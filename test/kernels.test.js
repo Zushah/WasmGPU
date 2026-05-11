@@ -252,5 +252,437 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     for (let i = 0; i < n; i++) assert.strictEqual(got[i] >>> 0, expected[i] >>> 0, `radixSortKeysU32 mismatch at index ${i}`);
 }
 
+// Batched LU f32 (partial pivot: factor + solve)
+{
+    assert.strictEqual(typeof kernels.luFactorF32Batched, "function", "Missing kernel: luFactorF32Batched");
+    assert.strictEqual(typeof kernels.luSolveF32Batched, "function", "Missing kernel: luSolveF32Batched");
+
+    const luFactorCpuPivoted = (aFlat, n) => {
+        const A = Float32Array.from(aFlat);
+        const ipiv = new Uint32Array(n);
+        for (let k = 0; k < n; k++) {
+            let piv = k;
+            let maxv = Math.abs(A[k * n + k]);
+            for (let i = k + 1; i < n; i++) {
+                const v = Math.abs(A[i * n + k]);
+                if (v > maxv || (v === maxv && i < piv)) {
+                    maxv = v;
+                    piv = i;
+                }
+            }
+            ipiv[k] = piv >>> 0;
+            if (piv !== k) {
+                for (let j = 0; j < n; j++) {
+                    const t = A[k * n + j];
+                    A[k * n + j] = A[piv * n + j];
+                    A[piv * n + j] = t;
+                }
+            }
+            const dia = A[k * n + k];
+            for (let i = k + 1; i < n; i++) A[i * n + k] /= dia;
+            for (let i = k + 1; i < n; i++) {
+                const lik = A[i * n + k];
+                for (let j = k + 1; j < n; j++) A[i * n + j] -= lik * A[k * n + j];
+            }
+        }
+        return { A, ipiv };
+    };
+
+    const luSolveCpuPivoted = (LU, ipiv, n, b) => {
+        const x = new Float32Array(n);
+        for (let i = 0; i < n; i++) x[i] = b[i];
+        for (let k = 0; k < n - 1; k++) {
+            const p = ipiv[k] >>> 0;
+            if (p !== k) {
+                const t = x[k];
+                x[k] = x[p];
+                x[p] = t;
+            }
+        }
+        for (let i = 0; i < n; i++) {
+            let s = x[i];
+            for (let j = 0; j < i; j++) s -= LU[i * n + j] * x[j];
+            x[i] = s;
+        }
+        for (let i = n - 1; i >= 0; i--) {
+            let s = x[i];
+            for (let j = i + 1; j < n; j++) s -= LU[i * n + j] * x[j];
+            x[i] = s / LU[i * n + i];
+        }
+        return x;
+    };
+
+    const batch = 3;
+    const n = 4;
+    const elems = batch * n * n;
+    const a = new Float32Array(elems);
+    const rhs = new Float32Array(batch * n);
+    for (let b = 0; b < batch; b++) {
+        const off = b * n * n;
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) a[off + i * n + j] = (i === j) ? (4 + b + i) : (0.1 * (i + 1) - 0.07 * (j + 1) + 0.02 * b);
+        }
+        for (let i = 0; i < n; i++) rhs[b * n + i] = 0.5 + 0.1 * i + 0.03 * b;
+    }
+
+    const bufA = compute.createStorageBuffer({ label: "lu:f32:A", data: a, copySrc: true });
+    const bufIpiv = compute.createStorageBuffer({ label: "lu:f32:ipiv", byteLength: batch * n * 4, copySrc: true });
+    const bufRhs = compute.createStorageBuffer({ label: "lu:f32:rhs", data: rhs, copySrc: true });
+    const bufX = compute.createStorageBuffer({ label: "lu:f32:x", byteLength: batch * n * 4, copySrc: true });
+
+    kernels.luFactorF32Batched(bufA, bufIpiv, batch, n);
+    kernels.luSolveF32Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
+
+    const gotLu = await bufA.readAs(Float32Array);
+    const gotIpiv = await bufIpiv.readAs(Uint32Array);
+    const gotX = await bufX.readAs(Float32Array);
+
+    for (let b = 0; b < batch; b++) {
+        const slice = new Float32Array(n * n);
+        for (let t = 0; t < n * n; t++) slice[t] = a[b * n * n + t];
+        const { A: wantLu, ipiv: wantIpiv } = luFactorCpuPivoted(slice, n);
+        for (let t = 0; t < n * n; t++) {
+            numberApproxEqual(gotLu[b * n * n + t], wantLu[t], 2e-4, `LU factor batch ${b} index ${t}`);
+        }
+        for (let k = 0; k < n; k++) {
+            assert.strictEqual(gotIpiv[b * n + k] >>> 0, wantIpiv[k] >>> 0, `ipiv batch ${b} k=${k}`);
+        }
+        const bRhs = rhs.subarray(b * n, (b + 1) * n);
+        const wantX = luSolveCpuPivoted(wantLu, wantIpiv, n, bRhs);
+        for (let i = 0; i < n; i++) {
+            numberApproxEqual(gotX[b * n + i], wantX[i], 2e-3, `LU solve batch ${b} row ${i}`);
+        }
+        for (let i = 0; i < n; i++) {
+            let ax = 0;
+            for (let j = 0; j < n; j++) ax += slice[i * n + j] * wantX[j];
+            numberApproxEqual(ax, bRhs[i], 2e-3, `residual batch ${b} row ${i}`);
+        }
+    }
+}
+
+// Batched LU complex64 (partial pivot by |a|^2: factor + solve)
+{
+    assert.strictEqual(typeof kernels.luFactorComplex64Batched, "function", "Missing kernel: luFactorComplex64Batched");
+    assert.strictEqual(typeof kernels.luSolveComplex64Batched, "function", "Missing kernel: luSolveComplex64Batched");
+
+    const cxMul = (ar, ai, br, bi) => [ar * br - ai * bi, ar * bi + ai * br];
+    const cxDiv = (ar, ai, br, bi) => {
+        const d = br * br + bi * bi;
+        return [(ar * br + ai * bi) / d, (ai * br - ar * bi) / d];
+    };
+
+    const luFactorCpuPivotedComplex = (aFlat2, n) => {
+        const A = Float32Array.from(aFlat2);
+        const ipiv = new Uint32Array(n);
+        for (let k = 0; k < n; k++) {
+            let piv = k;
+            let maxv = -1;
+            for (let i = k; i < n; i++) {
+                const t = (i * n + k) * 2;
+                const ms = A[t] * A[t] + A[t + 1] * A[t + 1];
+                if (ms > maxv || (ms === maxv && i < piv)) {
+                    maxv = ms;
+                    piv = i;
+                }
+            }
+            ipiv[k] = piv >>> 0;
+            if (piv !== k) {
+                for (let j = 0; j < n; j++) {
+                    const ta = (k * n + j) * 2;
+                    const tb = (piv * n + j) * 2;
+                    let tmp = A[ta];
+                    A[ta] = A[tb];
+                    A[tb] = tmp;
+                    tmp = A[ta + 1];
+                    A[ta + 1] = A[tb + 1];
+                    A[tb + 1] = tmp;
+                }
+            }
+            const pk = (k * n + k) * 2;
+            const diaR = A[pk];
+            const diaI = A[pk + 1];
+            for (let i = k + 1; i < n; i++) {
+                const tik = (i * n + k) * 2;
+                const [dr, di] = cxDiv(A[tik], A[tik + 1], diaR, diaI);
+                A[tik] = dr;
+                A[tik + 1] = di;
+            }
+            for (let i = k + 1; i < n; i++) {
+                const likR = A[(i * n + k) * 2];
+                const likI = A[(i * n + k) * 2 + 1];
+                for (let j = k + 1; j < n; j++) {
+                    const tkj = (k * n + j) * 2;
+                    const tij = (i * n + j) * 2;
+                    const [mr, mi] = cxMul(likR, likI, A[tkj], A[tkj + 1]);
+                    A[tij] -= mr;
+                    A[tij + 1] -= mi;
+                }
+            }
+        }
+        return { A, ipiv };
+    };
+
+    const luSolveCpuPivotedComplex = (LU, ipiv, n, b2) => {
+        const x = new Float32Array(2 * n);
+        for (let i = 0; i < n; i++) {
+            x[2 * i] = b2[2 * i];
+            x[2 * i + 1] = b2[2 * i + 1];
+        }
+        for (let k = 0; k < n - 1; k++) {
+            const p = ipiv[k] >>> 0;
+            if (p !== k) {
+                const tk = 2 * k;
+                const tp = 2 * p;
+                let t0 = x[tk];
+                let t1 = x[tk + 1];
+                x[tk] = x[tp];
+                x[tk + 1] = x[tp + 1];
+                x[tp] = t0;
+                x[tp + 1] = t1;
+            }
+        }
+        for (let i = 0; i < n; i++) {
+            let sr = x[2 * i];
+            let si = x[2 * i + 1];
+            for (let j = 0; j < i; j++) {
+                const Lr = LU[(i * n + j) * 2];
+                const Li = LU[(i * n + j) * 2 + 1];
+                const [mr, mi] = cxMul(Lr, Li, x[2 * j], x[2 * j + 1]);
+                sr -= mr;
+                si -= mi;
+            }
+            x[2 * i] = sr;
+            x[2 * i + 1] = si;
+        }
+        for (let i = n - 1; i >= 0; i--) {
+            let sr = x[2 * i];
+            let si = x[2 * i + 1];
+            for (let j = i + 1; j < n; j++) {
+                const Ur = LU[(i * n + j) * 2];
+                const Ui = LU[(i * n + j) * 2 + 1];
+                const [mr, mi] = cxMul(Ur, Ui, x[2 * j], x[2 * j + 1]);
+                sr -= mr;
+                si -= mi;
+            }
+            const [xr, xi] = cxDiv(sr, si, LU[(i * n + i) * 2], LU[(i * n + i) * 2 + 1]);
+            x[2 * i] = xr;
+            x[2 * i + 1] = xi;
+        }
+        return x;
+    };
+
+    const batch = 3;
+    const n = 4;
+    const cells = batch * n * n;
+    const a = new Float32Array(cells * 2);
+    const rhs = new Float32Array(batch * n * 2);
+    for (let b = 0; b < batch; b++) {
+        for (let i = 0; i < n; i++) {
+            for (let j = 0; j < n; j++) {
+                const t = ((b * n * n + i * n + j) * 2);
+                const dre = (i === j) ? (4 + b + i) : (0.1 * (i + 1) - 0.07 * (j + 1) + 0.02 * b);
+                const dim = (i === j) ? 0.15 : (0.05 * (i - j) + 0.01 * b);
+                a[t] = dre;
+                a[t + 1] = dim;
+            }
+        }
+        for (let i = 0; i < n; i++) {
+            const t = (b * n + i) * 2;
+            rhs[t] = 0.5 + 0.1 * i + 0.03 * b;
+            rhs[t + 1] = 0.2 - 0.05 * i + 0.02 * b;
+        }
+    }
+
+    const bufA = compute.createStorageBuffer({ label: "lu:c64:A", data: a, copySrc: true });
+    const bufIpiv = compute.createStorageBuffer({ label: "lu:c64:ipiv", byteLength: batch * n * 4, copySrc: true });
+    const bufRhs = compute.createStorageBuffer({ label: "lu:c64:rhs", data: rhs, copySrc: true });
+    const bufX = compute.createStorageBuffer({ label: "lu:c64:x", byteLength: batch * n * 8, copySrc: true });
+
+    kernels.luFactorComplex64Batched(bufA, bufIpiv, batch, n);
+    kernels.luSolveComplex64Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
+
+    const gotLu = await bufA.readAs(Float32Array);
+    const gotIpiv = await bufIpiv.readAs(Uint32Array);
+    const gotX = await bufX.readAs(Float32Array);
+
+    for (let b = 0; b < batch; b++) {
+        const slice = new Float32Array(n * n * 2);
+        for (let t = 0; t < n * n * 2; t++) slice[t] = a[b * n * n * 2 + t];
+        const { A: wantLu, ipiv: wantIpiv } = luFactorCpuPivotedComplex(slice, n);
+        for (let t = 0; t < n * n * 2; t++) {
+            numberApproxEqual(gotLu[b * n * n * 2 + t], wantLu[t], 5e-4, `LU c64 factor batch ${b} index ${t}`);
+        }
+        for (let k = 0; k < n; k++) {
+            assert.strictEqual(gotIpiv[b * n + k] >>> 0, wantIpiv[k] >>> 0, `ipiv c64 batch ${b} k=${k}`);
+        }
+        const bRhs = rhs.subarray(b * n * 2, (b + 1) * n * 2);
+        const wantX = luSolveCpuPivotedComplex(wantLu, wantIpiv, n, bRhs);
+        for (let i = 0; i < n; i++) {
+            numberApproxEqual(gotX[b * n * 2 + 2 * i], wantX[2 * i], 3e-3, `LU c64 solve batch ${b} row ${i} re`);
+            numberApproxEqual(gotX[b * n * 2 + 2 * i + 1], wantX[2 * i + 1], 3e-3, `LU c64 solve batch ${b} row ${i} im`);
+        }
+        for (let i = 0; i < n; i++) {
+            let axr = 0;
+            let axi = 0;
+            for (let j = 0; j < n; j++) {
+                const t = (i * n + j) * 2;
+                const [mr, mi] = cxMul(slice[t], slice[t + 1], wantX[2 * j], wantX[2 * j + 1]);
+                axr += mr;
+                axi += mi;
+            }
+            numberApproxEqual(axr, bRhs[2 * i], 3e-3, `residual c64 batch ${b} row ${i} re`);
+            numberApproxEqual(axi, bRhs[2 * i + 1], 3e-3, `residual c64 batch ${b} row ${i} im`);
+        }
+    }
+}
+
+// Complex64 solve fallback path for n > 512 (identity LU should return rhs unchanged)
+{
+    const batch = 1;
+    const n = 513;
+    const lu = new Float32Array(batch * n * n * 2);
+    const ipiv = new Uint32Array(batch * n);
+    const rhs = new Float32Array(batch * n * 2);
+    for (let i = 0; i < n; i++) {
+        const diag = (i * n + i) * 2;
+        lu[diag] = 1;
+        ipiv[i] = i >>> 0;
+        rhs[2 * i] = Math.sin(i * 0.17);
+        rhs[2 * i + 1] = Math.cos(i * 0.11);
+    }
+
+    const bufLu = compute.createStorageBuffer({ label: "lu:c64:large:lu", data: lu, copySrc: false });
+    const bufIpiv = compute.createStorageBuffer({ label: "lu:c64:large:ipiv", data: ipiv, copySrc: false });
+    const bufRhs = compute.createStorageBuffer({ label: "lu:c64:large:rhs", data: rhs, copySrc: false });
+    const bufX = compute.createStorageBuffer({ label: "lu:c64:large:x", byteLength: batch * n * 8, copySrc: true });
+
+    kernels.luSolveComplex64Batched(bufLu, bufIpiv, bufRhs, bufX, batch, n);
+
+    const gotX = await bufX.readAs(Float32Array);
+    arraysApproxEqualF32(gotX, rhs, 1e-5, "LU c64 large solve mismatch");
+}
+
+// Blocked-path regression for f32 LU at n >= 160 (covers lead/upper/trailing kernels).
+{
+    const n = 192;
+    const batch = 2;
+    const a = new Float32Array(batch * n * n);
+    const rhs = new Float32Array(batch * n);
+    // Diagonally dominant random matrix to keep f32 well-conditioned.
+    let seed = 0x9e3779b1 >>> 0;
+    const rand = () => {
+        seed = ((seed + 0x6D2B79F5) >>> 0);
+        let t = seed;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return (((t ^ (t >>> 14)) >>> 0) / 4294967296);
+    };
+    for (let b = 0; b < batch; b++) {
+        for (let i = 0; i < n; i++) {
+            let rowMag = 0;
+            for (let j = 0; j < n; j++) {
+                const v = (rand() - 0.5) * (1.0 / n);
+                a[b * n * n + i * n + j] = v;
+                rowMag += Math.abs(v);
+            }
+            a[b * n * n + i * n + i] = rowMag + 1 + b * 0.25;
+            rhs[b * n + i] = rand();
+        }
+    }
+
+    const bufA = compute.createStorageBuffer({ label: "lu:f32:blk:A", data: a, copySrc: true });
+    const bufIpiv = compute.createStorageBuffer({ label: "lu:f32:blk:ipiv", byteLength: batch * n * 4, copySrc: true });
+    const bufRhs = compute.createStorageBuffer({ label: "lu:f32:blk:rhs", data: rhs, copySrc: false });
+    const bufX = compute.createStorageBuffer({ label: "lu:f32:blk:x", byteLength: batch * n * 4, copySrc: true });
+
+    kernels.luFactorF32Batched(bufA, bufIpiv, batch, n);
+    kernels.luSolveF32Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
+    const gotX = await bufX.readAs(Float32Array);
+
+    // Validate by computing the residual ||A x - b||_inf / ||b||_inf with the original A.
+    for (let b = 0; b < batch; b++) {
+        let bMax = 0;
+        for (let i = 0; i < n; i++) bMax = Math.max(bMax, Math.abs(rhs[b * n + i]));
+        let resMax = 0;
+        for (let i = 0; i < n; i++) {
+            let ax = 0;
+            for (let j = 0; j < n; j++) ax += a[b * n * n + i * n + j] * gotX[b * n + j];
+            resMax = Math.max(resMax, Math.abs(ax - rhs[b * n + i]));
+        }
+        assert.ok(resMax / Math.max(bMax, 1e-30) < 1e-3,
+            `f32 blocked LU residual too large: batch ${b} -> ${resMax}/${bMax}`);
+    }
+}
+
+// Blocked-path regression for c64 LU at n >= 160 (covers lead/upper/trailing kernels).
+{
+    const n = 192;
+    const batch = 2;
+    const a = new Float32Array(batch * n * n * 2);
+    const rhs = new Float32Array(batch * n * 2);
+    let seed = 0x12345678 >>> 0;
+    const rand = () => {
+        seed = ((seed + 0x6D2B79F5) >>> 0);
+        let t = seed;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return (((t ^ (t >>> 14)) >>> 0) / 4294967296);
+    };
+    for (let b = 0; b < batch; b++) {
+        for (let i = 0; i < n; i++) {
+            let rowMag = 0;
+            for (let j = 0; j < n; j++) {
+                const re = (rand() - 0.5) * (1.0 / n);
+                const im = (rand() - 0.5) * (1.0 / n);
+                const t = (b * n * n + i * n + j) * 2;
+                a[t] = re;
+                a[t + 1] = im;
+                rowMag += Math.hypot(re, im);
+            }
+            const td = (b * n * n + i * n + i) * 2;
+            a[td] = rowMag + 1 + b * 0.25;
+            a[td + 1] = 0.5;
+            const tr = (b * n + i) * 2;
+            rhs[tr] = rand();
+            rhs[tr + 1] = rand();
+        }
+    }
+
+    const bufA = compute.createStorageBuffer({ label: "lu:c64:blk:A", data: a, copySrc: true });
+    const bufIpiv = compute.createStorageBuffer({ label: "lu:c64:blk:ipiv", byteLength: batch * n * 4, copySrc: true });
+    const bufRhs = compute.createStorageBuffer({ label: "lu:c64:blk:rhs", data: rhs, copySrc: false });
+    const bufX = compute.createStorageBuffer({ label: "lu:c64:blk:x", byteLength: batch * n * 8, copySrc: true });
+
+    kernels.luFactorComplex64Batched(bufA, bufIpiv, batch, n);
+    kernels.luSolveComplex64Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
+    const gotX = await bufX.readAs(Float32Array);
+
+    for (let b = 0; b < batch; b++) {
+        let bMax = 0;
+        for (let i = 0; i < n; i++) {
+            bMax = Math.max(bMax, Math.hypot(rhs[(b * n + i) * 2], rhs[(b * n + i) * 2 + 1]));
+        }
+        let resMax = 0;
+        for (let i = 0; i < n; i++) {
+            let axr = 0;
+            let axi = 0;
+            for (let j = 0; j < n; j++) {
+                const ta = (b * n * n + i * n + j) * 2;
+                const tx = (b * n + j) * 2;
+                const ar = a[ta];
+                const ai = a[ta + 1];
+                const xr = gotX[tx];
+                const xi = gotX[tx + 1];
+                axr += ar * xr - ai * xi;
+                axi += ar * xi + ai * xr;
+            }
+            const tr = (b * n + i) * 2;
+            resMax = Math.max(resMax, Math.hypot(axr - rhs[tr], axi - rhs[tr + 1]));
+        }
+        assert.ok(resMax / Math.max(bMax, 1e-30) < 1e-3,
+            `c64 blocked LU residual too large: batch ${b} -> ${resMax}/${bMax}`);
+    }
+}
+
 compute.destroy();
 device.destroy();

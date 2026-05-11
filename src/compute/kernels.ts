@@ -34,6 +34,18 @@ import copyU32WGSL from "../wgsl/compute/copy-u32.wgsl";
 import scaleExtractF32WGSL from "../wgsl/compute/scale-extract-f32.wgsl";
 import scaleHistogramF32WGSL from "../wgsl/compute/scale-histogram-f32.wgsl";
 import scaleRemapF32WGSL from "../wgsl/compute/scale-remap-f32.wgsl";
+import luFactorRealWGSL from "../wgsl/compute/lu-factor-f32.wgsl";
+import luFactorRealLeadWGSL from "../wgsl/compute/lu-factor-lead-f32.wgsl";
+import luFactorRealUpperWGSL from "../wgsl/compute/lu-factor-upper-f32.wgsl";
+import luFactorRealTrailingWGSL from "../wgsl/compute/lu-factor-trailing-f32.wgsl";
+import luFactorComplexSmallWGSL from "../wgsl/compute/lu-factor-complex64.wgsl";
+import luFactorComplexLeadWGSL from "../wgsl/compute/lu-factor-lead-complex64.wgsl";
+import luFactorComplexUpperWGSL from "../wgsl/compute/lu-factor-upper-complex64.wgsl";
+import luFactorComplexTrailingWGSL from "../wgsl/compute/lu-factor-trailing-complex64.wgsl";
+import luSolveRealWGSL from "../wgsl/compute/lu-solve-large-f32.wgsl";
+import luSolveRealSharedWGSL from "../wgsl/compute/lu-solve-shared-f32.wgsl";
+import luSolveComplexLargeWGSL from "../wgsl/compute/lu-solve-large-complex64.wgsl";
+import luSolveComplexWGSL from "../wgsl/compute/lu-solve-shared-complex64.wgsl";
 import { normalizeScaleTransform, packScaleTransform, scaleClampModeToId, scaleModeToId, scaleValueModeToId } from "../scaling/transform";
 import type { ScaleTransform, ScaleValueMode } from "../scaling/types";
 
@@ -151,6 +163,10 @@ export class ComputeKernels {
     readonly queue: GPUQueue;
     private readonly scratch: ScratchBufferPool;
     private readonly pipelines: Map<string, ComputePipeline>;
+    /** Reused by batched LU kernels to avoid create/destroy per dispatch. */
+    private luBatchedParamsBuffer: GPUBuffer | null;
+    /** Reused by blocked LU phases (needs kk/pw). */
+    private luBlockedParamsBuffer: GPUBuffer | null;
 
     constructor(device: GPUDevice, queue: GPUQueue) {
         this.device = device;
@@ -160,11 +176,39 @@ export class ComputeKernels {
             labelPrefix: "kernels:scratch"
         });
         this.pipelines = new Map();
+        this.luBatchedParamsBuffer = null;
+        this.luBlockedParamsBuffer = null;
     }
 
     destroy(): void {
         this.scratch.destroy();
         this.pipelines.clear();
+        this.luBatchedParamsBuffer?.destroy();
+        this.luBatchedParamsBuffer = null;
+        this.luBlockedParamsBuffer?.destroy();
+        this.luBlockedParamsBuffer = null;
+    }
+
+    private getLuBatchedParamsBuffer(): GPUBuffer {
+        if (!this.luBatchedParamsBuffer) {
+            this.luBatchedParamsBuffer = this.device.createBuffer({
+                size: 16,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                label: "kernels:luBatchedParams"
+            });
+        }
+        return this.luBatchedParamsBuffer;
+    }
+
+    private getLuBlockedParamsBuffer(): GPUBuffer {
+        if (!this.luBlockedParamsBuffer) {
+            this.luBlockedParamsBuffer = this.device.createBuffer({
+                size: 32,
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
+                label: "kernels:luBlockedParams"
+            });
+        }
+        return this.luBlockedParamsBuffer;
     }
 
     private getPipeline(key: string, create: () => ComputePipeline): ComputePipeline {
@@ -628,6 +672,262 @@ export class ComputeKernels {
                             storageBufferLayout({ binding: 0, readOnly: true }),
                             storageBufferLayout({ binding: 1, readOnly: false }),
                             uniformBufferLayout({ binding: 2 })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuFactorRealPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorReal";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luFactorRealWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 16 }),
+                            storageBufferLayout({ binding: 1, readOnly: false }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuFactorRealLeadPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorRealLead";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luFactorRealLeadWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 32 }),
+                            storageBufferLayout({ binding: 1, readOnly: false }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuFactorRealUpperPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorRealUpper";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luFactorRealUpperWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 32 }),
+                            storageBufferLayout({ binding: 1, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuFactorRealTrailingPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorRealTrailing";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luFactorRealTrailingWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 32 }),
+                            storageBufferLayout({ binding: 1, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuSolveRealPipeline(): ComputePipeline {
+        const key = "kernels:lu:solveReal";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luSolveRealWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 16 }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: true }),
+                            storageBufferLayout({ binding: 3, readOnly: false }),
+                            storageBufferLayout({ binding: 4, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuSolveRealSharedPipeline(): ComputePipeline {
+        const key = "kernels:lu:solveRealShared";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luSolveRealSharedWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 16 }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: true }),
+                            storageBufferLayout({ binding: 3, readOnly: false }),
+                            storageBufferLayout({ binding: 4, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuFactorComplexLeadPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorComplexLead";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luFactorComplexLeadWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 32 }),
+                            storageBufferLayout({ binding: 1, readOnly: false }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuFactorComplexUpperPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorComplexUpper";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luFactorComplexUpperWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 32 }),
+                            storageBufferLayout({ binding: 1, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuFactorComplexTrailingPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorComplexTrailing";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luFactorComplexTrailingWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 32 }),
+                            storageBufferLayout({ binding: 1, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuFactorComplexSmallPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorComplexSmall";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luFactorComplexSmallWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 16 }),
+                            storageBufferLayout({ binding: 1, readOnly: false }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuSolveComplexLargePipeline(): ComputePipeline {
+        const key = "kernels:lu:solveComplexLarge";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luSolveComplexLargeWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 16 }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: true }),
+                            storageBufferLayout({ binding: 3, readOnly: false }),
+                            storageBufferLayout({ binding: 4, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getLuSolveComplexPipeline(): ComputePipeline {
+        const key = "kernels:lu:solveComplex";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: luSolveComplexWGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            uniformBufferLayout({ binding: 0, minBindingSize: 16 }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: true }),
+                            storageBufferLayout({ binding: 3, readOnly: false }),
+                            storageBufferLayout({ binding: 4, readOnly: true })
                         ]
                     }
                 ]
@@ -1141,5 +1441,300 @@ export class ComputeKernels {
         }
         this.execute(commands, opts);
         return out;
+    }
+
+    /**
+    * In-place batched LU factorization with **partial pivoting**.
+    * Matrices are `(batchCount, n, n)` row-major `f32`. On return each block holds compact
+    * `L` (strict lower, unit diagonal implicit) and `U` (upper including diagonal) of **P A**
+    * where row swaps are recorded in `ipiv` (`ipiv[b*n + k]` = row swapped with row `k`
+    * at step `k`, 0-based). For `n < 160` this uses the small-matrix path; larger systems use
+    * the blocked panel/update path.
+     */
+    luFactorF32Batched(matrices: StorageBuffer, ipiv: StorageBuffer, batchCount: number, n: number, opts: KernelDispatchOptions = {}): void {
+        assert(!opts.encoder, "luFactorF32Batched does not support opts.encoder");
+        assert(Number.isInteger(batchCount) && batchCount >= 0, `luFactorF32Batched: batchCount must be an integer >= 0 (got ${batchCount})`);
+        assert(Number.isInteger(n) && n >= 0, `luFactorF32Batched: n must be an integer >= 0 (got ${n})`);
+        assert(matrices !== ipiv, "luFactorF32Batched: matrices and ipiv must be distinct StorageBuffer instances");
+        if (batchCount === 0 || n === 0) return;
+        const elemsPerMatrix = n * n;
+        assert(Number.isFinite(elemsPerMatrix) && elemsPerMatrix <= 0xFFFFFFFF, "luFactorF32Batched: n*n overflow");
+        const needBytes = batchCount * elemsPerMatrix * 4;
+        const ipivBytes = batchCount * n * 4;
+        assert(matrices.byteLength >= needBytes, `luFactorF32Batched: matrices buffer too small (need ${needBytes} bytes, have ${matrices.byteLength})`);
+        assert(ipiv.byteLength >= ipivBytes, `luFactorF32Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
+        if (n < 160) {
+            const params = this.getLuBatchedParamsBuffer();
+            this.queue.writeBuffer(params, 0, new Uint32Array([
+                batchCount >>> 0,
+                n >>> 0,
+                elemsPerMatrix >>> 0,
+                0
+            ]));
+            const pipeline = this.getLuFactorRealPipeline();
+            const bg = pipeline.createBindGroup(0, {
+                0: { buffer: params, size: 16 },
+                1: this.bindSized(matrices, needBytes),
+                2: this.bindSized(ipiv, ipivBytes)
+            }, "luFactorF32Batched:bg");
+            this.execute([{ pipeline, bindGroups: [bg], workgroups: { x: batchCount, y: 1, z: 1 }, label: "luFactorF32Batched" }], opts);
+            return;
+        }
+
+        const params = this.getLuBlockedParamsBuffer();
+        const leadPipe = this.getLuFactorRealLeadPipeline();
+        const upperPipe = this.getLuFactorRealUpperPipeline();
+        const trailingPipe = this.getLuFactorRealTrailingPipeline();
+
+        const bgLead = leadPipe.createBindGroup(0, {
+            0: { buffer: params, size: 32 },
+            1: this.bindSized(matrices, needBytes),
+            2: this.bindSized(ipiv, ipivBytes)
+        }, "luFactorF32:lead:bg");
+        const bgUpper = upperPipe.createBindGroup(0, {
+            0: { buffer: params, size: 32 },
+            1: this.bindSized(matrices, needBytes)
+        }, "luFactorF32:upper:bg");
+        const bgTrailing = trailingPipe.createBindGroup(0, {
+            0: { buffer: params, size: 32 },
+            1: this.bindSized(matrices, needBytes)
+        }, "luFactorF32:trailing:bg");
+
+        const PANEL_B = 16;
+        for (let kk = 0; kk < n; kk += PANEL_B) {
+            const pw = Math.min(PANEL_B, n - kk);
+            const trail = n - (kk + pw);
+
+            this.queue.writeBuffer(params, 0, new Uint32Array([
+                batchCount >>> 0,
+                n >>> 0,
+                elemsPerMatrix >>> 0,
+                kk >>> 0,
+                pw >>> 0,
+                0, 0, 0
+            ]));
+
+            const cmds: ComputeDispatchCommand[] = [
+                { pipeline: leadPipe, bindGroups: [bgLead], workgroups: { x: batchCount, y: 1, z: 1 }, label: `luFactorF32:lead:kk${kk}` }
+            ];
+
+            if (trail > 0) {
+                const totalTrsm = batchCount * trail;
+                cmds.push({
+                    pipeline: upperPipe,
+                    bindGroups: [bgUpper],
+                    workgroups: workgroups1D(totalTrsm, 256),
+                    label: `luFactorF32:upper:kk${kk}`
+                });
+
+                const mDim = trail;
+                const nDim = trail;
+                const tileM = 16;
+                const tileN = 8;
+                const mTiles = Math.ceil(mDim / tileM);
+                const nTiles = Math.ceil(nDim / tileN);
+                cmds.push({
+                    pipeline: trailingPipe,
+                    bindGroups: [bgTrailing],
+                    workgroups: { x: nTiles, y: mTiles, z: batchCount },
+                    label: `luFactorF32:trailing:kk${kk}`
+                });
+            }
+
+            this.execute(cmds, opts);
+        }
+    }
+
+    /**
+    * Batched solve `A x = b` given `lu` and `ipiv` from {@link luFactorF32Batched} for the
+    * same `batchCount` and `n`. `rhs` is `(batchCount, n)` contiguous `f32`; `outX` receives
+    * the solution. For `n <= 512` this uses the shared-memory path; larger systems use the
+    * large-matrix fallback. `lu`, `ipiv`, `rhs`, and `outX` must be pairwise distinct `StorageBuffer` instances.
+     */
+    luSolveF32Batched(lu: StorageBuffer, ipiv: StorageBuffer, rhs: StorageBuffer, outX: StorageBuffer, batchCount: number, n: number, opts: KernelDispatchOptions = {}): void {
+        assert(!opts.encoder, "luSolveF32Batched does not support opts.encoder");
+        assert(Number.isInteger(batchCount) && batchCount >= 0, `luSolveF32Batched: batchCount must be an integer >= 0 (got ${batchCount})`);
+        assert(Number.isInteger(n) && n >= 0, `luSolveF32Batched: n must be an integer >= 0 (got ${n})`);
+        assert(lu !== rhs && lu !== outX && lu !== ipiv && rhs !== outX && rhs !== ipiv && outX !== ipiv, "luSolveF32Batched: lu, ipiv, rhs, and outX must be distinct StorageBuffer instances");
+        if (batchCount === 0 || n === 0) return;
+        const elemsPerMatrix = n * n;
+        assert(Number.isFinite(elemsPerMatrix) && elemsPerMatrix <= 0xFFFFFFFF, "luSolveF32Batched: n*n overflow");
+        const luBytes = batchCount * elemsPerMatrix * 4;
+        const rhsBytes = batchCount * n * 4;
+        const ipivBytes = batchCount * n * 4;
+        assert(lu.byteLength >= luBytes, `luSolveF32Batched: lu buffer too small (need ${luBytes} bytes, have ${lu.byteLength})`);
+        assert(ipiv.byteLength >= ipivBytes, `luSolveF32Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
+        assert(rhs.byteLength >= rhsBytes, `luSolveF32Batched: rhs buffer too small (need ${rhsBytes} bytes, have ${rhs.byteLength})`);
+        assert(outX.byteLength >= rhsBytes, `luSolveF32Batched: outX buffer too small (need ${rhsBytes} bytes, have ${outX.byteLength})`);
+        const params = this.getLuBatchedParamsBuffer();
+        this.queue.writeBuffer(params, 0, new Uint32Array([
+            batchCount >>> 0,
+            n >>> 0,
+            elemsPerMatrix >>> 0,
+            0
+        ]));
+        const pipeline = (n <= 512) ? this.getLuSolveRealSharedPipeline() : this.getLuSolveRealPipeline();
+        const bg = pipeline.createBindGroup(0, {
+            0: { buffer: params, size: 16 },
+            1: this.bindSized(lu, luBytes),
+            2: this.bindSized(rhs, rhsBytes),
+            3: this.bindSized(outX, rhsBytes),
+            4: this.bindSized(ipiv, ipivBytes)
+        }, "luSolveF32Batched:bg");
+        this.execute([
+            {
+                pipeline,
+                bindGroups: [bg],
+                workgroups: { x: batchCount, y: 1, z: 1 },
+                label: "luSolveF32Batched"
+            }
+        ], opts);
+    }
+
+    /**
+     * In-place batched **complex64** LU (`interleaved re,im` as **8 bytes** per matrix entry,
+     * row-major `(batchCount, n, n)`). Same pivot convention as {@link luFactorF32Batched};
+     * `ipiv` is `batchCount * n` **u32** (bytes = `batchCount * n * 4`).
+     */
+    luFactorComplex64Batched(matrices: StorageBuffer, ipiv: StorageBuffer, batchCount: number, n: number, opts: KernelDispatchOptions = {}): void {
+        assert(!opts.encoder, "luFactorComplex64Batched does not support opts.encoder");
+        assert(Number.isInteger(batchCount) && batchCount >= 0, `luFactorComplex64Batched: batchCount must be an integer >= 0 (got ${batchCount})`);
+        assert(Number.isInteger(n) && n >= 0, `luFactorComplex64Batched: n must be an integer >= 0 (got ${n})`);
+        assert(matrices !== ipiv, "luFactorComplex64Batched: matrices and ipiv must be distinct StorageBuffer instances");
+        if (batchCount === 0 || n === 0) return;
+        const elemsPerMatrix = n * n;
+        assert(Number.isFinite(elemsPerMatrix) && elemsPerMatrix <= 0xFFFFFFFF, "luFactorComplex64Batched: n*n overflow");
+        const needBytes = batchCount * elemsPerMatrix * 8;
+        const ipivBytes = batchCount * n * 4;
+        assert(matrices.byteLength >= needBytes, `luFactorComplex64Batched: matrices buffer too small (need ${needBytes} bytes, have ${matrices.byteLength})`);
+        assert(ipiv.byteLength >= ipivBytes, `luFactorComplex64Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
+        // Heuristic: blocked kernel overhead dominates for small n.
+        if (n < 160) {
+            const params = this.getLuBatchedParamsBuffer();
+            this.queue.writeBuffer(params, 0, new Uint32Array([
+                batchCount >>> 0,
+                n >>> 0,
+                elemsPerMatrix >>> 0,
+                0
+            ]));
+            const pipeline = this.getLuFactorComplexSmallPipeline();
+            const bg = pipeline.createBindGroup(0, {
+                0: { buffer: params, size: 16 },
+                1: this.bindSized(matrices, needBytes),
+                2: this.bindSized(ipiv, ipivBytes)
+            }, "luFactorComplex64Batched:bg");
+            this.execute([{ pipeline, bindGroups: [bg], workgroups: { x: batchCount, y: 1, z: 1 }, label: "luFactorComplex64Batched" }], opts);
+            return;
+        }
+
+        // Blocked LU: panel + TRSM + GEMM (multi-dispatch per panel).
+        const params = this.getLuBlockedParamsBuffer();
+        const leadPipe = this.getLuFactorComplexLeadPipeline();
+        const upperPipe = this.getLuFactorComplexUpperPipeline();
+        const trailingPipe = this.getLuFactorComplexTrailingPipeline();
+
+        const bgLead = leadPipe.createBindGroup(0, {
+            0: { buffer: params, size: 32 },
+            1: this.bindSized(matrices, needBytes),
+            2: this.bindSized(ipiv, ipivBytes)
+        }, "luFactorComplex64:lead:bg");
+        const bgUpper = upperPipe.createBindGroup(0, {
+            0: { buffer: params, size: 32 },
+            1: this.bindSized(matrices, needBytes)
+        }, "luFactorComplex64:upper:bg");
+        const bgTrailing = trailingPipe.createBindGroup(0, {
+            0: { buffer: params, size: 32 },
+            1: this.bindSized(matrices, needBytes)
+        }, "luFactorComplex64:trailing:bg");
+
+        const PANEL_B = 16;
+        for (let kk = 0; kk < n; kk += PANEL_B) {
+            const pw = Math.min(PANEL_B, n - kk);
+            const trail = n - (kk + pw);
+
+            this.queue.writeBuffer(params, 0, new Uint32Array([
+                batchCount >>> 0,
+                n >>> 0,
+                elemsPerMatrix >>> 0,
+                kk >>> 0,
+                pw >>> 0,
+                0, 0, 0
+            ]));
+
+            const cmds: ComputeDispatchCommand[] = [
+                { pipeline: leadPipe, bindGroups: [bgLead], workgroups: { x: batchCount, y: 1, z: 1 }, label: `luFactorComplex64:lead:kk${kk}` }
+            ];
+
+            if (trail > 0) {
+                const totalTrsm = batchCount * trail;
+                cmds.push({
+                    pipeline: upperPipe,
+                    bindGroups: [bgUpper],
+                    workgroups: workgroups1D(totalTrsm, 256),
+                    label: `luFactorComplex64:upper:kk${kk}`
+                });
+
+                const mDim = trail;
+                const nDim = trail;
+                const tileM = 16;
+                const tileN = 8;
+                const mTiles = Math.ceil(mDim / tileM);
+                const nTiles = Math.ceil(nDim / tileN);
+                cmds.push({
+                    pipeline: trailingPipe,
+                    bindGroups: [bgTrailing],
+                    workgroups: { x: nTiles, y: mTiles, z: batchCount },
+                    label: `luFactorComplex64:trailing:kk${kk}`
+                });
+            }
+
+            this.execute(cmds, opts);
+        }
+    }
+
+    /**
+     * Batched **complex64** solve `A x = b` using `lu` + `ipiv` from {@link luFactorComplex64Batched}.
+     * `rhs` / `outX` are `(batchCount, n)` with **8 bytes** per component (re, im) per entry.
+    * For `n <= 512`, this picks the shared-memory path; larger systems use the
+    * large-matrix path that does not rely on workgroup-local storage.
+     */
+    luSolveComplex64Batched(lu: StorageBuffer, ipiv: StorageBuffer, rhs: StorageBuffer, outX: StorageBuffer, batchCount: number, n: number, opts: KernelDispatchOptions = {}): void {
+        assert(!opts.encoder, "luSolveComplex64Batched does not support opts.encoder");
+        assert(Number.isInteger(batchCount) && batchCount >= 0, `luSolveComplex64Batched: batchCount must be an integer >= 0 (got ${batchCount})`);
+        assert(Number.isInteger(n) && n >= 0, `luSolveComplex64Batched: n must be an integer >= 0 (got ${n})`);
+        assert(lu !== rhs && lu !== outX && lu !== ipiv && rhs !== outX && rhs !== ipiv && outX !== ipiv, "luSolveComplex64Batched: lu, ipiv, rhs, and outX must be distinct StorageBuffer instances");
+        if (batchCount === 0 || n === 0) return;
+        const elemsPerMatrix = n * n;
+        assert(Number.isFinite(elemsPerMatrix) && elemsPerMatrix <= 0xFFFFFFFF, "luSolveComplex64Batched: n*n overflow");
+        const luBytes = batchCount * elemsPerMatrix * 8;
+        const rhsBytes = batchCount * n * 8;
+        const ipivBytes = batchCount * n * 4;
+        assert(lu.byteLength >= luBytes, `luSolveComplex64Batched: lu buffer too small (need ${luBytes} bytes, have ${lu.byteLength})`);
+        assert(ipiv.byteLength >= ipivBytes, `luSolveComplex64Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
+        assert(rhs.byteLength >= rhsBytes, `luSolveComplex64Batched: rhs buffer too small (need ${rhsBytes} bytes, have ${rhs.byteLength})`);
+        assert(outX.byteLength >= rhsBytes, `luSolveComplex64Batched: outX buffer too small (need ${rhsBytes} bytes, have ${outX.byteLength})`);
+        const params = this.getLuBatchedParamsBuffer();
+        this.queue.writeBuffer(params, 0, new Uint32Array([
+            batchCount >>> 0,
+            n >>> 0,
+            elemsPerMatrix >>> 0,
+            0
+        ]));
+        const pipeline = (n <= 512) ? this.getLuSolveComplexPipeline() : this.getLuSolveComplexLargePipeline();
+        const bg = pipeline.createBindGroup(0, {
+            0: { buffer: params, size: 16 },
+            1: this.bindSized(lu, luBytes),
+            2: this.bindSized(rhs, rhsBytes),
+            3: this.bindSized(outX, rhsBytes),
+            4: this.bindSized(ipiv, ipivBytes)
+        }, "luSolveComplex64Batched:bg");
+        this.execute([
+            {
+                pipeline,
+                bindGroups: [bg],
+                workgroups: { x: batchCount, y: 1, z: 1 },
+                label: "luSolveComplex64Batched"
+            }
+        ], opts);
     }
 }
