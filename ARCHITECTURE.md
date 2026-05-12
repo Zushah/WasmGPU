@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: May 11th, 2026.
+Last updated: May 12th, 2026.
 
-Last commit: May 8th, 2026, [**`b1d278f`**](https://www.github.com/Zushah/WasmGPU/commit/b1d278ff181b8ad339c8dfb0d0ee333eb7845f2f).
+Last commit: May 11th, 2026, [**`a569a70`**](https://www.github.com/Zushah/WasmGPU/commit/a569a70).
 
 Last release: March 30th, 2026, [**`v0.7.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.7.0).
 
@@ -374,7 +374,7 @@ The main compute files are:
 - `./src/compute/pipeline.ts`: compute pipeline descriptors, pipeline creation, and bind group creation.
 - `./src/compute/dispatch.ts`: command encoding and dispatch validation.
 - `./src/compute/workgroups.ts`: workgroup size helpers.
-- `./src/compute/kernels.ts`: built-in copy, reduce, arg-reduce, scan, histogram, compact, radix sort, and scaling kernels.
+- `./src/compute/kernels.ts`: built-in copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, and LU factor/solve kernels.
 - `./src/compute/readback.ts`: reusable asynchronous GPU readback slots.
 - `./src/compute/scratch.ts`: scratch buffer pooling.
 - `./src/compute/ndarray.ts`: CPU and GPU ndarray layout, dtype, stride, offset, upload, and readback logic.
@@ -732,7 +732,7 @@ Important directories:
 - `./src/wgsl/core/`: core render support shaders such as SMAA and mesh picking.
 - `./src/wgsl/graphics/`: material shaders, standard and transmission shader variants, data material shaders, mipmap generation, and custom material defaults.
 - `./src/wgsl/world/`: pointcloud, glyphfield, nodelink, and picking shaders.
-- `./src/wgsl/compute/`: compute kernels for copy, reductions, scans, histograms, compaction, radix sort, scaling, and blitting.
+- `./src/wgsl/compute/`: compute kernels for copy, reductions, scans, histograms, compaction, radix sort, scaling, blitting, and LU factoring/solving.
 
 Common interactions:
 
