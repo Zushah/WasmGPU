@@ -10,17 +10,8 @@ import { UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, Colormap
 
 Object.assign(globalThis, globals);
 const navigator = { gpu: create([]) };
-
-const approxEqual = (actual, expected, tol = 1e-6, msg = "Numbers differ") => {
-    assert.ok(Number.isFinite(actual) && Number.isFinite(expected), `${msg}: expected finite numbers`);
-    assert.ok(Math.abs(actual - expected) <= tol, `${msg}: ${actual} vs ${expected}`);
-};
-
-const approxArray = (actual, expected, tol = 1e-6, msg = "Arrays differ") => {
-    assert.equal(actual.length, expected.length, `${msg}: length ${actual.length} vs ${expected.length}`);
-    for (let i = 0; i < actual.length; i++) approxEqual(actual[i], expected[i], tol, `${msg} at index ${i}`);
-};
-
+const approxEqual = (actual, expected, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(actual) && Number.isFinite(expected), `${msg}: expected finite numbers`); assert.ok(Math.abs(actual - expected) <= tol, `${msg}: ${actual} vs ${expected}`); };
+const approxArray = (actual, expected, tol = 1e-6, msg = "Arrays differ") => { assert.equal(actual.length, expected.length, `${msg}: length ${actual.length} vs ${expected.length}`); for (let i = 0; i < actual.length; i++) approxEqual(actual[i], expected[i], tol, `${msg} at index ${i}`); };
 const expectPackedTextureTransform = (uniforms, offset, expected, msg) => {
     approxEqual(uniforms[offset + 0], expected.offset[0], 1e-6, `${msg}.offset.x`);
     approxEqual(uniforms[offset + 1], expected.offset[1], 1e-6, `${msg}.offset.y`);
@@ -31,32 +22,25 @@ const expectPackedTextureTransform = (uniforms, offset, expected, msg) => {
     approxEqual(uniforms[offset + 6], expected.texCoord, 1e-6, `${msg}.texCoord`);
     approxEqual(uniforms[offset + 7], 0, 1e-6, `${msg}.pad`);
 };
-
 const createTextureViews = (device, queue, rgba, wantSrgbView) => {
     const texture = device.createTexture({ size: { width: 1, height: 1 }, format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST, viewFormats: ["rgba8unorm-srgb"] });
     const data = new Uint8Array(256);
-    data[0] = rgba[0];
-    data[1] = rgba[1];
-    data[2] = rgba[2];
-    data[3] = rgba[3];
+    data[0] = rgba[0]; data[1] = rgba[1]; data[2] = rgba[2]; data[3] = rgba[3];
     queue.writeTexture({ texture }, data, { bytesPerRow: 256, rowsPerImage: 1 }, { width: 1, height: 1 });
     const linear = texture.createView({ format: "rgba8unorm" });
     const srgb = wantSrgbView ? texture.createView({ format: "rgba8unorm-srgb" }) : linear;
     return { texture, linear, srgb };
 };
-
 const createUniformBuffer = (device, queue, data) => {
     const buffer = device.createBuffer({ size: data.byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength);
     return buffer;
 };
-
 const createSceneLayout = (device, withLighting) => {
     const entries = [{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }, { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: "uniform" } }];
     if (withLighting) entries.push({ binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } });
     return device.createBindGroupLayout({ entries });
 };
-
 const createPipeline = (device, shaderCode, bindGroupLayouts, vertexBuffers) => {
     const module = device.createShaderModule({ code: shaderCode });
     return device.createRenderPipeline({
@@ -67,16 +51,56 @@ const createPipeline = (device, shaderCode, bindGroupLayouts, vertexBuffers) => 
         depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" }
     });
 };
-
 const vertexBuffersWithUv1 = [
     { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }] },
     { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: "float32x3" }] },
     { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: "float32x2" }] },
     { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] }
 ];
-
+const vertexBuffersWithTangent = [
+    ...vertexBuffersWithUv1,
+    { arrayStride: 16, attributes: [{ shaderLocation: 12, offset: 0, format: "float32x4" }] }
+];
+const vertexBuffersInstancedStandard = [
+    ...vertexBuffersWithTangent,
+    {
+        arrayStride: 128,
+        stepMode: "instance",
+        attributes: [
+            { shaderLocation: 3, offset: 0, format: "float32x4" },
+            { shaderLocation: 4, offset: 16, format: "float32x4" },
+            { shaderLocation: 5, offset: 32, format: "float32x4" },
+            { shaderLocation: 6, offset: 48, format: "float32x4" },
+            { shaderLocation: 7, offset: 64, format: "float32x4" },
+            { shaderLocation: 8, offset: 80, format: "float32x4" },
+            { shaderLocation: 9, offset: 96, format: "float32x4" },
+            { shaderLocation: 10, offset: 112, format: "float32x4" }
+        ]
+    }
+];
+const vertexBuffersSkinnedStandard = [
+    ...vertexBuffersWithTangent,
+    {
+        arrayStride: 24,
+        attributes: [
+            { shaderLocation: 3, offset: 0, format: "uint16x4" },
+            { shaderLocation: 4, offset: 8, format: "float32x4" }
+        ]
+    }
+];
+const vertexBuffersSkinned8Standard = [
+    ...vertexBuffersWithTangent,
+    {
+        arrayStride: 48,
+        attributes: [
+            { shaderLocation: 3, offset: 0, format: "uint16x4" },
+            { shaderLocation: 4, offset: 8, format: "float32x4" },
+            { shaderLocation: 5, offset: 24, format: "uint16x4" },
+            { shaderLocation: 6, offset: 32, format: "float32x4" }
+        ]
+    }
+];
 const vertexBuffersWithUv0 = vertexBuffersWithUv1.slice(0, 3);
-
 const gpu = navigator.gpu;
 assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
 const adapter = await gpu.requestAdapter();
@@ -90,6 +114,7 @@ const white = createTextureViews(device, device.queue, [255, 255, 255, 255], tru
 const normal = createTextureViews(device, device.queue, [128, 128, 255, 255], false);
 const metallicRoughness = createTextureViews(device, device.queue, [0, 255, 255, 255], false);
 const occlusion = createTextureViews(device, device.queue, [255, 0, 0, 255], false);
+const anisotropy = createTextureViews(device, device.queue, [255, 128, 255, 255], false);
 
 // 1) Material defaults, dirty state, explicit render-state overrides, and retain/release behavior.
 {
@@ -179,6 +204,20 @@ const occlusion = createTextureViews(device, device.queue, [255, 0, 0, 255], fal
     const normalTransform = { offset: [0, 0], rotation: Math.PI, scale: [1, 1], texCoord: 1 };
     const occlusionTransform = { offset: [0.5, 0.25], rotation: 0.25, scale: [0.9, 0.8], texCoord: 1 };
     const emissiveTransform = { offset: [0.75, 0.5], rotation: -0.5, scale: [1.25, 1.5], texCoord: 0 };
+    const clearcoatTransform = { offset: [0.11, 0.12], rotation: 0.2, scale: [0.8, 0.7], texCoord: 1 };
+    const clearcoatRoughnessTransform = { offset: [0.21, 0.22], rotation: -0.3, scale: [1.1, 1.2], texCoord: 0 };
+    const clearcoatNormalTransform = { offset: [0.31, 0.32], rotation: 0.4, scale: [1.3, 1.4], texCoord: 1 };
+    const specularTransform = { offset: [0.41, 0.42], rotation: -0.5, scale: [1.5, 1.6], texCoord: 0 };
+    const specularColorTransform = { offset: [0.51, 0.52], rotation: 0.6, scale: [1.7, 1.8], texCoord: 1 };
+    const sheenColorTransform = { offset: [0.61, 0.62], rotation: -0.7, scale: [1.9, 2.0], texCoord: 0 };
+    const sheenRoughnessTransform = { offset: [0.71, 0.72], rotation: 0.8, scale: [2.1, 2.2], texCoord: 1 };
+    const iridescenceTransform = { offset: [0.81, 0.82], rotation: -0.9, scale: [2.3, 2.4], texCoord: 0 };
+    const iridescenceThicknessTransform = { offset: [0.91, 0.92], rotation: 1.0, scale: [2.5, 2.6], texCoord: 1 };
+    const anisotropyTransform = { offset: [1.01, 1.02], rotation: -1.1, scale: [2.7, 2.8], texCoord: 0 };
+    const transmissionTransform = { offset: [1.11, 1.12], rotation: 1.2, scale: [2.9, 3.0], texCoord: 1 };
+    const volumeThicknessTransform = { offset: [1.21, 1.22], rotation: -1.3, scale: [3.1, 3.2], texCoord: 0 };
+    const diffuseTransmissionTransform = { offset: [1.31, 1.32], rotation: 1.4, scale: [3.3, 3.4], texCoord: 1 };
+    const diffuseTransmissionColorTransform = { offset: [1.41, 1.42], rotation: -1.5, scale: [3.5, 3.6], texCoord: 0 };
     const texture = new Texture2D({ source: { kind: "bytes", bytes: new Uint8Array([255, 255, 255, 255]).buffer }, mipmaps: false });
     const material = new StandardMaterial({
         color: [1, 0, 0], opacity: 0.9,
@@ -196,27 +235,46 @@ const occlusion = createTextureViews(device, device.queue, [255, 0, 0, 255], fal
         emissiveTextureTransform: emissiveTransform,
         normalScale: 1.25, occlusionStrength: 0.9, alphaCutoff: 0.35,
         extensions: {
-            clearcoat: { factor: 0.4, texture, roughness: 0.2, roughnessTexture: texture, normalTexture: texture, normalScale: 0.8 },
-            transmission: { factor: 0.3, texture },
-            volume: { thicknessFactor: 0.6, thicknessTexture: texture, attenuationDistance: 10, attenuationColor: [0.8, 0.7, 0.6] },
-            specular: { factor: 0.9, texture, color: [0.5, 0.6, 0.7], colorTexture: texture },
-            sheen: { color: [0.2, 0.3, 0.4], colorTexture: texture, roughness: 0.25, roughnessTexture: texture },
-            iridescence: { factor: 0.45, texture, ior: 1.4, thicknessMinimum: 120, thicknessMaximum: 420, thicknessTexture: texture },
-            anisotropy: { strength: 0.5, rotation: 0.7, texture },
+            clearcoat: { factor: 0.4, texture, textureTransform: clearcoatTransform, roughness: 0.2, roughnessTexture: texture, roughnessTextureTransform: clearcoatRoughnessTransform, normalTexture: texture, normalTextureTransform: clearcoatNormalTransform, normalScale: 0.8 },
+            transmission: { factor: 0.3, texture, textureTransform: transmissionTransform },
+            volume: { thicknessFactor: 0.6, thicknessTexture: texture, thicknessTextureTransform: volumeThicknessTransform, attenuationDistance: 10, attenuationColor: [0.8, 0.7, 0.6] },
+            specular: { factor: 0.9, texture, textureTransform: specularTransform, color: [0.5, 0.6, 0.7], colorTexture: texture, colorTextureTransform: specularColorTransform },
+            sheen: { color: [0.2, 0.3, 0.4], colorTexture: texture, colorTextureTransform: sheenColorTransform, roughness: 0.25, roughnessTexture: texture, roughnessTextureTransform: sheenRoughnessTransform },
+            iridescence: { factor: 0.45, texture, textureTransform: iridescenceTransform, ior: 1.4, thicknessMinimum: 120, thicknessMaximum: 420, thicknessTexture: texture, thicknessTextureTransform: iridescenceThicknessTransform },
+            anisotropy: { strength: 0.5, rotation: 0.7, texture, textureTransform: anisotropyTransform },
+            diffuseTransmission: { factor: 0.35, texture, textureTransform: diffuseTransmissionTransform, color: [0.6, 0.7, 0.8], colorTexture: texture, colorTextureTransform: diffuseTransmissionColorTransform },
+            dispersion: { dispersion: 0.42 },
             ior: { ior: 1.55 },
             emissiveStrength: { strength: 2 }
         }
     });
 
-    assert.equal(material.getUniformBufferSize(), 224);
+    assert.equal(material.getUniformBufferSize(), 816);
     const uniforms = material.getUniformData();
-    assert.equal(uniforms.length, 56);
+    assert.equal(uniforms.length, 204);
     approxArray(Array.from(uniforms.slice(0, 13)), [1, 0, 0, 0.9, 0, 0, 1, 0.5, 0.2, 0.7, 1.25, 0.9, 0.35]);
     expectPackedTextureTransform(uniforms, 16, baseTransform, "standard.baseColorTextureTransform");
     expectPackedTextureTransform(uniforms, 24, mrTransform, "standard.metallicRoughnessTextureTransform");
     expectPackedTextureTransform(uniforms, 32, normalTransform, "standard.normalTextureTransform");
     expectPackedTextureTransform(uniforms, 40, occlusionTransform, "standard.occlusionTextureTransform");
     expectPackedTextureTransform(uniforms, 48, emissiveTransform, "standard.emissiveTextureTransform");
+    approxArray(Array.from(uniforms.slice(56, 68)), [0.4, 0.2, 0.8, 0, 0.9, 0.5, 0.6, 0.7, 1.55, 2, 0, 0]);
+    expectPackedTextureTransform(uniforms, 68, clearcoatTransform, "standard.clearcoatTextureTransform");
+    expectPackedTextureTransform(uniforms, 76, clearcoatRoughnessTransform, "standard.clearcoatRoughnessTextureTransform");
+    expectPackedTextureTransform(uniforms, 84, clearcoatNormalTransform, "standard.clearcoatNormalTextureTransform");
+    expectPackedTextureTransform(uniforms, 92, specularTransform, "standard.specularTextureTransform");
+    expectPackedTextureTransform(uniforms, 100, specularColorTransform, "standard.specularColorTextureTransform");
+    approxArray(Array.from(uniforms.slice(108, 120)), [0.2, 0.3, 0.4, 0.25, 0.45, 1.4, 120, 420, 0.5, Math.cos(0.7), Math.sin(0.7), 0]);
+    expectPackedTextureTransform(uniforms, 120, sheenColorTransform, "standard.sheenColorTextureTransform");
+    expectPackedTextureTransform(uniforms, 128, sheenRoughnessTransform, "standard.sheenRoughnessTextureTransform");
+    expectPackedTextureTransform(uniforms, 136, iridescenceTransform, "standard.iridescenceTextureTransform");
+    expectPackedTextureTransform(uniforms, 144, iridescenceThicknessTransform, "standard.iridescenceThicknessTextureTransform");
+    expectPackedTextureTransform(uniforms, 152, anisotropyTransform, "standard.anisotropyTextureTransform");
+    approxArray(Array.from(uniforms.slice(160, 172)), [0.3, 0.35, 0.6, 0.42, 0.6, 0.7, 0.8, 10, 0.8, 0.7, 0.6, 0]);
+    expectPackedTextureTransform(uniforms, 172, transmissionTransform, "standard.transmissionTextureTransform");
+    expectPackedTextureTransform(uniforms, 180, volumeThicknessTransform, "standard.volumeThicknessTextureTransform");
+    expectPackedTextureTransform(uniforms, 188, diffuseTransmissionTransform, "standard.diffuseTransmissionTextureTransform");
+    expectPackedTextureTransform(uniforms, 196, diffuseTransmissionColorTransform, "standard.diffuseTransmissionColorTextureTransform");
 
     material.metallic = 2;
     material.roughness = -1;
@@ -231,17 +289,63 @@ const occlusion = createTextureViews(device, device.queue, [255, 0, 0, 255], fal
 
     const extensions = material.extensions;
     assert.equal(extensions.clearcoat.factor, 0.4);
+    assert.equal(extensions.sheen.roughness, 0.25);
+    assert.equal(extensions.iridescence.thicknessMaximum, 420);
+    assert.equal(extensions.anisotropy.strength, 0.5);
     assert.equal(extensions.volume.attenuationColor[2], 0.6);
+    assert.equal(extensions.transmission.textureTransform.texCoord, 1);
+    assert.equal(extensions.diffuseTransmission.factor, 0.35);
+    assert.equal(extensions.diffuseTransmission.colorTextureTransform.offset[0], 1.41);
+    assert.equal(extensions.dispersion.dispersion, 0.42);
     extensions.clearcoat.factor = 99;
+    extensions.clearcoat.textureTransform.offset[0] = 99;
+    extensions.sheen.colorTextureTransform.offset[0] = 99;
+    extensions.diffuseTransmission.colorTextureTransform.offset[0] = 99;
     assert.equal(material.extensions.clearcoat.factor, 0.4);
+    approxEqual(material.extensions.clearcoat.textureTransform.offset[0], 0.11);
+    approxEqual(material.extensions.sheen.colorTextureTransform.offset[0], 0.61);
+    approxEqual(material.extensions.diffuseTransmission.colorTextureTransform.offset[0], 1.41);
     assert.equal(material.getFeatureMask() & 0b11111, 0b11111);
     assert.ok(material.getFeatureMask() > 0b11111);
+    material.bindGroupKey = "cached";
+    material.markClean();
     material.setExtensions({ emissiveStrength: { strength: 3 } });
+    assert.equal(material.bindGroupKey, null);
+    assert.equal(material.dirty, true);
     assert.equal(material.extensions.emissiveStrength.strength, 3);
     assert.equal(material.extensions.clearcoat, null);
 
+    const fallbackNormalMaterial = new StandardMaterial({
+        normalScale: 2,
+        extensions: { clearcoat: { factor: 1, normalScale: 2 } }
+    });
+    const fallbackNormalUniforms = fallbackNormalMaterial.getUniformData();
+    assert.equal(fallbackNormalUniforms[10], 0);
+    assert.equal(fallbackNormalUniforms[58], 0);
+    fallbackNormalMaterial.destroy();
+
+    const authoredNormalMaterial = new StandardMaterial({
+        normalTexture: texture,
+        normalScale: 2,
+        extensions: { clearcoat: { factor: 1, normalTexture: texture, normalScale: 2 } }
+    });
+    const authoredNormalUniforms = authoredNormalMaterial.getUniformData();
+    assert.equal(authoredNormalUniforms[10], 2);
+    assert.equal(authoredNormalUniforms[58], 2);
+    authoredNormalMaterial.destroy();
+
     texture.destroy();
     material.destroy();
+
+    const transmissionOnly = new StandardMaterial({ extensions: { transmission: { factor: 0.1 } } });
+    const diffuseTransmissionOnly = new StandardMaterial({ extensions: { diffuseTransmission: { factor: 0.1 } } });
+    const volumeDispersionOnly = new StandardMaterial({ extensions: { volume: { thicknessFactor: 1 }, dispersion: { dispersion: 1 } } });
+    assert.equal(transmissionOnly.usesTransmissionLayout(), true);
+    assert.equal(diffuseTransmissionOnly.usesTransmissionLayout(), true);
+    assert.equal(volumeDispersionOnly.usesTransmissionLayout(), false);
+    transmissionOnly.destroy();
+    diffuseTransmissionOnly.destroy();
+    volumeDispersionOnly.destroy();
 }
 
 // 4) Material GPU layouts and shader code create bind groups and render pipelines through the public API.
@@ -296,7 +400,27 @@ const occlusion = createTextureViews(device, device.queue, [255, 0, 0, 255], fal
             { binding: 7, resource: fallbackSampler },
             { binding: 8, resource: occlusion.linear },
             { binding: 9, resource: fallbackSampler },
-            { binding: 10, resource: white.srgb }
+            { binding: 10, resource: white.srgb },
+            { binding: 11, resource: fallbackSampler },
+            { binding: 12, resource: white.linear },
+            { binding: 13, resource: fallbackSampler },
+            { binding: 14, resource: white.linear },
+            { binding: 15, resource: fallbackSampler },
+            { binding: 16, resource: normal.linear },
+            { binding: 17, resource: fallbackSampler },
+            { binding: 18, resource: white.linear },
+            { binding: 19, resource: fallbackSampler },
+            { binding: 20, resource: white.srgb },
+            { binding: 21, resource: fallbackSampler },
+            { binding: 22, resource: white.srgb },
+            { binding: 23, resource: fallbackSampler },
+            { binding: 24, resource: white.linear },
+            { binding: 25, resource: fallbackSampler },
+            { binding: 26, resource: white.linear },
+            { binding: 27, resource: fallbackSampler },
+            { binding: 28, resource: white.linear },
+            { binding: 29, resource: fallbackSampler },
+            { binding: 30, resource: anisotropy.linear }
         ]
     }));
     assert.ok(device.createBindGroup({
@@ -312,13 +436,30 @@ const occlusion = createTextureViews(device, device.queue, [255, 0, 0, 255], fal
 
     const sceneLayout = createSceneLayout(device, true);
     const unlitSceneLayout = createSceneLayout(device, false);
+    const skinLayout = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }] });
     assert.ok(createPipeline(device, unlit.getShaderCode(), [unlitSceneLayout, unlit.createBindGroupLayout(device)], vertexBuffersWithUv1));
-    assert.ok(createPipeline(device, standard.getShaderCode(), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersWithUv1));
+    assert.ok(createPipeline(device, standard.getShaderCode(), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersWithTangent));
+    assert.ok(createPipeline(device, standard.getShaderCode({ instanced: true }), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersInstancedStandard));
+    assert.ok(createPipeline(device, standard.getShaderCode({ skinned: true }), [sceneLayout, standard.createBindGroupLayout(device), skinLayout], vertexBuffersSkinnedStandard));
+    assert.ok(createPipeline(device, standard.getShaderCode({ skinned8: true }), [sceneLayout, standard.createBindGroupLayout(device), skinLayout], vertexBuffersSkinned8Standard));
+    assert.ok(createPipeline(device, standard.getShaderCode({ transmission: true }), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersWithTangent));
+    assert.ok(createPipeline(device, standard.getShaderCode({ instanced: true, transmission: true }), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersInstancedStandard));
+    assert.ok(createPipeline(device, standard.getShaderCode({ skinned: true, transmission: true }), [sceneLayout, standard.createBindGroupLayout(device), skinLayout], vertexBuffersSkinnedStandard));
+    assert.ok(createPipeline(device, standard.getShaderCode({ skinned8: true, transmission: true }), [sceneLayout, standard.createBindGroupLayout(device), skinLayout], vertexBuffersSkinned8Standard));
     assert.ok(createPipeline(device, data.getShaderCode(), [sceneLayout, data.createBindGroupLayout(device)], vertexBuffersWithUv0));
     assert.ok(createPipeline(device, custom.getShaderCode(), [unlitSceneLayout, custom.createBindGroupLayout(device)], vertexBuffersWithUv0));
     assert.ok(unlit.getShaderCode({ instanced: true }).includes("@location(3)"));
     assert.ok(standard.getShaderCode({ skinned: true }).includes("@group(2) @binding(0)"));
     assert.ok(standard.getShaderCode({ skinned8: true }).includes("joints1"));
+    assert.ok(standard.getShaderCode().includes("fn iridescentFresnel"));
+    assert.ok(standard.getShaderCode().includes("fn distributionGGXAnisotropic"));
+    assert.ok(standard.getShaderCode().includes("fn sheenVisibility"));
+    assert.ok(standard.getShaderCode().includes("let anisotropyFrame = buildTangentFrame(geometricN, in.tangent, in.worldPos, anisotropyUv);"));
+    assert.ok(standard.getShaderCode({ transmission: true }).includes("let transmission = clamp(material.transmissionParams.x"));
+    assert.ok(standard.getShaderCode().includes("out.tangent = vec4f((model.normalMatrix * vec4f(in.tangent.xyz, 0.0)).xyz, in.tangent.w);"));
+    assert.ok(standard.getShaderCode({ instanced: true }).includes("out.tangent = vec4f((normalM * vec4f(in.tangent.xyz, 0.0)).xyz, in.tangent.w);"));
+    assert.ok(standard.getShaderCode({ skinned: true }).includes("out.tangent = vec4f((model.normalMatrix * vec4f(localTangent, 0.0)).xyz, in.tangent.w);"));
+    assert.ok(standard.getShaderCode({ skinned8: true }).includes("out.tangent = vec4f((model.normalMatrix * vec4f(localTangent, 0.0)).xyz, in.tangent.w);"));
 
     unlit.destroy();
     standard.destroy();
@@ -336,7 +477,7 @@ const occlusion = createTextureViews(device, device.queue, [255, 0, 0, 255], fal
         scaleTransform: {
             componentCount: 2, componentIndex: 1,
             stride: 2, offset: 0,
-            valueMode: "component", mode: "linear", lampMode: "range",
+            valueMode: "component", mode: "linear", clampMode: "range",
             domainMin: 0, domainMax: 7,
             clampMin: 0, clampMax: 7
         }
@@ -465,7 +606,7 @@ const occlusion = createTextureViews(device, device.queue, [255, 0, 0, 255], fal
     const standard = new StandardMaterial();
     standard.uniformBuffer = device.createBuffer({ size: standard.getUniformBufferSize(), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     standard.bindGroupKey = "cached-standard";
-    standard.pipeline = createPipeline(device, standard.getShaderCode(), [createSceneLayout(device, true), standard.createBindGroupLayout(device)], vertexBuffersWithUv1);
+    standard.pipeline = createPipeline(device, standard.getShaderCode(), [createSceneLayout(device, true), standard.createBindGroupLayout(device)], vertexBuffersWithTangent);
     standard.destroy();
     assert.equal(standard.uniformBuffer, null);
     assert.equal(standard.bindGroup, null);
@@ -489,4 +630,5 @@ white.texture.destroy();
 normal.texture.destroy();
 metallicRoughness.texture.destroy();
 occlusion.texture.destroy();
+anisotropy.texture.destroy();
 device.destroy();
