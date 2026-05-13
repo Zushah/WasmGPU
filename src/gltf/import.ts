@@ -409,8 +409,12 @@ const GLTF_EXTENSION_SUPPORT_STATES: Record<string, GltfImportExtensionSupportSt
     KHR_node_visibility: "supported",
     KHR_animation_pointer: "supported",
     KHR_xmp_json_ld: "supported",
-    KHR_draco_mesh_compression: "unsupported",
-    KHR_texture_transform: "supported"
+    KHR_draco_mesh_compression: "deferred",
+    KHR_texture_basisu: "deferred",
+    KHR_texture_transform: "supported",
+    EXT_mesh_gpu_instancing: "deferred",
+    EXT_meshopt_compression: "deferred",
+    EXT_texture_webp: "deferred"
 };
 
 const buildExtensionsMetadata = (json: GltfRoot): GltfImportExtensionsMetadata => {
