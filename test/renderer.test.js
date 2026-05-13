@@ -6,7 +6,7 @@
 
 import assert from "assert";
 import { create, globals } from "webgpu";
-import { initWebAssembly, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, BlendMode, CullMode } from "../dist/WasmGPU.js";
+import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, BlendMode, CullMode } from "../dist/WasmGPU.js";
 
 Object.assign(globalThis, globals);
 
@@ -279,4 +279,117 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(canvas.currentTextureCount, 1);
 
     renderer.destroy();
+}
+
+// 6) Warmup validates defaults and errors without acquiring a swapchain texture.
+{
+    assert.equal(typeof WasmGPU.prototype.warmup, "function");
+    const canvas = makeCanvas(256, 256);
+    const wgpu = await WasmGPU.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
+    const scene = wgpu.createScene([0, 0, 0]);
+    const camera = wgpu.createCamera.perspective({ fov: 50, near: 0.1, far: 100 });
+    camera.transform.setPosition(0, 0, 5);
+    await assert.rejects(async () => wgpu.warmup({ compute: true }));
+    await assert.rejects(async () => wgpu.warmup({ scene }));
+    await assert.rejects(async () => wgpu.warmup({ camera }));
+    await assert.doesNotReject(async () => wgpu.warmup({ render: false }));
+    await assert.doesNotReject(async () => wgpu.warmup({ scene, camera }));
+    assert.equal(canvas.currentTextureCount, 0);
+    scene.destroy();
+    wgpu.destroy();
+}
+
+// 7) Warmup eagerly exercises visible render resource creation paths before the first render.
+{
+    const canvas = makeCanvas(320, 240);
+    const wgpu = await WasmGPU.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
+    const scene = wgpu.createScene([0.01, 0.02, 0.03]);
+    const camera = wgpu.createCamera.perspective({ fov: 55, near: 0.1, far: 200 });
+    camera.transform.setPosition(0, 0, 12);
+    camera.lookAt(0, 0, 0);
+    const opaqueMaterial = wgpu.material.unlit({ color: [0.7, 0.7, 0.8] });
+    const sharedGeometry = wgpu.geometry.box(0.8, 0.8, 0.8);
+    const meshA = wgpu.createMesh(sharedGeometry.retain(), opaqueMaterial.retain());
+    const meshB = wgpu.createMesh(sharedGeometry, opaqueMaterial);
+    meshA.transform.setPosition(-2, 0, 0);
+    meshB.transform.setPosition(-0.75, 0, 0);
+    const skinnedGeometry = wgpu.geometry.custom({
+        positions: new Float32Array([0, 0, 0, 0.6, 0, 0, 0, 0.6, 0]),
+        normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+        uvs: new Float32Array([0, 0, 1, 0, 0, 1]),
+        indices: new Uint32Array([0, 1, 2]),
+        joints: new Uint16Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        weights: new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0])
+    });
+    const skinnedMesh = wgpu.createMesh(skinnedGeometry, wgpu.material.unlit({ color: [1.0, 0.8, 0.3] }));
+    const joint = wgpu.createTransform();
+    const skin = wgpu.animation.createSkin("WarmupSkin", [joint], null);
+    skinnedMesh.skin = skin.createInstance(skinnedMesh.transform);
+    skinnedMesh.transform.setPosition(0, -1.5, 0);
+    const cloud = wgpu.createPointCloud({
+        data: new Float32Array([-1, 1, 0, 0.1, -0.5, 1.5, 0, 0.2]),
+        keepCPUData: true,
+        ndShape: [1, 2],
+        basePointSize: 10,
+        blendMode: BlendMode.Opaque,
+        depthWrite: true,
+        scaleTransform: { componentCount: 4, componentIndex: 3, stride: 4, offset: 0 }
+    });
+    const field = wgpu.createGlyphField({
+        geometry: wgpu.geometry.box(0.25, 0.25, 0.25),
+        instanceCount: 2,
+        positions: new Float32Array([2, 1, 0, 0, 2, 1.75, 0, 0]),
+        rotations: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]),
+        scales: new Float32Array([1, 1, 1, 0, 1, 1, 1, 0]),
+        attributes: new Float32Array([0.2, 0.4, 0.6, 0.8, 0.5, 0.7, 0.9, 1.1]),
+        keepCPUData: true,
+        ndShape: [1, 2],
+        scaleTransform: { componentCount: 4, componentIndex: 0, stride: 4, offset: 0 }
+    });
+    const graph = wgpu.createNodeLink({
+        nodePositions: new Float32Array([-2, -1.5, 0, -1.25, -1.25, 0]),
+        edges: new Uint16Array([0, 1]),
+        nodeScalars: new Float32Array([0.25, 0.75]),
+        edgeScalars: new Float32Array([0.5]),
+        keepCPUData: true,
+        ndShape: [1, 2]
+    });
+    scene.add(meshA).add(meshB).add(skinnedMesh).add(cloud).add(field).add(graph);
+    await assert.doesNotReject(async () => wgpu.warmup({ scene, camera }));
+    assert.equal(canvas.currentTextureCount, 0);
+    assert.ok(sharedGeometry.positionBuffer);
+    assert.ok(opaqueMaterial.bindGroup);
+    assert.ok(cloud.bindGroup);
+    assert.ok(field.bindGroup);
+    assert.ok(graph.bindGroup);
+    assert.ok(skinnedMesh.skin && skinnedMesh.skin.boneBuffer);
+    assert.doesNotThrow(() => wgpu.render(scene, camera));
+    assert.equal(canvas.currentTextureCount, 1);
+    scene.destroy();
+    wgpu.destroy();
+}
+
+// 8) Transmission warmup prepares transmissive material binding without drawing a visible frame.
+{
+    const canvas = makeCanvas(240, 180);
+    const wgpu = await WasmGPU.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
+    const scene = wgpu.createScene([0, 0, 0]);
+    const camera = wgpu.createCamera.perspective({ fov: 50, near: 0.1, far: 100 });
+    camera.transform.setPosition(0, 0, 5);
+    camera.lookAt(0, 0, 0);
+    const material = wgpu.material.standard({
+        color: [0.8, 0.95, 1.0],
+        opacity: 0.7,
+        blendMode: BlendMode.Transparent,
+        extensions: { transmission: { factor: 0.6 } }
+    });
+    const mesh = wgpu.createMesh(wgpu.geometry.sphere(0.6, 12, 8), material);
+    scene.add(mesh);
+    await assert.doesNotReject(async () => wgpu.warmup({ scene, camera }));
+    assert.equal(canvas.currentTextureCount, 0);
+    assert.ok(material.bindGroup);
+    assert.doesNotThrow(() => wgpu.render(scene, camera));
+    assert.equal(canvas.currentTextureCount, 1);
+    scene.destroy();
+    wgpu.destroy();
 }

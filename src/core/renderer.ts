@@ -518,16 +518,13 @@ export class Renderer {
         this.cullCapacity = cap;
     }
 
-    render(scene: Scene, camera: Camera): void {
-        this.resize();
+    private prepareSceneFrame(scene: Scene, camera: Camera): void {
         this.modelBufferIndex = 0;
         this.instanceBufferOffset = 0;
         this.cameraUniformStagingPtr = frameArena.allocF32(20);
         this.lightingUniformStagingPtr = frameArena.allocF32(8 + (Scene.MAX_LIGHTS * 16));
         this.modelUniformStagingPtr = frameArena.allocF32(32);
         if ("aspect" in camera) (camera as { aspect: number }).aspect = this.aspectRatio;
-        const swapTexture = this.context.getCurrentTexture();
-        const swapView = swapTexture.createView();
         Transform.updateAll();
         this.writeCameraUniforms(camera);
         this.writeLightingUniforms(scene);
@@ -535,6 +532,13 @@ export class Renderer {
         this.buildPointCloudDrawLists(scene, camera);
         this.buildGlyphFieldDrawLists(scene, camera);
         this.buildNodeLinkDrawLists(scene, camera);
+    }
+
+    render(scene: Scene, camera: Camera): void {
+        this.resize();
+        const swapTexture = this.context.getCurrentTexture();
+        const swapView = swapTexture.createView();
+        this.prepareSceneFrame(scene, camera);
         const encoder = this.device.createCommandEncoder();
         const timestampWrites = (this.gpuTimingEnabled && this.gpuQuerySet) ? ({ querySet: this.gpuQuerySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } as any) : undefined;
         const timestampBeginWrites = (this.gpuTimingEnabled && this.gpuQuerySet) ? ({ querySet: this.gpuQuerySet, beginningOfPassWriteIndex: 0 } as any) : undefined;
@@ -663,6 +667,21 @@ export class Renderer {
         }
         this.queue.submit([encoder.finish()]);
         this.tryReadGpuTiming();
+    }
+
+    warmup(scene: Scene, camera: Camera): void {
+        this.resize();
+        this.prepareSceneFrame(scene, camera);
+        const hasTransmission = this.hasOpticalTransmissionDrawItems();
+        if (hasTransmission) this.ensureTransmissionTargets(!this.smaaEnabled);
+        this.warmMeshDrawList(this.opaqueDrawList);
+        this.warmMeshDrawList(this.transparentDrawList);
+        this.warmPointCloudDrawList(this.opaquePointCloudDrawList);
+        this.warmPointCloudDrawList(this.transparentPointCloudDrawList);
+        this.warmGlyphFieldDrawList(this.opaqueGlyphFieldDrawList);
+        this.warmGlyphFieldDrawList(this.transparentGlyphFieldDrawList);
+        this.warmNodeLinkDrawList(this.opaqueNodeLinkDrawList);
+        this.warmNodeLinkDrawList(this.transparentNodeLinkDrawList);
     }
 
     private schedulePick<T>(run: () => Promise<T>): Promise<T> {
@@ -820,19 +839,7 @@ export class Renderer {
     }
 
     private preparePickFrame(scene: Scene, camera: Camera): void {
-        this.modelBufferIndex = 0;
-        this.instanceBufferOffset = 0;
-        this.cameraUniformStagingPtr = frameArena.allocF32(20);
-        this.lightingUniformStagingPtr = frameArena.allocF32(8 + (Scene.MAX_LIGHTS * 16));
-        this.modelUniformStagingPtr = frameArena.allocF32(32);
-        if ("aspect" in camera) (camera as { aspect: number }).aspect = this.aspectRatio;
-        Transform.updateAll();
-        this.writeCameraUniforms(camera);
-        this.writeLightingUniforms(scene);
-        this.buildDrawLists(scene, camera);
-        this.buildPointCloudDrawLists(scene, camera);
-        this.buildGlyphFieldDrawLists(scene, camera);
-        this.buildNodeLinkDrawLists(scene, camera);
+        this.prepareSceneFrame(scene, camera);
         if (!this.pickIdView || !this.pickDepthView || !this.pickDepthPayloadView) this.resizePickTargets();
     }
 
@@ -2059,6 +2066,100 @@ export class Renderer {
         }
         this.opaqueNodeLinkDrawList.sort((a, b) => a.pipelineId - b.pipelineId || a.geometryId - b.geometryId || a.linkId - b.linkId);
         this.transparentNodeLinkDrawList.sort((a, b) => b.sortKey - a.sortKey || a.pipelineId - b.pipelineId || a.geometryId - b.geometryId || a.linkId - b.linkId);
+    }
+
+    private warmMeshDrawList(items: DrawItem[]): void {
+        let lastMaterial: Material | null = null;
+        let lastGeometry: Geometry | null = null;
+        let lastVertexSourceId = -1;
+        for (let i = 0; i < items.length; ) {
+            const first = items[i];
+            const material = first.material;
+            const geometry = first.geometry;
+            const vertexSourceId = first.vertexSourceId;
+            let j = i + 1;
+            while (j < items.length) {
+                const it = items[j];
+                if (it.pipeline !== first.pipeline) break;
+                if (it.material !== material) break;
+                if (it.vertexSourceId !== vertexSourceId) break;
+                j++;
+            }
+            const runCount = j - i;
+            if (geometry !== lastGeometry || vertexSourceId !== lastVertexSourceId) {
+                geometry.upload(this.device);
+                getMeshVertexBuffers(first.mesh, this.device, this.queue);
+                lastGeometry = geometry;
+                lastVertexSourceId = vertexSourceId;
+            }
+            if (material !== lastMaterial) {
+                this.ensureMaterialBindGroup(material);
+                lastMaterial = material;
+            }
+            const canInstance = runCount > 1 && !first.skinned && !hasMeshMorphRuntime(first.mesh) && this.materialSupportsInstancing(material) && items === this.opaqueDrawList;
+            if (canInstance) {
+                this.getOrCreatePipeline(material, true, false, false, first.mirrored);
+                this.warmInstancedRunResources(items, i, runCount);
+            } else if (first.skinned) {
+                for (let k = i; k < j; k++) {
+                    const skin = items[k].mesh.skin;
+                    if (skin) this.warmSkinResources(skin);
+                }
+            }
+            i = j;
+        }
+    }
+
+    private warmSkinResources(skin: Mesh["skin"]): void {
+        if (!skin) return;
+        skin.ensureGpuResources(this.device, this.skinBindGroupLayout);
+        const jointCount = skin.jointCount | 0;
+        const jointMatPtr = frameArena.allocF32(jointCount * 16) as WasmPtr;
+        animf.computeJointMatricesTo(jointMatPtr, skin.skin.jointIndicesPtr, jointCount, skin.skin.invBindPtr, TransformStore.global().worldPtr as WasmPtr, skin.bindMatrixPtr);
+        const bytes = wasmInterop.bytes();
+        this.queue.writeBuffer(skin.boneBuffer!, 0, bytes, jointMatPtr, jointCount * 64);
+    }
+
+    private warmInstancedRunResources(items: DrawItem[], start: number, count: number): void {
+        const ptrsPtr = frameArena.alloc(count * 4, 4) as WasmPtr;
+        const u32 = TransformStore.global().u32();
+        const ptrsBase = ptrsPtr >>> 2;
+        for (let i = 0; i < count; i++) u32[ptrsBase + i] = items[start + i].mesh.transform.worldMatrixPtr >>> 0;
+        const outPtr = frameArena.allocF32(count * 32) as WasmPtr;
+        transformf.packModelNormalMat4FromPtrs(outPtr, ptrsPtr, count);
+        const outBytes = count * this.INSTANCE_STRIDE_BYTES;
+        const dstOffset = this.instanceBufferOffset;
+        const dstEnd = dstOffset + outBytes;
+        this.ensureInstanceBuffer(dstEnd);
+        const bytes = wasmInterop.bytes();
+        this.queue.writeBuffer(this.instanceBuffer!, dstOffset, bytes, outPtr, outBytes);
+        this.instanceBufferOffset = dstEnd;
+    }
+
+    private warmPointCloudDrawList(items: PointCloudDrawItem[]): void {
+        for (const item of items) {
+            const cloud = item.cloud;
+            if (!cloud.visible) continue;
+            if (cloud.pointCount <= 0) continue;
+            this.ensurePointCloudBindGroup(cloud);
+        }
+    }
+
+    private warmGlyphFieldDrawList(items: GlyphDrawItem[]): void {
+        for (const item of items) {
+            const field = item.field;
+            if (!field.visible) continue;
+            if (field.instanceCount <= 0) continue;
+            item.geometry.upload(this.device);
+            this.ensureGlyphFieldBindGroup(field);
+        }
+    }
+
+    private warmNodeLinkDrawList(items: NodeLinkDrawItem[]): void {
+        for (const item of items) {
+            this.ensureNodeLinkBindGroup(item.link);
+            if (item.geometry) item.geometry.upload(this.device);
+        }
     }
 
     private executeDrawList(pass: GPURenderPassEncoder, items: DrawItem[]): void {

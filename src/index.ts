@@ -5,7 +5,7 @@
  */
 
 export { WasmGPU } from "./core/engine";
-export type { WasmGPUDescriptor } from "./core/engine";
+export type { WasmGPUDescriptor, WasmGPUWarmupDescriptor } from "./core/engine";
 export { Renderer } from "./core/renderer";
 export type { RendererDescriptor } from "./core/renderer";
 export { PerformanceStats } from "./core/stats";

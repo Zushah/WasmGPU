@@ -49,6 +49,13 @@ export type WasmGPUDescriptor = RendererDescriptor & {
     // Future options: physics, audio, etc.
 };
 
+export type WasmGPUWarmupDescriptor = {
+    scene?: Scene;
+    camera?: Camera;
+    render?: boolean;
+    compute?: false;
+};
+
 export class WasmGPU {
     private renderer: Renderer;
     readonly compute: Compute;
@@ -186,6 +193,17 @@ export class WasmGPU {
     render(scene: Scene, camera: Camera): void {
         if (!this._isRunning) frameArena.reset();
         this.renderer.render(scene, camera);
+    }
+
+    async warmup(options: WasmGPUWarmupDescriptor = {}): Promise<void> {
+        const compute = (options as WasmGPUWarmupDescriptor & { compute?: boolean }).compute ?? false;
+        if (compute) throw new Error("WasmGPU.warmup: compute warmup is not implemented yet.");
+        const render = options.render ?? true;
+        if (!render) return;
+        const { scene, camera } = options;
+        if (!scene || !camera) throw new Error("WasmGPU.warmup: scene and camera are required when render warmup is enabled.");
+        if (!this._isRunning) frameArena.reset();
+        this.renderer.warmup(scene, camera);
     }
 
     private buildPickNdIndex(hit: RendererPickHit): number[] | null {
