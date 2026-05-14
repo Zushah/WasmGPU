@@ -7,62 +7,26 @@
 import assert from "assert";
 import { initWebAssembly, Geometry, Mesh, Scene, TransformStore, UnlitMaterial, StandardMaterial } from "../dist/WasmGPU.js";
 
-const approxEqual = (actual, expected, tol = 1e-6, msg = "Numbers differ") => {
-    assert.ok(Number.isFinite(actual) && Number.isFinite(expected), `${msg}: expected finite numbers`);
-    assert.ok(Math.abs(actual - expected) <= tol, `${msg}: ${actual} vs ${expected}`);
-};
-
-const approxArray = (actual, expected, tol = 1e-6, msg = "Arrays differ") => {
-    assert.equal(actual.length, expected.length, `${msg}: length ${actual.length} vs ${expected.length}`);
-    for (let i = 0; i < actual.length; i++) approxEqual(actual[i], expected[i], tol, `${msg} at index ${i}`);
-};
-
+const approxEqual = (actual, expected, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(actual) && Number.isFinite(expected), `${msg}: expected finite numbers`); assert.ok(Math.abs(actual - expected) <= tol, `${msg}: ${actual} vs ${expected}`); };
+const approxArray = (actual, expected, tol = 1e-6, msg = "Arrays differ") => { assert.equal(actual.length, expected.length, `${msg}: length ${actual.length} vs ${expected.length}`); for (let i = 0; i < actual.length; i++) approxEqual(actual[i], expected[i], tol, `${msg} at index ${i}`); };
 const captureWarnings = (run) => { const warnings = []; const originalWarn = console.warn; console.warn = (message) => { warnings.push(String(message)); }; try { const result = run(); return { result, warnings }; } finally { console.warn = originalWarn; } };
-
 await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 1) Geometry descriptors preserve attributes, bounds, morph targets, and buffer access guards.
 {
-    const positions = new Float32Array([
-        -1, -2, -3,
-        2, 0, 1,
-        0, 4, -1
-    ]);
-    const normals = new Float32Array([
-        0, 0, 1,
-        0, 0, 1,
-        0, 0, 1
-    ]);
+    const positions = new Float32Array([-1, -2, -3, 2, 0, 1, 0, 4, -1]);
+    const normals = new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]);
     const uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
     const uvs1 = new Float32Array([1, 1, 0, 1, 1, 0]);
-    const joints = new Uint16Array([
-        0, 1, 0, 0,
-        1, 2, 0, 0,
-        2, 3, 0, 0
-    ]);
-    const weights = new Float32Array([
-        0.75, 0.25, 0, 0,
-        0.5, 0.5, 0, 0,
-        0.2, 0.8, 0, 0
-    ]);
-    const joints1 = new Uint16Array([
-        4, 5, 0, 0,
-        5, 6, 0, 0,
-        6, 7, 0, 0
-    ]);
-    const weights1 = new Float32Array([
-        0.1, 0.1, 0, 0,
-        0.1, 0.1, 0, 0,
-        0.1, 0.1, 0, 0
-    ]);
+    const tangents = new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]);
+    const joints = new Uint16Array([0, 1, 0, 0, 1, 2, 0, 0, 2, 3, 0, 0]);
+    const weights = new Float32Array([0.75, 0.25, 0, 0, 0.5, 0.5, 0, 0, 0.2, 0.8, 0, 0]);
+    const joints1 = new Uint16Array([4, 5, 0, 0, 5, 6, 0, 0, 6, 7, 0, 0]);
+    const weights1 = new Float32Array([0.1, 0.1, 0, 0, 0.1, 0.1, 0, 0, 0.1, 0.1, 0, 0]);
     const indices = new Uint32Array([0, 1, 2]);
-    const morphPositions = new Float32Array([
-        0, 0, 0,
-        1, 0, 0,
-        0, 1, 0
-    ]);
+    const morphPositions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     const geometry = new Geometry({
-        positions, normals, uvs, uvs1, joints, weights, joints1, weights1, indices,
+        positions, normals, tangents, uvs, uvs1, joints, weights, joints1, weights1, indices,
         morphTargets: [{ positions: morphPositions }],
         authoredNormals: true
     });
@@ -70,6 +34,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(geometry.vertexCount, 3);
     assert.equal(geometry.indexCount, 3);
     assert.equal(geometry.authoredNormals, true);
+    assert.equal(geometry.tangents, tangents);
     assert.equal(geometry.morphTargets.length, 1);
     assert.equal(geometry.morphTargets[0].positions, morphPositions);
     approxArray(Array.from(geometry.boundsMin), [-1, -2, -3]);
@@ -79,6 +44,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(geometry.isSkinned, false);
     assert.equal(geometry.isSkinned8, false);
     assert.throws(() => geometry.positionBuffer, /not uploaded/);
+    assert.throws(() => geometry.tangentBuffer, /not uploaded/);
     geometry.destroy();
     assert.throws(() => geometry.positionBuffer, /already been released/);
 }
@@ -86,12 +52,9 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 // 2) Geometry validation degrades malformed optional attributes without breaking base geometry.
 {
     const { result: geometry, warnings } = captureWarnings(() => new Geometry({
-        positions: new Float32Array([
-            0, 0, 0,
-            1, 0, 0,
-            0, 1, 0
-        ]),
+        positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
         normals: new Float32Array([0, 1, 0]),
+        tangents: new Float32Array([1, 0, 0, 1]),
         uvs: new Float32Array([0, 0]),
         joints: new Uint16Array([0, 0, 0, 0]),
         joints1: new Uint16Array(12),
@@ -101,12 +64,15 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(geometry.vertexCount, 3);
     assert.equal(geometry.authoredNormals, false);
     assert.equal(geometry.normals.length, 9);
+    assert.equal(geometry.tangents.length, 12);
+    approxArray(Array.from(geometry.tangents.slice(0, 4)), [0, 0, 0, 1]);
     assert.equal(geometry.uvs.length, 6);
     assert.equal(geometry.joints, null);
     assert.equal(geometry.weights, null);
     assert.equal(geometry.joints1, null);
     assert.equal(geometry.weights1, null);
     assert.ok(warnings.some((message) => message.includes("normals length mismatch")));
+    assert.ok(warnings.some((message) => message.includes("tangents length mismatch")));
     assert.ok(warnings.some((message) => message.includes("uvs length mismatch")));
     assert.ok(warnings.some((message) => message.includes("JOINTS_0/WEIGHTS_0")));
     geometry.destroy();
@@ -131,10 +97,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     approxArray(Array.from(box.boundsMax), [1, 2, 3]);
     assert.equal(box.indexCount, 36);
 
-    const curve = Geometry.cartesianCurve({
-        f: (x) => x,
-        xMin: 0, xMax: 1, segments: 4, radius: 0.05, radialSegments: 6
-    });
+    const curve = Geometry.cartesianCurve({ f: (x) => x, xMin: 0, xMax: 1, segments: 4, radius: 0.05, radialSegments: 6 });
     assert.ok(curve.vertexCount > 0);
     assert.ok(curve.indexCount > 0);
 
