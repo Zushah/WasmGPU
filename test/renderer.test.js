@@ -230,7 +230,36 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     renderer.destroy();
 }
 
-// 4) Render-only occlusion hooks do not run during pick or warmup, so picking stays exact and warmup stays unfiltered.
+// 4) The render path stays cold for occlusion bookkeeping when occlusion culling is disabled.
+{
+    const canvas = makeCanvas(160, 160);
+    const renderer = await Renderer.create(canvas, {
+        antialias: false,
+        frustumCulling: false,
+        occlusionCulling: false,
+        occlusionCullingStats: true,
+        canvasFormat: "rgba8unorm"
+    });
+    const rendererAny = renderer;
+    const scene = new Scene();
+    const camera = createCamera();
+    scene.add(new Mesh(Geometry.box(), new UnlitMaterial()));
+    let buildCalls = 0;
+    const origBuild = rendererAny.buildOcclusionFrameState.bind(rendererAny);
+    rendererAny.buildOcclusionFrameState = function patchedBuild(...args) {
+        buildCalls++;
+        return origBuild(...args);
+    };
+
+    assert.doesNotThrow(() => renderer.render(scene, camera));
+    assert.equal(buildCalls, 0);
+    assert.deepEqual(renderer.cullingStats.occlusion, { tested: 0, visible: 0, occluded: 0 });
+
+    scene.destroy();
+    renderer.destroy();
+}
+
+// 5) Render-only occlusion hooks do not run during pick or warmup, so picking stays exact and warmup stays unfiltered.
 {
     const canvas = makeCanvas(160, 160);
     const renderer = await Renderer.create(canvas, {
@@ -267,7 +296,37 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     renderer.destroy();
 }
 
-// 5) Strict previous-frame validity skips occlusion filtering when the stored view-projection does not match.
+// 6) Occlusion-enabled renders create capture resources and submit the capture path without throwing.
+{
+    const canvas = makeCanvas(192, 192);
+    const renderer = await Renderer.create(canvas, {
+        antialias: false,
+        frustumCulling: false,
+        occlusionCulling: true,
+        occlusionCullingStats: true,
+        canvasFormat: "rgba8unorm"
+    });
+    const rendererAny = renderer;
+    const scene = new Scene();
+    const camera = createCamera();
+    scene.add(new Mesh(Geometry.box(), new UnlitMaterial({ color: [0.7, 0.7, 0.7] })));
+    let uncapturedError = null;
+    rendererAny.device.addEventListener("uncapturederror", (e) => {
+        uncapturedError = e?.error?.message ?? String(e);
+    });
+
+    assert.doesNotThrow(() => renderer.render(scene, camera));
+    if (typeof rendererAny.queue.onSubmittedWorkDone === "function") await rendererAny.queue.onSubmittedWorkDone();
+    await Promise.resolve();
+    assert.ok(rendererAny.occlusionHierarchyTexture);
+    assert.ok(rendererAny.occlusionCaptureSerial >= 1);
+    assert.equal(uncapturedError, null);
+
+    scene.destroy();
+    renderer.destroy();
+}
+
+// 7) Strict previous-frame validity skips occlusion filtering when the stored view-projection does not match.
 {
     const canvas = makeCanvas(160, 160);
     const renderer = await Renderer.create(canvas, {
@@ -311,7 +370,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     renderer.destroy();
 }
 
-// 6) Safe occluder capture classification keeps ambiguous coverage paths out of the capture set.
+// 8) Safe occluder capture classification keeps ambiguous coverage paths out of the capture set.
 {
     const canvas = makeCanvas(200, 200);
     const renderer = await Renderer.create(canvas, {
@@ -388,7 +447,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     renderer.destroy();
 }
 
-// 7) Picking APIs return stable empty and region result shapes.
+// 9) Picking APIs return stable empty and region result shapes.
 {
     const canvas = makeCanvas(128, 128);
     const renderer = await Renderer.create(canvas, {
@@ -422,7 +481,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     renderer.destroy();
 }
 
-// 8) SMAA render path and destroyed scene objects clean up without poisoning later frames.
+// 10) SMAA render path and destroyed scene objects clean up without poisoning later frames.
 {
     const canvas = makeCanvas(160, 120);
     const renderer = await Renderer.create(canvas, {
@@ -443,7 +502,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     renderer.destroy();
 }
 
-// 9) Warmup validates defaults and errors without acquiring a swapchain texture.
+// 11) Warmup validates defaults and errors without acquiring a swapchain texture.
 {
     assert.equal(typeof WasmGPU.prototype.warmup, "function");
     const canvas = makeCanvas(256, 256);
@@ -461,7 +520,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     wgpu.destroy();
 }
 
-// 10) Warmup eagerly exercises visible render resource creation paths before the first render.
+// 12) Warmup eagerly exercises visible render resource creation paths before the first render.
 {
     const canvas = makeCanvas(320, 240);
     const wgpu = await WasmGPU.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
@@ -531,7 +590,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     wgpu.destroy();
 }
 
-// 11) Transmission warmup prepares transmissive material binding without drawing a visible frame.
+// 13) Transmission warmup prepares transmissive material binding without drawing a visible frame.
 {
     const canvas = makeCanvas(240, 180);
     const wgpu = await WasmGPU.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });

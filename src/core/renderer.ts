@@ -16,7 +16,6 @@ import { NodeLink } from "../world/nodelink";
 import type { PickLassoPoint, PickQuery, PickRegionQuery } from "../world/picking";
 import { Geometry } from "../graphics/geometry";
 import { Material, BlendMode, CullMode, UnlitMaterial, StandardMaterial, DataMaterial, CustomMaterial } from "../graphics/material";
-import { Texture2D } from "../graphics/texture";
 import { animf, cullf, frameArena, frustumf, mat4, mat4f, transformf, wasm, wasmInterop, WasmPtr } from "../wasm";
 import smaaWGSL from "../wgsl/core/smaa.wgsl";
 import pointCloudWGSL from "../wgsl/world/pointcloud.wgsl";
@@ -650,8 +649,9 @@ export class Renderer {
         this.cullingStats.occlusion.tested = 0;
         this.cullingStats.occlusion.visible = 0;
         this.cullingStats.occlusion.occluded = 0;
+        if (!this.occlusionCullingEnabled) return;
         this.pendingOcclusionFrameState = this.buildOcclusionFrameState();
-        if (!this.occlusionCullingEnabled || !this.pendingOcclusionFrameState) return;
+        if (!this.pendingOcclusionFrameState) return;
         const hierarchy = this.getValidOcclusionHierarchy(camera, this.pendingOcclusionFrameState.signature);
         if (!hierarchy) return;
         this.applyOcclusionFiltering(camera, this.pendingOcclusionFrameState.candidates, hierarchy);
