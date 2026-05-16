@@ -79,6 +79,12 @@ const colorModeId = (mode: GlyphColorMode): number => {
     }
 };
 
+const glyphRevisionScratch = new ArrayBuffer(4);
+const glyphRevisionF32 = new Float32Array(glyphRevisionScratch);
+const glyphRevisionU32 = new Uint32Array(glyphRevisionScratch);
+const mixGlyphRevision = (hash: number, value: number): number => Math.imul((hash ^ (value >>> 0)) >>> 0, 16777619) >>> 0;
+const mixGlyphRevisionF32 = (hash: number, value: number): number => { glyphRevisionF32[0] = Number.isFinite(value) ? value : 0; return mixGlyphRevision(hash, glyphRevisionU32[0] >>> 0); };
+
 const createUvEllipsoidGeometry = (latSegments: number = 8, lonSegments: number = 12): Geometry => {
     const lat = Math.max(3, latSegments | 0);
     const lon = Math.max(3, lonSegments | 0);
@@ -389,6 +395,23 @@ export class GlyphField {
 
     get instanceCount(): number {
         return this._instanceCount;
+    }
+
+    get occluderRevision(): number {
+        let hash = 2166136261 >>> 0;
+        hash = mixGlyphRevision(hash, this._instanceCount >>> 0);
+        hash = mixGlyphRevision(hash, this._scaleRevision >>> 0);
+        hash = mixGlyphRevision(hash, this.blendMode === BlendMode.Opaque ? 1 : this.blendMode === BlendMode.Transparent ? 2 : 3);
+        hash = mixGlyphRevision(hash, this.cullMode === CullMode.Back ? 1 : this.cullMode === CullMode.Front ? 2 : 3);
+        hash = mixGlyphRevision(hash, this.depthWrite ? 1 : 0);
+        hash = mixGlyphRevision(hash, this.depthTest ? 1 : 0);
+        hash = mixGlyphRevision(hash, colorModeId(this._colorMode) >>> 0);
+        hash = mixGlyphRevision(hash, this._dataDirty ? 1 : 0);
+        hash = mixGlyphRevision(hash, this.geometry.vertexCount >>> 0);
+        hash = mixGlyphRevision(hash, this.geometry.indexCount >>> 0);
+        hash = mixGlyphRevision(hash, this.attributesBuffer ? 1 : 0);
+        hash = mixGlyphRevisionF32(hash, this._opacity);
+        return hash >>> 0;
     }
 
     get ndShape(): number[] | null {

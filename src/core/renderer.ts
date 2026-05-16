@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+import { alignTo, createDepthTexture } from "../utils";
 import { Transform, TransformStore } from "./transform";
 import { Scene } from "../world/scene";
 import { DirectionalLight, PointLight, SpotLight, resolveLightDirection, resolveLightPosition } from "../world/light";
@@ -14,7 +15,7 @@ import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
 import type { PickLassoPoint, PickQuery, PickRegionQuery } from "../world/picking";
 import { Geometry } from "../graphics/geometry";
-import { Material, BlendMode, CullMode, UnlitMaterial, StandardMaterial, DataMaterial } from "../graphics/material";
+import { Material, BlendMode, CullMode, UnlitMaterial, StandardMaterial, DataMaterial, CustomMaterial } from "../graphics/material";
 import { Texture2D } from "../graphics/texture";
 import { animf, cullf, frameArena, frustumf, mat4, mat4f, transformf, wasm, wasmInterop, WasmPtr } from "../wasm";
 import smaaWGSL from "../wgsl/core/smaa.wgsl";
@@ -27,7 +28,11 @@ import pickMeshSkinned8WGSL from "../wgsl/core/picking-mesh-skinned8.wgsl";
 import pickPointCloudWGSL from "../wgsl/world/picking-pointcloud.wgsl";
 import pickGlyphFieldWGSL from "../wgsl/world/picking-glyphfield.wgsl";
 import pickNodeLinkWGSL from "../wgsl/world/picking-nodelink.wgsl";
-import { createDepthTexture } from "../utils";
+import occlusionMeshWGSL from "../wgsl/core/occlusion-mesh.wgsl";
+import occlusionReduceWGSL from "../wgsl/core/occlusion-reduce.wgsl";
+import occlusionPointCloudWGSL from "../wgsl/world/occlusion-pointcloud.wgsl";
+import occlusionGlyphFieldWGSL from "../wgsl/world/occlusion-glyphfield.wgsl";
+import occlusionNodeLinkWGSL from "../wgsl/world/occlusion-nodelink.wgsl";
 
 export type RendererDescriptor = {
     antialias?: boolean;
@@ -35,9 +40,23 @@ export type RendererDescriptor = {
     canvasFormat?: GPUTextureFormat;
     frustumCulling?: boolean;
     frustumCullingStats?: boolean;
+    occlusionCulling?: boolean;
+    occlusionCullingStats?: boolean;
     maxBufferSize?: number;
     maxStorageBufferBindingSize?: number;
     maxUniformBufferBindingSize?: number;
+};
+
+export type RendererCullingStats = {
+    frustum: {
+        tested: number;
+        visible: number;
+    };
+    occlusion: {
+        tested: number;
+        visible: number;
+        occluded: number;
+    };
 };
 
 type DrawItem = {
@@ -85,6 +104,62 @@ type NodeLinkDrawItem = {
 };
 
 type TransparentDrawItem = DrawItem | PointCloudDrawItem | GlyphDrawItem | NodeLinkDrawItem;
+
+type OcclusionCandidateKind = "mesh" | "pointcloud" | "glyphfield" | "nodelink";
+
+type OcclusionCandidate = {
+    kind: OcclusionCandidateKind;
+    object: Mesh | PointCloud | GlyphField | NodeLink;
+    objectId: number;
+    worldMatrixPtr: WasmPtr;
+    boundsCenter: [number, number, number];
+    boundsRadius: number;
+};
+
+type OcclusionHierarchyLayout = {
+    widths: Uint32Array;
+    heights: Uint32Array;
+    offsets: Uint32Array;
+    copyOffsets: Uint32Array;
+    rowBytes: Uint32Array;
+    mipCount: number;
+    texelCount: number;
+    totalBytes: number;
+};
+
+type OcclusionHierarchyMetadata = {
+    viewportWidth: number;
+    viewportHeight: number;
+    hierarchyWidth: number;
+    hierarchyHeight: number;
+    cameraType: string;
+    occluderSignature: number;
+    viewProjection: Float32Array;
+    layout: OcclusionHierarchyLayout;
+};
+
+type OcclusionReadbackSlot = {
+    buffer: GPUBuffer | null;
+    capacityBytes: number;
+    pending: Promise<void> | null;
+    state: "idle" | "mapping" | "ready";
+    metadata: OcclusionHierarchyMetadata | null;
+    data: Float32Array | null;
+    serial: number;
+};
+
+type OcclusionFrameState = {
+    signature: number;
+    candidates: OcclusionCandidate[];
+    meshOccluders: DrawItem[];
+    pointCloudOccluders: PointCloudDrawItem[];
+    glyphOccluders: GlyphDrawItem[];
+    nodeLinkOccluders: NodeLinkDrawItem[];
+};
+
+const occlusionHashScratch = new ArrayBuffer(4);
+const occlusionHashF32 = new Float32Array(occlusionHashScratch);
+const occlusionHashU32 = new Uint32Array(occlusionHashScratch);
 
 export type RendererPickHit =
     {
@@ -243,11 +318,39 @@ export class Renderer {
     private _wasmBuffer: ArrayBuffer | null = null;
     private frustumCullingEnabled: boolean = true;
     private frustumCullingStatsEnabled: boolean = false;
-    readonly cullingStats: { tested: number; visible: number } = { tested: 0, visible: 0 };
+    private occlusionCullingEnabled: boolean = false;
+    private occlusionCullingStatsEnabled: boolean = false;
+    readonly cullingStats: RendererCullingStats = { frustum: { tested: 0, visible: 0 }, occlusion: { tested: 0, visible: 0, occluded: 0 } };
+    private frameFrustumTested: number = 0;
+    private frameFrustumVisible: number = 0;
     private cullCentersPtr: WasmPtr = 0;
     private cullRadiiPtr: WasmPtr = 0;
     private cullCapacity: number = 0;
     private cullMeshScratch: Mesh[] = [];
+    private occlusionVisibleObjectIds: Set<number> = new Set();
+    private occlusionCandidateObjectIds: Set<number> = new Set();
+    private occlusionCandidateScratch: OcclusionCandidate[] = [];
+    private pendingOcclusionFrameState: OcclusionFrameState | null = null;
+    private latestOcclusionHierarchy: { metadata: OcclusionHierarchyMetadata; data: Float32Array } | null = null;
+    private latestOcclusionHierarchySerial: number = 0;
+    private occlusionHierarchyTexture: GPUTexture | null = null;
+    private occlusionHierarchyMipViews: GPUTextureView[] = [];
+    private occlusionDepthTexture: GPUTexture | null = null;
+    private occlusionDepthView: GPUTextureView | null = null;
+    private occlusionHierarchyLayout: OcclusionHierarchyLayout | null = null;
+    private occlusionWidth: number = 0;
+    private occlusionHeight: number = 0;
+    private occlusionReadbackSlots: OcclusionReadbackSlot[] = [];
+    private occlusionCaptureSerial: number = 0;
+    private occlusionReduceBindGroupLayout: GPUBindGroupLayout | null = null;
+    private occlusionReducePipeline: GPURenderPipeline | null = null;
+    private occlusionReduceBindGroups: Map<string, GPUBindGroup> = new Map();
+    private readonly OCCLUSION_READBACK_RING_SIZE = 3;
+    private readonly OCCLUSION_MAX_LONG_EDGE = 256;
+    private readonly OCCLUSION_NEAR_EPSILON = 1e-5;
+    private readonly OCCLUSION_MAX_SCREEN_COVERAGE = 0.2;
+    private readonly OCCLUSION_DEPTH_BIAS = 2e-4;
+    private readonly OCCLUSION_VIEW_PROJ_EPSILON = 1e-6;
     private fallbackSampler!: GPUSampler;
     private fallbackWhiteTexture!: GPUTexture;
     private fallbackWhiteViewLinear!: GPUTextureView;
@@ -324,6 +427,9 @@ export class Renderer {
         this.resize();
         this.frustumCullingEnabled = descriptor.frustumCulling ?? true;
         this.frustumCullingStatsEnabled = descriptor.frustumCullingStats ?? false;
+        this.occlusionCullingEnabled = descriptor.occlusionCulling ?? false;
+        this.occlusionCullingStatsEnabled = descriptor.occlusionCullingStats ?? false;
+        if (this.occlusionCullingEnabled) this.ensureOcclusionResources();
     }
 
     get gpu(): { device: GPUDevice; queue: GPUQueue; format: GPUTextureFormat } {
@@ -425,6 +531,7 @@ export class Renderer {
         this.transmissionSourceRevision++;
         if (this.smaaEnabled) this.resizeSmaaTargets();
         this.resizePickTargets();
+        this.invalidateOcclusionResources();
     }
 
     get aspectRatio(): number {
@@ -518,9 +625,12 @@ export class Renderer {
         this.cullCapacity = cap;
     }
 
-    private prepareSceneFrame(scene: Scene, camera: Camera): void {
+    private prepareSceneFrameBase(scene: Scene, camera: Camera): void {
         this.modelBufferIndex = 0;
         this.instanceBufferOffset = 0;
+        this.frameFrustumTested = 0;
+        this.frameFrustumVisible = 0;
+        this.pendingOcclusionFrameState = null;
         this.cameraUniformStagingPtr = frameArena.allocF32(20);
         this.lightingUniformStagingPtr = frameArena.allocF32(8 + (Scene.MAX_LIGHTS * 16));
         this.modelUniformStagingPtr = frameArena.allocF32(32);
@@ -534,11 +644,25 @@ export class Renderer {
         this.buildNodeLinkDrawLists(scene, camera);
     }
 
+    private applyRenderCullingAndStats(camera: Camera): void {
+        this.cullingStats.frustum.tested = this.frustumCullingStatsEnabled ? this.frameFrustumTested : 0;
+        this.cullingStats.frustum.visible = this.frustumCullingStatsEnabled ? this.frameFrustumVisible : 0;
+        this.cullingStats.occlusion.tested = 0;
+        this.cullingStats.occlusion.visible = 0;
+        this.cullingStats.occlusion.occluded = 0;
+        this.pendingOcclusionFrameState = this.buildOcclusionFrameState();
+        if (!this.occlusionCullingEnabled || !this.pendingOcclusionFrameState) return;
+        const hierarchy = this.getValidOcclusionHierarchy(camera, this.pendingOcclusionFrameState.signature);
+        if (!hierarchy) return;
+        this.applyOcclusionFiltering(camera, this.pendingOcclusionFrameState.candidates, hierarchy);
+    }
+
     render(scene: Scene, camera: Camera): void {
         this.resize();
         const swapTexture = this.context.getCurrentTexture();
         const swapView = swapTexture.createView();
-        this.prepareSceneFrame(scene, camera);
+        this.prepareSceneFrameBase(scene, camera);
+        this.applyRenderCullingAndStats(camera);
         const encoder = this.device.createCommandEncoder();
         const timestampWrites = (this.gpuTimingEnabled && this.gpuQuerySet) ? ({ querySet: this.gpuQuerySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } as any) : undefined;
         const timestampBeginWrites = (this.gpuTimingEnabled && this.gpuQuerySet) ? ({ querySet: this.gpuQuerySet, beginningOfPassWriteIndex: 0 } as any) : undefined;
@@ -667,11 +791,13 @@ export class Renderer {
         }
         this.queue.submit([encoder.finish()]);
         this.tryReadGpuTiming();
+        if (this.occlusionCullingEnabled) this.captureOcclusionHierarchy(camera);
     }
 
     warmup(scene: Scene, camera: Camera): void {
         this.resize();
-        this.prepareSceneFrame(scene, camera);
+        this.prepareSceneFrameBase(scene, camera);
+        if (this.occlusionCullingEnabled) this.ensureOcclusionResources();
         const hasTransmission = this.hasOpticalTransmissionDrawItems();
         if (hasTransmission) this.ensureTransmissionTargets(!this.smaaEnabled);
         this.warmMeshDrawList(this.opaqueDrawList);
@@ -839,7 +965,7 @@ export class Renderer {
     }
 
     private preparePickFrame(scene: Scene, camera: Camera): void {
-        this.prepareSceneFrame(scene, camera);
+        this.prepareSceneFrameBase(scene, camera);
         if (!this.pickIdView || !this.pickDepthView || !this.pickDepthPayloadView) this.resizePickTargets();
     }
 
@@ -1033,6 +1159,7 @@ export class Renderer {
     destroy(): void {
         if (this.destroyed) return;
         this.destroyed = true;
+        this.destroyOcclusionTextures();
         this.depthTexture?.destroy();
         this.smaaSceneColorTexture?.destroy();
         this.smaaEdgesTexture?.destroy();
@@ -1092,6 +1219,22 @@ export class Renderer {
         this.pickIdReadbackCapacityBytes = 0;
         this.pickDepthReadbackCapacityBytes = 0;
         this.pickTail = Promise.resolve();
+        for (const slot of this.occlusionReadbackSlots) {
+            slot.buffer?.destroy();
+            slot.buffer = null;
+            slot.capacityBytes = 0;
+            slot.pending = null;
+            slot.metadata = null;
+            slot.data = null;
+            slot.state = "idle";
+        }
+        this.occlusionReadbackSlots = [];
+        this.occlusionReduceBindGroups.clear();
+        this.occlusionReduceBindGroupLayout = null;
+        this.occlusionReducePipeline = null;
+        this.latestOcclusionHierarchy = null;
+        this.latestOcclusionHierarchySerial = 0;
+        this.pendingOcclusionFrameState = null;
         this.lightingUniformBuffer?.destroy();
         this.instanceBuffer?.destroy();
         this.instanceBuffer = null;
@@ -1528,6 +1671,18 @@ export class Renderer {
         this.queue.writeBuffer(this.pickUniformBuffers[slot], 0, data.buffer, data.byteOffset, data.byteLength);
     }
 
+    private writeModelUniformSlot(slot: number, modelPtr: WasmPtr): void {
+        if (slot >= this.modelUniformBuffers.length) this.ensureModelBufferPool(slot + 1);
+        const modelBuffer = this.modelUniformBuffers[slot];
+        const invPtr = this.modelUniformStagingPtr;
+        const normalPtr = (this.modelUniformStagingPtr + 16 * 4) as WasmPtr;
+        mat4f.invert(invPtr, modelPtr);
+        mat4f.transpose(normalPtr, invPtr);
+        const bytes = wasmInterop.bytes();
+        this.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
+        this.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
+    }
+
     private unprojectDepth(camera: Camera, px: number, py: number, depth: number): [number, number, number] {
         const x = ((px + 0.5) / Math.max(1, this.width)) * 2.0 - 1.0;
         const y = 1.0 - ((py + 0.5) / Math.max(1, this.height)) * 2.0;
@@ -1661,6 +1816,403 @@ export class Renderer {
         this.queue.writeBuffer(this.lightingUniformBuffer, 0, data);
     }
 
+    private recordFrustumCounts(tested: number, visible: number): void {
+        this.frameFrustumTested += tested;
+        this.frameFrustumVisible += visible;
+    }
+
+    private mixOcclusionHash(hash: number, value: number): number {
+        return Math.imul((hash ^ (value >>> 0)) >>> 0, 16777619) >>> 0;
+    }
+
+    private blendModeHash(mode: BlendMode): number {
+        return mode === BlendMode.Opaque ? 1 : mode === BlendMode.Transparent ? 2 : 3;
+    }
+
+    private cullModeHash(mode: CullMode): number {
+        return mode === CullMode.Back ? 1 : mode === CullMode.Front ? 2 : 3;
+    }
+
+    private mixOcclusionHashF32(hash: number, value: number): number {
+        occlusionHashF32[0] = Number.isFinite(value) ? value : 0;
+        return this.mixOcclusionHash(hash, occlusionHashU32[0] >>> 0);
+    }
+
+    private hashWorldMatrix(ptr: WasmPtr): number {
+        const m = wasm.f32view(ptr, 16);
+        let hash = 2166136261 >>> 0;
+        for (let i = 0; i < 16; i++) hash = this.mixOcclusionHashF32(hash, m[i]);
+        return hash >>> 0;
+    }
+
+    private createOcclusionHierarchyLayout(width: number, height: number): OcclusionHierarchyLayout {
+        const widths: number[] = [];
+        const heights: number[] = [];
+        let w = Math.max(1, width | 0);
+        let h = Math.max(1, height | 0);
+        while (true) {
+            widths.push(w);
+            heights.push(h);
+            if (w === 1 && h === 1) break;
+            w = Math.max(1, Math.floor(w / 2));
+            h = Math.max(1, Math.floor(h / 2));
+        }
+        const mipCount = widths.length;
+        const offsets = new Uint32Array(mipCount);
+        const copyOffsets = new Uint32Array(mipCount);
+        const rowBytes = new Uint32Array(mipCount);
+        let texelOffset = 0;
+        let byteOffset = 0;
+        for (let i = 0; i < mipCount; i++) {
+            offsets[i] = texelOffset >>> 0;
+            copyOffsets[i] = byteOffset >>> 0;
+            rowBytes[i] = alignTo(widths[i] * 4, 256) >>> 0;
+            texelOffset += widths[i] * heights[i];
+            byteOffset += rowBytes[i] * heights[i];
+        }
+        return { widths: Uint32Array.from(widths), heights: Uint32Array.from(heights), offsets, copyOffsets, rowBytes, mipCount, texelCount: texelOffset >>> 0, totalBytes: byteOffset >>> 0 };
+    }
+
+    private destroyOcclusionTextures(): void {
+        this.occlusionHierarchyTexture?.destroy();
+        this.occlusionDepthTexture?.destroy();
+        this.occlusionHierarchyTexture = null;
+        this.occlusionHierarchyMipViews = [];
+        this.occlusionDepthTexture = null;
+        this.occlusionDepthView = null;
+        this.occlusionHierarchyLayout = null;
+        this.occlusionWidth = 0;
+        this.occlusionHeight = 0;
+        this.occlusionReduceBindGroups.clear();
+    }
+
+    private invalidateOcclusionResources(): void {
+        this.destroyOcclusionTextures();
+        this.latestOcclusionHierarchy = null;
+        this.latestOcclusionHierarchySerial = 0;
+        this.pendingOcclusionFrameState = null;
+        for (const slot of this.occlusionReadbackSlots) {
+            slot.metadata = null;
+            slot.data = null;
+            if (slot.state === "ready") slot.state = "idle";
+        }
+    }
+
+    private ensureOcclusionResources(): void {
+        if (!this.occlusionCullingEnabled) return;
+        let targetW = this.width;
+        let targetH = this.height;
+        if (targetW >= targetH) {
+            const scale = Math.min(1, this.OCCLUSION_MAX_LONG_EDGE / Math.max(1, targetW));
+            targetW = Math.max(1, Math.floor(targetW * scale));
+            targetH = Math.max(1, Math.floor(targetH * scale));
+        } else {
+            const scale = Math.min(1, this.OCCLUSION_MAX_LONG_EDGE / Math.max(1, targetH));
+            targetW = Math.max(1, Math.floor(targetW * scale));
+            targetH = Math.max(1, Math.floor(targetH * scale));
+        }
+        const layout = this.createOcclusionHierarchyLayout(targetW, targetH);
+        if (this.occlusionHierarchyTexture && this.occlusionDepthTexture && this.occlusionWidth === targetW && this.occlusionHeight === targetH && this.occlusionHierarchyLayout?.mipCount === layout.mipCount) return;
+        this.destroyOcclusionTextures();
+        this.occlusionWidth = targetW;
+        this.occlusionHeight = targetH;
+        this.occlusionHierarchyLayout = layout;
+        this.occlusionHierarchyTexture = this.device.createTexture({
+            size: { width: targetW, height: targetH, depthOrArrayLayers: 1 },
+            format: "r32float",
+            mipLevelCount: layout.mipCount,
+            usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC
+        });
+        this.occlusionHierarchyMipViews = [];
+        for (let i = 0; i < layout.mipCount; i++) {
+            this.occlusionHierarchyMipViews.push(this.occlusionHierarchyTexture.createView({
+                dimension: "2d",
+                baseMipLevel: i,
+                mipLevelCount: 1
+            }));
+        }
+        this.occlusionDepthTexture = createDepthTexture(this.device, targetW, targetH);
+        this.occlusionDepthView = this.occlusionDepthTexture.createView();
+        while (this.occlusionReadbackSlots.length < this.OCCLUSION_READBACK_RING_SIZE) {
+            this.occlusionReadbackSlots.push({
+                buffer: null, capacityBytes: 0,
+                pending: null, state: "idle",
+                metadata: null, data: null, serial: 0
+            });
+        }
+    }
+
+    private ensureOcclusionReadbackBuffer(slot: OcclusionReadbackSlot, bytes: number): void {
+        if (slot.buffer && slot.capacityBytes >= bytes) return;
+        slot.buffer?.destroy();
+        slot.buffer = this.device.createBuffer({
+            size: Math.max(256, alignTo(bytes, 256)),
+            usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
+        });
+        slot.capacityBytes = Math.max(256, alignTo(bytes, 256));
+    }
+
+    private getIdleOcclusionReadbackSlot(): OcclusionReadbackSlot | null {
+        for (const slot of this.occlusionReadbackSlots) if (!slot.pending && slot.state !== "mapping") return slot;
+        return null;
+    }
+
+    private buildOcclusionFrameState(): OcclusionFrameState | null {
+        let signature = 2166136261 >>> 0;
+        const candidates = this.occlusionCandidateScratch;
+        candidates.length = 0;
+        const meshOccluders: DrawItem[] = [];
+        const pointCloudOccluders: PointCloudDrawItem[] = [];
+        const glyphOccluders: GlyphDrawItem[] = [];
+        const nodeLinkOccluders: NodeLinkDrawItem[] = [];
+        const candidateSeen = this.occlusionVisibleObjectIds;
+        candidateSeen.clear();
+        for (const item of this.opaqueDrawList) {
+            if (this.isSafeMeshOccluder(item)) {
+                meshOccluders.push(item);
+                signature = this.mixOcclusionHash(signature, 1);
+                signature = this.mixOcclusionHash(signature, this.getObjectId(item.mesh));
+                signature = this.mixOcclusionHash(signature, this.getMeshOccluderToken(item));
+            }
+            if (!candidateSeen.has(this.getObjectId(item.mesh)) && this.tryPushMeshOcclusionCandidate(item, candidates)) candidateSeen.add(this.getObjectId(item.mesh));
+        }
+        for (const item of this.opaquePointCloudDrawList) {
+            if (this.isSafePointCloudOccluder(item)) {
+                pointCloudOccluders.push(item);
+                signature = this.mixOcclusionHash(signature, 2);
+                signature = this.mixOcclusionHash(signature, this.getObjectId(item.cloud));
+                signature = this.mixOcclusionHash(signature, item.cloud.occluderRevision >>> 0);
+                signature = this.mixOcclusionHash(signature, this.hashWorldMatrix(item.cloud.transform.worldMatrixPtr as WasmPtr));
+            }
+            if (!candidateSeen.has(this.getObjectId(item.cloud)) && this.tryPushPointCloudOcclusionCandidate(item.cloud, candidates)) candidateSeen.add(this.getObjectId(item.cloud));
+        }
+        for (const item of this.opaqueGlyphFieldDrawList) {
+            if (this.isSafeGlyphOccluder(item)) {
+                glyphOccluders.push(item);
+                signature = this.mixOcclusionHash(signature, 3);
+                signature = this.mixOcclusionHash(signature, this.getObjectId(item.field));
+                signature = this.mixOcclusionHash(signature, item.field.occluderRevision >>> 0);
+                signature = this.mixOcclusionHash(signature, this.hashWorldMatrix(item.field.transform.worldMatrixPtr as WasmPtr));
+                signature = this.mixOcclusionHash(signature, this.getObjectId(item.geometry));
+            }
+            if (!candidateSeen.has(this.getObjectId(item.field)) && this.tryPushGlyphOcclusionCandidate(item.field, candidates)) candidateSeen.add(this.getObjectId(item.field));
+        }
+        for (const item of this.opaqueNodeLinkDrawList) {
+            if (this.isSafeNodeLinkOccluder(item)) {
+                nodeLinkOccluders.push(item);
+                signature = this.mixOcclusionHash(signature, 4);
+                signature = this.mixOcclusionHash(signature, this.getObjectId(item.link));
+                signature = this.mixOcclusionHash(signature, item.link.occluderRevision >>> 0);
+                signature = this.mixOcclusionHash(signature, this.hashWorldMatrix(item.link.transform.worldMatrixPtr as WasmPtr));
+                signature = this.mixOcclusionHash(signature, item.passKind === "node-points" ? 1 : item.passKind === "node-solid" ? 2 : item.passKind === "edge-lines" ? 3 : 4);
+            }
+            if (!candidateSeen.has(this.getObjectId(item.link)) && this.tryPushNodeLinkOcclusionCandidate(item.link, candidates)) candidateSeen.add(this.getObjectId(item.link));
+        }
+        candidateSeen.clear();
+        return { signature: signature >>> 0, candidates, meshOccluders, pointCloudOccluders, glyphOccluders, nodeLinkOccluders };
+    }
+
+    private tryPushMeshOcclusionCandidate(item: DrawItem, out: OcclusionCandidate[]): boolean {
+        const mesh = item.mesh;
+        if (item.skinned) return false;
+        const bounds = getMeshLocalBoundsSource(mesh);
+        if (!(bounds.boundsRadius > 0) || !Number.isFinite(bounds.boundsRadius)) return false;
+        const center = bounds.boundsCenter;
+        if (!Number.isFinite(center[0]) || !Number.isFinite(center[1]) || !Number.isFinite(center[2])) return false;
+        out.push({
+            kind: "mesh",
+            object: mesh, objectId: this.getObjectId(mesh),
+            worldMatrixPtr: mesh.transform.worldMatrixPtr as WasmPtr,
+            boundsCenter: [center[0], center[1], center[2]], boundsRadius: bounds.boundsRadius
+        });
+        return true;
+    }
+
+    private tryPushPointCloudOcclusionCandidate(cloud: PointCloud, out: OcclusionCandidate[]): boolean {
+        if (!(cloud.boundsRadius > 0) || !Number.isFinite(cloud.boundsRadius)) return false;
+        const center = cloud.boundsCenter;
+        if (!Number.isFinite(center[0]) || !Number.isFinite(center[1]) || !Number.isFinite(center[2])) return false;
+        out.push({
+            kind: "pointcloud",
+            object: cloud, objectId: this.getObjectId(cloud),
+            worldMatrixPtr: cloud.transform.worldMatrixPtr as WasmPtr,
+            boundsCenter: [center[0], center[1], center[2]], boundsRadius: cloud.boundsRadius
+        });
+        return true;
+    }
+
+    private tryPushGlyphOcclusionCandidate(field: GlyphField, out: OcclusionCandidate[]): boolean {
+        if (!(field.boundsRadius > 0) || !Number.isFinite(field.boundsRadius)) return false;
+        const center = field.boundsCenter;
+        if (!Number.isFinite(center[0]) || !Number.isFinite(center[1]) || !Number.isFinite(center[2])) return false;
+        out.push({
+            kind: "glyphfield",
+            object: field, objectId: this.getObjectId(field),
+            worldMatrixPtr: field.transform.worldMatrixPtr as WasmPtr,
+            boundsCenter: [center[0], center[1], center[2]], boundsRadius: field.boundsRadius
+        });
+        return true;
+    }
+
+    private tryPushNodeLinkOcclusionCandidate(link: NodeLink, out: OcclusionCandidate[]): boolean {
+        if (!(link.boundsRadius > 0) || !Number.isFinite(link.boundsRadius)) return false;
+        const center = link.boundsCenter;
+        if (!Number.isFinite(center[0]) || !Number.isFinite(center[1]) || !Number.isFinite(center[2])) return false;
+        out.push({
+            kind: "nodelink",
+            object: link, objectId: this.getObjectId(link),
+            worldMatrixPtr: link.transform.worldMatrixPtr as WasmPtr,
+            boundsCenter: [center[0], center[1], center[2]], boundsRadius: link.boundsRadius
+        });
+        return true;
+    }
+
+    private viewProjectionMatches(currentPtr: WasmPtr, previous: Float32Array): boolean {
+        const current = wasm.f32view(currentPtr, 16);
+        if (previous.length !== 16) return false;
+        for (let i = 0; i < 16; i++) if (Math.abs(current[i] - previous[i]) > this.OCCLUSION_VIEW_PROJ_EPSILON) return false;
+        return true;
+    }
+
+    private getValidOcclusionHierarchy(camera: Camera, signature: number): { metadata: OcclusionHierarchyMetadata; data: Float32Array } | null {
+        const latest = this.latestOcclusionHierarchy;
+        if (!latest || !this.occlusionHierarchyLayout) return null;
+        const meta = latest.metadata;
+        if (meta.viewportWidth !== this.width || meta.viewportHeight !== this.height) return null;
+        if (meta.hierarchyWidth !== this.occlusionWidth || meta.hierarchyHeight !== this.occlusionHeight) return null;
+        if (meta.cameraType !== camera.type) return null;
+        if (meta.occluderSignature !== signature) return null;
+        if (!this.viewProjectionMatches(this.cameraUniformStagingPtr, meta.viewProjection)) return null;
+        return latest;
+    }
+
+    private applyOcclusionFiltering(camera: Camera, candidates: OcclusionCandidate[], hierarchy: { metadata: OcclusionHierarchyMetadata; data: Float32Array }): void {
+        if (candidates.length === 0) return;
+        this.ensureCullingCapacity(candidates.length);
+        const worldPtrsPtr = frameArena.alloc(candidates.length * 4, 4) as WasmPtr;
+        const localCentersPtr = frameArena.allocF32(candidates.length * 3) as WasmPtr;
+        const localRadiiPtr = frameArena.allocF32(candidates.length) as WasmPtr;
+        const worldPtrs = wasm.u32view(worldPtrsPtr, candidates.length);
+        const localCenters = wasm.f32view(localCentersPtr, candidates.length * 3);
+        const localRadii = wasm.f32view(localRadiiPtr, candidates.length);
+        for (let i = 0; i < candidates.length; i++) {
+            const candidate = candidates[i];
+            worldPtrs[i] = candidate.worldMatrixPtr >>> 0;
+            localCenters[(i * 3) + 0] = candidate.boundsCenter[0];
+            localCenters[(i * 3) + 1] = candidate.boundsCenter[1];
+            localCenters[(i * 3) + 2] = candidate.boundsCenter[2];
+            localRadii[i] = candidate.boundsRadius;
+        }
+        cullf.prepareWorldSpheresFromPtrs(this.cullCentersPtr, this.cullRadiiPtr, worldPtrsPtr, localCentersPtr, localRadiiPtr, candidates.length);
+        const layout = hierarchy.metadata.layout;
+        const depthPtr = frameArena.allocF32(hierarchy.data.length) as WasmPtr;
+        wasm.f32view(depthPtr, hierarchy.data.length).set(hierarchy.data);
+        const mipOffsetsPtr = frameArena.alloc(layout.offsets.byteLength, 4) as WasmPtr;
+        const mipWidthsPtr = frameArena.alloc(layout.widths.byteLength, 4) as WasmPtr;
+        const mipHeightsPtr = frameArena.alloc(layout.heights.byteLength, 4) as WasmPtr;
+        wasm.u32view(mipOffsetsPtr, layout.offsets.length).set(layout.offsets);
+        wasm.u32view(mipWidthsPtr, layout.widths.length).set(layout.widths);
+        wasm.u32view(mipHeightsPtr, layout.heights.length).set(layout.heights);
+        const outPtr = frameArena.alloc(candidates.length * 4, 4) as WasmPtr;
+        const statsPtr = frameArena.alloc(12, 4) as WasmPtr;
+        const visibleCount = cullf.spheresOcclusion(outPtr, statsPtr, this.cullCentersPtr, this.cullRadiiPtr, candidates.length, this.cameraUniformStagingPtr, this.width, this.height, mipOffsetsPtr, mipWidthsPtr, mipHeightsPtr, layout.mipCount, depthPtr, hierarchy.data.length, this.OCCLUSION_NEAR_EPSILON, this.OCCLUSION_MAX_SCREEN_COVERAGE, this.OCCLUSION_DEPTH_BIAS);
+        if (this.occlusionCullingStatsEnabled) {
+            const stats = wasm.u32view(statsPtr, 3);
+            this.cullingStats.occlusion.tested = stats[0] >>> 0;
+            this.cullingStats.occlusion.visible = stats[1] >>> 0;
+            this.cullingStats.occlusion.occluded = stats[2] >>> 0;
+        }
+        const visibleSet = this.occlusionVisibleObjectIds;
+        const candidateSet = this.occlusionCandidateObjectIds;
+        visibleSet.clear();
+        candidateSet.clear();
+        for (let i = 0; i < candidates.length; i++) candidateSet.add(candidates[i].objectId);
+        const out = wasm.u32view(outPtr, visibleCount);
+        for (let i = 0; i < visibleCount; i++) visibleSet.add(candidates[out[i]].objectId);
+        this.filterOpaqueDrawListInPlace(this.opaqueDrawList, (item) => {
+            const id = this.getObjectId(item.mesh);
+            return !candidateSet.has(id) || visibleSet.has(id);
+        });
+        this.filterOpaqueDrawListInPlace(this.opaquePointCloudDrawList, (item) => {
+            const id = this.getObjectId(item.cloud);
+            return !candidateSet.has(id) || visibleSet.has(id);
+        });
+        this.filterOpaqueDrawListInPlace(this.opaqueGlyphFieldDrawList, (item) => {
+            const id = this.getObjectId(item.field);
+            return !candidateSet.has(id) || visibleSet.has(id);
+        });
+        this.filterOpaqueDrawListInPlace(this.opaqueNodeLinkDrawList, (item) => {
+            const id = this.getObjectId(item.link);
+            return !candidateSet.has(id) || visibleSet.has(id);
+        });
+        visibleSet.clear();
+        candidateSet.clear();
+    }
+
+    private filterOpaqueDrawListInPlace<T>(items: T[], keep: (item: T) => boolean): void {
+        let write = 0;
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            if (!keep(item)) continue;
+            items[write++] = item;
+        }
+        items.length = write;
+    }
+
+    private isCoverageStableMeshMaterial(material: Material): boolean {
+        if (material instanceof CustomMaterial) return false;
+        if (material instanceof DataMaterial) return false;
+        if (material instanceof UnlitMaterial) return material.alphaCutoff <= 0;
+        if (material instanceof StandardMaterial) return material.alphaCutoff <= 0 && !material.usesTransmissionLayout();
+        return false;
+    }
+
+    private isSafeMeshOccluder(item: DrawItem): boolean {
+        const material = item.material;
+        if (material.blendMode !== BlendMode.Opaque) return false;
+        if (!material.depthWrite || !material.depthTest) return false;
+        if (this.isOpticallyTransmissiveMaterial(material)) return false;
+        if (!this.isCoverageStableMeshMaterial(material)) return false;
+        if (item.skinned) return false;
+        return true;
+    }
+
+    private getMeshOccluderToken(item: DrawItem): number {
+        const mesh = item.mesh;
+        const material = item.material;
+        let hash = 2166136261 >>> 0;
+        hash = this.mixOcclusionHash(hash, this.getObjectId(item.geometry));
+        hash = this.mixOcclusionHash(hash, this.getObjectId(getMeshVertexSource(mesh)));
+        hash = this.mixOcclusionHash(hash, this.getObjectId(material));
+        hash = this.mixOcclusionHash(hash, this.blendModeHash(material.blendMode));
+        hash = this.mixOcclusionHash(hash, material.depthWrite ? 1 : 0);
+        hash = this.mixOcclusionHash(hash, material.depthTest ? 1 : 0);
+        hash = this.mixOcclusionHash(hash, this.cullModeHash(material.cullMode));
+        hash = this.mixOcclusionHash(hash, item.mirrored ? 1 : 0);
+        hash = this.mixOcclusionHash(hash, item.skinned ? 1 : 0);
+        hash = this.mixOcclusionHash(hash, hasMeshMorphRuntime(mesh) ? 1 : 0);
+        hash = this.mixOcclusionHash(hash, this.hashWorldMatrix(mesh.transform.worldMatrixPtr as WasmPtr));
+        if (material instanceof UnlitMaterial) hash = this.mixOcclusionHashF32(hash, material.alphaCutoff);
+        if (material instanceof StandardMaterial) {
+            hash = this.mixOcclusionHashF32(hash, material.alphaCutoff);
+            hash = this.mixOcclusionHash(hash, material.getFeatureMask() >>> 0);
+            hash = this.mixOcclusionHash(hash, material.usesTransmissionLayout() ? 1 : 0);
+        }
+        return hash >>> 0;
+    }
+
+    private isSafePointCloudOccluder(item: PointCloudDrawItem): boolean {
+        return item.cloud.blendMode === BlendMode.Opaque && item.cloud.depthWrite && item.cloud.depthTest;
+    }
+
+    private isSafeGlyphOccluder(item: GlyphDrawItem): boolean {
+        return item.field.blendMode === BlendMode.Opaque && item.field.depthWrite && item.field.depthTest;
+    }
+
+    private isSafeNodeLinkOccluder(item: NodeLinkDrawItem): boolean {
+        return item.link.blendMode === BlendMode.Opaque && item.link.depthWrite && item.link.depthTest;
+    }
+
     private buildDrawLists(scene: Scene, camera: Camera): void {
         this.drawItemPoolUsed = 0;
         this.opaqueDrawList.length = 0;
@@ -1673,13 +2225,7 @@ export class Renderer {
             candidates.push(mesh);
         }
         const count = candidates.length;
-        if (count === 0) {
-            if (this.frustumCullingStatsEnabled) {
-                this.cullingStats.tested = 0;
-                this.cullingStats.visible = 0;
-            }
-            return;
-        }
+        if (count === 0) return;
         let visibleIndicesBase = 0;
         let visibleCount = count;
         const store = TransformStore.global();
@@ -1715,10 +2261,7 @@ export class Renderer {
             visibleCount = cullf.spheresFrustum(outPtr, this.cullCentersPtr, this.cullRadiiPtr, count, frustumPtr);
             visibleIndicesBase = outPtr >>> 2;
         }
-        if (this.frustumCullingStatsEnabled) {
-            this.cullingStats.tested = count;
-            this.cullingStats.visible = visibleCount;
-        }
+        this.recordFrustumCounts(count, visibleCount);
         const pushMesh = (mesh: Mesh): void => {
             const geometry = mesh.geometry;
             const material = mesh.material;
@@ -1829,6 +2372,7 @@ export class Renderer {
             }
             for (const pc of unbounded) visible.push(pc);
         } else for (const pc of this.cullPointCloudScratch) visible.push(pc);
+        this.recordFrustumCounts(this.cullPointCloudScratch.length, visible.length);
         for (const pc of visible) {
             const pipeline = this.getOrCreatePointCloudPipeline(pc);
             const pipelineId = this.getObjectId(pipeline);
@@ -1913,13 +2457,10 @@ export class Renderer {
                 const u32 = store.u32();
                 const outBase = outPtr >>> 2;
                 for (let i = 0; i < numVisible; i++) visible.push(bounded[u32[outBase + i]]);
-                if (this.frustumCullingStatsEnabled) {
-                    this.cullingStats.tested += bounded.length;
-                    this.cullingStats.visible += visible.length;
-                }
             }
             for (const gf of unbounded) visible.push(gf);
         } else for (const gf of this.cullGlyphFieldScratch) visible.push(gf);
+        this.recordFrustumCounts(this.cullGlyphFieldScratch.length, visible.length);
         for (const gf of visible) {
             const geometry = gf.geometry;
             const pipeline = this.getOrCreateGlyphFieldPipeline(gf);
@@ -2030,6 +2571,7 @@ export class Renderer {
             }
             for (const link of unbounded) visible.push(link);
         } else for (const link of this.cullNodeLinkScratch) visible.push(link);
+        this.recordFrustumCounts(this.cullNodeLinkScratch.length, visible.length);
         const pushItem = (link: NodeLink, passKind: NodeLinkDrawItem["passKind"], geometry: Geometry | null): void => {
             const pipeline = this.getOrCreateNodeLinkPipeline(link, passKind);
             const item = this.acquireNodeLinkDrawItem();
@@ -2066,6 +2608,250 @@ export class Renderer {
         }
         this.opaqueNodeLinkDrawList.sort((a, b) => a.pipelineId - b.pipelineId || a.geometryId - b.geometryId || a.linkId - b.linkId);
         this.transparentNodeLinkDrawList.sort((a, b) => b.sortKey - a.sortKey || a.pipelineId - b.pipelineId || a.geometryId - b.geometryId || a.linkId - b.linkId);
+    }
+
+    private captureOcclusionHierarchy(camera: Camera): void {
+        const frameState = this.pendingOcclusionFrameState;
+        if (!frameState) return;
+        const safeOccluderCount = frameState.meshOccluders.length + frameState.pointCloudOccluders.length + frameState.glyphOccluders.length + frameState.nodeLinkOccluders.length;
+        if (safeOccluderCount <= 0) return;
+        this.ensureOcclusionResources();
+        if (!this.occlusionHierarchyTexture || !this.occlusionDepthView || !this.occlusionHierarchyLayout) return;
+        const slot = this.getIdleOcclusionReadbackSlot();
+        if (!slot) return;
+        this.ensureOcclusionReadbackBuffer(slot, this.occlusionHierarchyLayout.totalBytes);
+        if (!slot.buffer) return;
+        this.modelBufferIndex = 0;
+        const encoder = this.device.createCommandEncoder();
+        const capturePass = encoder.beginRenderPass({
+            colorAttachments: [
+                {
+                    view: this.occlusionHierarchyMipViews[0],
+                    clearValue: { r: 1, g: 0, b: 0, a: 0 },
+                    loadOp: "clear",
+                    storeOp: "store"
+                }
+            ],
+            depthStencilAttachment: {
+                view: this.occlusionDepthView,
+                depthClearValue: 1.0,
+                depthLoadOp: "clear",
+                depthStoreOp: "store"
+            }
+        });
+        this.executeOcclusionMeshDrawList(capturePass, frameState.meshOccluders);
+        this.executeOcclusionGlyphFieldDrawList(capturePass, frameState.glyphOccluders);
+        this.executeOcclusionPointCloudDrawList(capturePass, frameState.pointCloudOccluders);
+        this.executeOcclusionNodeLinkDrawList(capturePass, frameState.nodeLinkOccluders);
+        capturePass.end();
+        for (let mip = 1; mip < this.occlusionHierarchyLayout.mipCount; mip++) {
+            const pass = encoder.beginRenderPass({
+                colorAttachments: [
+                    {
+                        view: this.occlusionHierarchyMipViews[mip],
+                        clearValue: { r: 1, g: 0, b: 0, a: 0 },
+                        loadOp: "clear",
+                        storeOp: "store"
+                    }
+                ]
+            });
+            pass.setPipeline(this.getOrCreateOcclusionReducePipeline());
+            pass.setBindGroup(0, this.getOrCreateOcclusionReduceBindGroup(mip - 1));
+            pass.draw(3);
+            pass.end();
+        }
+        for (let mip = 0; mip < this.occlusionHierarchyLayout.mipCount; mip++) {
+            encoder.copyTextureToBuffer(
+                {
+                    texture: this.occlusionHierarchyTexture,
+                    mipLevel: mip
+                },
+                {
+                    buffer: slot.buffer,
+                    offset: this.occlusionHierarchyLayout.copyOffsets[mip],
+                    bytesPerRow: this.occlusionHierarchyLayout.rowBytes[mip],
+                    rowsPerImage: this.occlusionHierarchyLayout.heights[mip]
+                },
+                {
+                    width: this.occlusionHierarchyLayout.widths[mip],
+                    height: this.occlusionHierarchyLayout.heights[mip],
+                    depthOrArrayLayers: 1
+                }
+            );
+        }
+        const metadata: OcclusionHierarchyMetadata = {
+            viewportWidth: this.width,
+            viewportHeight: this.height,
+            hierarchyWidth: this.occlusionWidth,
+            hierarchyHeight: this.occlusionHeight,
+            cameraType: camera.type,
+            occluderSignature: frameState.signature,
+            viewProjection: new Float32Array(wasm.f32view(this.cameraUniformStagingPtr, 16)),
+            layout: this.occlusionHierarchyLayout
+        };
+        slot.metadata = metadata;
+        slot.data = null;
+        slot.serial = ++this.occlusionCaptureSerial;
+        slot.state = "mapping";
+        this.queue.submit([encoder.finish()]);
+        slot.pending = slot.buffer.mapAsync(GPUMapMode.READ).then(() => {
+            if (!slot.buffer || !slot.metadata) return;
+            const mapped = slot.buffer.getMappedRange();
+            const data = new Float32Array(slot.metadata.layout.texelCount);
+            for (let mip = 0; mip < slot.metadata.layout.mipCount; mip++) {
+                const width = slot.metadata.layout.widths[mip];
+                const height = slot.metadata.layout.heights[mip];
+                const texelOffset = slot.metadata.layout.offsets[mip];
+                const rowBytes = slot.metadata.layout.rowBytes[mip];
+                const copyOffset = slot.metadata.layout.copyOffsets[mip];
+                for (let row = 0; row < height; row++) {
+                    const src = new Float32Array(mapped, copyOffset + (row * rowBytes), width);
+                    data.set(src, texelOffset + (row * width));
+                }
+            }
+            slot.data = data;
+            slot.state = "ready";
+            if (slot.metadata && slot.serial >= this.latestOcclusionHierarchySerial) {
+                this.latestOcclusionHierarchySerial = slot.serial;
+                this.latestOcclusionHierarchy = { metadata: slot.metadata, data };
+            }
+        }).catch(() => {
+            slot.data = null;
+            slot.metadata = null;
+            slot.state = "idle";
+        }).finally(() => {
+            try { slot.buffer?.unmap(); } catch { /* ignore */ }
+            if (slot.state !== "ready") slot.state = "idle";
+            slot.pending = null;
+        });
+    }
+
+    private executeOcclusionMeshDrawList(pass: GPURenderPassEncoder, items: DrawItem[]): void {
+        let lastPipeline: GPURenderPipeline | null = null;
+        let lastGeometry: Geometry | null = null;
+        let lastVertexSourceId = -1;
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const geometry = item.geometry;
+            if (geometry !== lastGeometry || item.vertexSourceId !== lastVertexSourceId) {
+                geometry.upload(this.device);
+                getMeshVertexBuffers(item.mesh, this.device, this.queue);
+                lastGeometry = geometry;
+                lastVertexSourceId = item.vertexSourceId;
+            }
+            const pipeline = this.getOrCreateOcclusionMeshPipeline(item);
+            if (pipeline !== lastPipeline) {
+                pass.setPipeline(pipeline);
+                lastPipeline = pipeline;
+            }
+            const slot = this.modelBufferIndex++;
+            this.writeModelUniformSlot(slot, item.mesh.transform.worldMatrixPtr as WasmPtr);
+            pass.setBindGroup(0, this.globalBindGroups[slot]);
+            const geometryBuffers = getMeshVertexBuffers(item.mesh, this.device, this.queue);
+            pass.setVertexBuffer(0, geometryBuffers.positionBuffer);
+            if (geometry.isIndexed && geometry.indexBuffer) {
+                pass.setIndexBuffer(geometry.indexBuffer, "uint32");
+                pass.drawIndexed(geometry.indexCount);
+            } else pass.draw(geometry.vertexCount);
+        }
+    }
+
+    private executeOcclusionPointCloudDrawList(pass: GPURenderPassEncoder, items: PointCloudDrawItem[]): void {
+        let lastCloud: PointCloud | null = null;
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const cloud = item.cloud;
+            this.ensurePointCloudBindGroup(cloud);
+            if (!cloud.bindGroup) continue;
+            const slot = this.modelBufferIndex++;
+            this.writeModelUniformSlot(slot, cloud.transform.worldMatrixPtr as WasmPtr);
+            pass.setPipeline(this.getOrCreateOcclusionPointCloudPipeline());
+            pass.setBindGroup(0, this.globalBindGroups[slot]);
+            if (cloud !== lastCloud) {
+                pass.setBindGroup(1, cloud.bindGroup);
+                lastCloud = cloud;
+            }
+            pass.draw(6, cloud.pointCount);
+        }
+    }
+
+    private executeOcclusionGlyphFieldDrawList(pass: GPURenderPassEncoder, list: GlyphDrawItem[]): void {
+        let lastGeometry: Geometry | null = null;
+        let lastField: GlyphField | null = null;
+        let lastPipeline: GPURenderPipeline | null = null;
+        for (let i = 0; i < list.length; i++) {
+            const item = list[i];
+            const field = item.field;
+            this.ensureGlyphFieldBindGroup(field);
+            if (!field.bindGroup) continue;
+            const pipeline = this.getOrCreateOcclusionGlyphFieldPipeline(field);
+            if (pipeline !== lastPipeline) {
+                pass.setPipeline(pipeline);
+                lastPipeline = pipeline;
+            }
+            if (item.geometry !== lastGeometry) {
+                item.geometry.upload(this.device);
+                pass.setVertexBuffer(0, item.geometry.positionBuffer!);
+                lastGeometry = item.geometry;
+            }
+            const slot = this.modelBufferIndex++;
+            this.writeModelUniformSlot(slot, field.transform.worldMatrixPtr as WasmPtr);
+            pass.setBindGroup(0, this.globalBindGroups[slot]);
+            if (field !== lastField) {
+                pass.setBindGroup(1, field.bindGroup);
+                lastField = field;
+            }
+            if (item.geometry.isIndexed && item.geometry.indexBuffer) {
+                pass.setIndexBuffer(item.geometry.indexBuffer, "uint32");
+                pass.drawIndexed(item.geometry.indexCount, field.instanceCount);
+            } else pass.draw(item.geometry.vertexCount, field.instanceCount);
+        }
+    }
+
+    private executeOcclusionNodeLinkDrawList(pass: GPURenderPassEncoder, list: NodeLinkDrawItem[]): void {
+        let lastLink: NodeLink | null = null;
+        let lastGeometry: Geometry | null = null;
+        let lastPipeline: GPURenderPipeline | null = null;
+        for (let i = 0; i < list.length; i++) {
+            const item = list[i];
+            const link = item.link;
+            this.ensureNodeLinkBindGroup(link);
+            if (!link.bindGroup) continue;
+            const pipeline = this.getOrCreateOcclusionNodeLinkPipeline(link, item.passKind);
+            if (pipeline !== lastPipeline) {
+                pass.setPipeline(pipeline);
+                lastPipeline = pipeline;
+            }
+            if (item.geometry && item.geometry !== lastGeometry) {
+                item.geometry.upload(this.device);
+                pass.setVertexBuffer(0, item.geometry.positionBuffer!);
+                lastGeometry = item.geometry;
+            }
+            const slot = this.modelBufferIndex++;
+            this.writeModelUniformSlot(slot, link.transform.worldMatrixPtr as WasmPtr);
+            pass.setBindGroup(0, this.globalBindGroups[slot]);
+            if (link !== lastLink) {
+                pass.setBindGroup(1, link.bindGroup);
+                lastLink = link;
+            }
+            if (item.passKind === "node-points") pass.draw(6, link.nodeCount);
+            else if (item.passKind === "edge-lines") pass.draw(2, link.edgeCount);
+            else if (item.passKind === "node-solid") {
+                if (!item.geometry) continue;
+                if (item.geometry.isIndexed && item.geometry.indexBuffer) {
+                    pass.setIndexBuffer(item.geometry.indexBuffer, "uint32");
+                    pass.drawIndexed(item.geometry.indexCount, link.nodeCount);
+                }
+                else pass.draw(item.geometry.vertexCount, link.nodeCount);
+            } else {
+                if (!item.geometry) continue;
+                if (item.geometry.isIndexed && item.geometry.indexBuffer) {
+                    pass.setIndexBuffer(item.geometry.indexBuffer, "uint32");
+                    pass.drawIndexed(item.geometry.indexCount, link.edgeCount);
+                }
+                else pass.draw(item.geometry.vertexCount, link.edgeCount);
+            }
+        }
     }
 
     private warmMeshDrawList(items: DrawItem[]): void {
@@ -2933,6 +3719,230 @@ export class Renderer {
         if (geometry.isIndexed) pass.drawIndexed(geometry.indexCount, count);
         else pass.draw(geometry.vertexCount, count);
         this.instanceBufferOffset = dstEnd;
+    }
+
+    private getOcclusionReduceBindGroupLayout(): GPUBindGroupLayout {
+        if (this.occlusionReduceBindGroupLayout) return this.occlusionReduceBindGroupLayout;
+        this.occlusionReduceBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [{
+                binding: 0,
+                visibility: GPUShaderStage.FRAGMENT,
+                texture: { sampleType: "unfilterable-float", viewDimension: "2d" }
+            }]
+        });
+        return this.occlusionReduceBindGroupLayout;
+    }
+
+    private getOrCreateOcclusionReducePipeline(): GPURenderPipeline {
+        if (this.occlusionReducePipeline) return this.occlusionReducePipeline;
+        let shaderModule = this.shaderCache.get(occlusionReduceWGSL);
+        if (!shaderModule) {
+            shaderModule = this.device.createShaderModule({ code: occlusionReduceWGSL });
+            this.shaderCache.set(occlusionReduceWGSL, shaderModule);
+        }
+        this.occlusionReducePipeline = this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({
+                bindGroupLayouts: [this.getOcclusionReduceBindGroupLayout()]
+            }),
+            vertex: {
+                module: shaderModule,
+                entryPoint: "vs_main",
+                buffers: []
+            },
+            fragment: {
+                module: shaderModule,
+                entryPoint: "fs_main",
+                targets: [{ format: "r32float" }]
+            },
+            primitive: {
+                topology: "triangle-list",
+                cullMode: "none"
+            }
+        });
+        return this.occlusionReducePipeline;
+    }
+
+    private getOrCreateOcclusionReduceBindGroup(srcMip: number): GPUBindGroup {
+        if (!this.occlusionHierarchyTexture) throw new Error("Renderer: occlusion hierarchy texture is not initialized.");
+        const key = `occlusion-reduce:${this.getObjectId(this.occlusionHierarchyTexture)}:${srcMip}`;
+        const cached = this.occlusionReduceBindGroups.get(key);
+        if (cached) return cached;
+        const bindGroup = this.device.createBindGroup({
+            layout: this.getOcclusionReduceBindGroupLayout(),
+            entries: [{
+                binding: 0,
+                resource: this.occlusionHierarchyMipViews[srcMip]
+            }]
+        });
+        this.occlusionReduceBindGroups.set(key, bindGroup);
+        return bindGroup;
+    }
+
+    private getOrCreateOcclusionMeshPipeline(item: DrawItem): GPURenderPipeline {
+        const cullMode = this.getCullMode(item.material.cullMode);
+        const key = `occlusion:mesh:${cullMode}:${item.mirrored ? "cw" : "ccw"}`;
+        const cached = this.pipelineCache.get(key);
+        if (cached) return cached;
+        let shaderModule = this.shaderCache.get(occlusionMeshWGSL);
+        if (!shaderModule) {
+            shaderModule = this.device.createShaderModule({ code: occlusionMeshWGSL });
+            this.shaderCache.set(occlusionMeshWGSL, shaderModule);
+        }
+        const pipeline = this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({
+                bindGroupLayouts: [this.globalBindGroupLayout]
+            }),
+            vertex: {
+                module: shaderModule,
+                entryPoint: "vs_main",
+                buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }] }]
+            },
+            fragment: {
+                module: shaderModule,
+                entryPoint: "fs_main",
+                targets: [{ format: "r32float" }]
+            },
+            primitive: {
+                topology: "triangle-list",
+                cullMode,
+                frontFace: item.mirrored ? "cw" : "ccw"
+            },
+            depthStencil: {
+                format: "depth24plus",
+                depthWriteEnabled: true,
+                depthCompare: "less"
+            }
+        });
+        this.pipelineCache.set(key, pipeline);
+        return pipeline;
+    }
+
+    private getOrCreateOcclusionPointCloudPipeline(): GPURenderPipeline {
+        const key = "occlusion:pointcloud";
+        const cached = this.pipelineCache.get(key);
+        if (cached) return cached;
+        let shaderModule = this.shaderCache.get(occlusionPointCloudWGSL);
+        if (!shaderModule) {
+            shaderModule = this.device.createShaderModule({ code: occlusionPointCloudWGSL });
+            this.shaderCache.set(occlusionPointCloudWGSL, shaderModule);
+        }
+        const pipeline = this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({
+                bindGroupLayouts: [this.globalBindGroupLayout, this.getPointCloudBindGroupLayout()]
+            }),
+            vertex: {
+                module: shaderModule,
+                entryPoint: "vs_main",
+                buffers: []
+            },
+            fragment: {
+                module: shaderModule,
+                entryPoint: "fs_main",
+                targets: [{ format: "r32float" }]
+            },
+            primitive: {
+                topology: "triangle-list",
+                cullMode: "none"
+            },
+            depthStencil: {
+                format: "depth24plus",
+                depthWriteEnabled: true,
+                depthCompare: "less"
+            }
+        });
+        this.pipelineCache.set(key, pipeline);
+        return pipeline;
+    }
+
+    private getOrCreateOcclusionGlyphFieldPipeline(field: GlyphField): GPURenderPipeline {
+        const cullMode = this.getCullMode(field.cullMode);
+        const key = `occlusion:glyphfield:${cullMode}`;
+        const cached = this.pipelineCache.get(key);
+        if (cached) return cached;
+        let shaderModule = this.shaderCache.get(occlusionGlyphFieldWGSL);
+        if (!shaderModule) {
+            shaderModule = this.device.createShaderModule({ code: occlusionGlyphFieldWGSL });
+            this.shaderCache.set(occlusionGlyphFieldWGSL, shaderModule);
+        }
+        const pipeline = this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({
+                bindGroupLayouts: [this.globalBindGroupLayout, this.getGlyphFieldBindGroupLayout()]
+            }),
+            vertex: {
+                module: shaderModule,
+                entryPoint: "vs_main",
+                buffers: [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }] }]
+            },
+            fragment: {
+                module: shaderModule,
+                entryPoint: "fs_main",
+                targets: [{ format: "r32float" }]
+            },
+            primitive: {
+                topology: "triangle-list",
+                cullMode
+            },
+            depthStencil: {
+                format: "depth24plus",
+                depthWriteEnabled: true,
+                depthCompare: "less"
+            }
+        });
+        this.pipelineCache.set(key, pipeline);
+        return pipeline;
+    }
+
+    private getOrCreateOcclusionNodeLinkPipeline(link: NodeLink, passKind: NodeLinkDrawItem["passKind"]): GPURenderPipeline {
+        const key = `occlusion:nodelink:${passKind}:${link.cullMode}`;
+        const cached = this.pipelineCache.get(key);
+        if (cached) return cached;
+        let shaderModule = this.shaderCache.get(occlusionNodeLinkWGSL);
+        if (!shaderModule) {
+            shaderModule = this.device.createShaderModule({ code: occlusionNodeLinkWGSL });
+            this.shaderCache.set(occlusionNodeLinkWGSL, shaderModule);
+        }
+        let vertexEntry = "vs_node_points";
+        let buffers: GPUVertexBufferLayout[] = [];
+        let topology: GPUPrimitiveTopology = "triangle-list";
+        let cullMode: GPUCullMode = "none";
+        if (passKind === "node-solid") {
+            vertexEntry = "vs_node_solid";
+            buffers = [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }] }];
+            cullMode = this.getCullMode(link.cullMode);
+        } else if (passKind === "edge-lines") {
+            vertexEntry = "vs_edge_lines";
+            topology = "line-list";
+        } else if (passKind === "edge-cylinders") {
+            vertexEntry = "vs_edge_cylinders";
+            buffers = [{ arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }] }];
+            cullMode = this.getCullMode(link.cullMode);
+        }
+        const pipeline = this.device.createRenderPipeline({
+            layout: this.device.createPipelineLayout({
+                bindGroupLayouts: [this.globalBindGroupLayout, this.getNodeLinkBindGroupLayout()]
+            }),
+            vertex: {
+                module: shaderModule,
+                entryPoint: vertexEntry,
+                buffers
+            },
+            fragment: {
+                module: shaderModule,
+                entryPoint: "fs_main",
+                targets: [{ format: "r32float" }]
+            },
+            primitive: {
+                topology,
+                cullMode
+            },
+            depthStencil: {
+                format: "depth24plus",
+                depthWriteEnabled: true,
+                depthCompare: "less"
+            }
+        });
+        this.pipelineCache.set(key, pipeline);
+        return pipeline;
     }
 
     private getOrCreatePipeline(material: Material, instanced: boolean = false, skinned: boolean = false, skinned8: boolean = false, mirrored: boolean = false, forceNoDepthWrite: boolean = false): GPURenderPipeline {

@@ -57,6 +57,12 @@ const normalizePointCloudScaleTransform = (transform: ScaleTransformDescriptor |
     });
 };
 
+const pointCloudRevisionScratch = new ArrayBuffer(4);
+const pointCloudRevisionF32 = new Float32Array(pointCloudRevisionScratch);
+const pointCloudRevisionU32 = new Uint32Array(pointCloudRevisionScratch);
+const mixPointCloudRevision = (hash: number, value: number): number => Math.imul((hash ^ (value >>> 0)) >>> 0, 16777619) >>> 0;
+const mixPointCloudRevisionF32 = (hash: number, value: number): number => { pointCloudRevisionF32[0] = Number.isFinite(value) ? value : 0; return mixPointCloudRevision(hash, pointCloudRevisionU32[0] >>> 0); };
+
 export class PointCloud {
     readonly transform: Transform = new Transform();
     name: string | null = null;
@@ -157,6 +163,22 @@ export class PointCloud {
 
     get pointCount(): number {
         return this._pointCount;
+    }
+
+    get occluderRevision(): number {
+        let hash = 2166136261 >>> 0;
+        hash = mixPointCloudRevision(hash, this._pointCount >>> 0);
+        hash = mixPointCloudRevision(hash, this._scaleRevision >>> 0);
+        hash = mixPointCloudRevision(hash, this.blendMode === BlendMode.Opaque ? 1 : this.blendMode === BlendMode.Transparent ? 2 : 3);
+        hash = mixPointCloudRevision(hash, this.depthWrite ? 1 : 0);
+        hash = mixPointCloudRevision(hash, this.depthTest ? 1 : 0);
+        hash = mixPointCloudRevision(hash, this._pointsDirty ? 1 : 0);
+        hash = mixPointCloudRevision(hash, this.pointsBuffer ? 1 : 0);
+        hash = mixPointCloudRevisionF32(hash, this._basePointSize);
+        hash = mixPointCloudRevisionF32(hash, this._minPointSize);
+        hash = mixPointCloudRevisionF32(hash, this._maxPointSize);
+        hash = mixPointCloudRevisionF32(hash, this._sizeAttenuation);
+        return hash >>> 0;
     }
 
     get ndShape(): number[] | null {

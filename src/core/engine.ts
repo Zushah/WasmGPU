@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { Renderer, RendererDescriptor } from "./renderer";
+import { Renderer, RendererDescriptor, RendererCullingStats } from "./renderer";
 import type { RendererPickHit } from "./renderer";
 import { PerformanceStats } from "./stats";
 import type { PerformanceStatsDescriptor } from "./stats";
@@ -114,7 +114,7 @@ export class WasmGPU {
         return this._isRunning;
     }
 
-    get cullingStats(): { tested: number; visible: number } {
+    get cullingStats(): RendererCullingStats {
         return this.renderer.cullingStats;
     }
 

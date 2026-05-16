@@ -157,6 +157,9 @@ export const cullf = {
     },
     spheresFrustum: (outIndicesPtr: WasmPtr, centersPtr: WasmPtr, radiiPtr: WasmPtr, count: number, frustumPlanesPtr: WasmPtr): number => {
         return ensure().cull_spheres_frustum(outIndicesPtr >>> 0, centersPtr >>> 0, radiiPtr >>> 0, count >>> 0, frustumPlanesPtr >>> 0) >>> 0;
+    },
+    spheresOcclusion: (outIndicesPtr: WasmPtr, outStatsPtr: WasmPtr, centersPtr: WasmPtr, radiiPtr: WasmPtr, count: number, viewProjPtr: WasmPtr, viewportWidth: number, viewportHeight: number, mipOffsetsPtr: WasmPtr, mipWidthsPtr: WasmPtr, mipHeightsPtr: WasmPtr, mipCount: number, depthValuesPtr: WasmPtr, depthValuesLen: number, nearPlaneEpsilon: number, maxScreenCoverage: number, depthBias: number): number => {
+        return ensure().cull_spheres_occlusion(outIndicesPtr >>> 0, outStatsPtr >>> 0, centersPtr >>> 0, radiiPtr >>> 0, count >>> 0, viewProjPtr >>> 0, viewportWidth, viewportHeight, mipOffsetsPtr >>> 0, mipWidthsPtr >>> 0, mipHeightsPtr >>> 0, mipCount >>> 0, depthValuesPtr >>> 0, depthValuesLen >>> 0, nearPlaneEpsilon, maxScreenCoverage, depthBias) >>> 0;
     }
 };
 

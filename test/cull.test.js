@@ -138,3 +138,66 @@ const approxArray = (a, b, tol = 1e-6) => {
     approxArray(Array.from(outCenters), [0, 0, 0, 12, 4, 6], 1e-6);
     approxArray(Array.from(outRadii), [1, 2], 1e-6);
 }
+
+// 3) cullf.spheresOcclusion uses WebGPU depth convention and only culls when nearestDepth > tileMaxDepth + bias.
+{
+    frameArena.reset();
+
+    const viewProjPtr = frameArena.allocF32(16);
+    wasm.f32view(viewProjPtr, 16).set([
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        0, 0, 0, 1
+    ]);
+
+    const count = 5;
+    const centersPtr = frameArena.allocF32(count * 3);
+    const radiiPtr = frameArena.allocF32(count);
+    const centers = wasm.f32view(centersPtr, count * 3);
+    const radii = wasm.f32view(radiiPtr, count);
+
+    centers.set([0, 0, 0.2], 0);
+    radii[0] = 0.05;
+
+    centers.set([0, 0, 0.6], 3);
+    radii[1] = 0.05;
+
+    centers.set([0, 0, 0.3501], 6);
+    radii[2] = 0.05;
+
+    centers.set([0, 0, 0.02], 9);
+    radii[3] = 0.05;
+
+    centers.set([0, 0, 0.8], 12);
+    radii[4] = -1;
+
+    const mipOffsetsPtr = frameArena.alloc(4, 4);
+    const mipWidthsPtr = frameArena.alloc(4, 4);
+    const mipHeightsPtr = frameArena.alloc(4, 4);
+    wasm.u32view(mipOffsetsPtr, 1).set([0]);
+    wasm.u32view(mipWidthsPtr, 1).set([1]);
+    wasm.u32view(mipHeightsPtr, 1).set([1]);
+
+    const depthPtr = frameArena.allocF32(1);
+    wasm.f32view(depthPtr, 1)[0] = 0.3;
+
+    const outPtr = frameArena.alloc(count * 4, 4);
+    const statsPtr = frameArena.alloc(12, 4);
+    const visibleCount = cullf.spheresOcclusion(outPtr, statsPtr, centersPtr, radiiPtr, count, viewProjPtr, 128, 128, mipOffsetsPtr, mipWidthsPtr, mipHeightsPtr, 1, depthPtr, 1, 1e-5, 0.95, 2e-4);
+
+    const visible = Array.from(wasm.u32view(outPtr, visibleCount));
+    const stats = Array.from(wasm.u32view(statsPtr, 3));
+    assert.strictEqual(visibleCount, 4, "Expected 4 visible spheres after conservative occlusion culling");
+    assert.deepStrictEqual(visible, [0, 2, 3, 4], "Visible spheres must keep stable input order");
+    assert.deepStrictEqual(stats, [5, 4, 1], "Occlusion stats mismatch");
+
+    // Clear depth 1.0 never occludes with WebGPU-style depth where smaller is closer.
+    wasm.f32view(depthPtr, 1)[0] = 1.0;
+    const clearVisibleCount = cullf.spheresOcclusion(outPtr, statsPtr, centersPtr, radiiPtr, count, viewProjPtr, 128, 128, mipOffsetsPtr, mipWidthsPtr, mipHeightsPtr, 1, depthPtr, 1, 1e-5, 0.95, 2e-4);
+    const clearStats = Array.from(wasm.u32view(statsPtr, 3));
+    assert.strictEqual(clearVisibleCount, 5, "Clear depth should not occlude any sphere");
+    assert.deepStrictEqual(clearStats, [5, 5, 0], "Clear-depth stats mismatch");
+
+    assert.strictEqual(cullf.spheresOcclusion(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0), 0);
+}

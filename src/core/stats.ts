@@ -34,7 +34,10 @@ export type PerformanceStatsDescriptor = {
 
 export type PerformanceStatsSources = {
     getGpuTimeNs?: () => number | null;
-    getCullingStats?: () => { tested: number; visible: number } | null;
+    getCullingStats?: () => {
+        frustum: { tested: number; visible: number };
+        occlusion: { tested: number; visible: number; occluded: number };
+    } | null;
 };
 
 class RollingAverage {
@@ -267,7 +270,10 @@ export class PerformanceStats {
         }
         if (this.show.showCulling) {
             const stats = this.sources.getCullingStats?.() ?? null;
-            if (stats) lines.push(`Culling: visible ${stats.visible} / tested ${stats.tested}`);
+            if (stats) {
+                lines.push(`Frustum: visible ${stats.frustum.visible} / tested ${stats.frustum.tested}`);
+                lines.push(`Occlusion: visible ${stats.occlusion.visible} / tested ${stats.occlusion.tested} / occluded ${stats.occlusion.occluded}`);
+            }
         }
         this.textEl.textContent = lines.join("\n");
     }

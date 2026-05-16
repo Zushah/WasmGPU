@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: May 12th, 2026.
+Last updated: May 15th, 2026.
 
-Last commit: May 11th, 2026, [**`a569a70`**](https://www.github.com/Zushah/WasmGPU/commit/a569a70).
+Last commit: May 14th, 2026, [**`9813bc8`**](https://www.github.com/Zushah/WasmGPU/commit/9813bc8).
 
 Last release: March 30th, 2026, [**`v0.7.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.7.0).
 
@@ -250,9 +250,9 @@ It also exposes accessors for WebAssembly interop helpers from `./src/wasm/index
 
 The WebGPU engine coordinates the browser-facing parts of the runtime. Its main files are `./src/core/engine.ts`, `./src/core/renderer.ts`, `./src/core/stats.ts`, `./src/core/transform.ts`, and all of the subsystem directories under `./src/`.
 
-The engine reads scene objects, transform state, camera state, material state, texture state, compute descriptors, overlay descriptors, and WebAssembly memory views. It mutates cached renderer state, GPU buffers, bind groups, draw lists, pick state, performance counters, and per-frame staging memory.
+The engine reads scene objects, transform state, camera state, material state, texture state, compute descriptors, overlay descriptors, and WebAssembly memory views. It mutates cached renderer state, GPU buffers, bind groups, draw lists, pick state, performance counters, per-frame staging memory, and optional occlusion hierarchy resources used by render-only previous-frame occlusion culling.
 
-`./src/core/renderer.ts` is the largest TypeScript file and has the highest change risk. It creates the WebGPU adapter, device, queue, context, fallback textures, global buffers, bind group layouts, pipeline caches, shader caches, draw-list pools, culling scratch state, pick resources, and optional SMAA resources. It reads from the scene model and graphics objects, then writes commands into WebGPU command encoders.
+`./src/core/renderer.ts` is the largest TypeScript file and has the highest change risk. It creates the WebGPU adapter, device, queue, context, fallback textures, global buffers, bind group layouts, pipeline caches, shader caches, draw-list pools, culling scratch state, pick resources, optional occlusion hierarchy textures and readback slots, and optional SMAA resources. It reads from the scene model and graphics objects, then writes commands into WebGPU command encoders.
 
 `./src/core/stats.ts` stores frame timing, GPU timing when timestamp queries are available, and frame counters. `./src/core/transform.ts` owns the global transform store and calls Rust functions for transform propagation.
 
@@ -301,7 +301,7 @@ Graphics data is implemented under `./src/graphics/`.
 
 ### 1.8. Pointcloud, glyphfield, and nodelink data
 
-Pointclouds, glyphfields, and nodelinks are separate scene object types. They share several patterns: a transform, visibility flags, scale transform data, optional CPU records for picking, GPU buffer references, uniform buffers, bind groups, bounds, and dirty flags.
+Pointclouds, glyphfields, and nodelinks are separate scene object types. They share several patterns: a transform, visibility flags, scale transform data, optional CPU records for picking, GPU buffer references, uniform buffers, bind groups, bounds, dirty flags, and lightweight internal occluder revision values used to validate previous-frame occlusion reuse.
 
 `./src/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available. Its `destroy()` method currently destroys the stored point and uniform buffers.
 
@@ -323,9 +323,9 @@ Camera, controls, and light changes should be checked against renderer uniform p
 
 ### 1.10. Rendering pipeline
 
-The renderer is implemented in `./src/core/renderer.ts`. It stores the WebGPU device, queue, canvas context, and swapchain format. It owns renderer-created bind group layouts, fallback resources, pipeline caches, shader caches, model buffers, instance buffers, culling scratch memory, pick resources, and optional SMAA resources.
+The renderer is implemented in `./src/core/renderer.ts`. It stores the WebGPU device, queue, canvas context, and swapchain format. It owns renderer-created bind group layouts, fallback resources, pipeline caches, shader caches, model buffers, instance buffers, culling scratch memory, pick resources, optional occlusion hierarchy resources, and optional SMAA resources.
 
-`Renderer.create()` requests a WebGPU adapter and device. It currently supports descriptor fields for antialiasing, power preference, canvas format, frustum culling, culling stats, and requested device limits such as maximum buffer and binding sizes.
+`Renderer.create()` requests a WebGPU adapter and device. It currently supports descriptor fields for antialiasing, power preference, canvas format, frustum culling, frustum culling stats, occlusion culling, occlusion culling stats, and requested device limits such as maximum buffer and binding sizes.
 
 `Renderer.render(scene, camera)` currently performs these steps:
 
@@ -334,13 +334,15 @@ The renderer is implemented in `./src/core/renderer.ts`. It stores the WebGPU de
 - allocate camera, lighting, and model staging memory from the WebAssembly frame arena;
 - update camera matrices and scene transforms;
 - write camera and lighting uniforms;
-- build draw lists for meshes, pointclouds, glyphfields, and nodelinks;
-- run frustum culling when enabled;
+- build unfiltered draw lists for meshes, pointclouds, glyphfields, and nodelinks;
+- aggregate render-only frustum culling stats when enabled;
+- optionally reuse a valid previous-frame occlusion hierarchy to conservatively filter opaque meshes, pointclouds, glyphfields, and nodelinks;
 - encode render passes for opaque objects, transmission copies and passes when needed, transparent objects, and optional SMAA;
 - encode timestamp query resolve and readback when GPU timing is available;
-- submit the command buffer.
+- submit the command buffer;
+- optionally capture a low-resolution opaque depth hierarchy for a later frame and schedule its readback without blocking the current frame.
 
-The renderer reads scene objects, transform world matrices, material state, texture views, geometry buffers, pointcloud buffers, glyphfield buffers, nodelink buffers, camera matrices, light data, and WebAssembly culling results. It mutates GPU buffers, bind groups, pipeline caches, draw-list pools, pick textures, timing query buffers, and internal counters.
+The renderer reads scene objects, transform world matrices, material state, texture views, geometry buffers, pointcloud buffers, glyphfield buffers, nodelink buffers, camera matrices, light data, and WebAssembly culling results. It mutates GPU buffers, bind groups, pipeline caches, draw-list pools, pick textures, timing query buffers, internal counters, and the bounded ring of occlusion readback slots.
 
 Changing render behavior usually means checking `./src/core/renderer.ts`, the graphics classes in `./src/graphics/`, object classes in `./src/world/`, WGSL shader variants in `./src/wgsl/`, and renderer-focused tests in `./test/`.
 
@@ -356,7 +358,7 @@ Changing browser resource layout requires checking usage flags, bind group layou
 
 Picking types and selection helpers are implemented in `./src/world/picking.ts`. The renderer implements the actual pick passes in `./src/core/renderer.ts`. Pick rendering writes object and element identifiers into GPU textures, then reads back the requested pixel or region.
 
-The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./src/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, and nodelinks when CPU records are available.
+The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./src/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, and nodelinks when CPU records are available. Pick preparation uses the renderer's base scene-preparation path only, so it does not apply render-only occlusion filtering and does not consume previous-frame occlusion results.
 
 The overlay framework lives under `./src/overlay/`. `./src/overlay/system.ts` creates a DOM overlay root next to the canvas, tracks layers, observes resize and scroll changes, listens to controls when attached, and marks layers dirty for camera, viewport, layout, scale, colormap, or interaction changes. Built-in layers include axis triad, grid, and legend layers.
 
@@ -450,9 +452,9 @@ WGSL shaders live under `./src/wgsl/`. They are imported as text into TypeScript
 
 Shader directories currently map to architecture areas:
 
-- `./src/wgsl/core/`: SMAA and mesh picking shaders.
+- `./src/wgsl/core/`: SMAA, mesh picking shaders, mesh occlusion capture, and occlusion hierarchy reduction.
 - `./src/wgsl/graphics/`: mesh material shaders, transmission shaders, data material shaders, custom material defaults, mipmap generation, and skinned or instanced variants.
-- `./src/wgsl/world/`: pointcloud, glyphfield, nodelink, and picking shaders.
+- `./src/wgsl/world/`: pointcloud, glyphfield, nodelink, picking, and object-family occlusion capture shaders.
 - `./src/wgsl/compute/`: copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, and blit kernels.
 
 WGSL changes must stay in sync with bind group layouts, vertex buffer layouts, uniform packing, material descriptors, object uniform layouts, and compute pipeline resource bindings in TypeScript.
@@ -462,13 +464,13 @@ WGSL changes must stay in sync with bind group layouts, vertex buffer layouts, u
 Per-frame work spans TypeScript, WebAssembly, and WebGPU:
 
 - `WasmGPU.run()` resets the frame arena and calls the frame callback.
-- `Renderer.render()` updates canvas-sized resources, camera matrices, transforms, lighting uniforms, draw lists, culling, GPU uploads, render passes, optional post-processing, and timing readback.
+- `Renderer.render()` updates canvas-sized resources, camera matrices, transforms, lighting uniforms, unfiltered draw lists, render-only culling stats, optional previous-frame occlusion filtering of opaque lists, GPU uploads, render passes, optional post-processing, timing readback, and optional asynchronous occlusion hierarchy capture.
 - Transform propagation runs in Rust using WebAssembly memory.
-- Culling and bounds helpers run in Rust when enabled by renderer paths.
+- Culling and bounds helpers run in Rust when enabled by renderer paths. Current Rust culling work includes frustum culling and conservative previous-frame hierarchical-Z occlusion tests over world-space spheres.
 - Animation sampling mutates transforms and morph weights before rendering when the application updates players.
 - Overlay updates are DOM work and can be marked dirty by camera, viewport, scale, colormap, or interaction changes.
 
-The code contains several performance-sensitive patterns: reusable draw-list arrays, draw item pools, model buffer pools, pipeline and shader caches, bind group caches, culling scratch buffers, frame arena staging memory, scratch compute buffers, and readback ring slots. Changes in these areas should avoid new per-object or per-frame allocations unless the allocation is bounded and measured.
+The code contains several performance-sensitive patterns: reusable draw-list arrays, draw item pools, model buffer pools, pipeline and shader caches, bind group caches, culling scratch buffers, frame arena staging memory, scratch compute buffers, and readback ring slots. The occlusion path uses a bounded ring of hierarchy readback slots and intentionally becomes a no-op when no safe previous-frame hierarchy is ready. Changes in these areas should avoid new per-object or per-frame allocations unless the allocation is bounded and measured.
 
 ### 1.21. Visible invariants
 
@@ -482,11 +484,14 @@ These invariants are visible in the current code:
 - Disposed transforms throw on later use.
 - Transform parenting rejects cycles.
 - The renderer calls transform updates before reading world matrices for draw lists.
+- Render-only previous-frame occlusion culling reuses hierarchy data only when viewport size, hierarchy layout, camera type, view-projection matrix, and occluder signature still match; otherwise it is skipped for that frame.
+- Render-only occlusion filtering never runs for picking or warmup.
 - Geometry and materials use reference counts, and meshes release references on destruction.
 - Imported glTF node visibility has local and effective state; effective visibility fans out to attached meshes and lights, while cameras remain importable and unaffected by visibility.
 - Scene lighting uniform data currently uses at most eight non-ambient lights.
 - WebGPU buffer readback requires buffers with copy-source usage.
 - Buffer writes are padded to four-byte alignment where needed.
+- Opaque occluder capture uses only coverage-safe subsets of meshes, pointclouds, glyphfields, and nodelinks; unsafe or ambiguous contributors are excluded from capture and stay visible as candidates.
 - Picking attributes for pointclouds, glyphfields, and nodelinks depend on retained CPU-side records.
 - Shader uniform layouts, TypeScript packing code, and WGSL structs must match.
 
@@ -522,9 +527,9 @@ Architectural role:
 
 Important files:
 
-- `./src/core/renderer.ts`: central render implementation. It creates the WebGPU device and context, configures limits, manages caches, builds draw lists, uploads uniforms, runs culling, encodes render passes, handles transmission and SMAA paths, and implements picking.
+- `./src/core/renderer.ts`: central render implementation. It creates the WebGPU device and context, configures limits, manages caches, builds draw lists, uploads uniforms, runs frustum and optional previous-frame occlusion culling, encodes render passes, handles transmission and SMAA paths, implements picking, and owns the occlusion hierarchy textures and readback ring.
 - `./src/core/transform.ts`: global transform store and `Transform` class. It stores transform data in WebAssembly memory and calls Rust transform functions.
-- `./src/core/stats.ts`: frame and GPU timing counters used by the runtime.
+- `./src/core/stats.ts`: frame and GPU timing counters plus the nested public culling stats display used by the runtime.
 - `./src/utils/index.ts`: shared internal helpers used across subsystems.
 
 Contributors should inspect `./src/core/renderer.ts` together with the object class, material class, and shader file for any feature that changes draw behavior. Renderer changes often affect tests, examples, and shader layouts.
@@ -711,7 +716,7 @@ Important files:
 - `./rust/src/accessors.rs`: glTF accessor conversion, deinterleaving, sparse patching, and numeric conversion.
 - `./rust/src/anim.rs`: animation sampling and joint matrix generation.
 - `./rust/src/bounds.rs`: geometry, pointcloud, and glyph bounds helpers.
-- `./rust/src/cull.rs`: frustum plane extraction and sphere culling.
+- `./rust/src/cull.rs`: frustum plane extraction, sphere culling, and conservative hierarchical-Z occlusion culling over packed world-space spheres.
 - `./rust/src/shared.rs` and `./rust/src/utils.rs`: shared Rust helpers.
 
 Common interactions:
@@ -729,9 +734,9 @@ Architectural role:
 
 Important directories:
 
-- `./src/wgsl/core/`: core render support shaders such as SMAA and mesh picking.
+- `./src/wgsl/core/`: core render support shaders such as SMAA, mesh picking, mesh occlusion capture, and occlusion hierarchy reduction.
 - `./src/wgsl/graphics/`: material shaders, standard and transmission shader variants, data material shaders, mipmap generation, and custom material defaults.
-- `./src/wgsl/world/`: pointcloud, glyphfield, nodelink, and picking shaders.
+- `./src/wgsl/world/`: pointcloud, glyphfield, nodelink, picking, and occlusion capture shaders.
 - `./src/wgsl/compute/`: compute kernels for copy, reductions, scans, histograms, compaction, radix sort, scaling, blitting, and LU factoring/solving.
 
 Common interactions:

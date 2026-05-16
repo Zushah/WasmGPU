@@ -6,7 +6,7 @@
 
 import assert from "assert";
 import { create, globals } from "webgpu";
-import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, BlendMode, CullMode } from "../dist/WasmGPU.js";
+import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, BlendMode, CullMode, PointCloud, GlyphField, NodeLink } from "../dist/WasmGPU.js";
 
 Object.assign(globalThis, globals);
 
@@ -196,7 +196,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     renderer.destroy();
 }
 
-// 3) Frustum culling and visibility stats track renderable mesh candidates.
+// 3) Frustum culling stats use the nested public shape and keep occlusion counts separate.
 {
     const canvas = makeCanvas(192, 192);
     const renderer = await Renderer.create(canvas, {
@@ -215,18 +215,180 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     scene.add(near).add(far);
 
     renderer.render(scene, camera);
-    assert.equal(renderer.cullingStats.tested, 2);
-    assert.equal(renderer.cullingStats.visible, 1);
+    assert.deepEqual(renderer.cullingStats, {
+        frustum: { tested: 2, visible: 1 },
+        occlusion: { tested: 0, visible: 0, occluded: 0 }
+    });
     far.visible = false;
     renderer.render(scene, camera);
-    assert.equal(renderer.cullingStats.tested, 1);
-    assert.equal(renderer.cullingStats.visible, 1);
+    assert.deepEqual(renderer.cullingStats, {
+        frustum: { tested: 1, visible: 1 },
+        occlusion: { tested: 0, visible: 0, occluded: 0 }
+    });
 
     scene.destroy();
     renderer.destroy();
 }
 
-// 4) Picking APIs return stable empty and region result shapes.
+// 4) Render-only occlusion hooks do not run during pick or warmup, so picking stays exact and warmup stays unfiltered.
+{
+    const canvas = makeCanvas(160, 160);
+    const renderer = await Renderer.create(canvas, {
+        antialias: false,
+        frustumCulling: false,
+        occlusionCulling: true,
+        occlusionCullingStats: true,
+        canvasFormat: "rgba8unorm"
+    });
+    const scene = new Scene();
+    const camera = createCamera();
+    let applyCalls = 0;
+    let captureCalls = 0;
+    const rendererAny = renderer;
+    const origApply = rendererAny.applyRenderCullingAndStats.bind(rendererAny);
+    rendererAny.applyRenderCullingAndStats = function patchedApply(...args) {
+        applyCalls++;
+        return origApply(...args);
+    };
+    rendererAny.captureOcclusionHierarchy = function patchedCapture() {
+        captureCalls++;
+    };
+
+    renderer.render(scene, camera);
+    assert.equal(applyCalls, 1);
+    assert.equal(captureCalls, 1);
+    await assert.doesNotReject(async () => renderer.pick(scene, camera, 32, 32));
+    assert.equal(applyCalls, 1);
+    assert.equal(captureCalls, 1);
+    assert.doesNotThrow(() => renderer.warmup(scene, camera));
+    assert.equal(applyCalls, 1);
+    assert.equal(captureCalls, 1);
+
+    renderer.destroy();
+}
+
+// 5) Strict previous-frame validity skips occlusion filtering when the stored view-projection does not match.
+{
+    const canvas = makeCanvas(160, 160);
+    const renderer = await Renderer.create(canvas, {
+        antialias: false,
+        frustumCulling: false,
+        occlusionCulling: true,
+        occlusionCullingStats: true,
+        canvasFormat: "rgba8unorm"
+    });
+    const rendererAny = renderer;
+    const scene = new Scene();
+    const camera = createCamera();
+    scene.add(new Mesh(Geometry.box(), new UnlitMaterial()));
+
+    rendererAny.prepareSceneFrameBase(scene, camera);
+    const frameState = rendererAny.buildOcclusionFrameState();
+    rendererAny.pendingOcclusionFrameState = frameState;
+    rendererAny.ensureOcclusionResources();
+    const layout = rendererAny.occlusionHierarchyLayout;
+    assert.ok(layout);
+    rendererAny.latestOcclusionHierarchy = {
+        metadata: {
+            viewportWidth: rendererAny.width,
+            viewportHeight: rendererAny.height,
+            hierarchyWidth: rendererAny.occlusionWidth,
+            hierarchyHeight: rendererAny.occlusionHeight,
+            cameraType: camera.type,
+            occluderSignature: frameState.signature,
+            viewProjection: new Float32Array(16), // deliberately invalid for the current frame
+            layout
+        },
+        data: new Float32Array(layout.texelCount).fill(0.2)
+    };
+    rendererAny.latestOcclusionHierarchySerial = 1;
+    rendererAny.applyRenderCullingAndStats(camera);
+
+    assert.equal(rendererAny.opaqueDrawList.length, 1);
+    assert.deepEqual(renderer.cullingStats.occlusion, { tested: 0, visible: 0, occluded: 0 });
+
+    scene.destroy();
+    renderer.destroy();
+}
+
+// 6) Safe occluder capture classification keeps ambiguous coverage paths out of the capture set.
+{
+    const canvas = makeCanvas(200, 200);
+    const renderer = await Renderer.create(canvas, {
+        antialias: false,
+        frustumCulling: false,
+        occlusionCulling: true,
+        canvasFormat: "rgba8unorm"
+    });
+    const rendererAny = renderer;
+    const scene = new Scene();
+    const camera = createCamera();
+
+    const safeMesh = new Mesh(Geometry.box(), new UnlitMaterial());
+    const alphaCutMesh = new Mesh(Geometry.box(), new UnlitMaterial({ alphaCutoff: 0.5 }));
+    const customMesh = new Mesh(Geometry.box(), new CustomMaterial({
+        fragmentShader: `
+            @fragment
+            fn fs_main(in: VertexOutput) -> @location(0) vec4f {
+                return vec4f(in.uv, 0.0, 1.0);
+            }
+        `
+    }));
+    const safeCloud = new PointCloud({
+        data: new Float32Array([0, 0, 0, 1]),
+        basePointSize: 12,
+        blendMode: BlendMode.Opaque,
+        depthWrite: true,
+        depthTest: true,
+        scaleTransform: { componentCount: 4, componentIndex: 3, stride: 4, offset: 0 }
+    });
+    const additiveCloud = new PointCloud({
+        data: new Float32Array([1, 0, 0, 1]),
+        basePointSize: 12,
+        blendMode: BlendMode.Additive,
+        depthWrite: true,
+        depthTest: true,
+        scaleTransform: { componentCount: 4, componentIndex: 3, stride: 4, offset: 0 }
+    });
+    const safeGlyph = new GlyphField({
+        geometry: Geometry.box(0.25, 0.25, 0.25),
+        instanceCount: 1,
+        positions: new Float32Array([0, 0, 0, 0]),
+        rotations: new Float32Array([0, 0, 0, 1]),
+        scales: new Float32Array([1, 1, 1, 0]),
+        attributes: new Float32Array([1, 0, 0, 0]),
+        colorMode: "scalar",
+        blendMode: BlendMode.Opaque,
+        depthWrite: true,
+        depthTest: true,
+        scaleTransform: { componentCount: 4, componentIndex: 0, stride: 4, offset: 0 }
+    });
+    const safeGraph = new NodeLink({
+        nodePositions: new Float32Array([0, 0, 0, 1, 0, 0]),
+        edges: new Uint16Array([0, 1]),
+        blendMode: BlendMode.Opaque,
+        depthWrite: true,
+        depthTest: true
+    });
+
+    scene.add(safeMesh).add(alphaCutMesh).add(customMesh).add(safeCloud).add(additiveCloud).add(safeGlyph).add(safeGraph);
+    rendererAny.prepareSceneFrameBase(scene, camera);
+    const frameState = rendererAny.buildOcclusionFrameState();
+
+    assert.equal(frameState.meshOccluders.length, 1);
+    assert.equal(frameState.meshOccluders[0].mesh, safeMesh);
+    assert.equal(frameState.pointCloudOccluders.length, 1);
+    assert.equal(frameState.pointCloudOccluders[0].cloud, safeCloud);
+    assert.equal(frameState.glyphOccluders.length, 1);
+    assert.equal(frameState.glyphOccluders[0].field, safeGlyph);
+    assert.ok(frameState.nodeLinkOccluders.length >= 1);
+    assert.ok(frameState.nodeLinkOccluders.every((item) => item.link === safeGraph));
+
+    scene.destroy();
+    renderer.destroy();
+}
+
+// 7) Picking APIs return stable empty and region result shapes.
 {
     const canvas = makeCanvas(128, 128);
     const renderer = await Renderer.create(canvas, {
@@ -260,7 +422,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     renderer.destroy();
 }
 
-// 5) SMAA render path and destroyed scene objects clean up without poisoning later frames.
+// 8) SMAA render path and destroyed scene objects clean up without poisoning later frames.
 {
     const canvas = makeCanvas(160, 120);
     const renderer = await Renderer.create(canvas, {
@@ -281,7 +443,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     renderer.destroy();
 }
 
-// 6) Warmup validates defaults and errors without acquiring a swapchain texture.
+// 9) Warmup validates defaults and errors without acquiring a swapchain texture.
 {
     assert.equal(typeof WasmGPU.prototype.warmup, "function");
     const canvas = makeCanvas(256, 256);
@@ -299,7 +461,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     wgpu.destroy();
 }
 
-// 7) Warmup eagerly exercises visible render resource creation paths before the first render.
+// 10) Warmup eagerly exercises visible render resource creation paths before the first render.
 {
     const canvas = makeCanvas(320, 240);
     const wgpu = await WasmGPU.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
@@ -369,7 +531,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     wgpu.destroy();
 }
 
-// 8) Transmission warmup prepares transmissive material binding without drawing a visible frame.
+// 11) Transmission warmup prepares transmissive material binding without drawing a visible frame.
 {
     const canvas = makeCanvas(240, 180);
     const wgpu = await WasmGPU.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });

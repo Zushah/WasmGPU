@@ -93,6 +93,11 @@ const isNodeGeometryMode = (value: unknown): value is NodeLinkNodeGeometryMode =
 const isEdgeGeometryMode = (value: unknown): value is NodeLinkEdgeGeometryMode => value === "lines" || value === "cylinders";
 const isColorMode = (value: unknown): value is NodeLinkColorMode => value === "rgba" || value === "scalar" || value === "solid";
 const cloneBytes = (data: ArrayBufferView): Uint8Array => new Uint8Array(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+const nodeLinkRevisionScratch = new ArrayBuffer(4);
+const nodeLinkRevisionF32 = new Float32Array(nodeLinkRevisionScratch);
+const nodeLinkRevisionU32 = new Uint32Array(nodeLinkRevisionScratch);
+const mixNodeLinkRevision = (hash: number, value: number): number => Math.imul((hash ^ (value >>> 0)) >>> 0, 16777619) >>> 0;
+const mixNodeLinkRevisionF32 = (hash: number, value: number): number => { nodeLinkRevisionF32[0] = Number.isFinite(value) ? value : 0; return mixNodeLinkRevision(hash, nodeLinkRevisionU32[0] >>> 0); };
 
 export class NodeLink {
     readonly transform: Transform = new Transform();
@@ -295,6 +300,31 @@ export class NodeLink {
 
     get edgeCount(): number {
         return this._edgeCount;
+    }
+
+    get occluderRevision(): number {
+        let hash = 2166136261 >>> 0;
+        hash = mixNodeLinkRevision(hash, this._nodeCount >>> 0);
+        hash = mixNodeLinkRevision(hash, this._edgeCount >>> 0);
+        hash = mixNodeLinkRevision(hash, this._nodeScaleRevision >>> 0);
+        hash = mixNodeLinkRevision(hash, this._edgeScaleRevision >>> 0);
+        hash = mixNodeLinkRevision(hash, this.blendMode === BlendMode.Opaque ? 1 : this.blendMode === BlendMode.Transparent ? 2 : 3);
+        hash = mixNodeLinkRevision(hash, this.cullMode === CullMode.Back ? 1 : this.cullMode === CullMode.Front ? 2 : 3);
+        hash = mixNodeLinkRevision(hash, this.depthWrite ? 1 : 0);
+        hash = mixNodeLinkRevision(hash, this.depthTest ? 1 : 0);
+        hash = mixNodeLinkRevision(hash, nodeGeometryModeId(this._nodeGeometryMode) >>> 0);
+        hash = mixNodeLinkRevision(hash, edgeGeometryModeId(this._edgeGeometryMode) >>> 0);
+        hash = mixNodeLinkRevision(hash, colorModeId(this._nodeColorMode) >>> 0);
+        hash = mixNodeLinkRevision(hash, colorModeId(this._edgeColorMode) >>> 0);
+        hash = mixNodeLinkRevision(hash, this._nodePositionsDirty ? 1 : 0);
+        hash = mixNodeLinkRevision(hash, this._nodeRadiiDirty ? 1 : 0);
+        hash = mixNodeLinkRevision(hash, this._edgesDirty ? 1 : 0);
+        hash = mixNodeLinkRevisionF32(hash, this._nodeSize);
+        hash = mixNodeLinkRevisionF32(hash, this._edgeSize);
+        hash = mixNodeLinkRevisionF32(hash, this._minPointSize);
+        hash = mixNodeLinkRevisionF32(hash, this._maxPointSize);
+        hash = mixNodeLinkRevisionF32(hash, this._pointSizeAttenuation);
+        return hash >>> 0;
     }
 
     get ndShape(): number[] | null {
