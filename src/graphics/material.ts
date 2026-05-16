@@ -1400,7 +1400,9 @@ export class CustomMaterial extends Material {
 
     getShaderCode(opts: { instanced?: boolean; skinned?: boolean; skinned8?: boolean } = {}): string {
         let uniformStruct = "struct CustomUniforms {\n";
-        for (const [name, def] of Object.entries(this._uniforms)) uniformStruct += `    ${name}: ${def.type},\n`;
+        const uniformEntries = Object.entries(this._uniforms);
+        if (uniformEntries.length === 0) uniformStruct += "    _pad: f32\n";
+        else for (const [name, def] of uniformEntries) uniformStruct += `    ${name}: ${def.type},\n`;
         uniformStruct += "};\n\n@group(1) @binding(0) var<uniform> custom: CustomUniforms;\n\n";
         return this._vertexShader + "\n" + uniformStruct + this._fragmentShader;
     }
