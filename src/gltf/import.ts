@@ -1636,7 +1636,6 @@ const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedN
         const animationName = a.name ?? `anim_${i}`;
         const samplerCount = a.samplers.length | 0;
         const samplerTablePtr = samplerCount > 0 ? (wasm.allocU32(samplerCount * 5) as WasmPtr) : (0 as WasmPtr);
-        const samplerTable = samplerCount > 0 ? wasm.u32view(samplerTablePtr, samplerCount * 5) : null;
         const ownedF32Allocs: { ptr: WasmPtr; len: number }[] = [];
         const ownedU32Allocs: { ptr: WasmPtr; len: number }[] = [];
         if (samplerCount > 0) ownedU32Allocs.push({ ptr: samplerTablePtr, len: samplerCount * 5 });
@@ -1660,13 +1659,14 @@ const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedN
                 startTime = Math.min(startTime, input[0]!);
                 endTime = Math.max(endTime, input[input.length - 1]!);
             }
-            if (samplerTable) {
+            if (samplerCount > 0) {
                 const timesPtr = wasm.allocF32(input.length) as WasmPtr;
                 wasm.f32view(timesPtr, input.length).set(input);
                 ownedF32Allocs.push({ ptr: timesPtr, len: input.length });
                 const valuesPtr = wasm.allocF32(output.length) as WasmPtr;
                 wasm.f32view(valuesPtr, output.length).set(output);
                 ownedF32Allocs.push({ ptr: valuesPtr, len: output.length });
+                const samplerTable = wasm.u32view(samplerTablePtr, samplerCount * 5);
                 const base = si * 5;
                 samplerTable[base + 0] = timesPtr >>> 0;
                 samplerTable[base + 1] = (input.length | 0) >>> 0;
