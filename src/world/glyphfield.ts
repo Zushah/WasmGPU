@@ -11,7 +11,7 @@ import { Colormap, type BuiltinColormapName } from "../graphics/colormap";
 import { cloneScaleTransform, normalizeScaleTransform, packScaleTransform } from "../scaling";
 import type { ScaleSourceDescriptor, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor } from "../scaling";
 import { Geometry } from "../graphics/geometry";
-import { boundsf, wasm, wasmInterop, type WasmPtr } from "../wasm";
+import { boundsf, driver, wasm, type WasmPtr } from "../wasm";
 import { Bounds3, boundsFromBox, boundsFromSphere, emptyBounds, transformBounds } from "./bounds";
 
 export type GlyphColormap = BuiltinColormapName | "custom";
@@ -694,11 +694,8 @@ export class GlyphField {
     upload(device: GPUDevice, queue: GPUQueue): void {
         if (this._usingExternalBuffers) return;
         if (!this._dataDirty) return;
-        if (this._instanceCount <= 0) {
-            this._dataDirty = false;
-            return;
-        }
-        const bytes = wasmInterop.bytes();
+        if (this._instanceCount <= 0) { this._dataDirty = false; return; }
+        const bytes = driver.bytes();
         const requiredBytes = this._instanceCount * 16;
         const uploadSoA = (buf: GPUBuffer | null, cpu: Float32Array | null, ptr: WasmPtr, label: string): GPUBuffer | null => {
             if (!cpu && !ptr) return buf;

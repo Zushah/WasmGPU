@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: May 15th, 2026.
+Last updated: May 21st, 2026.
 
-Last commit: May 14th, 2026, [**`9813bc8`**](https://www.github.com/Zushah/WasmGPU/commit/9813bc8).
+Last commit: May 16th, 2026, [**`55169d6`**](https://www.github.com/Zushah/WasmGPU/commit/55169d6).
 
 Last release: March 30th, 2026, [**`v0.7.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.7.0).
 
@@ -69,7 +69,7 @@ flowchart LR
     subgraph API["Public API"]
         APP["User Application"]
         ENG["WasmGPU"]
-        FAC["Factory surface: scene, camera, controls, geometry, material, texture, mesh, pointcloud, glyphfield, nodelink, light, asset import, animation, overlay, annotation"]
+        FAC["Factory surface: scene, camera, controls, geometry, material, texture, mesh, pointcloud, glyphfield, nodelink, light, asset import, animation, overlay, annotation, interop"]
     end
 
     subgraph WGPU["WebGPU Engine"]
@@ -101,6 +101,8 @@ flowchart LR
         ADEC["Accessor decoding & data conversion"]
         AIMP["Importer from asset data to scene resources"]
         AMETA["Imported nodes, metadata, variants, cameras, & lights"]
+        WINT["WebAssembly interop"]
+        PY["Python interop"]
     end
 
     subgraph WASM["WebAssembly Driver"]
@@ -134,7 +136,7 @@ flowchart LR
     class APP,ENG,FAC darkblue;
     class LOOP,REND,SCALE,OVER,ANNO,PICK green;
     class COMP,CBUF,CPIP,CDIS,CKER,CND,CREAD,CSCR lightblue;
-    class SCN,TSTORE,MESH,PGN,CMAP,SKIN,ASTORE,ALOAD,ADEC,AIMP,AMETA yellow;
+    class SCN,TSTORE,MESH,PGN,CMAP,SKIN,ASTORE,ALOAD,ADEC,AIMP,AMETA,WINT,PY yellow;
     class WHEAP,WFRAME,WTRANS,WMATH,WND,WNORM,WGLTF,WANIM,WBOUNDS,WCULL purple;
     class DEV,CACHE,RES,RPASS,CPASS pink;
 
@@ -152,6 +154,8 @@ flowchart LR
     FAC --> PGN
     FAC --> ALOAD
     FAC --> AIMP
+    FAC --> WINT
+    FAC --> PY
 
     SCN --> MESH
     SCN --> PGN
@@ -212,6 +216,9 @@ flowchart LR
     REND -.-> WFRAME
     REND -.-> WMATH
     COMP -.-> WHEAP
+    WINT -.-> CBUF
+    PY --> WHEAP
+    PY --> WFRAME
     WHEAP -.-> RES
     WFRAME -.-> RES
 ```
@@ -240,7 +247,7 @@ The runtime owns:
 - performance stats;
 - requestAnimationFrame loop state.
 
-It also exposes accessors for WebAssembly interop helpers from `./src/wasm/index.ts`.
+It also exposes accessors from `./src/wasm/index.ts` for the WebAssembly driver (`driver`) and the external WebAssembly interop (`webassembly`), alongside the Python interop (`python`) accessors from `./src/python/index.ts`.
 
 `WasmGPU.run(callback)` starts a browser animation loop. Each frame resets the WebAssembly frame arena, computes timing values, invokes the callback, and records frame statistics. `WasmGPU.render(scene, camera)` delegates to `Renderer.render()`. If the runtime is not inside `run()`, it resets the frame arena before rendering.
 
@@ -430,9 +437,11 @@ Interop changes should preserve allocator ownership, frame arena lifetime checks
 
 ### 1.18. WebAssembly driver
 
-WebAssembly initialization is implemented in `./src/wasm/index.ts`. It imports the generated loader from `./build/wasm.js`, creates an eight-mebibyte frame arena, and exposes grouped Rust functions for accessors, animation, bounds, culling, matrix math, mesh normals, ndarray indexing, quaternion math, transforms, and vector math.
+WebAssembly driver initialization is implemented in `./src/wasm/driver.ts` and exported through `./src/wasm/index.ts`. It imports the generated loader from `./build/wasm.js`, creates an eight-mebibyte (8,388,608 bytes) frame arena, and exposes grouped Rust functions for accessors, animation, bounds, culling, matrix math, mesh normals, ndarray indexing, quaternion math, transforms, and vector math.
 
-WebAssembly interop helpers live in `./src/wasm/interop.ts`. `WasmSlice` records pointer, length, dtype, allocation kind, and epoch. Frame arena and heap arena slices check epochs so callers do not reuse memory after a reset or destroyed arena. `WasmHeapArena` allocates a WebAssembly heap block and provides bump allocation within that block.
+`WasmSlice`, `WasmHeapArena`, `frameArena`, `wasm`, and the `driver` namespace are part of the WebAssembly driver. `WasmSlice` records pointer, length, dtype, allocation kind, and epoch. Frame arena and heap arena slices check epochs so callers do not reuse memory after a reset or destroyed arena. `WasmHeapArena` allocates a WebAssembly heap block and provides bump allocation within that block.
+
+WebAssembly interop with external modules lives in `./src/wasm/interop.ts`. It wraps foreign `WebAssembly.Instance` or exports objects, resolves explicit memory and export descriptors, validates byte ranges and alignment, and constructs typed views or raw byte/DataView accessors over external linear memory.
 
 Rust memory allocation is implemented in `./rust/src/heap.rs`. The heap allocator is a bump allocator. The exported free functions currently do not reclaim memory. Contributors should treat heap allocations as persistent within the current WebAssembly instance unless an arena reset pattern is used.
 
@@ -678,16 +687,15 @@ Common interactions:
 
 Architectural role:
 
-- Implements Python/Pyodide interop and WebAssembly memory helpers in the diagram.
-- Bridges JavaScript typed arrays, Pyodide buffers, WebAssembly memory, and ndarray handles.
-- Exposes Rust functions and memory views to TypeScript.
+- Implements Python/Pyodide interop and external WebAssembly module interop in the diagram.
+- Bridges JavaScript typed arrays, Pyodide buffers, foreign WebAssembly memory, and ndarray handles.
 
 Important files:
 
 - `./src/python/index.ts`: TypeScript interop API for sending and receiving ndarrays, viewing handles, copying data, and freeing owned memory.
 - `./src/python/interop.py`: Python-side helper classes for handles, arenas, and array wrappers.
-- `./src/wasm/index.ts`: WebAssembly loader integration, Rust export grouping, frame arena setup, typed memory views, and math wrappers.
-- `./src/wasm/interop.ts`: `WasmSlice`, `WasmHeapArena`, handle views, epoch checks, and host wiring.
+- `./src/wasm/index.ts`: exports for the WebAssembly driver and the WebAssembly interop.
+- `./src/wasm/interop.ts`: external WebAssembly module wrappers, descriptor resolution, typed memory views, raw byte reads, and UTF-8/DataView helpers.
 
 Common interactions:
 
@@ -700,11 +708,13 @@ Common interactions:
 Architectural role:
 
 - Implements the WebAssembly Driver area in the diagram.
+- `./src/wasm/driver.ts` is the TypeScript layer over the generated WebAssembly output of the Rust.
 - Provides exported functions for allocation, frame scratch memory, transforms, math, bounds, culling, normals, accessors, animation, and ndarray layout.
 - Mutates WebAssembly memory owned by the current WebAssembly instance.
 
 Important files:
 
+- `./src/wasm/driver.ts`: internal "glue" between the TypeScript and Rust sides of the overall system, `WasmSlice`, `WasmHeapArena`, frame arena helpers, loader integration, and grouped Rust function wrappers.
 - `./rust/Cargo.toml`: Rust crate metadata and release profile.
 - `./rust/src/lib.rs`: module wiring and exported entry points.
 - `./rust/src/heap.rs`: bump heap allocation and no-op free exports.

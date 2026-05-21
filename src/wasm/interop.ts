@@ -4,405 +4,415 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import type { WasmPtr } from "./index";
+import { assert } from "../utils";
+import { dtypeInfo, type DType, type NumberTypedArray } from "../compute/ndarray";
 
-export type WasmSliceKind = "heap" | "frame" | "arena";
-export type WasmSliceDType = "f32" | "u32" | "i32" | "u8";
+export type WasmExportsLike = Record<string, unknown>;
 
-export type WasmSliceHandle = {
-    kind: WasmSliceKind;
-    dtype: WasmSliceDType;
-    ptr: WasmPtr;
-    length: number;
-    epoch?: number;
+export type WasmInstanceLike = WebAssembly.Instance | { exports: WasmExportsLike; };
+
+export type WasmMemorySource = WebAssembly.Memory | string | null | undefined;
+
+export type WasmCallArg = number | bigint;
+
+export type WasmModuleOptions = { name?: string; memory?: WasmMemorySource; };
+
+export type WasmValueDescriptor = number | bigint | string | (() => number | bigint) | WasmFunctionValueDescriptor | WasmGlobalValueDescriptor | WasmExportValueDescriptor;
+
+type WasmFunctionValueDescriptor = {
+    function: (...args: WasmCallArg[]) => unknown;
+    args?: ReadonlyArray<WasmCallArg>;
+    name?: string;
 };
 
-export type WasmTypedArray = Float32Array | Uint32Array | Int32Array | Uint8Array;
+type WasmGlobalValueDescriptor = {
+    global: WebAssembly.Global;
+    name?: string;
+};
 
-export interface WasmTypedArrayConstructor<T extends WasmTypedArray> {
-    readonly BYTES_PER_ELEMENT: number;
-    new(buffer: ArrayBuffer, byteOffset: number, length: number): T;
+type WasmExportValueDescriptor = {
+    export: string;
+    kind?: "function" | "global";
+    args?: ReadonlyArray<WasmCallArg>;
+    name?: string;
+};
+
+export type WasmViewDescriptor = {
+    memory?: WasmMemorySource;
+    ptr: WasmValueDescriptor;
+    length: WasmValueDescriptor;
+    dtype: DType;
+    byteOffset?: number;
+    name?: string;
+};
+
+export type WasmBytesDescriptor = {
+    memory?: WasmMemorySource;
+    ptr: WasmValueDescriptor;
+    byteLength: WasmValueDescriptor;
+    byteOffset?: number;
+    name?: string;
+};
+
+export type WasmUtf8Descriptor = {
+    memory?: WasmMemorySource;
+    byteOffset?: number;
+    name?: string;
+    fatal?: boolean;
+    ignoreBOM?: boolean;
+};
+
+export type WasmDataViewDescriptor = {
+    memory?: WasmMemorySource;
+    ptr: WasmValueDescriptor;
+    byteLength: WasmValueDescriptor;
+    byteOffset?: number;
+    name?: string;
+};
+
+type ResolvedByteRange = {
+    memory: WebAssembly.Memory;
+    ptr: number;
+    byteLength: number;
+};
+
+type ResolvedViewState = {
+    memory: WebAssembly.Memory;
+    ptr: number;
+    length: number;
+    byteLength: number;
+    dtype: DType;
+    name: string | null;
+};
+
+const isWebAssemblyMemory = (x: unknown): x is WebAssembly.Memory => (typeof WebAssembly !== "undefined") && (typeof WebAssembly.Memory !== "undefined") && (x instanceof WebAssembly.Memory);
+
+const isWebAssemblyGlobal = (x: unknown): x is WebAssembly.Global => (typeof WebAssembly !== "undefined") && (typeof WebAssembly.Global !== "undefined") && (x instanceof WebAssembly.Global);
+
+const describeLabel = (label: string, name?: string | null): string => name ? `${label} '${name}'` : label;
+
+const normalizeName = (name: string | undefined): string | null => { if (!name) return null; return name; };
+
+const assertNonNegativeInteger = (value: unknown, label: string): number => {
+    if (typeof value === "bigint") {
+        assert(value >= 0n, `${label} must be >= 0 (got ${value.toString()})`);
+        assert(value <= BigInt(Number.MAX_SAFE_INTEGER), `${label} exceeds Number.MAX_SAFE_INTEGER (got ${value.toString()})`);
+        return Number(value);
+    }
+    assert(typeof value === "number", `${label} must be a number or bigint (got ${typeof value})`);
+    assert(Number.isFinite(value), `${label} must be finite (got ${value})`);
+    assert(Number.isInteger(value), `${label} must be an integer (got ${value})`);
+    assert(value >= 0, `${label} must be >= 0 (got ${value})`);
+    assert(Number.isSafeInteger(value), `${label} must be a safe integer (got ${value})`);
+    return value;
+};
+
+const assertCallArg = (arg: WasmCallArg, label: string): WasmCallArg => {
+    if (typeof arg === "bigint") return arg;
+    assert(typeof arg === "number", `${label} must be a number or bigint (got ${typeof arg})`);
+    assert(Number.isFinite(arg), `${label} must be finite (got ${arg})`);
+    return arg;
+};
+
+const resolveCallArgs = (args: ReadonlyArray<WasmCallArg> | undefined, label: string): WasmCallArg[] => {
+    if (args === undefined) return [];
+    assert(Array.isArray(args), `${label} args must be an array when provided.`);
+    if (args.length === 0) return [];
+    const out: WasmCallArg[] = new Array(args.length);
+    for (let i = 0; i < args.length; i++) out[i] = assertCallArg(args[i]!, `${label} args[${i}]`);
+    return out;
+};
+
+const assertByteOffset = (byteOffset: number | undefined, label: string): number => {
+    if (byteOffset === undefined) return 0;
+    assert(Number.isFinite(byteOffset), `${label} byteOffset must be finite (got ${byteOffset})`);
+    assert(Number.isInteger(byteOffset), `${label} byteOffset must be an integer (got ${byteOffset})`);
+    assert(byteOffset >= 0, `${label} byteOffset must be >= 0 (got ${byteOffset})`);
+    assert(Number.isSafeInteger(byteOffset), `${label} byteOffset must be a safe integer (got ${byteOffset})`);
+    return byteOffset;
+};
+
+const checkedAdd = (a: number, b: number, label: string): number => {
+    const out = a + b;
+    assert(Number.isSafeInteger(out), `${label} overflowed Number.MAX_SAFE_INTEGER`);
+    return out;
+};
+
+const checkedMul = (a: number, b: number, label: string): number => {
+    const out = a * b;
+    assert(Number.isSafeInteger(out), `${label} overflowed Number.MAX_SAFE_INTEGER`);
+    return out;
+};
+
+const resolveTypedArrayCtor = (dtype: DType): (new(buffer: ArrayBufferLike, byteOffset: number, length: number) => NumberTypedArray) => {
+    const info = dtypeInfo(dtype);
+    return info.ctor as unknown as (new(buffer: ArrayBufferLike, byteOffset: number, length: number) => NumberTypedArray);
+};
+
+export class WasmModule {
+    private readonly exportsObject: WasmExportsLike;
+    private readonly defaultMemorySource: WasmMemorySource;
+    readonly name: string | null;
+
+    constructor(exportsObject: WasmExportsLike = {}, options: WasmModuleOptions = {}) {
+        this.exportsObject = exportsObject;
+        this.defaultMemorySource = options.memory;
+        this.name = normalizeName(options.name);
+    }
+
+    static fromInstance(instance: WasmInstanceLike, options: WasmModuleOptions = {}): WasmModule {
+        assert((typeof instance === "object") && (instance !== null), "WasmModule.fromInstance(): instance must be an object with an exports field.");
+        const exportsObject = (instance as { exports?: WasmExportsLike }).exports;
+        assert((typeof exportsObject === "object") && (exportsObject !== null), "WasmModule.fromInstance(): instance.exports must be an object.");
+        return new WasmModule(exportsObject, options);
+    }
+
+    static fromExports(exportsObject: WasmExportsLike, options: WasmModuleOptions = {}): WasmModule {
+        assert((typeof exportsObject === "object") && (exportsObject !== null), "WasmModule.fromExports(): exports must be an object.");
+        return new WasmModule(exportsObject, options);
+    }
+
+    static fromMemory(memory: WebAssembly.Memory, options: Omit<WasmModuleOptions, "memory"> = {}): WasmModule {
+        assert(isWebAssemblyMemory(memory), "WasmModule.fromMemory(): memory must be a WebAssembly.Memory.");
+        return new WasmModule({}, { ...options, memory });
+    }
+
+    getExport(name: string): unknown {
+        assert(typeof name === "string" && name.length > 0, "WasmModule.getExport(): name must be a non-empty string.");
+        assert(Object.prototype.hasOwnProperty.call(this.exportsObject, name), `${describeLabel("WasmModule export", this.name)} does not contain export '${name}'.`);
+        return this.exportsObject[name];
+    }
+
+    getFunction(name: string): (...args: WasmCallArg[]) => unknown {
+        const value = this.getExport(name);
+        assert(typeof value === "function", `${describeLabel("WasmModule export", this.name)} '${name}' is not a function.`);
+        return value as (...args: WasmCallArg[]) => unknown;
+    }
+
+    getGlobal(name: string): WebAssembly.Global {
+        const value = this.getExport(name);
+        assert(isWebAssemblyGlobal(value), `${describeLabel("WasmModule export", this.name)} '${name}' is not a WebAssembly.Global.`);
+        return value;
+    }
+
+    memory(nameOrMemory?: WasmMemorySource): WebAssembly.Memory {
+        const source = (nameOrMemory !== undefined) ? nameOrMemory : this.defaultMemorySource;
+        if (isWebAssemblyMemory(source)) return source;
+        if (typeof source === "string") {
+            const value = this.getExport(source);
+            assert(isWebAssemblyMemory(value), `${describeLabel("WasmModule export", this.name)} '${source}' is not a WebAssembly.Memory.`);
+            return value;
+        }
+        if ((source !== undefined) && (source !== null)) throw new Error(`${describeLabel("WasmModule", this.name)} received an invalid memory source. Expected a WebAssembly.Memory or memory export name.`);
+        const memoryExports = this.memoryExportNames();
+        if (memoryExports.length === 1) return this.memory(memoryExports[0]!);
+        if (memoryExports.length === 0) throw new Error(`${describeLabel("WasmModule", this.name)} could not resolve a WebAssembly.Memory. Pass memory explicitly or export one memory.`);
+        throw new Error(`${describeLabel("WasmModule", this.name)} has multiple memory exports (${memoryExports.join(", ")}). Pass memory explicitly.`);
+    }
+
+    view<T extends NumberTypedArray = NumberTypedArray>(descriptor: WasmViewDescriptor): WasmMemoryView<T> {
+        return new WasmMemoryView<T>(this, descriptor);
+    }
+
+    readBytes(descriptor: WasmBytesDescriptor): Uint8Array<ArrayBufferLike> {
+        const resolved = this._resolveBytes(descriptor);
+        return new Uint8Array(resolved.memory.buffer as ArrayBufferLike, resolved.ptr >>> 0, resolved.byteLength >>> 0) as Uint8Array<ArrayBufferLike>;
+    }
+
+    readUtf8(ptr: WasmValueDescriptor, length: WasmValueDescriptor, options: WasmUtf8Descriptor = {}): string {
+        const name = normalizeName(options.name);
+        const resolved = this._resolveBytes({
+            memory: options.memory,
+            ptr,
+            byteLength: length,
+            byteOffset: options.byteOffset,
+            name: name ?? undefined
+        });
+        const decoder = new TextDecoder("utf-8", {
+            fatal: options.fatal ?? false,
+            ignoreBOM: options.ignoreBOM ?? false
+        });
+        return decoder.decode(new Uint8Array(resolved.memory.buffer as ArrayBufferLike, resolved.ptr >>> 0, resolved.byteLength >>> 0));
+    }
+
+    dataView(descriptor: WasmDataViewDescriptor): DataView {
+        const resolved = this._resolveBytes(descriptor);
+        return new DataView(resolved.memory.buffer as ArrayBufferLike, resolved.ptr >>> 0, resolved.byteLength >>> 0);
+    }
+
+    _resolveView(descriptor: WasmViewDescriptor): ResolvedViewState {
+        const name = normalizeName(descriptor.name);
+        const label = describeLabel("WasmMemoryView", name);
+        const dtype = descriptor.dtype;
+        const bytesPerElement = dtypeInfo(dtype).bytesPerElement >>> 0;
+        const length = this.resolveValue(descriptor.length, `${label} length`);
+        const byteLength = checkedMul(length, bytesPerElement, `${label} byteLength`);
+        const resolved = this.resolveByteRange(descriptor.memory, descriptor.ptr, descriptor.byteOffset, byteLength, label);
+        assert((resolved.ptr % bytesPerElement) === 0, `${label} ptr ${resolved.ptr} is not aligned for dtype '${dtype}' (${bytesPerElement} bytes).`);
+        return { memory: resolved.memory, ptr: resolved.ptr >>> 0, length: length >>> 0, byteLength: byteLength >>> 0, dtype, name };
+    }
+
+    _resolveBytes(descriptor: WasmBytesDescriptor | WasmDataViewDescriptor): ResolvedByteRange {
+        const name = normalizeName(descriptor.name);
+        const label = describeLabel("external WebAssembly memory range", name);
+        const byteLength = this.resolveValue(descriptor.byteLength, `${label} byteLength`);
+        return this.resolveByteRange(descriptor.memory, descriptor.ptr, descriptor.byteOffset, byteLength, label);
+    }
+
+    private memoryExportNames(): string[] {
+        const names: string[] = [];
+        for (const [name, value] of Object.entries(this.exportsObject)) if (isWebAssemblyMemory(value)) names.push(name);
+        return names;
+    }
+
+    private resolveByteRange(memorySource: WasmMemorySource, ptrDescriptor: WasmValueDescriptor, byteOffset: number | undefined, byteLength: number, label: string): ResolvedByteRange {
+        const memory = this.memory(memorySource);
+        assert(isWebAssemblyMemory(memory), `${label} requires a valid WebAssembly.Memory.`);
+        const basePtr = this.resolveValue(ptrDescriptor, `${label} ptr`);
+        const extraOffset = assertByteOffset(byteOffset, label);
+        const ptr = checkedAdd(basePtr, extraOffset, `${label} ptr + byteOffset`);
+        const end = checkedAdd(ptr, byteLength, `${label} ptr + byteLength`);
+        const bufferByteLength = memory.buffer.byteLength >>> 0;
+        assert(end <= bufferByteLength, `${label} range [${ptr}, ${end}) is out of bounds for memory byteLength ${bufferByteLength}.`);
+        return { memory, ptr: ptr >>> 0, byteLength: byteLength >>> 0 };
+    }
+
+    private resolveValue(descriptor: WasmValueDescriptor, label: string): number {
+        if ((typeof descriptor === "number") || (typeof descriptor === "bigint")) return assertNonNegativeInteger(descriptor, label);
+        if (typeof descriptor === "string") {
+            const value = this.getExport(descriptor);
+            if (typeof value === "function") return assertNonNegativeInteger((value as (...args: WasmCallArg[]) => unknown)(), `${label} export '${descriptor}' result`);
+            if (isWebAssemblyGlobal(value)) return assertNonNegativeInteger(value.value as number | bigint, `${label} export '${descriptor}' value`);
+            throw new Error(`${label} export '${descriptor}' must be a function or WebAssembly.Global.`);
+        }
+        if (typeof descriptor === "function") return assertNonNegativeInteger(descriptor(), `${label} callback result`);
+        assert((typeof descriptor === "object") && (descriptor !== null), `${label} descriptor must be a number, bigint, export name string, callback, or descriptor object.`);
+        if (Object.prototype.hasOwnProperty.call(descriptor, "function")) {
+            const functionDescriptor = descriptor as Partial<WasmFunctionValueDescriptor>;
+            assert(typeof functionDescriptor.function === "function", `${label} function descriptor must contain a callable function.`);
+            const args = resolveCallArgs(functionDescriptor.args, label);
+            return assertNonNegativeInteger(functionDescriptor.function(...args), `${label} function result`);
+        }
+        if (Object.prototype.hasOwnProperty.call(descriptor, "global")) {
+            const globalDescriptor = descriptor as Partial<WasmGlobalValueDescriptor>;
+            assert(isWebAssemblyGlobal(globalDescriptor.global), `${label} global descriptor must contain a WebAssembly.Global.`);
+            return assertNonNegativeInteger(globalDescriptor.global.value as number | bigint, `${label} global value`);
+        }
+        assert(Object.prototype.hasOwnProperty.call(descriptor, "export"), `${label} descriptor object requires one of 'function', 'global', or 'export'.`);
+        const exportDescriptor = descriptor as Partial<WasmExportValueDescriptor>;
+        assert(typeof exportDescriptor.export === "string" && exportDescriptor.export.length > 0, `${label} export descriptor requires a non-empty export name.`);
+        assert((exportDescriptor.kind === undefined) || (exportDescriptor.kind === "function") || (exportDescriptor.kind === "global"), `${label} export descriptor kind must be 'function' or 'global' when provided.`);
+        if (exportDescriptor.kind === "global") return assertNonNegativeInteger(this.getGlobal(exportDescriptor.export).value as number | bigint, `${label} export '${exportDescriptor.export}' value`);
+        if (exportDescriptor.kind === "function") return assertNonNegativeInteger(this.getFunction(exportDescriptor.export)(...resolveCallArgs(exportDescriptor.args, label)), `${label} export '${exportDescriptor.export}' result`);
+        const value = this.getExport(exportDescriptor.export);
+        if (typeof value === "function") return assertNonNegativeInteger((value as (...args: WasmCallArg[]) => unknown)(...resolveCallArgs(exportDescriptor.args, label)), `${label} export '${exportDescriptor.export}' result`);
+        if (isWebAssemblyGlobal(value)) {
+            assert(resolveCallArgs(exportDescriptor.args, label).length === 0, `${label} export '${exportDescriptor.export}' is a global and does not accept args.`);
+            return assertNonNegativeInteger(value.value as number | bigint, `${label} export '${exportDescriptor.export}' value`);
+        }
+        throw new Error(`${label} export '${exportDescriptor.export}' must be a function or WebAssembly.Global.`);
+    }
 }
 
-export type WasmInteropHost = {
-    memory: () => WebAssembly.Memory;
-    allocF32: (len: number) => WasmPtr;
-    freeF32: (ptr: WasmPtr, len: number) => void;
-    allocU32: (len: number) => WasmPtr;
-    freeU32: (ptr: WasmPtr, len: number) => void;
-    allocBytes: (bytes: number) => WasmPtr;
-    freeBytes: (ptr: WasmPtr, bytes: number) => void;
-};
+export class WasmMemoryView<T extends NumberTypedArray = NumberTypedArray> {
+    private readonly moduleRef: WasmModule;
+    private readonly descriptor: WasmViewDescriptor;
+    private state: ResolvedViewState;
+    private cachedBuffer: ArrayBufferLike | null = null;
+    private cachedArray: T | null = null;
+    private cachedBytes: Uint8Array<ArrayBufferLike> | null = null;
+    private cachedDataView: DataView | null = null;
 
-export type FrameArenaHost = {
-    alloc: (bytes: number, align?: number) => WasmPtr;
-    allocF32: (len: number) => WasmPtr;
-    epoch: () => number;
-};
-
-type InteropHostState = {
-    wasm: WasmInteropHost;
-    frameArena: FrameArenaHost;
-};
-
-let HOST: InteropHostState | null = null;
-
-export const setWasmInteropHost = (wasm: WasmInteropHost, frameArena: FrameArenaHost): void => {
-    HOST = { wasm, frameArena };
-};
-
-const ensureHost = (): InteropHostState => {
-    if (!HOST) throw new Error("wasm interop host not set. This is an internal error: WasmGPU/src/wasm/index.ts should call setWasmInteropHost().");
-    return HOST;
-};
-
-type HeapFinalizerHeldValue = {
-    dtype: WasmSliceDType;
-    ptr: WasmPtr;
-    length: number;
-};
-
-const HEAP_SLICE_FINALIZER: FinalizationRegistry<HeapFinalizerHeldValue> | null =
-    (typeof FinalizationRegistry !== "undefined")
-        ? new FinalizationRegistry((held) => {
-            try {
-                const { wasm } = ensureHost();
-                const ptr = held.ptr >>> 0;
-                const len = held.length >>> 0;
-                switch (held.dtype) {
-                    case "f32": wasm.freeF32(ptr, len); break;
-                    case "u32": wasm.freeU32(ptr, len); break;
-                    case "i32": wasm.freeU32(ptr, len); break;
-                    case "u8": wasm.freeBytes(ptr, len); break;
-                }
-            } catch { /* ignore */ }
-        }) : null;
-
-export class WasmSlice<T extends WasmTypedArray> {
-    readonly kind: WasmSliceKind;
-    readonly dtype: WasmSliceDType;
-    readonly ptr: WasmPtr;
-    readonly length: number;
-    readonly byteLength: number;
-    private readonly ctor: WasmTypedArrayConstructor<T>;
-    private readonly epoch: number;
-    private readonly epochProvider: (() => number) | null;
-    private freed: boolean = false;
-    private _buf: ArrayBufferLike | null = null;
-    private _view: T | null = null;
-
-    constructor(kind: WasmSliceKind, dtype: WasmSliceDType, ptr: WasmPtr, length: number, ctor: WasmTypedArrayConstructor<T>, epoch: number, epochProvider: (() => number) | null) {
-        this.kind = kind;
-        this.dtype = dtype;
-        this.ptr = ptr >>> 0;
-        this.length = length >>> 0;
-        this.ctor = ctor;
-        this.epoch = epoch >>> 0;
-        this.epochProvider = epochProvider;
-        this.byteLength = (this.length * (ctor.BYTES_PER_ELEMENT >>> 0)) >>> 0;
-        if (this.kind === "heap") HEAP_SLICE_FINALIZER?.register(this, { dtype: this.dtype, ptr: this.ptr, length: this.length }, this);
+    constructor(moduleRef: WasmModule, descriptor: WasmViewDescriptor) {
+        this.moduleRef = moduleRef;
+        this.descriptor = descriptor;
+        this.state = this.moduleRef._resolveView(this.descriptor);
     }
 
-    isAlive(): boolean {
-        if (this.freed) return false;
-        if (!this.epochProvider) return true;
-        try {
-            return (this.epoch >>> 0) === (this.epochProvider() >>> 0);
-        } catch {
-            return false;
-        }
+    get memory(): WebAssembly.Memory {
+        return this.state.memory;
     }
 
-    assertAlive(): void {
-        if (this.isAlive()) return;
-
-        if (this.freed) {
-            throw new Error(`WasmSlice<${this.dtype}> is no longer valid (freed).`);
-        }
-
-        if (this.epochProvider) {
-            let currentEpoch = 0;
-            try {
-                currentEpoch = this.epochProvider() >>> 0;
-            } catch { /* ignore */ }
-            throw new Error(`WasmSlice<${this.dtype}> is no longer valid (epoch changed: allocEpoch=${this.epoch} currentEpoch=${currentEpoch}).`);
-        }
-
-        throw new Error(`WasmSlice<${this.dtype}> is no longer valid.`);
+    get ptr(): number {
+        return this.state.ptr >>> 0;
     }
 
-    buffer(): ArrayBufferLike {
-        this.assertAlive();
-        return ensureHost().wasm.memory().buffer as ArrayBufferLike;
+    get length(): number {
+        return this.state.length >>> 0;
     }
 
-    view(): T {
-        this.assertAlive();
-        const buf = ensureHost().wasm.memory().buffer as ArrayBufferLike;
-        if (this._buf !== buf || !this._view) {
-            this._buf = buf;
-            this._view = new this.ctor(buf as unknown as ArrayBuffer, this.ptr >>> 0, this.length >>> 0);
-        }
-        return this._view;
+    get byteLength(): number {
+        return this.state.byteLength >>> 0;
     }
 
-    write(src: ArrayLike<number> | null | undefined, srcOffset: number = 0, zeroFill: boolean = true): void {
-        const v = this.view();
-        if (zeroFill) v.fill(0);
-        if (!src) return;
-        const dstLen = this.length >>> 0;
-        const srcOff = srcOffset >>> 0;
-        const srcLen = (src.length >>> 0);
-        const remaining = (srcLen > srcOff) ? (srcLen - srcOff) : 0;
-        const n = Math.min(dstLen, remaining);
-        if (n === 0) return;
-        const s = src as any;
-        if (ArrayBuffer.isView(s) && typeof (s as any).subarray === "function") {
-            v.set((s as any).subarray(srcOff, srcOff + n), 0);
+    get dtype(): DType {
+        return this.state.dtype;
+    }
+
+    get name(): string | null {
+        return this.state.name;
+    }
+
+    refresh(): WasmMemoryView<T> {
+        this.state = this.moduleRef._resolveView(this.descriptor);
+        this.cachedBuffer = null;
+        this.cachedArray = null;
+        this.cachedBytes = null;
+        this.cachedDataView = null;
+        return this;
+    }
+
+    array(): T {
+        this.ensureCachedViews();
+        return this.cachedArray!;
+    }
+
+    bytes(): Uint8Array<ArrayBufferLike> {
+        this.ensureCachedViews();
+        return this.cachedBytes!;
+    }
+
+    dataView(): DataView {
+        this.ensureCachedViews();
+        return this.cachedDataView!;
+    }
+
+    copy(): T {
+        const src = this.array();
+        const ctor = resolveTypedArrayCtor(this.dtype);
+        const out = new ctor(new ArrayBuffer(this.byteLength >>> 0), 0, this.length >>> 0) as T;
+        out.set(src);
+        return out;
+    }
+
+    copyInto(target: NumberTypedArray): void {
+        const label = describeLabel("WasmMemoryView", this.name);
+        assert(ArrayBuffer.isView(target) && !(target instanceof DataView), `${label} copyInto target must be a numeric TypedArray.`);
+        if ((target instanceof Uint8Array) || (target instanceof Int8Array)) {
+            assert((target.byteLength >>> 0) >= (this.byteLength >>> 0), `${label} copyInto target is too small for ${this.byteLength} bytes.`);
+            new Uint8Array(target.buffer as ArrayBufferLike, target.byteOffset >>> 0, this.byteLength >>> 0).set(this.bytes());
             return;
         }
-        for (let i = 0; i < n; i++) v[i] = (src as any)[srcOff + i] as number;
+        const expectedCtor = resolveTypedArrayCtor(this.dtype);
+        assert((target as { constructor: unknown; }).constructor === expectedCtor, `${label} copyInto target must be dtype-compatible with '${this.dtype}'. Use Uint8Array or Int8Array for raw byte copies.`);
+        assert((target.length >>> 0) >= (this.length >>> 0), `${label} copyInto target is too small for ${this.length} elements.`);
+        const dst = target as NumberTypedArray & { set: (src: NumberTypedArray, offset?: number) => void; };
+        dst.set(this.array(), 0);
     }
 
-    handle(): WasmSliceHandle {
-        const h: WasmSliceHandle = {
-            kind: this.kind,
-            dtype: this.dtype,
-            ptr: this.ptr >>> 0,
-            length: this.length >>> 0,
-        };
-        if (this.epochProvider) h.epoch = this.epoch >>> 0;
-        return h;
-    }
-
-    free(): void {
-        if (this.kind !== "heap") throw new Error(`WasmSlice.free(): cannot free a ${this.kind} allocation. Use reset() for arena-like allocators (frameArena.reset() / WasmHeapArena.reset()).`);
-        if (this.freed) return;
-        this.freed = true;
-        HEAP_SLICE_FINALIZER?.unregister(this);
-        const { wasm } = ensureHost();
-        const ptr = this.ptr >>> 0;
-        const len = this.length >>> 0;
-        switch (this.dtype) {
-            case "f32": wasm.freeF32(ptr, len); break;
-            case "u32": wasm.freeU32(ptr, len); break;
-            case "i32": wasm.freeU32(ptr, len); break;
-            case "u8": wasm.freeBytes(ptr, len); break;
-        }
-        this._buf = null;
-        this._view = null;
+    private ensureCachedViews(): void {
+        const buffer = this.state.memory.buffer as ArrayBufferLike;
+        if (this.cachedBuffer === buffer && this.cachedArray && this.cachedBytes && this.cachedDataView) return;
+        const ctor = resolveTypedArrayCtor(this.state.dtype);
+        this.cachedBuffer = buffer;
+        this.cachedArray = new ctor(buffer, this.state.ptr >>> 0, this.state.length >>> 0) as T;
+        this.cachedBytes = new Uint8Array(buffer, this.state.ptr >>> 0, this.state.byteLength >>> 0) as Uint8Array<ArrayBufferLike>;
+        this.cachedDataView = new DataView(buffer, this.state.ptr >>> 0, this.state.byteLength >>> 0);
     }
 }
 
-const alignUp = (n: number, align: number): number => {
-    const a = align >>> 0;
-    if (a === 0 || (a & (a - 1)) !== 0) throw new Error(`alignUp(${n}, ${align}): align must be a non-zero power of two`);
-    return Math.ceil(n / a) * a;
-};
-
-export class WasmHeapArena {
-    readonly basePtr: WasmPtr;
-    readonly capBytes: number;
-    private headBytes: number = 0;
-    private _epoch: number = 1;
-    private destroyed: boolean = false;
-
-    constructor(capBytes: number, align: number = 16) {
-        const cap = capBytes >>> 0;
-        if (cap === 0) throw new Error("WasmHeapArena: capBytes must be > 0");
-        const { wasm } = ensureHost();
-        const base = wasm.allocBytes(cap);
-        if (!base) throw new Error(`WasmHeapArena(${capBytes}): wasm.allocBytes failed`);
-        const a = align >>> 0;
-        if (a !== 0 && (base & (a - 1)) !== 0) throw new Error(`WasmHeapArena(${capBytes}): basePtr 0x${base.toString(16)} is not ${align}-byte aligned`);
-        this.basePtr = base >>> 0;
-        this.capBytes = cap >>> 0;
-    }
-
-    epoch(): number {
-        this.assertAlive();
-        return this._epoch >>> 0;
-    }
-
-    usedBytes(): number {
-        this.assertAlive();
-        return this.headBytes >>> 0;
-    }
-
-    reset(): void {
-        this.assertAlive();
-        this.headBytes = 0;
-        this._epoch = (this._epoch + 1) >>> 0;
-        if (this._epoch === 0) this._epoch = 1;
-    }
-
-    destroy(): void {
-        if (this.destroyed) return;
-        this.destroyed = true;
-        this.headBytes = 0;
-        this._epoch = (this._epoch + 1) >>> 0;
-        if (this._epoch === 0) this._epoch = 1;
-    }
-
-    alloc(bytes: number, alignBytes: number = 16): WasmPtr {
-        this.assertAlive();
-        const b = bytes >>> 0;
-        const a = alignBytes >>> 0;
-        const base = this.basePtr >>> 0;
-        const head = this.headBytes >>> 0;
-        const start = alignUp(base + head, a);
-        const end = start + b;
-        if (end - base > (this.capBytes >>> 0)) throw new Error(`WasmHeapArena.alloc(${bytes}, ${alignBytes}): out of memory (used=${head} cap=${this.capBytes})`);
-        this.headBytes = (end - base) >>> 0;
-        return start >>> 0;
-    }
-
-    allocF32(len: number): WasmSlice<Float32Array> {
-        const l = len >>> 0;
-        const ptr = this.alloc(l * 4, 16);
-        const epoch = this.epoch();
-        return new WasmSlice("arena", "f32", ptr, l, Float32Array, epoch, () => this.epoch());
-    }
-
-    allocU32(len: number): WasmSlice<Uint32Array> {
-        const l = len >>> 0;
-        const ptr = this.alloc(l * 4, 16);
-        const epoch = this.epoch();
-        return new WasmSlice("arena", "u32", ptr, l, Uint32Array, epoch, () => this.epoch());
-    }
-
-    allocI32(len: number): WasmSlice<Int32Array> {
-        const l = len >>> 0;
-        const ptr = this.alloc(l * 4, 16);
-        const epoch = this.epoch();
-        return new WasmSlice("arena", "i32", ptr, l, Int32Array, epoch, () => this.epoch());
-    }
-
-    allocU8(len: number, alignBytes: number = 16): WasmSlice<Uint8Array> {
-        const l = len >>> 0;
-        const ptr = this.alloc(l, alignBytes);
-        const epoch = this.epoch();
-        return new WasmSlice("arena", "u8", ptr, l, Uint8Array, epoch, () => this.epoch());
-    }
-
-    private assertAlive(): void {
-        if (this.destroyed) throw new Error("WasmHeapArena has been destroyed.");
-    }
-}
-
-let cachedWasmBytesBuf: ArrayBufferLike | null = null;
-let cachedWasmBytes: Uint8Array<ArrayBuffer> | null = null;
-
-const wasmBytesView = (): Uint8Array<ArrayBuffer> => {
-    const b = ensureHost().wasm.memory().buffer as ArrayBufferLike;
-    if (b !== cachedWasmBytesBuf || !cachedWasmBytes) {
-        cachedWasmBytesBuf = b;
-        cachedWasmBytes = new Uint8Array(b as unknown as ArrayBuffer);
-    }
-    return cachedWasmBytes;
-};
-
-export const wasmInterop = {
-    buffer: (): ArrayBufferLike => ensureHost().wasm.memory().buffer as ArrayBufferLike,
-
-    bytes: (): Uint8Array<ArrayBuffer> => wasmBytesView(),
-
-    isSharedMemory: (): boolean => {
-        const b = ensureHost().wasm.memory().buffer as ArrayBufferLike;
-        return (typeof SharedArrayBuffer !== "undefined") && (b instanceof SharedArrayBuffer);
-    },
-
-    requireSharedMemory: (): SharedArrayBuffer => {
-        const b = ensureHost().wasm.memory().buffer as ArrayBufferLike;
-        if ((typeof SharedArrayBuffer !== "undefined") && (b instanceof SharedArrayBuffer)) return b;
-        throw new Error("WebAssembly memory is not a SharedArrayBuffer. Build with WASMGPU_SHARED_MEMORY=1 and serve with cross-origin isolation to enable SharedArrayBuffer.");
-    },
-
-    viewOn: <T extends WasmTypedArray>(ctor: WasmTypedArrayConstructor<T>, buffer: ArrayBufferLike, ptr: WasmPtr, len: number): T => {
-        return new ctor(buffer as unknown as ArrayBuffer, ptr >>> 0, len >>> 0);
-    },
-
-    view: <T extends WasmTypedArray>(ctor: WasmTypedArrayConstructor<T>, ptr: WasmPtr, len: number): T => {
-        return new ctor(ensureHost().wasm.memory().buffer as unknown as ArrayBuffer, ptr >>> 0, len >>> 0);
-    },
-
-    createHeapArena: (capBytes: number, align: number = 16): WasmHeapArena => {
-        return new WasmHeapArena(capBytes, align);
-    },
-
-    viewFromHandle: (buffer: ArrayBufferLike, handle: WasmSliceHandle): ArrayBufferView => {
-        const ptr = handle.ptr >>> 0;
-        const len = handle.length >>> 0;
-        switch (handle.dtype) {
-            case "f32": return new Float32Array(buffer, ptr, len);
-            case "u32": return new Uint32Array(buffer, ptr, len);
-            case "i32": return new Int32Array(buffer, ptr, len);
-            case "u8": return new Uint8Array(buffer, ptr, len);
-        }
-    },
-
-    heap: {
-        allocF32: (len: number): WasmSlice<Float32Array> => {
-            const { wasm } = ensureHost();
-            const ptr = wasm.allocF32(len);
-            if (!ptr && (len >>> 0) !== 0) throw new Error(`wasmInterop.heap.allocF32(${len}) failed`);
-            return new WasmSlice("heap", "f32", ptr, len, Float32Array, 0, null);
-        },
-
-        allocU32: (len: number): WasmSlice<Uint32Array> => {
-            const { wasm } = ensureHost();
-            const ptr = wasm.allocU32(len);
-            if (!ptr && (len >>> 0) !== 0) throw new Error(`wasmInterop.heap.allocU32(${len}) failed`);
-            return new WasmSlice("heap", "u32", ptr, len, Uint32Array, 0, null);
-        },
-
-        allocI32: (len: number): WasmSlice<Int32Array> => {
-            const { wasm } = ensureHost();
-            const ptr = wasm.allocU32(len);
-            if (!ptr && (len >>> 0) !== 0) throw new Error(`wasmInterop.heap.allocI32(${len}) failed`);
-            return new WasmSlice("heap", "i32", ptr, len, Int32Array, 0, null);
-        },
-
-        allocU8: (len: number, align: number = 16): WasmSlice<Uint8Array> => {
-            const { wasm } = ensureHost();
-            const ptr = wasm.allocBytes((len >>> 0));
-            if (!ptr && (len >>> 0) !== 0) throw new Error(`wasmInterop.heap.allocU8(${len}) failed`);
-            if (align !== 0) {
-                if ((ptr & ((align >>> 0) - 1)) !== 0) {
-                    throw new Error(`wasmInterop.heap.allocU8(${len}): returned ptr 0x${ptr.toString(16)} is not ${align}-byte aligned`);
-                }
-            }
-            return new WasmSlice("heap", "u8", ptr, len, Uint8Array, 0, null);
-        }
-    },
-
-    frame: {
-        allocF32: (len: number): WasmSlice<Float32Array> => {
-            const { frameArena } = ensureHost();
-            const ptr = frameArena.allocF32(len);
-            if (!ptr && (len >>> 0) !== 0) throw new Error(`wasmInterop.frame.allocF32(${len}) failed`);
-            return new WasmSlice("frame", "f32", ptr, len, Float32Array, frameArena.epoch(), () => frameArena.epoch());
-        },
-
-        allocU32: (len: number): WasmSlice<Uint32Array> => {
-            const { frameArena } = ensureHost();
-            const ptr = frameArena.alloc((len >>> 0) * 4, 16);
-            if (!ptr && (len >>> 0) !== 0) throw new Error(`wasmInterop.frame.allocU32(${len}) failed`);
-            return new WasmSlice("frame", "u32", ptr, len, Uint32Array, frameArena.epoch(), () => frameArena.epoch());
-        },
-
-        allocI32: (len: number): WasmSlice<Int32Array> => {
-            const { frameArena } = ensureHost();
-            const ptr = frameArena.alloc((len >>> 0) * 4, 16);
-            if (!ptr && (len >>> 0) !== 0) throw new Error(`wasmInterop.frame.allocI32(${len}) failed`);
-            return new WasmSlice("frame", "i32", ptr, len, Int32Array, frameArena.epoch(), () => frameArena.epoch());
-        },
-
-        allocU8: (len: number, align: number = 16): WasmSlice<Uint8Array> => {
-            const { frameArena } = ensureHost();
-            const ptr = frameArena.alloc(len >>> 0, align >>> 0);
-            if (!ptr && (len >>> 0) !== 0) throw new Error(`wasmInterop.frame.allocU8(${len}) failed`);
-            return new WasmSlice("frame", "u8", ptr, len, Uint8Array, frameArena.epoch(), () => frameArena.epoch());
-        }
-    }
+export const webassemblyInterop = {
+    fromInstance: (instance: WasmInstanceLike, options: WasmModuleOptions = {}): WasmModule => WasmModule.fromInstance(instance, options),
+    fromExports: (exportsObject: WasmExportsLike, options: WasmModuleOptions = {}): WasmModule => WasmModule.fromExports(exportsObject, options),
+    fromMemory: (memory: WebAssembly.Memory, options: Omit<WasmModuleOptions, "memory"> = {}): WasmModule => WasmModule.fromMemory(memory, options)
 };

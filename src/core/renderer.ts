@@ -16,7 +16,7 @@ import { NodeLink } from "../world/nodelink";
 import type { PickLassoPoint, PickQuery, PickRegionQuery } from "../world/picking";
 import { Geometry } from "../graphics/geometry";
 import { Material, BlendMode, CullMode, UnlitMaterial, StandardMaterial, DataMaterial, CustomMaterial } from "../graphics/material";
-import { animf, cullf, frameArena, frustumf, mat4, mat4f, transformf, wasm, wasmInterop, WasmPtr } from "../wasm";
+import { driver, animf, cullf, frameArena, frustumf, mat4, mat4f, transformf, wasm, WasmPtr } from "../wasm";
 import smaaWGSL from "../wgsl/core/smaa.wgsl";
 import pointCloudWGSL from "../wgsl/world/pointcloud.wgsl";
 import glyphFieldWGSL from "../wgsl/world/glyphfield.wgsl";
@@ -1678,7 +1678,7 @@ export class Renderer {
         const normalPtr = (this.modelUniformStagingPtr + 16 * 4) as WasmPtr;
         mat4f.invert(invPtr, modelPtr);
         mat4f.transpose(normalPtr, invPtr);
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         this.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
         this.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
     }
@@ -2902,7 +2902,7 @@ export class Renderer {
         const jointCount = skin.jointCount | 0;
         const jointMatPtr = frameArena.allocF32(jointCount * 16) as WasmPtr;
         animf.computeJointMatricesTo(jointMatPtr, skin.skin.jointIndicesPtr, jointCount, skin.skin.invBindPtr, TransformStore.global().worldPtr as WasmPtr, skin.bindMatrixPtr);
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         this.queue.writeBuffer(skin.boneBuffer!, 0, bytes, jointMatPtr, jointCount * 64);
     }
 
@@ -2917,7 +2917,7 @@ export class Renderer {
         const dstOffset = this.instanceBufferOffset;
         const dstEnd = dstOffset + outBytes;
         this.ensureInstanceBuffer(dstEnd);
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         this.queue.writeBuffer(this.instanceBuffer!, dstOffset, bytes, outPtr, outBytes);
         this.instanceBufferOffset = dstEnd;
     }
@@ -3015,7 +3015,7 @@ export class Renderer {
                     const modelSlot = this.modelBufferIndex++;
                     const modelBuffer = this.modelUniformBuffers[modelSlot];
                     const globalBindGroup = this.globalBindGroups[modelSlot];
-                    const bytes = wasmInterop.bytes();
+                    const bytes = driver.bytes();
                     const mesh = items[k].mesh;
                     const skin = first.skinned ? mesh.skin : null;
                     if (skin) {
@@ -3044,7 +3044,7 @@ export class Renderer {
 
     private executePointCloudDrawList(pass: GPURenderPassEncoder, items: PointCloudDrawItem[]): void {
         if (items.length === 0) return;
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         const mat4 = mat4f;
         let lastPipeline: GPURenderPipeline | null = null;
         for (let i = 0; i < items.length; i++) {
@@ -3077,7 +3077,7 @@ export class Renderer {
 
     private executeGlyphFieldDrawList(pass: GPURenderPassEncoder, list: GlyphDrawItem[]): void {
         if (list.length === 0) return;
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         let lastPipeline: GPURenderPipeline | null = null;
         let lastGeometry: Geometry | null = null;
         let lastField: GlyphField | null = null;
@@ -3125,7 +3125,7 @@ export class Renderer {
 
     private executeNodeLinkDrawList(pass: GPURenderPassEncoder, list: NodeLinkDrawItem[]): void {
         if (list.length === 0) return;
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         let lastPipeline: GPURenderPipeline | null = null;
         let lastGeometry: Geometry | null = null;
         let lastLink: NodeLink | null = null;
@@ -3233,7 +3233,7 @@ export class Renderer {
             }
             return typeOrder(a) - typeOrder(b);
         });
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         let lastPipeline: GPURenderPipeline | null = null;
         let lastMaterial: Material | null = null;
         let lastGeometry: Geometry | null = null;
@@ -3480,7 +3480,7 @@ export class Renderer {
 
 
     private executeMeshPickDrawList(pass: GPURenderPassEncoder, items: DrawItem[]): void {
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         let lastPipeline: GPURenderPipeline | null = null;
         let lastGeometry: Geometry | null = null;
         let lastVertexSourceId = -1;
@@ -3556,7 +3556,7 @@ export class Renderer {
     }
 
     private executePointCloudPickDrawList(pass: GPURenderPassEncoder, items: PointCloudDrawItem[]): void {
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         let lastPipeline: GPURenderPipeline | null = null;
         let lastCloud: PointCloud | null = null;
         for (let i = 0; i < items.length; i++) {
@@ -3593,7 +3593,7 @@ export class Renderer {
     }
 
     private executeGlyphPickDrawList(pass: GPURenderPassEncoder, items: GlyphDrawItem[]): void {
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         let lastPipeline: GPURenderPipeline | null = null;
         let lastGeometry: Geometry | null = null;
         let lastField: GlyphField | null = null;
@@ -3641,7 +3641,7 @@ export class Renderer {
     }
 
     private executeNodeLinkPickDrawList(pass: GPURenderPassEncoder, items: NodeLinkDrawItem[]): void {
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         let lastPipeline: GPURenderPipeline | null = null;
         let lastGeometry: Geometry | null = null;
         let lastLink: NodeLink | null = null;
@@ -3709,7 +3709,7 @@ export class Renderer {
         const dstOffset = this.instanceBufferOffset;
         const dstEnd = dstOffset + outBytes;
         this.ensureInstanceBuffer(dstEnd);
-        const bytes = wasmInterop.bytes();
+        const bytes = driver.bytes();
         this.queue.writeBuffer(this.instanceBuffer!, dstOffset, bytes, outPtr, outBytes);
         pass.setBindGroup(0, this.globalBindGroups[0]);
         if (material instanceof StandardMaterial) {

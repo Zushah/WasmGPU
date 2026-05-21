@@ -225,8 +225,8 @@ def _resolve_init_wasm(wasmgpu: Any) -> Optional[Any]:
 def _resolve_create_heap_arena(wasmgpu: Any) -> Optional[Any]:
     if hasattr(wasmgpu, "createHeapArena"):
         return getattr(wasmgpu, "createHeapArena")
-    if hasattr(wasmgpu, "wasmInterop") and hasattr(wasmgpu.wasmInterop, "createHeapArena"):
-        return getattr(wasmgpu.wasmInterop, "createHeapArena")
+    if hasattr(wasmgpu, "driver") and hasattr(wasmgpu.driver, "createHeapArena"):
+        return getattr(wasmgpu.driver, "createHeapArena")
     if hasattr(wasmgpu, "WasmGPU") and hasattr(wasmgpu.WasmGPU, "createHeapArena"):
         return getattr(wasmgpu.WasmGPU, "createHeapArena")
     return None
@@ -438,7 +438,7 @@ class WasmGPUInterop:
 
     def create_arena(self, cap_bytes: int, *, align: int = 16, fallback_align: Optional[int] = 8, name: Optional[str] = None) -> WasmGPUArena:
         if self._create_heap_arena is None:
-            raise WasmGPUInteropError("WasmGPU heap arena creation API not found (createHeapArena/wasmInterop.createHeapArena).")
+            raise WasmGPUInteropError("WasmGPU heap arena creation API not found (createHeapArena/driver.createHeapArena).")
         cap = int(cap_bytes)
         if cap <= 0:
             raise WasmGPUInteropError("cap_bytes must be > 0")

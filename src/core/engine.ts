@@ -29,7 +29,7 @@ import { OverlaySystem, AxisTriadLayer, GridLayer, LegendLayer } from "../overla
 import type { OverlaySystemDescriptor, AxisTriadLayerDescriptor, GridLayerDescriptor, LegendLayerDescriptor } from "../overlay";
 import { pythonInterop } from "../python";
 import { ScaleService } from "../scaling";
-import { mat4, vec3, quat, frameArena, initWebAssembly, wasmInterop, WasmHeapArena } from "../wasm";
+import { driver, frameArena, initWebAssembly, mat4, quat, vec3, WasmHeapArena, webassemblyInterop } from "../wasm";
 import { Camera, PerspectiveCamera, OrthographicCamera } from "../world/camera";
 import { NavigationControls, OrbitControls, TrackballControls } from "../world/controls";
 import type { NavigationControlsDescriptor, OrbitControlsDescriptor, TrackballControlsDescriptor } from "../world/controls";
@@ -118,12 +118,20 @@ export class WasmGPU {
         return this.renderer.cullingStats;
     }
 
-    static get interop() {
-        return wasmInterop;
+    static get driver() {
+        return driver;
     }
 
-    get interop() {
-        return wasmInterop;
+    get driver() {
+        return driver;
+    }
+
+    static get webassembly() {
+        return webassemblyInterop;
+    }
+
+    get webassembly() {
+        return webassemblyInterop;
     }
 
     static get python() {
@@ -143,11 +151,11 @@ export class WasmGPU {
     }
 
     static createHeapArena(capBytes: number, align: number = 16): WasmHeapArena {
-        return wasmInterop.createHeapArena(capBytes, align);
+        return driver.createHeapArena(capBytes, align);
     }
 
     createHeapArena(capBytes: number, align: number = 16): WasmHeapArena {
-        return wasmInterop.createHeapArena(capBytes, align);
+        return driver.createHeapArena(capBytes, align);
     }
 
     static get frameArena() {

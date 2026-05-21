@@ -4,9 +4,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { dtypeInfo, type DType, type NumberTypedArray } from "../compute/ndarray";
-import { frameArena, type WasmPtr, wasm, WasmHeapArena, wasmInterop } from "../wasm";
 import { assert } from "../utils";
+import { dtypeInfo, type DType, type NumberTypedArray } from "../compute/ndarray";
+import { driver, frameArena, type WasmPtr, wasm, WasmHeapArena } from "../wasm";
 
 export type PyProxyLike = {
     getBuffer: (type?: string) => PyBufferLike;
@@ -135,12 +135,12 @@ const allocBytes = (byteLength: number, align: number, allocator: SendNdarrayOpt
 const typedViewFromPtr = (dtype: DType, ptr: WasmPtr, length: number): NumberTypedArray => {
     const info = dtypeInfo(dtype);
     const ctor = info.ctor as unknown as (new (buffer: ArrayBuffer, byteOffset: number, length: number) => NumberTypedArray);
-    const buf = wasmInterop.buffer() as unknown as ArrayBuffer;
+    const buf = driver.buffer() as unknown as ArrayBuffer;
     return new ctor(buf, ptr >>> 0, length >>> 0);
 };
 
 const bytesViewFromPtr = (ptr: WasmPtr, byteLength: number): Uint8Array => {
-    const base = wasmInterop.bytes();
+    const base = driver.bytes();
     const start = ptr >>> 0;
     const end = (start + (byteLength >>> 0)) >>> 0;
     return base.subarray(start, end);
