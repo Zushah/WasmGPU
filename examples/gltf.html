@@ -17,34 +17,39 @@
     </head>
     <body>
         <canvas></canvas>
+        <!-- Adapted from https://www.github.com/bhavjitAlt/threejs -->
+        <script src="https://cdn.jsdelivr.net/gh/bhavjitAlt/threejs/trex_glb1.js"></script>
+        <script src="https://cdn.jsdelivr.net/gh/bhavjitAlt/threejs/trex_glb2.js"></script>
         <script type="module">
             import { WasmGPU } from "../dist/WasmGPU.min.js";
             const canvas = document.querySelector("canvas");
             const wgpu = await WasmGPU.create(canvas);
 
-            // Scene, camera, and light
-            const scene = wgpu.createScene([0, 0, 0]);
-            const camera = wgpu.createCamera.perspective({ fov: 45, near: 0.1, far: 1000 });
-            camera.transform.setPosition(0.5, 0.5, 0.5);
-            camera.lookAt(0, 0, 0);
-            scene.addLight(wgpu.createLight.directional({
-                direction: [-1, -2, -1],
-                color: [1, 1, 1],
-                intensity: 5
-            }));
+            // Decode base64 glTF binary
+            const trex_buffer = (Uint8Array.from(atob(trex_glb1 + trex_glb2), (c) => c.charCodeAt(0))).buffer;
 
-            // glTF model
-            const url = "https://raw.githubusercontent.com/KhronosGroup/glTF-Sample-Assets/main/Models/ABeautifulGame/glTF-Binary/ABeautifulGame.glb";
-            await wgpu.gltf.loadAndImport(url, { import: { targetScene: scene } });
+            // Scene, camera, controls, and lights
+            const scene = wgpu.createScene([0.1, 0.1, 0.2]);
+            const camera = wgpu.createCamera.perspective({ fov: 45, near: 1, far: 1000 });
+            camera.transform.setPosition(5, 4, 8);
+            const controls = wgpu.createControls.orbit(camera, canvas, { target: [-1, 2, 1] });
+            scene.addLight(wgpu.createLight.ambient({ color: [0.5, 0.5, 0.5], intensity: 0.1 }));
+            scene.addLight(wgpu.createLight.directional({ direction: [-1, -2, -1], color: [0.9, 0.9, 0.9], intensity: 5 }));
+
+            // Platform
+            const platform = wgpu.createMesh(wgpu.geometry.sphere(20, 64, 64), wgpu.material.standard({ color: [0.1, 0.2, 0.1], roughness: 0.0, metallic: 0.9 }));
+            scene.add(platform);
+            platform.transform.setPosition(0, -19.75, 0);
+
+            // glTF asset and animation
+            const gltf = await wgpu.gltf.loadAndImport(trex_buffer, { import: { targetScene: scene } });
+            const player = wgpu.animation.createPlayer(gltf.animations[0].clip, { speed: 1.0, loop: true, playing: true });
 
             // Render
             wgpu.run((dt, time) => {
-                const radius = 0.75;
-                const speed = 0.5;
-                const camX = Math.sin(time * speed) * radius;
-                const camZ = Math.cos(time * speed) * radius;
-                camera.transform.setPosition(camX, 0.5, camZ);
-                camera.lookAt(0, 0, 0);
+                controls.update(dt);
+                player.update(dt);
+                platform.transform.rotateX(dt);
                 wgpu.render(scene, camera);
             });
         </script>
