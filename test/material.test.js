@@ -41,15 +41,27 @@ const createSceneLayout = (device, withLighting) => {
     if (withLighting) entries.push({ binding: 2, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } });
     return device.createBindGroupLayout({ entries });
 };
-const createPipeline = (device, shaderCode, bindGroupLayouts, vertexBuffers) => {
+const createPipelineDescriptor = (device, shaderCode, bindGroupLayouts, vertexBuffers) => {
     const module = device.createShaderModule({ code: shaderCode });
-    return device.createRenderPipeline({
+    return {
         layout: device.createPipelineLayout({ bindGroupLayouts }),
         vertex: { module, entryPoint: "vs_main", buffers: vertexBuffers },
         fragment: { module, entryPoint: "fs_main", targets: [{ format: "rgba8unorm" }] },
         primitive: { topology: "triangle-list", cullMode: "back" },
         depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" }
-    });
+    };
+};
+const createPipelineAsync = (device, shaderCode, bindGroupLayouts, vertexBuffers) => {
+    const descriptor = createPipelineDescriptor(device, shaderCode, bindGroupLayouts, vertexBuffers);
+    if (typeof device.createRenderPipelineAsync === "function") return device.createRenderPipelineAsync(descriptor);
+    return device.createRenderPipeline(descriptor);
+};
+const assertShaderCompiles = async (device, shaderCode) => {
+    const module = device.createShaderModule({ code: shaderCode });
+    if (typeof module.getCompilationInfo !== "function") return;
+    const info = await module.getCompilationInfo();
+    const errors = info.messages.filter((m) => m.type === "error");
+    assert.equal(errors.length, 0, errors.map((m) => `${m.lineNum}:${m.linePos} ${m.message}`).join("\n"));
 };
 const vertexBuffersWithUv1 = [
     { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }] },
@@ -57,10 +69,7 @@ const vertexBuffersWithUv1 = [
     { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: "float32x2" }] },
     { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] }
 ];
-const vertexBuffersWithTangent = [
-    ...vertexBuffersWithUv1,
-    { arrayStride: 16, attributes: [{ shaderLocation: 12, offset: 0, format: "float32x4" }] }
-];
+const vertexBuffersWithTangent = [...vertexBuffersWithUv1, { arrayStride: 16, attributes: [{ shaderLocation: 12, offset: 0, format: "float32x4" }] }];
 const vertexBuffersInstancedStandard = [
     ...vertexBuffersWithTangent,
     {
@@ -115,6 +124,7 @@ const normal = createTextureViews(device, device.queue, [128, 128, 255, 255], fa
 const metallicRoughness = createTextureViews(device, device.queue, [0, 255, 255, 255], false);
 const occlusion = createTextureViews(device, device.queue, [255, 0, 0, 255], false);
 const anisotropy = createTextureViews(device, device.queue, [255, 128, 255, 255], false);
+let cleanupPipeline = null;
 
 // 1) Material defaults, dirty state, explicit render-state overrides, and retain/release behavior.
 {
@@ -437,17 +447,26 @@ const anisotropy = createTextureViews(device, device.queue, [255, 128, 255, 255]
     const sceneLayout = createSceneLayout(device, true);
     const unlitSceneLayout = createSceneLayout(device, false);
     const skinLayout = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }] });
-    assert.ok(createPipeline(device, unlit.getShaderCode(), [unlitSceneLayout, unlit.createBindGroupLayout(device)], vertexBuffersWithUv1));
-    assert.ok(createPipeline(device, standard.getShaderCode(), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersWithTangent));
-    assert.ok(createPipeline(device, standard.getShaderCode({ instanced: true }), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersInstancedStandard));
-    assert.ok(createPipeline(device, standard.getShaderCode({ skinned: true }), [sceneLayout, standard.createBindGroupLayout(device), skinLayout], vertexBuffersSkinnedStandard));
-    assert.ok(createPipeline(device, standard.getShaderCode({ skinned8: true }), [sceneLayout, standard.createBindGroupLayout(device), skinLayout], vertexBuffersSkinned8Standard));
-    assert.ok(createPipeline(device, standard.getShaderCode({ transmission: true }), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersWithTangent));
-    assert.ok(createPipeline(device, standard.getShaderCode({ instanced: true, transmission: true }), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersInstancedStandard));
-    assert.ok(createPipeline(device, standard.getShaderCode({ skinned: true, transmission: true }), [sceneLayout, standard.createBindGroupLayout(device), skinLayout], vertexBuffersSkinnedStandard));
-    assert.ok(createPipeline(device, standard.getShaderCode({ skinned8: true, transmission: true }), [sceneLayout, standard.createBindGroupLayout(device), skinLayout], vertexBuffersSkinned8Standard));
-    assert.ok(createPipeline(device, data.getShaderCode(), [sceneLayout, data.createBindGroupLayout(device)], vertexBuffersWithUv0));
-    assert.ok(createPipeline(device, custom.getShaderCode(), [unlitSceneLayout, custom.createBindGroupLayout(device)], vertexBuffersWithUv0));
+    const materialPipelinePromises = [
+        createPipelineAsync(device, unlit.getShaderCode(), [unlitSceneLayout, unlit.createBindGroupLayout(device)], vertexBuffersWithUv1),
+        createPipelineAsync(device, standard.getShaderCode(), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersWithTangent),
+        createPipelineAsync(device, standard.getShaderCode({ skinned8: true, transmission: true }), [sceneLayout, standard.createBindGroupLayout(device), skinLayout], vertexBuffersSkinned8Standard),
+        createPipelineAsync(device, data.getShaderCode(), [sceneLayout, data.createBindGroupLayout(device)], vertexBuffersWithUv0),
+        createPipelineAsync(device, custom.getShaderCode(), [unlitSceneLayout, custom.createBindGroupLayout(device)], vertexBuffersWithUv0)
+    ];
+    const shaderCompilePromises = [
+        assertShaderCompiles(device, unlit.getShaderCode({ instanced: true })),
+        assertShaderCompiles(device, standard.getShaderCode({ instanced: true })),
+        assertShaderCompiles(device, standard.getShaderCode({ skinned: true })),
+        assertShaderCompiles(device, standard.getShaderCode({ skinned8: true })),
+        assertShaderCompiles(device, standard.getShaderCode({ transmission: true })),
+        assertShaderCompiles(device, standard.getShaderCode({ instanced: true, transmission: true })),
+        assertShaderCompiles(device, standard.getShaderCode({ skinned: true, transmission: true }))
+    ];
+    const materialPipelines = await Promise.all(materialPipelinePromises);
+    await Promise.all(shaderCompilePromises);
+    for (const pipeline of materialPipelines) assert.ok(pipeline);
+    cleanupPipeline = materialPipelines[1];
     assert.ok(unlit.getShaderCode({ instanced: true }).includes("@location(3)"));
     assert.ok(standard.getShaderCode({ skinned: true }).includes("@group(2) @binding(0)"));
     assert.ok(standard.getShaderCode({ skinned8: true }).includes("joints1"));
@@ -606,7 +625,8 @@ const anisotropy = createTextureViews(device, device.queue, [255, 128, 255, 255]
     const standard = new StandardMaterial();
     standard.uniformBuffer = device.createBuffer({ size: standard.getUniformBufferSize(), usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     standard.bindGroupKey = "cached-standard";
-    standard.pipeline = createPipeline(device, standard.getShaderCode(), [createSceneLayout(device, true), standard.createBindGroupLayout(device)], vertexBuffersWithTangent);
+    assert.ok(cleanupPipeline);
+    standard.pipeline = cleanupPipeline;
     standard.destroy();
     assert.equal(standard.uniformBuffer, null);
     assert.equal(standard.bindGroup, null);
