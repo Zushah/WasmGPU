@@ -94,6 +94,7 @@ struct PointData {
 };
 
 @group(1) @binding(0) var<storage, read> points: array<PointData>;
+@group(1) @binding(4) var<storage, read> pointColors: array<vec4f>;
 
 struct PointCloudUniforms {
     sizeParams: vec4f,
@@ -199,22 +200,28 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) ins
     let ndcSize = (sizePx * 2.0) / max(camera._pad0, 1.0);
     let offsetX = (uv.x - 0.5) * ndcSize / aspect * clip.w;
     let offsetY = -(uv.y - 0.5) * ndcSize * clip.w;
-    let rawVec = shiftedValueVector(vec4f(p.position, p.scalar), pc.scaleDomain.z);
-    let componentCount = u32(pc.scaleSource.x + 0.5);
-    let componentIndex = u32(pc.scaleSource.y + 0.5);
-    let valueMode = u32(pc.scaleSource.z + 0.5);
-    let rawValue = scale_select_value(rawVec, componentCount, componentIndex, valueMode);
-    let finiteRaw = scale_is_finite(rawValue);
-    var t = scale_apply_transform(rawValue, vec4f(pc.scaleDomain.x, pc.scaleDomain.y, 0.0, pc.scaleDomain.w), pc.scaleClamp, pc.scaleParams, pc.scaleFlags);
-    var c = colormap(t);
-    if (!finiteRaw) {
-        c = vec4f(0.0, 0.0, 0.0, 0.0);
+    let colorMode = u32(pc.visual.w + 0.5);
+    var c: vec4f;
+    if (colorMode == 0u) {
+        c = pointColors[instanceIndex];
+    } else {
+        let rawVec = shiftedValueVector(vec4f(p.position, p.scalar), pc.scaleDomain.z);
+        let componentCount = u32(pc.scaleSource.x + 0.5);
+        let componentIndex = u32(pc.scaleSource.y + 0.5);
+        let valueMode = u32(pc.scaleSource.z + 0.5);
+        let rawValue = scale_select_value(rawVec, componentCount, componentIndex, valueMode);
+        let finiteRaw = scale_is_finite(rawValue);
+        var t = scale_apply_transform(rawValue, vec4f(pc.scaleDomain.x, pc.scaleDomain.y, 0.0, pc.scaleDomain.w), pc.scaleClamp, pc.scaleParams, pc.scaleFlags);
+        c = colormap(t);
+        if (!finiteRaw) {
+            c = vec4f(0.0, 0.0, 0.0, 0.0);
+        }
     }
-    c.a = c.a * scale_clamp01(pc.visual.x);
+    let alpha = scale_clamp01(c.a) * scale_clamp01(pc.visual.x);
     var out: VertexOutput;
     out.position = clip + vec4f(offsetX, offsetY, 0.0, 0.0);
     out.pointCoord = uv * 2.0 - vec2f(1.0, 1.0);
-    out.col = vec4f(srgbFromLinear(c.rgb), c.a);
+    out.col = vec4f(srgbFromLinear(max(c.rgb, vec3f(0.0))), alpha);
     return out;
 }
 

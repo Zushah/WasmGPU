@@ -15,11 +15,15 @@ import { Bounds3, boundsFromBox, boundsFromBoxAndSphere, boundsFromSphere, empty
 
 export type PointCloudColormap = BuiltinColormapName | "custom";
 
+export type PointCloudColorMode = "rgba" | "scalar";
+
 export type PointCloudVisualChangeKind = "scale" | "colormap" | "visual";
 
 export type PointCloudDescriptor = {
     data?: Float32Array;
+    colors?: Float32Array;
     pointsBuffer?: GPUBuffer | { buffer: GPUBuffer };
+    colorsBuffer?: GPUBuffer | { buffer: GPUBuffer };
     pointCount?: number;
     boundsMin?: [number, number, number];
     boundsMax?: [number, number, number];
@@ -35,6 +39,7 @@ export type PointCloudDescriptor = {
     opacity?: number;
     colormap?: PointCloudColormap | Colormap;
     colormapStops?: Color4[];
+    colorMode?: PointCloudColorMode;
     softness?: number;
     scaleTransform: ScaleTransformDescriptor;
     visible?: boolean;
@@ -48,14 +53,9 @@ const UNIFORM_BYTE_SIZE = UNIFORM_FLOAT_COUNT * 4;
 
 type BoundsSourceMode = "none" | "explicit" | "computed";
 
-const normalizePointCloudScaleTransform = (transform: ScaleTransformDescriptor | ScaleTransform): ScaleTransform => {
-    return normalizeScaleTransform({
-        componentCount: 4,
-        componentIndex: 3,
-        stride: 4,
-        ...transform
-    });
-};
+const normalizePointCloudScaleTransform = (transform: ScaleTransformDescriptor | ScaleTransform): ScaleTransform => normalizeScaleTransform({ componentCount: 4, componentIndex: 3, stride: 4, ...transform });
+
+const colorModeId = (mode: PointCloudColorMode): number => mode === "rgba" ? 0 : 1;
 
 const pointCloudRevisionScratch = new ArrayBuffer(4);
 const pointCloudRevisionF32 = new Float32Array(pointCloudRevisionScratch);
@@ -79,23 +79,28 @@ export class PointCloud {
     private _maxPointSize: number = 16.0;
     private _sizeAttenuation: number = 1.0;
     private _opacity: number = 1.0;
+    private _colorMode: PointCloudColorMode = "scalar";
     private _colormap: PointCloudColormap | Colormap = "viridis";
     private _colormapStops: Color4[] = [[0.26700, 0.00487, 0.32942, 1.0], [0.99325, 0.90616, 0.14394, 1.0]];
     private _softness: number = 0.15;
     private _scaleTransform: ScaleTransform;
     private _CPUData: Float32Array | null = null;
+    private _colorsCPU: Float32Array | null = null;
     private _keepCPUData: boolean = false;
     private _ndShape: number[] | null = null;
     private _boundsSource: BoundsSourceMode = "none";
     private _scaleRevision: number = 0;
     private readonly _visualChangeListeners: Set<(kind: PointCloudVisualChangeKind) => void> = new Set();
     pointsBuffer: GPUBuffer | null = null;
+    colorsBuffer: GPUBuffer | null = null;
     uniformBuffer: GPUBuffer | null = null;
     bindGroup: GPUBindGroup | null = null;
     bindGroupKey: string | null = null;
     private _pointCount: number = 0;
     private _uniformDirty: boolean = true;
     private _pointsDirty: boolean = true;
+    private _colorsDirty: boolean = true;
+    private _colorsExternal: boolean = false;
 
     constructor(desc: PointCloudDescriptor) {
         assert(!!desc && !!desc.scaleTransform, "PointCloud: scaleTransform is required.");
@@ -112,21 +117,17 @@ export class PointCloud {
         if (desc.opacity !== undefined) this._opacity = desc.opacity;
         if (desc.colormap !== undefined) this._colormap = desc.colormap;
         if (desc.colormapStops !== undefined) this._colormapStops = normalizeColorStops(desc.colormapStops);
+        if (desc.colorMode !== undefined) this._colorMode = desc.colorMode;
+        else if (desc.colors || desc.colorsBuffer) this._colorMode = "rgba";
         if (desc.softness !== undefined) this._softness = desc.softness;
         if (desc.keepCPUData !== undefined) this._keepCPUData = !!desc.keepCPUData;
         if (desc.ndShape !== undefined) this.ndShape = desc.ndShape;
         this.applyExplicitBounds(desc);
-        if (desc.data) {
-            this.setData(desc.data, { keepCPUData: this._keepCPUData });
-        } else if (desc.pointsBuffer) {
-            const buf = resolveGPUBuffer(desc.pointsBuffer);
-            const count = desc.pointCount ?? 0;
-            assert(count > 0, "PointCloud: pointCount is required when using pointsBuffer.");
-            this.setPointsBuffer(buf, count);
-        } else if (desc.pointCount !== undefined) {
-            this._pointCount = desc.pointCount;
-            this._pointsDirty = false;
-        }
+        if (desc.data) this.setData(desc.data, { keepCPUData: this._keepCPUData });
+        else if (desc.pointsBuffer) { const buf = resolveGPUBuffer(desc.pointsBuffer); const count = desc.pointCount ?? 0; assert(count > 0, "PointCloud: pointCount is required when using pointsBuffer."); this.setPointsBuffer(buf, count); }
+        else if (desc.pointCount !== undefined) { this._pointCount = desc.pointCount; this._pointsDirty = false; }
+        if (desc.colors) this.setColors(desc.colors, { keepCPUData: this._keepCPUData });
+        else if (desc.colorsBuffer) this.setColorsBuffer(resolveGPUBuffer(desc.colorsBuffer));
     }
 
     private applyExplicitBounds(desc: PointCloudDescriptor): void {
@@ -161,6 +162,14 @@ export class PointCloud {
         this.boundsRadius = 0;
     }
 
+    private clearColorsIfCountMismatch(): void {
+        if (!this._colorsCPU) return;
+        if ((this._colorsCPU.length / 4) === this._pointCount) return;
+        this._colorsCPU = null;
+        this._colorsDirty = false;
+        this.bindGroupKey = null;
+    }
+
     get pointCount(): number {
         return this._pointCount;
     }
@@ -173,7 +182,10 @@ export class PointCloud {
         hash = mixPointCloudRevision(hash, this.depthWrite ? 1 : 0);
         hash = mixPointCloudRevision(hash, this.depthTest ? 1 : 0);
         hash = mixPointCloudRevision(hash, this._pointsDirty ? 1 : 0);
+        hash = mixPointCloudRevision(hash, this._colorsDirty ? 1 : 0);
         hash = mixPointCloudRevision(hash, this.pointsBuffer ? 1 : 0);
+        hash = mixPointCloudRevision(hash, this.colorsBuffer ? 1 : 0);
+        hash = mixPointCloudRevision(hash, colorModeId(this._colorMode) >>> 0);
         hash = mixPointCloudRevisionF32(hash, this._basePointSize);
         hash = mixPointCloudRevisionF32(hash, this._minPointSize);
         hash = mixPointCloudRevisionF32(hash, this._maxPointSize);
@@ -281,6 +293,17 @@ export class PointCloud {
         this._uniformDirty = true;
     }
 
+    get colorMode(): PointCloudColorMode {
+        return this._colorMode;
+    }
+
+    set colorMode(v: PointCloudColorMode) {
+        if (v === this._colorMode) return;
+        this._colorMode = v;
+        this._uniformDirty = true;
+        this.emitVisualChange("visual");
+    }
+
     get colormap(): PointCloudColormap | Colormap {
         return this._colormap;
     }
@@ -328,6 +351,7 @@ export class PointCloud {
         assert((data.length % 4) === 0, "PointCloud: data length must be a multiple of 4 (x,y,z,scalar per point).");
         this._CPUData = data;
         this._pointCount = data.length / 4;
+        this.clearColorsIfCountMismatch();
         this._pointsDirty = true;
         this._keepCPUData = opts.keepCPUData ?? this._keepCPUData;
         this._scaleRevision++;
@@ -338,6 +362,7 @@ export class PointCloud {
         assert(pointCount > 0, "PointCloud: pointCount must be > 0.");
         this._CPUData = null;
         this._pointCount = pointCount;
+        this.clearColorsIfCountMismatch();
         this.pointsBuffer = buffer;
         this._pointsDirty = false;
         this._scaleRevision++;
@@ -345,18 +370,39 @@ export class PointCloud {
         this.clearComputedBoundsIfNeeded();
     }
 
-    dropCPUData(): void {
-        this._CPUData = null;
+    setColors(data: Float32Array, opts: { keepCPUData?: boolean } = {}): void {
+        assert((data.length % 4) === 0, "PointCloud: colors length must be a multiple of 4 (r,g,b,a per point).");
+        assert((data.length / 4) === this._pointCount, "PointCloud: colors length must equal pointCount*4.");
+        this._colorsCPU = new Float32Array(data);
+        this._colorsExternal = false;
+        this._colorsDirty = true;
+        this._keepCPUData = opts.keepCPUData ?? this._keepCPUData;
+        this.bindGroupKey = null;
     }
 
-    getPointRecord(index: number): { position: [number, number, number]; scalar: number; packed: [number, number, number, number] } | null {
+    setColorsBuffer(buffer: GPUBuffer | null): void {
+        if (buffer) assert(this._pointCount > 0, "PointCloud: pointCount must be > 0 when using colorsBuffer.");
+        this.colorsBuffer = buffer;
+        this._colorsCPU = null;
+        this._colorsExternal = !!buffer;
+        this._colorsDirty = false;
+        this.bindGroupKey = null;
+    }
+
+    dropCPUData(): void {
+        this._CPUData = null;
+        this._colorsCPU = null;
+    }
+
+    getPointRecord(index: number): { position: [number, number, number]; scalar: number; color: [number, number, number, number] | null; packed: [number, number, number, number] } | null {
         const data = this._CPUData;
         if (!data) return null;
         if (!Number.isInteger(index) || index < 0 || index >= this._pointCount) return null;
         const o = index * 4;
+        const color = this._colorsCPU ? [this._colorsCPU[o + 0], this._colorsCPU[o + 1], this._colorsCPU[o + 2], this._colorsCPU[o + 3]] as [number, number, number, number] : null;
         return {
             position: [data[o + 0], data[o + 1], data[o + 2]],
-            scalar: data[o + 3],
+            scalar: data[o + 3], color,
             packed: [data[o + 0], data[o + 1], data[o + 2], data[o + 3]]
         };
     }
@@ -407,30 +453,31 @@ export class PointCloud {
     }
 
     upload(device: GPUDevice, queue: GPUQueue): void {
-        if (!this._pointsDirty) return;
-        if (this.pointsBuffer && !this._CPUData) {
-            this._pointsDirty = false;
-            return;
-        }
-        const data = this._CPUData;
-        if (!data) {
-            this._pointsDirty = false;
-            return;
-        }
-        const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
-        if (!this.pointsBuffer) {
-            this.pointsBuffer = createBuffer(device, data, usage);
-        } else {
-            try {
-                queue.writeBuffer(this.pointsBuffer, 0, data.buffer, data.byteOffset, data.byteLength);
-            } catch {
-                this.pointsBuffer.destroy();
-                this.pointsBuffer = createBuffer(device, data, usage);
+        if (this._pointsDirty) {
+            if (this.pointsBuffer && !this._CPUData) this._pointsDirty = false;
+            else {
+                const data = this._CPUData;
+                if (!data) this._pointsDirty = false;
+                else {
+                    const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
+                    if (!this.pointsBuffer) this.pointsBuffer = createBuffer(device, data, usage);
+                    else try { queue.writeBuffer(this.pointsBuffer, 0, data.buffer, data.byteOffset, data.byteLength); } catch { this.pointsBuffer.destroy(); this.pointsBuffer = createBuffer(device, data, usage); }
+                    if (!this._keepCPUData) this._CPUData = null;
+                    this._pointsDirty = false;
+                    this.bindGroupKey = null;
+                }
             }
         }
-        if (!this._keepCPUData) this._CPUData = null;
-        this._pointsDirty = false;
-        this.bindGroupKey = null;
+        if (!this._colorsExternal && this._colorsDirty) {
+            const colors = this._colorsCPU;
+            if (!colors) { this._colorsDirty = false; return; }
+            const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
+            if (!this.colorsBuffer) this.colorsBuffer = createBuffer(device, colors, usage);
+            else try { queue.writeBuffer(this.colorsBuffer, 0, colors.buffer, colors.byteOffset, colors.byteLength); } catch { this.colorsBuffer.destroy(); this.colorsBuffer = createBuffer(device, colors, usage); }
+            if (!this._keepCPUData) this._colorsCPU = null;
+            this._colorsDirty = false;
+            this.bindGroupKey = null;
+        }
     }
 
     getUniformBufferSize(): number {
@@ -451,7 +498,7 @@ export class PointCloud {
         out[24] = clamp01(this._opacity);
         out[25] = clamp01(this._softness);
         out[26] = (typeof this._colormap === "string" && this._colormap === "custom") ? Math.min(8, Math.max(2, this._colormapStops.length)) : 0;
-        out[27] = 0;
+        out[27] = colorModeId(this._colorMode);
         const stops = this._colormapStops;
         const nStops = Math.min(8, Math.max(2, stops.length));
         for (let i = 0; i < 8; i++) {
@@ -474,21 +521,20 @@ export class PointCloud {
     }
 
     private emitVisualChange(kind: PointCloudVisualChangeKind): void {
-        for (const listener of this._visualChangeListeners) {
-            try {
-                listener(kind);
-            } catch { /* ignore */ }
-        }
+        for (const listener of this._visualChangeListeners) try { listener(kind); } catch { /* ignore */ }
     }
 
     destroy(): void {
         this.pointsBuffer?.destroy();
+        this.colorsBuffer?.destroy();
         this.uniformBuffer?.destroy();
         this.pointsBuffer = null;
+        this.colorsBuffer = null;
         this.uniformBuffer = null;
         this.bindGroup = null;
         this.bindGroupKey = null;
         this._CPUData = null;
+        this._colorsCPU = null;
         this._ndShape = null;
         this._pointCount = 0;
         this._visualChangeListeners.clear();

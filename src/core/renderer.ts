@@ -280,6 +280,7 @@ export class Renderer {
     private opaqueDrawList: DrawItem[] = [];
     private transparentDrawList: DrawItem[] = [];
     private pointCloudBindGroupLayout: GPUBindGroupLayout | null = null;
+    private pointCloudDummyColorsBuffer: GPUBuffer | null = null;
     private pointCloudDrawItemPool: PointCloudDrawItem[] = [];
     private pointCloudDrawItemPoolUsed: number = 0;
     private opaquePointCloudDrawList: PointCloudDrawItem[] = [];
@@ -1243,6 +1244,8 @@ export class Renderer {
         this.pipelineCache.clear();
         this.shaderCache.clear();
         this.pointCloudBindGroupLayout = null;
+        this.pointCloudDummyColorsBuffer?.destroy();
+        this.pointCloudDummyColorsBuffer = null;
         this.glyphFieldBindGroupLayout = null;
         this.nodeLinkBindGroupLayout = null;
         this.glyphFieldDummyAttributesBuffer?.destroy();
@@ -4589,6 +4592,11 @@ export class Renderer {
                     binding: 3,
                     visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
                     texture: { sampleType: "float", viewDimension: "1d" }
+                },
+                {
+                    binding: 4,
+                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
+                    buffer: { type: "read-only-storage" }
                 }
             ]
         });
@@ -4649,8 +4657,9 @@ export class Renderer {
 
     private getPointCloudBindGroupKey(cloud: PointCloud): string {
         const points = cloud.pointsBuffer;
+        const colors = cloud.colorsBuffer;
         const uniforms = cloud.uniformBuffer;
-        return `pointcloud:${points ? this.getObjectId(points) : 0}:${uniforms ? this.getObjectId(uniforms) : 0}:${cloud.getColormapKey()}`;
+        return `pointcloud:${points ? this.getObjectId(points) : 0}:${colors ? this.getObjectId(colors) : 0}:${uniforms ? this.getObjectId(uniforms) : 0}:${cloud.getColormapKey()}`;
     }
 
     private ensurePointCloudBindGroup(cloud: PointCloud): void {
@@ -4669,6 +4678,14 @@ export class Renderer {
             this.queue.writeBuffer(cloud.uniformBuffer, 0, data.buffer, data.byteOffset, data.byteLength);
             cloud.markUniformsClean();
         }
+        if (!this.pointCloudDummyColorsBuffer) {
+            this.pointCloudDummyColorsBuffer = this.device.createBuffer({
+                size: 16,
+                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+            });
+            const white = new Float32Array([1, 1, 1, 1]);
+            this.queue.writeBuffer(this.pointCloudDummyColorsBuffer, 0, white.buffer, white.byteOffset, white.byteLength);
+        }
         const key = this.getPointCloudBindGroupKey(cloud);
         if (cloud.bindGroup && cloud.bindGroupKey === key) return;
         const layout = this.getPointCloudBindGroupLayout();
@@ -4679,7 +4696,8 @@ export class Renderer {
                 { binding: 0, resource: { buffer: cloud.pointsBuffer } },
                 { binding: 1, resource: { buffer: cloud.uniformBuffer } },
                 { binding: 2, resource: cmapGPU.sampler },
-                { binding: 3, resource: cmapGPU.view }
+                { binding: 3, resource: cmapGPU.view },
+                { binding: 4, resource: { buffer: cloud.colorsBuffer ?? this.pointCloudDummyColorsBuffer } }
             ]
         });
         cloud.bindGroupKey = key;
