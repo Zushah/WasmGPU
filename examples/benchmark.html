@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<!--
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+-->
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title>WasmGPU | Benchmark Example</title>
+        <link rel="icon" type="image/png" href="../assets/favicon.png">
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { background: #05070a; overflow: hidden; color: #d8e2ef; font: 12px/1.4 monospace; }
+            .stage { position: fixed; inset: 0; }
+            canvas.main { position: absolute; inset: 0; width: 100vw; height: 100vh; display: block; }
+            .hud { position: fixed; left: 10px; top: 10px; display: flex; flex-direction: column; gap: 10px; width: 430px; z-index: 8; }
+            .pane { padding: 10px; background: rgba(5, 10, 18, 0.78); border: 1px solid rgba(180, 210, 255, 0.2); white-space: pre-line; min-height: 120px; }
+            .controls { display: grid; grid-template-columns: 96px 1fr; gap: 6px 8px; align-items: center; min-height: 0; }
+            .controls select, .controls button { font: 12px monospace; padding: 4px; background: rgba(10, 16, 28, 0.95); color: #d8e2ef; border: 1px solid rgba(180, 210, 255, 0.25); }
+            .controls button { cursor: pointer; }
+            .controls .note { grid-column: 1 / span 2; opacity: 0.8; }
+        </style>
+        <script type="importmap">
+        {
+            "imports": {
+                "three": "https://cdn.jsdelivr.net/npm/three@0.171.0/build/three.module.js",
+                "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.171.0/examples/jsm/"
+            }
+        }
+        </script>
+    </head>
+    <body>
+        <div class="stage"></div>
+        <div class="hud">
+            <div class="pane controls">
+                <label for="mode-select">mode</label>
+                <select id="mode-select">
+                    <option value="render">rendering</option>
+                    <option value="compute">computing</option>
+                </select>
+                <label for="engine-select">engine</label>
+                <select id="engine-select">
+                    <option value="wasmgpu">WasmGPU</option>
+                    <option value="three">Three.js</option>
+                    <option value="babylon">Babylon.js</option>
+                </select>
+                <label for="count-select">samples</label>
+                <select id="count-select">
+                    <option value="100000">100k</option>
+                    <option value="500000" selected>500k</option>
+                    <option value="1000000">1M</option>
+                    <option value="5000000">5M</option>
+                </select>
+                <label for="iter-select">iterations</label>
+                <select id="iter-select">
+                    <option value="1">1</option>
+                    <option value="4">4</option>
+                    <option value="8" selected>8</option>
+                    <option value="16">16</option>
+                    <option value="32">32</option>
+                </select>
+                <label for="batch-select">batches</label>
+                <select id="batch-select">
+                    <option value="1">1</option>
+                    <option value="2">2</option>
+                    <option value="4" selected>4</option>
+                    <option value="8">8</option>
+                    <option value="16">16</option>
+                </select>
+                <label></label>
+                <button id="reset-button">reset</button>
+                <div class="note">Chirikov standard map on the 2-torus</div>
+            </div>
+            <div class="pane stats">loading...</div>
+        </div>
+        <script src="../dist/WasmGPU.iife.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/babylonjs@9.2.1/babylon.js"></script>
+        <script type="module">
+            import * as THREE from "three";
+            import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+            import { GPUComputationRenderer } from "three/addons/misc/GPUComputationRenderer.js";
+
+            const stage = document.querySelector(".stage");
+            const statsHud = document.querySelector(".stats");
+            const ui = {
+                mode: document.querySelector("#mode-select"),
+                engine: document.querySelector("#engine-select"),
+                count: document.querySelector("#count-select"),
+                iterations: document.querySelector("#iter-select"),
+                batches: document.querySelector("#batch-select"),
+                reset: document.querySelector("#reset-button")
+            };
+            const TAU = Math.PI * 2.0;
+            const MAP_K = 1.35;
+            const WORKGROUP_SIZE = 256;
+            const POINT_SIZE = 4.0;
+            const BOUNDS_RADIUS = 28.0;
+            const WARMUP = 12;
+            const CHECK_INTERVAL = 30;
+            const MAX_COMPUTE_ITERATIONS = 1024;
+            const fmt = (n, d = 2) => Number.isFinite(n) ? n.toFixed(d) : "nan";
+            const int = (n) => Number.isFinite(n) ? Math.round(n).toLocaleString() : "0";
+            const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
+            const fract = (x) => x - Math.floor(x);
+            const rng = (seed) => {
+                let t = seed >>> 0;
+                return () => {
+                    t += 0x6D2B79F5;
+                    let x = t;
+                    x = Math.imul(x ^ (x >>> 15), x | 1);
+                    x ^= x + Math.imul(x ^ (x >>> 7), x | 61);
+                    return ((x ^ (x >>> 14)) >>> 0) / 4294967296;
+                };
+            };
+            class Rolling {
+                constructor(n = 180) { this.values = new Float64Array(n); this.index = 0; this.count = 0; }
+                add(x) { if (!Number.isFinite(x) || x < 0) return; this.values[this.index] = x; this.index = (this.index + 1) % this.values.length; this.count = Math.min(this.count + 1, this.values.length); }
+                sorted() { return Array.from(this.values.slice(0, this.count)).sort((a, b) => a - b); }
+                median() { const a = this.sorted(); return a.length ? a[Math.floor(a.length * 0.50)] : NaN; }
+                p95() { const a = this.sorted(); return a.length ? a[Math.min(a.length - 1, Math.floor(a.length * 0.95))] : NaN; }
+            }
+            const metrics = () => ({ frames: 0, queueSubmits: 0, frame: new Rolling(), work: new Rolling(), submit: new Rolling(), sync: new Rolling(), read: new Rolling() });
+            const settings = () => ({ mode: ui.mode.value, engine: ui.engine.value, count: Number(ui.count.value), iterations: Number(ui.iterations.value), batches: Number(ui.batches.value) });
+            const createCanvas = () => { stage.textContent = ""; const c = document.createElement("canvas"); c.className = "main"; stage.appendChild(c); return c; };
+            const stepMap = (q, p, phase, time = 0) => { const k = MAP_K + (0.20 * Math.sin((time * 0.07) + phase * TAU)); p = fract(p + ((k / TAU) * Math.sin(TAU * q))); q = fract(q + p); return [q, p]; };
+            const scalarAt = (q, p, phase) => clamp(0.5 + 0.28 * Math.sin(TAU * (q - p + phase * 0.17)) + 0.22 * Math.sin(TAU * (3 * q + 2 * p)), 0, 1);
+            const embed = (q, p, phase) => { const theta = TAU * q, phi = TAU * p; const major = 10.0 + 0.5 * Math.sin(TAU * phase), minor = 3.4 + 0.35 * Math.cos(TAU * (q + phase)); const r = major + minor * Math.cos(phi); return [r * Math.cos(theta), 1.15 * minor * Math.sin(phi), r * Math.sin(theta)]; };
+            const cache = new Map();
+            const source = (count) => {
+                let v = cache.get(count);
+                if (v) return v;
+                const random = rng(92731);
+                const render4 = new Float32Array(count * 4);
+                const render3 = new Float32Array(count * 3);
+                const scalars = new Float32Array(count);
+                const state4 = new Float32Array(count * 4);
+                for (let i = 0; i < count; i++) {
+                    let q = random();
+                    let p = random();
+                    const phase = random();
+                    const q0 = q, p0 = p;
+                    for (let j = 0; j < 12; j++) [q, p] = stepMap(q, p, phase, 0);
+                    const s = scalarAt(q, p, phase);
+                    const xyz = embed(q, p, phase);
+                    const o4 = i * 4;
+                    const o3 = i * 3;
+                    render4[o4 + 0] = xyz[0]; render4[o4 + 1] = xyz[1]; render4[o4 + 2] = xyz[2]; render4[o4 + 3] = s;
+                    render3[o3 + 0] = xyz[0]; render3[o3 + 1] = xyz[1]; render3[o3 + 2] = xyz[2];
+                    scalars[i] = s;
+                    state4[o4 + 0] = q0; state4[o4 + 1] = p0; state4[o4 + 2] = 0; state4[o4 + 3] = phase;
+                }
+                v = { render4, render3, scalars, state4 };
+                cache.set(count, v);
+                return v;
+            };
+            const computeSourceData = (count) => { const data = new Float32Array(source(count).state4); data[0] = 0; data[1] = 0; data[2] = 0; data[3] = 0; return data; };
+
+            const PointVertex = `
+                attribute float scalar;
+                uniform float pointSize;
+                varying vec3 vColor;
+                varying float vAlpha;
+                vec3 colorRamp(float t) {
+                    t = clamp(t, 0.0, 1.0);
+                    if (t < 0.25) return mix(vec3(0.04, 0.10, 0.35), vec3(0.05, 0.45, 1.00), t / 0.25);
+                    if (t < 0.50) return mix(vec3(0.05, 0.45, 1.00), vec3(0.12, 0.92, 0.75), (t - 0.25) / 0.25);
+                    if (t < 0.75) return mix(vec3(0.12, 0.92, 0.75), vec3(1.00, 0.78, 0.20), (t - 0.50) / 0.25);
+                    return mix(vec3(1.00, 0.78, 0.20), vec3(1.00, 1.00, 1.00), (t - 0.75) / 0.25);
+                }
+                void main() {
+                    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                    gl_Position = projectionMatrix * mvPosition;
+                    gl_PointSize = clamp(pointSize * (420.0 / max(1.0, -mvPosition.z)), 1.0, 12.0);
+                    vColor = colorRamp(scalar);
+                    vAlpha = mix(0.55, 0.96, scalar);
+                }
+            `;
+            const PointFragment = `
+                precision highp float;
+                varying vec3 vColor;
+                varying float vAlpha;
+                void main() {
+                    vec2 c = gl_PointCoord - 0.5;
+                    float r = dot(c, c);
+                    if (r > 0.25) discard;
+                    gl_FragColor = vec4(vColor, smoothstep(0.25, 0.015, r) * vAlpha);
+                }
+            `;
+            const BabylonVertex = `
+                precision highp float;
+                attribute vec3 position;
+                attribute float scalar;
+                uniform mat4 worldViewProjection;
+                uniform float pointSize;
+                varying vec3 vColor;
+                varying float vAlpha;
+                vec3 colorRamp(float t) {
+                    t = clamp(t, 0.0, 1.0);
+                    if (t < 0.25) return mix(vec3(0.04, 0.10, 0.35), vec3(0.05, 0.45, 1.00), t / 0.25);
+                    if (t < 0.50) return mix(vec3(0.05, 0.45, 1.00), vec3(0.12, 0.92, 0.75), (t - 0.25) / 0.25);
+                    if (t < 0.75) return mix(vec3(0.12, 0.92, 0.75), vec3(1.00, 0.78, 0.20), (t - 0.50) / 0.25);
+                    return mix(vec3(1.00, 0.78, 0.20), vec3(1.00, 1.00, 1.00), (t - 0.75) / 0.25);
+                }
+                void main(void) {
+                    gl_Position = worldViewProjection * vec4(position, 1.0);
+                    gl_PointSize = clamp(pointSize * (420.0 / max(1.0, gl_Position.w)), 1.0, 12.0);
+                    vColor = colorRamp(scalar);
+                    vAlpha = mix(0.55, 0.96, scalar);
+                }
+            `;
+            const WasmGPUCompute = `
+                @group(0) @binding(0) var<storage, read_write> state: array<vec4<f32>>;
+                @group(0) @binding(1) var<storage, read> params: array<vec4<f32>>;
+                @compute @workgroup_size(256)
+                fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+                    let idx = gid.x;
+                    if (idx >= arrayLength(&state)) { return; }
+                    let cfg = params[0];
+                    let k = cfg.x;
+                    let n = u32(cfg.y);
+                    var s = state[idx];
+                    var q = s.x;
+                    var p = s.y;
+                    var stretch = s.z;
+                    for (var i = 0u; i < n; i = i + 1u) {
+                        let angle = 6.28318530718 * q;
+                        let c = k * cos(angle);
+                        stretch += log(abs(1.0 + c) + 0.0001);
+                        p = fract(p + ((k / 6.28318530718) * sin(angle)));
+                        q = fract(q + p);
+                    }
+                    state[idx] = vec4<f32>(q, p, stretch, s.w);
+                }
+            `;
+            const ThreeCompute = `
+                precision highp float;
+                uniform sampler2D textureState;
+                uniform float iterations;
+                uniform float kBase;
+                const float TAU = 6.28318530718;
+                void main() {
+                    vec2 uv = gl_FragCoord.xy / resolution.xy;
+                    vec4 s = texture2D(textureState, uv);
+                    if (s.z < 0.0) { gl_FragColor = s; return; }
+                    float q = s.x;
+                    float p = s.y;
+                    float stretch = s.z;
+                    for (int i = 0; i < 1024; i++) {
+                        if (float(i) >= iterations) break;
+                        float angle = TAU * q;
+                        float c = kBase * cos(angle);
+                        stretch += log(abs(1.0 + c) + 0.0001);
+                        p = fract(p + ((kBase / TAU) * sin(angle)));
+                        q = fract(q + p);
+                    }
+                    gl_FragColor = vec4(q, p, stretch, s.w);
+                }
+            `;
+
+            const effectiveIterations = (s) => Math.min(MAX_COMPUTE_ITERATIONS, Math.max(1, s.iterations * s.batches));
+            const makeParams = (s) => new Float32Array([MAP_K, effectiveIterations(s), 0, 0]);
+            const throughput = (units, ms) => ms > 0 ? units / (ms / 1000) : NaN;
+            const units = (n) => n >= 1e9 ? `${fmt(n / 1e9, 2)} B/s` : `${fmt(n / 1e6, 1)} M/s`;
+            const sample4 = (bytes) => {
+                if (!bytes) return null;
+                const v = bytes instanceof ArrayBuffer ? new Float32Array(bytes, 0, 4) : new Float32Array(bytes.buffer, bytes.byteOffset, 4);
+                return [v[0], v[1], v[2], v[3]];
+            };
+            const sentinelStep = Math.log(Math.abs(1.0 + MAP_K) + 0.0001);
+            const validateSample = (r, sample) => {
+                if (!sample) return null;
+                const error = Math.max(Math.abs(sample[0]), Math.abs(sample[1]), Math.abs(sample[2] - r.expected));
+                const tolerance = Math.max(1e-2, Math.abs(r.expected) * 2e-4);
+                return { ok: Number.isFinite(error) && error <= tolerance, error, tolerance, expected: r.expected };
+            };
+            const sampleLine = (sample) => sample ? `[${fmt(sample[0], 5)}, ${fmt(sample[1], 5)}, ${fmt(sample[2], 3)}]` : "n/a";
+            const recordCompute = async (s, r, submitMs, syncMs, readSample, note) => {
+                r.expected += effectiveIterations(s) * sentinelStep;
+                r.m.frames++;
+                let readMs = NaN;
+                if (!r.validation || ((r.m.frames % CHECK_INTERVAL) === 0)) {
+                    const tRead = performance.now();
+                    try { r.sample = sample4(await readSample()); }
+                    catch { r.sample = null; }
+                    readMs = performance.now() - tRead;
+                    r.validation = validateSample(r, r.sample);
+                }
+                if (r.m.frames > WARMUP) {
+                    r.m.submit.add(submitMs);
+                    r.m.sync.add(syncMs);
+                    if (Number.isFinite(readMs)) r.m.read.add(readMs);
+                }
+                updateHud(s, r, note);
+            };
+            const updateHud = (s, r, note) => {
+                const m = r.m;
+                const isRender = s.mode === "render";
+                const effective = effectiveIterations(s);
+                const frame = isRender ? m.frame.median() : m.sync.median();
+                const count = isRender ? s.count : s.count * effective;
+                const rate = throughput(count, frame);
+                const lines = [
+                    `Phase-Space ${isRender ? "Rendering" : "Compute"} Benchmark`,
+                    `engine: ${r.name}`,
+                    `path: ${r.path}`,
+                    `samples: ${int(s.count)}`,
+                    r.dispatchedCount && r.dispatchedCount !== s.count ? `dispatch cells: ${int(r.dispatchedCount)}` : null,
+                    `map: p' = p + K sin(2pi q) / 2pi; q' = q + p'`,
+                    `K: ${fmt(MAP_K, 2)}`,
+                    `iterations: ${s.iterations}`,
+                    `batches: ${isRender ? 1 : s.batches}`,
+                    ...(isRender ? [] : [`effective iterations/run: ${effective}`]),
+                    "",
+                    `${isRender ? "frame" : "run sync"} median: ${fmt(frame)} ms`,
+                    `${isRender ? "frame" : "run sync"} p95: ${fmt(isRender ? m.frame.p95() : m.sync.p95())} ms`,
+                    ...(isRender ? [`submit/update median: ${fmt(m.work.median())} ms`] : [
+                        `submit median: ${fmt(m.submit.median())} ms`,
+                        `validation readback median: ${fmt(m.read.median())} ms`
+                    ]),
+                    `${isRender ? "phase samples" : "map steps"}: ${units(rate)}`,
+                    `${isRender ? "frames" : "runs"}: ${int(m.frames)}`,
+                    ...(isRender ? [] : [`queue submits: ${int(m.queueSubmits)}`]),
+                    `sample [q,p,stretch]: ${sampleLine(r.sample)}`,
+                    r.validation ? `validation: ${r.validation.ok ? "ok" : "check"} (err ${fmt(r.validation.error, 5)}, tol ${fmt(r.validation.tolerance, 5)})` : "validation: pending",
+                    "",
+                    note
+                ].filter((x) => x !== null);
+                statsHud.textContent = lines.join("\n");
+            };
+            const makeRunner = (name, path) => ({ name, path, m: metrics(), sample: null, validation: null, expected: 0, dispatchedCount: null, destroy() {} });
+
+            const WasmGPURendering = async (s) => {
+                const c = createCanvas();
+                const data = source(s.count).render4;
+                const wgpu = await WasmGPU.create(c, { powerPreference: "high-performance", antialias: true, frustumCulling: false });
+                const scene = wgpu.createScene([0.02, 0.03, 0.04]);
+                const camera = wgpu.createCamera.perspective({ fov: 50, near: 0.05, far: 300 });
+                camera.transform.setPosition(0, 18, 38);
+                camera.lookAt(0, 0, 0);
+                const controls = wgpu.createControls.navigation(camera, c, { mode: "orbit", target: [0, 0, 0], enableDamping: true, dampingFactor: 0.08 });
+                const cloud = wgpu.createPointCloud({
+                    data,
+                    boundsCenter: [0, 0, 0], boundsRadius: BOUNDS_RADIUS,
+                    basePointSize: POINT_SIZE, minPointSize: 1, maxPointSize: 12,
+                    sizeAttenuation: 1.6, opacity: 1, softness: 0.35,
+                    blendMode: "additive", colormap: "turbo",
+                    scaleTransform: { componentCount: 4, componentIndex: 3, valueMode: "component", stride: 4, offset: 0, mode: "linear", clampMode: "none", domainMin: 0, domainMax: 1, gamma: 0.9 }
+                });
+                scene.add(cloud);
+                const r = makeRunner("WasmGPU", "PointCloud render path");
+                r.step = (dt) => {
+                    const t0 = performance.now();
+                    controls.update(dt);
+                    cloud.transform.rotateY(dt * 0.16);
+                    wgpu.render(scene, camera);
+                    const ms = performance.now() - t0;
+                    r.m.frames++;
+                    if (r.m.frames > WARMUP) { r.m.frame.add(dt * 1000); r.m.work.add(ms); }
+                    updateHud(s, r, "Rendering mode: static phase-space samples from the standard map; metric is visible phase samples per second.");
+                };
+                r.destroy = () => { wgpu.destroy(); c.remove(); };
+                return r;
+            };
+
+            const ThreeRendering = async (s) => {
+                const c = createCanvas();
+                const d = source(s.count);
+                const renderer = new THREE.WebGLRenderer({ canvas: c, antialias: true, powerPreference: "high-performance" });
+                const scene = new THREE.Scene();
+                scene.background = new THREE.Color(0x05070a);
+                const camera = new THREE.PerspectiveCamera(50, 1, 0.05, 300);
+                camera.position.set(0, 18, 38);
+                const controls = new OrbitControls(camera, c);
+                controls.target.set(0, 0, 0);
+                controls.enableDamping = true;
+                const geometry = new THREE.BufferGeometry();
+                geometry.setAttribute("position", new THREE.BufferAttribute(d.render3, 3));
+                geometry.setAttribute("scalar", new THREE.BufferAttribute(d.scalars, 1));
+                geometry.boundingSphere = new THREE.Sphere(new THREE.Vector3(0, 0, 0), BOUNDS_RADIUS);
+                const material = new THREE.ShaderMaterial({ vertexShader: PointVertex, fragmentShader: PointFragment, uniforms: { pointSize: { value: POINT_SIZE } }, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+                const points = new THREE.Points(geometry, material);
+                points.frustumCulled = false;
+                scene.add(points);
+                const resize = () => { renderer.setSize(innerWidth, innerHeight, false); camera.aspect = innerWidth / Math.max(1, innerHeight); camera.updateProjectionMatrix(); };
+                resize();
+                addEventListener("resize", resize);
+                const r = makeRunner("Three.js", "THREE.Points + ShaderMaterial");
+                r.step = (dt) => {
+                    const t0 = performance.now();
+                    controls.update();
+                    points.rotation.y += dt * 0.16;
+                    renderer.render(scene, camera);
+                    const ms = performance.now() - t0;
+                    r.m.frames++;
+                    if (r.m.frames > WARMUP) { r.m.frame.add(dt * 1000); r.m.work.add(ms); }
+                    updateHud(s, r, "Rendering mode: same precomputed phase-space samples as the other engines.");
+                };
+                r.destroy = () => { removeEventListener("resize", resize); controls.dispose(); geometry.dispose(); material.dispose(); renderer.dispose(); c.remove(); };
+                return r;
+            };
+
+            const BabylonRendering = async (s) => {
+                const c = createCanvas();
+                const d = source(s.count);
+                BABYLON.Effect.ShadersStore.benchPointVertexShader = BabylonVertex;
+                BABYLON.Effect.ShadersStore.benchPointFragmentShader = PointFragment;
+                const engine = new BABYLON.Engine(c, true, { powerPreference: "high-performance" });
+                const scene = new BABYLON.Scene(engine);
+                scene.clearColor = new BABYLON.Color4(0.02, 0.03, 0.04, 1);
+                const camera = new BABYLON.ArcRotateCamera("camera", Math.PI * 0.5, Math.PI * 0.34, 44, BABYLON.Vector3.Zero(), scene);
+                camera.attachControl(c, true);
+                const mesh = new BABYLON.Mesh("phase-points", scene);
+                mesh.setVerticesData(BABYLON.VertexBuffer.PositionKind, d.render3, false, 3);
+                mesh.setVerticesData("scalar", d.scalars, false, 1);
+                mesh.setIndices(Uint32Array.from({ length: s.count }, (_, i) => i));
+                mesh.alwaysSelectAsActiveMesh = true;
+                const material = new BABYLON.ShaderMaterial("phase-material", scene, { vertex: "benchPoint", fragment: "benchPoint" }, { attributes: ["position", "scalar"], uniforms: ["worldViewProjection", "pointSize"] });
+                material.pointsCloud = true;
+                material.alphaMode = BABYLON.Engine.ALPHA_ADD;
+                material.backFaceCulling = false;
+                material.setFloat("pointSize", POINT_SIZE);
+                mesh.material = material;
+                const resize = () => engine.resize();
+                addEventListener("resize", resize);
+                const r = makeRunner("Babylon.js", "ShaderMaterial point mesh");
+                r.step = (dt) => {
+                    const t0 = performance.now();
+                    mesh.rotation.y += dt * 0.16;
+                    scene.render();
+                    const ms = performance.now() - t0;
+                    r.m.frames++;
+                    if (r.m.frames > WARMUP) { r.m.frame.add(dt * 1000); r.m.work.add(ms); }
+                    updateHud(s, r, "Rendering mode: same precomputed phase-space samples as the other engines.");
+                };
+                r.destroy = () => { removeEventListener("resize", resize); scene.dispose(); engine.dispose(); c.remove(); };
+                return r;
+            };
+
+            const WasmGPUComputing = async (s) => {
+                const c = createCanvas();
+                const data = computeSourceData(s.count);
+                const wgpu = await WasmGPU.create(c, { powerPreference: "high-performance", antialias: false });
+                const state = wgpu.compute.createStorageBuffer({ data, copySrc: true });
+                const params = wgpu.compute.createStorageBuffer({ data: makeParams(s) });
+                const pipeline = wgpu.compute.createPipeline({ code: WasmGPUCompute, entryPoint: "main" });
+                const bind = pipeline.createBindGroup(0, { 0: state, 1: params });
+                const workgroups = wgpu.compute.workgroups1D(s.count, WORKGROUP_SIZE);
+                const r = makeRunner("WasmGPU", "WebGPU storage-buffer compute via wgpu.compute");
+                r.dispatchedCount = s.count;
+                r.step = async () => {
+                    params.write(makeParams(s));
+                    const t0 = performance.now();
+                    wgpu.compute.dispatch({ pipeline, bindGroups: [bind], workgroups });
+                    const submitMs = performance.now() - t0;
+                    await wgpu.gpu.queue.onSubmittedWorkDone();
+                    const syncMs = performance.now() - t0;
+                    r.m.queueSubmits++;
+                    await recordCompute(s, r, submitMs, syncMs, () => state.read(0, 16), "Compute mode: one storage-buffer dispatch per run; timing waits for GPU completion, and the sentinel sample validates the kernel periodically.");
+                };
+                r.destroy = () => { state.destroy(); params.destroy(); wgpu.destroy(); c.remove(); };
+                return r;
+            };
+
+            const ThreeComputing = async (s) => {
+                const c = createCanvas();
+                const renderer = new THREE.WebGLRenderer({ canvas: c, antialias: false, powerPreference: "high-performance" });
+                renderer.setSize(1, 1, false);
+                const side = Math.ceil(Math.sqrt(s.count));
+                const dispatched = side * side;
+                const gpu = new GPUComputationRenderer(side, side, renderer);
+                gpu.setDataType(THREE.FloatType);
+                const texture = gpu.createTexture();
+                const tex = texture.image.data;
+                const data = computeSourceData(s.count);
+                tex.fill(0);
+                tex.set(data);
+                for (let i = s.count; i < dispatched; i++) tex[(i * 4) + 2] = -1;
+                const variable = gpu.addVariable("textureState", ThreeCompute, texture);
+                gpu.setVariableDependencies(variable, [variable]);
+                variable.material.uniforms.iterations = { value: effectiveIterations(s) };
+                variable.material.uniforms.kBase = { value: MAP_K };
+                const err = gpu.init();
+                if (err) throw new Error(err);
+                const gl = renderer.getContext();
+                const r = makeRunner("Three.js", "WebGL floating render-target GPGPU");
+                r.dispatchedCount = dispatched;
+                r.step = async () => {
+                    variable.material.uniforms.iterations.value = effectiveIterations(s);
+                    const t0 = performance.now();
+                    gpu.compute();
+                    const submitMs = performance.now() - t0;
+                    gl.finish();
+                    const syncMs = performance.now() - t0;
+                    r.m.queueSubmits++;
+                    await recordCompute(s, r, submitMs, syncMs, () => {
+                        const out = new Float32Array(4);
+                        renderer.readRenderTargetPixels(gpu.getCurrentRenderTarget(variable), 0, 0, 1, 1, out);
+                        return out;
+                    }, "Compute mode: same standard-map kernel and synchronization contract; Three.js uses WebGL FBO ping-pong here, not WebGPU storage buffers.");
+                };
+                r.destroy = () => { if (gpu.dispose) gpu.dispose(); renderer.dispose(); c.remove(); };
+                return r;
+            };
+
+            const BabylonComputing = async (s) => {
+                if (!BABYLON.WebGPUEngine || !BABYLON.ComputeShader || !BABYLON.StorageBuffer) throw new Error("Babylon.js WebGPU compute classes are not available.");
+                if (!navigator.gpu) throw new Error("Babylon.js compute mode requires WebGPU.");
+                const c = createCanvas();
+                const data = computeSourceData(s.count);
+                const engine = new BABYLON.WebGPUEngine(c, { antialias: false, powerPreference: "high-performance" });
+                await engine.initAsync();
+                const state = new BABYLON.StorageBuffer(engine, data.byteLength);
+                const params = new BABYLON.StorageBuffer(engine, 16);
+                state.update(data);
+                params.update(makeParams(s));
+                const shader = new BABYLON.ComputeShader("phase-compute", engine, { computeSource: WasmGPUCompute }, { bindingsMapping: { state: { group: 0, binding: 0 }, params: { group: 0, binding: 1 } }, entryPoint: "main" });
+                shader.setStorageBuffer("state", state);
+                shader.setStorageBuffer("params", params);
+                await shader.dispatchWhenReady(1, 1, 1);
+                if (engine._device?.queue?.onSubmittedWorkDone) await engine._device.queue.onSubmittedWorkDone();
+                state.update(data);
+                params.update(makeParams(s));
+                shader.fastMode = true;
+                const r = makeRunner("Babylon.js", "WebGPU ComputeShader storage buffer");
+                r.dispatchedCount = s.count;
+                r.step = async () => {
+                    params.update(makeParams(s));
+                    const t0 = performance.now();
+                    shader.dispatch(Math.ceil(s.count / WORKGROUP_SIZE), 1, 1);
+                    const submitMs = performance.now() - t0;
+                    if (engine._device?.queue?.onSubmittedWorkDone) await engine._device.queue.onSubmittedWorkDone();
+                    const syncMs = performance.now() - t0;
+                    r.m.queueSubmits++;
+                    await recordCompute(s, r, submitMs, syncMs, () => state.read(0, 16, undefined, true), "Compute mode: same WGSL storage-buffer state layout as WasmGPU; timing waits for GPU completion and validates the sentinel sample periodically.");
+                };
+                r.destroy = () => { state.dispose(); params.dispose(); engine.dispose(); c.remove(); };
+                return r;
+            };
+
+            const factories = {
+                render: { wasmgpu: WasmGPURendering, three: ThreeRendering, babylon: BabylonRendering },
+                compute: { wasmgpu: WasmGPUComputing, three: ThreeComputing, babylon: BabylonComputing }
+            };
+            let current = null;
+            let currentSettings = null;
+            let busy = false;
+            let lastNow = performance.now();
+            let token = 0;
+            const start = async () => {
+                const id = ++token;
+                if (current) { try { current.destroy(); } catch { /* ignore */ } current = null; }
+                const s = settings();
+                currentSettings = s;
+                statsHud.textContent = `initializing ${s.mode}:${s.engine}...`;
+                try {
+                    const r = await factories[s.mode][s.engine](s);
+                    if (id !== token) { r.destroy(); return; }
+                    current = r;
+                    lastNow = performance.now();
+                    updateHud(s, r, "running");
+                } catch (error) {
+                    stage.textContent = "";
+                    statsHud.textContent = ["Phase-Space Benchmark", "setup failed", "", error?.stack ?? error?.message ?? String(error)].join("\n");
+                    console.error(error);
+                }
+            };
+            const loop = async (now) => {
+                if (!busy && current) {
+                    busy = true;
+                    try { const dt = Math.min(0.25, Math.max(0.0001, (now - lastNow) / 1000)); lastNow = now; await current.step(dt, now / 1000); }
+                    catch (error) { statsHud.textContent = ["Phase-Space Benchmark", "runtime failed", "", error?.stack ?? error?.message ?? String(error)].join("\n"); console.error(error); }
+                    finally { busy = false; }
+                }
+                requestAnimationFrame(loop);
+            };
+            for (const el of [ui.mode, ui.engine, ui.count, ui.iterations, ui.batches]) el.addEventListener("change", start);
+            ui.reset.addEventListener("click", start);
+            await start();
+            requestAnimationFrame(loop);
+        </script>
+    </body>
+</html>
