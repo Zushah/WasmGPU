@@ -14,7 +14,7 @@
             body { background: #05070a; overflow: hidden; color: #d8e2ef; font: 12px/1.4 monospace; }
             .stage { position: fixed; inset: 0; }
             canvas.main { position: absolute; inset: 0; width: 100vw; height: 100vh; display: block; }
-            .hud { position: fixed; left: 10px; top: 10px; display: flex; flex-direction: column; gap: 10px; width: 430px; z-index: 8; }
+            .hud { position: fixed; left: 10px; top: 10px; display: flex; flex-direction: column; gap: 10px; width: 390px; z-index: 8; }
             .pane { padding: 10px; background: rgba(5, 10, 18, 0.78); border: 1px solid rgba(180, 210, 255, 0.2); white-space: pre-line; min-height: 120px; }
             .controls { display: grid; grid-template-columns: 96px 1fr; gap: 6px 8px; align-items: center; min-height: 0; }
             .controls select, .controls button { font: 12px monospace; padding: 4px; background: rgba(10, 16, 28, 0.95); color: #d8e2ef; border: 1px solid rgba(180, 210, 255, 0.25); }
@@ -79,7 +79,6 @@
         <script type="module">
             import * as THREE from "three";
             import { OrbitControls } from "three/addons/controls/OrbitControls.js";
-            import { GPUComputationRenderer } from "three/addons/misc/GPUComputationRenderer.js";
 
             const stage = document.querySelector(".stage");
             const statsHud = document.querySelector(".stats");
@@ -98,7 +97,6 @@
             const BOUNDS_RADIUS = 28.0;
             const WARMUP = 12;
             const CHECK_INTERVAL = 30;
-            const MAX_COMPUTE_ITERATIONS = 1024;
             const fmt = (n, d = 2) => Number.isFinite(n) ? n.toFixed(d) : "nan";
             const int = (n) => Number.isFinite(n) ? Math.round(n).toLocaleString() : "0";
             const clamp = (x, lo, hi) => Math.max(lo, Math.min(hi, x));
@@ -117,10 +115,11 @@
                 constructor(n = 180) { this.values = new Float64Array(n); this.index = 0; this.count = 0; }
                 add(x) { if (!Number.isFinite(x) || x < 0) return; this.values[this.index] = x; this.index = (this.index + 1) % this.values.length; this.count = Math.min(this.count + 1, this.values.length); }
                 sorted() { return Array.from(this.values.slice(0, this.count)).sort((a, b) => a - b); }
+                mean() { if (!this.count) return NaN; let s = 0; for (let i = 0; i < this.count; i++) s += this.values[i]; return s / this.count; }
                 median() { const a = this.sorted(); return a.length ? a[Math.floor(a.length * 0.50)] : NaN; }
                 p95() { const a = this.sorted(); return a.length ? a[Math.min(a.length - 1, Math.floor(a.length * 0.95))] : NaN; }
             }
-            const metrics = () => ({ frames: 0, queueSubmits: 0, frame: new Rolling(), work: new Rolling(), submit: new Rolling(), sync: new Rolling(), read: new Rolling() });
+            const metrics = () => ({ frames: 0, queueSubmits: 0, frame: new Rolling(), work: new Rolling(), submit: new Rolling(), sync: new Rolling(), kernel: new Rolling(), timestampRead: new Rolling(), validationRead: new Rolling() });
             const settings = () => ({ mode: ui.mode.value, engine: ui.engine.value, count: Number(ui.count.value), iterations: Number(ui.iterations.value), batches: Number(ui.batches.value) });
             const createCanvas = () => { stage.textContent = ""; const c = document.createElement("canvas"); c.className = "main"; stage.appendChild(c); return c; };
             const stepMap = (q, p, phase, time = 0) => { const k = MAP_K + (0.20 * Math.sin((time * 0.07) + phase * TAU)); p = fract(p + ((k / TAU) * Math.sin(TAU * q))); q = fract(q + p); return [q, p]; };
@@ -154,7 +153,7 @@
                 cache.set(count, v);
                 return v;
             };
-            const computeSourceData = (count) => { const data = new Float32Array(source(count).state4); data[0] = 0; data[1] = 0; data[2] = 0; data[3] = 0; return data; };
+            const computeSourceData = (count) => { const data = new Float32Array(source(count).state4); if (count > 0) { data[0] = 0; data[1] = 0; data[2] = 0; data[3] = 0; } return data; };
 
             const PointVertex = `
                 attribute float scalar;
@@ -209,7 +208,7 @@
                     vAlpha = mix(0.55, 0.96, scalar);
                 }
             `;
-            const WasmGPUCompute = `
+            const WGSLCompute = `
                 @group(0) @binding(0) var<storage, read_write> state: array<vec4<f32>>;
                 @group(0) @binding(1) var<storage, read> params: array<vec4<f32>>;
                 @compute @workgroup_size(256)
@@ -233,102 +232,127 @@
                     state[idx] = vec4<f32>(q, p, stretch, s.w);
                 }
             `;
-            const ThreeCompute = `
-                precision highp float;
-                uniform sampler2D textureState;
-                uniform float iterations;
-                uniform float kBase;
-                const float TAU = 6.28318530718;
-                void main() {
-                    vec2 uv = gl_FragCoord.xy / resolution.xy;
-                    vec4 s = texture2D(textureState, uv);
-                    if (s.z < 0.0) { gl_FragColor = s; return; }
-                    float q = s.x;
-                    float p = s.y;
-                    float stretch = s.z;
-                    for (int i = 0; i < 1024; i++) {
-                        if (float(i) >= iterations) break;
-                        float angle = TAU * q;
-                        float c = kBase * cos(angle);
-                        stretch += log(abs(1.0 + c) + 0.0001);
-                        p = fract(p + ((kBase / TAU) * sin(angle)));
-                        q = fract(q + p);
-                    }
-                    gl_FragColor = vec4(q, p, stretch, s.w);
-                }
-            `;
 
-            const effectiveIterations = (s) => Math.min(MAX_COMPUTE_ITERATIONS, Math.max(1, s.iterations * s.batches));
-            const makeParams = (s) => new Float32Array([MAP_K, effectiveIterations(s), 0, 0]);
+            const makeParams = (s) => new Float32Array([MAP_K, s.iterations, 0, 0]);
             const throughput = (units, ms) => ms > 0 ? units / (ms / 1000) : NaN;
             const units = (n) => n >= 1e9 ? `${fmt(n / 1e9, 2)} B/s` : `${fmt(n / 1e6, 1)} M/s`;
-            const sample4 = (bytes) => {
+            const sampleArray = (bytes) => {
                 if (!bytes) return null;
-                const v = bytes instanceof ArrayBuffer ? new Float32Array(bytes, 0, 4) : new Float32Array(bytes.buffer, bytes.byteOffset, 4);
-                return [v[0], v[1], v[2], v[3]];
-            };
-            const sentinelStep = Math.log(Math.abs(1.0 + MAP_K) + 0.0001);
-            const validateSample = (r, sample) => {
-                if (!sample) return null;
-                const error = Math.max(Math.abs(sample[0]), Math.abs(sample[1]), Math.abs(sample[2] - r.expected));
-                const tolerance = Math.max(1e-2, Math.abs(r.expected) * 2e-4);
-                return { ok: Number.isFinite(error) && error <= tolerance, error, tolerance, expected: r.expected };
+                if (bytes instanceof Float32Array) return Array.from(bytes.slice(0, 4));
+                if (bytes instanceof ArrayBuffer) return Array.from(new Float32Array(bytes, 0, 4));
+                if (ArrayBuffer.isView(bytes)) return Array.from(new Float32Array(bytes.buffer, bytes.byteOffset, 4));
+                return null;
             };
             const sampleLine = (sample) => sample ? `[${fmt(sample[0], 5)}, ${fmt(sample[1], 5)}, ${fmt(sample[2], 3)}]` : "n/a";
-            const recordCompute = async (s, r, submitMs, syncMs, readSample, note) => {
-                r.expected += effectiveIterations(s) * sentinelStep;
-                r.m.frames++;
-                let readMs = NaN;
-                if (!r.validation || ((r.m.frames % CHECK_INTERVAL) === 0)) {
-                    const tRead = performance.now();
-                    try { r.sample = sample4(await readSample()); }
-                    catch { r.sample = null; }
-                    readMs = performance.now() - tRead;
-                    r.validation = validateSample(r, r.sample);
+            const effectiveSteps = (s) => s.iterations * s.batches;
+            const cpuAdvanceSample = (sample, steps) => {
+                let q = Math.fround(sample[0]);
+                let p = Math.fround(sample[1]);
+                let stretch = Math.fround(sample[2]);
+                const phase = Math.fround(sample[3]);
+                const k = Math.fround(MAP_K);
+                for (let i = 0; i < steps; i++) {
+                    const angle = Math.fround(TAU * q);
+                    const c = Math.fround(k * Math.fround(Math.cos(angle)));
+                    stretch = Math.fround(stretch + Math.fround(Math.log(Math.abs(Math.fround(1.0 + c)) + 0.0001)));
+                    p = Math.fround(fract(Math.fround(p + Math.fround((k / TAU) * Math.fround(Math.sin(angle))))));
+                    q = Math.fround(fract(Math.fround(q + p)));
                 }
-                if (r.m.frames > WARMUP) {
-                    r.m.submit.add(submitMs);
-                    r.m.sync.add(syncMs);
-                    if (Number.isFinite(readMs)) r.m.read.add(readMs);
-                }
-                updateHud(s, r, note);
+                sample[0] = q;
+                sample[1] = p;
+                sample[2] = stretch;
+                sample[3] = phase;
             };
+            const validateSample = (actual, expected) => {
+                if (!actual || !expected) return null;
+                const dq = Math.abs(actual[0] - expected[0]);
+                const dp = Math.abs(actual[1] - expected[1]);
+                const ds = Math.abs(actual[2] - expected[2]);
+                const error = Math.max(dq, dp, ds);
+                const tolerance = Math.max(0.25, Math.abs(expected[2]) * 0.002);
+                return { ok: error <= tolerance, error, tolerance };
+            };
+            const createTimestampTimer = (device) => {
+                if (!device.features || !device.features.has("timestamp-query")) return null;
+                try {
+                    const querySet = device.createQuerySet({ type: "timestamp", count: 2 });
+                    const resolveBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+                    const readBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+                    return {
+                        supported: true, querySet, resolveBuffer, readBuffer,
+                        passDescriptor() { return { timestampWrites: { querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } }; },
+                        resolve(encoder) { encoder.resolveQuerySet(querySet, 0, 2, resolveBuffer, 0); encoder.copyBufferToBuffer(resolveBuffer, 0, readBuffer, 0, 16); },
+                        async readMs() { await readBuffer.mapAsync(GPUMapMode.READ, 0, 16); const values = new BigUint64Array(readBuffer.getMappedRange(0, 16)), ns = values[1] > values[0] ? Number(values[1] - values[0]) : NaN; readBuffer.unmap(); return Number.isFinite(ns) ? ns / 1e6 : NaN; },
+                        destroy() { querySet.destroy?.(); resolveBuffer.destroy(); readBuffer.destroy(); }
+                    };
+                } catch { return null; }
+            };
+            const readValidationSample = async (readSample) => { const t0 = performance.now(), bytes = await readSample(); return { ms: performance.now() - t0, sample: sampleArray(bytes) }; };
             const updateHud = (s, r, note) => {
                 const m = r.m;
                 const isRender = s.mode === "render";
-                const effective = effectiveIterations(s);
-                const frame = isRender ? m.frame.median() : m.sync.median();
-                const count = isRender ? s.count : s.count * effective;
-                const rate = throughput(count, frame);
+                const timingMs = isRender ? m.frame.median() : (m.kernel.count ? m.kernel.median() : m.sync.median());
+                const computeUnits = s.count * s.iterations * s.batches;
+                const rate = (!isRender && r.unsupported) ? NaN : throughput(isRender ? s.count : computeUnits, timingMs);
                 const lines = [
                     `Phase-Space ${isRender ? "Rendering" : "Compute"} Benchmark`,
                     `engine: ${r.name}`,
                     `path: ${r.path}`,
                     `samples: ${int(s.count)}`,
-                    r.dispatchedCount && r.dispatchedCount !== s.count ? `dispatch cells: ${int(r.dispatchedCount)}` : null,
                     `map: p' = p + K sin(2pi q) / 2pi; q' = q + p'`,
                     `K: ${fmt(MAP_K, 2)}`,
                     `iterations: ${s.iterations}`,
                     `batches: ${isRender ? 1 : s.batches}`,
-                    ...(isRender ? [] : [`effective iterations/run: ${effective}`]),
                     "",
-                    `${isRender ? "frame" : "run sync"} median: ${fmt(frame)} ms`,
-                    `${isRender ? "frame" : "run sync"} p95: ${fmt(isRender ? m.frame.p95() : m.sync.p95())} ms`,
-                    ...(isRender ? [`submit/update median: ${fmt(m.work.median())} ms`] : [
-                        `submit median: ${fmt(m.submit.median())} ms`,
-                        `validation readback median: ${fmt(m.read.median())} ms`
+                    ...(isRender ? [
+                        `frame median: ${fmt(m.frame.median())} ms`,
+                        `frame p95: ${fmt(m.frame.p95())} ms`,
+                        `submit/update median: ${fmt(m.work.median())} ms`,
+                        `phase samples: ${units(rate)}`,
+                        `frames: ${int(m.frames)}`
+                    ] : r.unsupported ? [
+                        "native compute: unsupported in this benchmark",
+                        "map steps: n/a",
+                        `runs: ${int(m.frames)}`
+                    ] : [
+                        `timing basis: ${m.kernel.count ? "GPU timestamp kernel time" : "wall-clock synchronized time"}`,
+                        `kernel GPU median: ${m.kernel.count ? fmt(m.kernel.median()) : "n/a"} ms`,
+                        `sync wall median: ${fmt(m.sync.median())} ms`,
+                        `sync wall p95: ${fmt(m.sync.p95())} ms`,
+                        `submit/flush median: ${fmt(m.submit.median())} ms`,
+                        `timestamp read median: ${m.timestampRead.count ? fmt(m.timestampRead.median()) : "n/a"} ms`,
+                        `validation readback median: ${m.validationRead.count ? fmt(m.validationRead.median()) : "n/a"} ms`,
+                        `map steps: ${units(rate)}`,
+                        `runs: ${int(m.frames)}`,
+                        `queue submits: ${int(m.queueSubmits)}`,
+                        `sample [q,p,stretch]: ${sampleLine(r.sample)}`,
+                        r.validation ? `validation: ${r.validation.ok ? "ok" : "check"} (err ${fmt(r.validation.error, 5)}, tol ${fmt(r.validation.tolerance, 5)})` : "validation: pending"
                     ]),
-                    `${isRender ? "phase samples" : "map steps"}: ${units(rate)}`,
-                    `${isRender ? "frames" : "runs"}: ${int(m.frames)}`,
-                    ...(isRender ? [] : [`queue submits: ${int(m.queueSubmits)}`]),
-                    `sample [q,p,stretch]: ${sampleLine(r.sample)}`,
-                    r.validation ? `validation: ${r.validation.ok ? "ok" : "check"} (err ${fmt(r.validation.error, 5)}, tol ${fmt(r.validation.tolerance, 5)})` : "validation: pending",
                     "",
                     note
-                ].filter((x) => x !== null);
+                ];
                 statsHud.textContent = lines.join("\n");
             };
-            const makeRunner = (name, path) => ({ name, path, m: metrics(), sample: null, validation: null, expected: 0, dispatchedCount: null, destroy() {} });
+            const makeRunner = (name, path) => ({ name, path, m: metrics(), sample: null, validation: null, expected: null, unsupported: false, destroy() {} });
+            const recordCompute = async (s, r, submitMs, syncMs, kernelMs, timestampReadMs, readSample, note) => {
+                r.m.frames++;
+                r.m.queueSubmits++;
+                cpuAdvanceSample(r.expected, effectiveSteps(s));
+                if (r.m.frames > WARMUP) {
+                    r.m.submit.add(submitMs);
+                    r.m.sync.add(syncMs);
+                    if (Number.isFinite(kernelMs)) r.m.kernel.add(kernelMs);
+                    if (Number.isFinite(timestampReadMs)) r.m.timestampRead.add(timestampReadMs);
+                }
+                const shouldValidate = r.m.frames === 1 || (r.m.frames % CHECK_INTERVAL) === 0;
+                if (shouldValidate) {
+                    const check = await readValidationSample(readSample);
+                    r.sample = check.sample;
+                    r.validation = validateSample(r.sample, r.expected);
+                    if (r.m.frames > WARMUP) r.m.validationRead.add(check.ms);
+                }
+                updateHud(s, r, note);
+            };
 
             const WasmGPURendering = async (s) => {
                 const c = createCanvas();
@@ -443,63 +467,48 @@
                 const wgpu = await WasmGPU.create(c, { powerPreference: "high-performance", antialias: false });
                 const state = wgpu.compute.createStorageBuffer({ data, copySrc: true });
                 const params = wgpu.compute.createStorageBuffer({ data: makeParams(s) });
-                const pipeline = wgpu.compute.createPipeline({ code: WasmGPUCompute, entryPoint: "main" });
+                const pipeline = wgpu.compute.createPipeline({ code: WGSLCompute, entryPoint: "main" });
                 const bind = pipeline.createBindGroup(0, { 0: state, 1: params });
                 const workgroups = wgpu.compute.workgroups1D(s.count, WORKGROUP_SIZE);
-                const r = makeRunner("WasmGPU", "WebGPU storage-buffer compute via wgpu.compute");
-                r.dispatchedCount = s.count;
+                const timer = createTimestampTimer(wgpu.gpu.device);
+                const r = makeRunner("WasmGPU", timer ? "WebGPU storage-buffer compute + timestamp query" : "WebGPU storage-buffer compute + queue sync");
+                r.expected = Array.from(data.slice(0, 4));
                 r.step = async () => {
-                    params.write(makeParams(s));
+                    const device = wgpu.gpu.device;
+                    const queue = wgpu.gpu.queue;
                     const t0 = performance.now();
-                    wgpu.compute.dispatch({ pipeline, bindGroups: [bind], workgroups });
+                    const encoder = device.createCommandEncoder({ label: "phase-compute" });
+                    const pass = encoder.beginComputePass(timer ? timer.passDescriptor() : {});
+                    pass.setPipeline(pipeline.pipeline);
+                    pass.setBindGroup(0, bind);
+                    for (let i = 0; i < s.batches; i++) pass.dispatchWorkgroups(workgroups[0], workgroups[1], workgroups[2]);
+                    pass.end();
+                    if (timer) timer.resolve(encoder);
+                    queue.submit([encoder.finish()]);
                     const submitMs = performance.now() - t0;
-                    await wgpu.gpu.queue.onSubmittedWorkDone();
+                    await queue.onSubmittedWorkDone();
                     const syncMs = performance.now() - t0;
-                    r.m.queueSubmits++;
-                    await recordCompute(s, r, submitMs, syncMs, () => state.read(0, 16), "Compute mode: one storage-buffer dispatch per run; timing waits for GPU completion, and the sentinel sample validates the kernel periodically.");
+                    let kernelMs = NaN;
+                    let timestampReadMs = NaN;
+                    if (timer) {
+                        const tr0 = performance.now();
+                        kernelMs = await timer.readMs();
+                        timestampReadMs = performance.now() - tr0;
+                    }
+                    await recordCompute(s, r, submitMs, syncMs, kernelMs, timestampReadMs, () => state.read(0, 16), "Compute mode: WasmGPU native WebGPU storage-buffer compute. Throughput uses GPU timestamp time when available, otherwise synchronized wall-clock time; validation readback is separate.");
                 };
-                r.destroy = () => { state.destroy(); params.destroy(); wgpu.destroy(); c.remove(); };
+                r.destroy = () => { timer?.destroy(); state.destroy(); params.destroy(); wgpu.destroy(); c.remove(); };
                 return r;
             };
 
             const ThreeComputing = async (s) => {
-                const c = createCanvas();
-                const renderer = new THREE.WebGLRenderer({ canvas: c, antialias: false, powerPreference: "high-performance" });
-                renderer.setSize(1, 1, false);
-                const side = Math.ceil(Math.sqrt(s.count));
-                const dispatched = side * side;
-                const gpu = new GPUComputationRenderer(side, side, renderer);
-                gpu.setDataType(THREE.FloatType);
-                const texture = gpu.createTexture();
-                const tex = texture.image.data;
-                const data = computeSourceData(s.count);
-                tex.fill(0);
-                tex.set(data);
-                for (let i = s.count; i < dispatched; i++) tex[(i * 4) + 2] = -1;
-                const variable = gpu.addVariable("textureState", ThreeCompute, texture);
-                gpu.setVariableDependencies(variable, [variable]);
-                variable.material.uniforms.iterations = { value: effectiveIterations(s) };
-                variable.material.uniforms.kBase = { value: MAP_K };
-                const err = gpu.init();
-                if (err) throw new Error(err);
-                const gl = renderer.getContext();
-                const r = makeRunner("Three.js", "WebGL floating render-target GPGPU");
-                r.dispatchedCount = dispatched;
-                r.step = async () => {
-                    variable.material.uniforms.iterations.value = effectiveIterations(s);
-                    const t0 = performance.now();
-                    gpu.compute();
-                    const submitMs = performance.now() - t0;
-                    gl.finish();
-                    const syncMs = performance.now() - t0;
-                    r.m.queueSubmits++;
-                    await recordCompute(s, r, submitMs, syncMs, () => {
-                        const out = new Float32Array(4);
-                        renderer.readRenderTargetPixels(gpu.getCurrentRenderTarget(variable), 0, 0, 1, 1, out);
-                        return out;
-                    }, "Compute mode: same standard-map kernel and synchronization contract; Three.js uses WebGL FBO ping-pong here, not WebGPU storage buffers.");
+                stage.textContent = "";
+                const r = makeRunner("Three.js", "unsupported: native WebGPU compute not implemented here");
+                r.unsupported = true;
+                r.step = () => {
+                    r.m.frames++;
+                    updateHud(s, r, "Three.js compute is intentionally not run: GPUComputationRenderer is a WebGL render-target ping-pong helper, not native WebGPU storage-buffer compute. This example does not attempt a TSL/WebGPURenderer compute implementation.");
                 };
-                r.destroy = () => { if (gpu.dispose) gpu.dispose(); renderer.dispose(); c.remove(); };
                 return r;
             };
 
@@ -510,29 +519,35 @@
                 const data = computeSourceData(s.count);
                 const engine = new BABYLON.WebGPUEngine(c, { antialias: false, powerPreference: "high-performance" });
                 await engine.initAsync();
+                const queue = engine._device?.queue;
+                if (!queue?.onSubmittedWorkDone) throw new Error("Babylon.js compute benchmark requires access to WebGPUEngine's GPUQueue for synchronized wall-clock timing.");
                 const state = new BABYLON.StorageBuffer(engine, data.byteLength);
                 const params = new BABYLON.StorageBuffer(engine, 16);
                 state.update(data);
                 params.update(makeParams(s));
-                const shader = new BABYLON.ComputeShader("phase-compute", engine, { computeSource: WasmGPUCompute }, { bindingsMapping: { state: { group: 0, binding: 0 }, params: { group: 0, binding: 1 } }, entryPoint: "main" });
+                const shader = new BABYLON.ComputeShader("phase-compute", engine, { computeSource: WGSLCompute }, { bindingsMapping: { state: { group: 0, binding: 0 }, params: { group: 0, binding: 1 } }, entryPoint: "main" });
                 shader.setStorageBuffer("state", state);
                 shader.setStorageBuffer("params", params);
                 await shader.dispatchWhenReady(1, 1, 1);
-                if (engine._device?.queue?.onSubmittedWorkDone) await engine._device.queue.onSubmittedWorkDone();
+                engine.flushFramebuffer();
+                await queue.onSubmittedWorkDone();
                 state.update(data);
                 params.update(makeParams(s));
                 shader.fastMode = true;
-                const r = makeRunner("Babylon.js", "WebGPU ComputeShader storage buffer");
-                r.dispatchedCount = s.count;
+                const workgroups = Math.ceil(s.count / WORKGROUP_SIZE);
+                const r = makeRunner("Babylon.js", "WebGPU ComputeShader storage-buffer compute + queue sync");
+                r.expected = Array.from(data.slice(0, 4));
                 r.step = async () => {
-                    params.update(makeParams(s));
                     const t0 = performance.now();
-                    shader.dispatch(Math.ceil(s.count / WORKGROUP_SIZE), 1, 1);
+                    for (let i = 0; i < s.batches; i++) {
+                        const ok = shader.dispatch(workgroups, 1, 1);
+                        if (!ok) throw new Error("Babylon.js ComputeShader dispatch returned false.");
+                    }
+                    engine.flushFramebuffer();
                     const submitMs = performance.now() - t0;
-                    if (engine._device?.queue?.onSubmittedWorkDone) await engine._device.queue.onSubmittedWorkDone();
+                    await queue.onSubmittedWorkDone();
                     const syncMs = performance.now() - t0;
-                    r.m.queueSubmits++;
-                    await recordCompute(s, r, submitMs, syncMs, () => state.read(0, 16, undefined, true), "Compute mode: same WGSL storage-buffer state layout as WasmGPU; timing waits for GPU completion and validates the sentinel sample periodically.");
+                    await recordCompute(s, r, submitMs, syncMs, NaN, NaN, () => state.read(0, 16, undefined, true), "Compute mode: Babylon.js native WebGPU ComputeShader/storage-buffer path. Timing is synchronized wall-clock over dispatch + engine flush + GPUQueue completion; validation readback is separate.");
                 };
                 r.destroy = () => { state.dispose(); params.dispose(); engine.dispose(); c.remove(); };
                 return r;
