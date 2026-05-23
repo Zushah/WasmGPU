@@ -25,6 +25,8 @@
         {
             "imports": {
                 "three": "https://cdn.jsdelivr.net/npm/three@0.171.0/build/three.module.js",
+                "three/webgpu": "https://cdn.jsdelivr.net/npm/three@0.171.0/build/three.webgpu.js",
+                "three/tsl": "https://cdn.jsdelivr.net/npm/three@0.171.0/build/three.tsl.js",
                 "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.171.0/examples/jsm/"
             }
         }
@@ -78,6 +80,8 @@
         <script src="https://cdn.jsdelivr.net/npm/babylonjs@9.2.1/babylon.js"></script>
         <script type="module">
             import * as THREE from "three";
+            import * as THREEGPU from "three/webgpu";
+            import { Fn, Loop, float, instanceIndex, storage, vec4 } from "three/tsl";
             import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 
             const stage = document.querySelector(".stage");
@@ -299,7 +303,7 @@
                     `engine: ${r.name}`,
                     `path: ${r.path}`,
                     `samples: ${int(s.count)}`,
-                    `map: p' = p + K sin(2pi q) / 2pi; q' = q + p'`,
+                    `map: p' = p + Ksin(2πq) / 2π; q' = q + p'`,
                     `K: ${fmt(MAP_K, 2)}`,
                     `iterations: ${s.iterations}`,
                     `batches: ${isRender ? 1 : s.batches}`,
@@ -307,7 +311,7 @@
                     ...(isRender ? [
                         `frame median: ${fmt(m.frame.median())} ms`,
                         `frame p95: ${fmt(m.frame.p95())} ms`,
-                        `submit/update median: ${fmt(m.work.median())} ms`,
+                        `submit median: ${fmt(m.work.median())} ms`,
                         `phase samples: ${units(rate)}`,
                         `frames: ${int(m.frames)}`
                     ] : r.unsupported ? [
@@ -319,7 +323,7 @@
                         `kernel GPU median: ${m.kernel.count ? fmt(m.kernel.median()) : "n/a"} ms`,
                         `sync wall median: ${fmt(m.sync.median())} ms`,
                         `sync wall p95: ${fmt(m.sync.p95())} ms`,
-                        `submit/flush median: ${fmt(m.submit.median())} ms`,
+                        `submit median: ${m.submit.count ? fmt(m.submit.median()) + " ms" : "n/a"}`,
                         `timestamp read median: ${m.timestampRead.count ? fmt(m.timestampRead.median()) : "n/a"} ms`,
                         `validation readback median: ${m.validationRead.count ? fmt(m.validationRead.median()) : "n/a"} ms`,
                         `map steps: ${units(rate)}`,
@@ -381,12 +385,11 @@
                     const ms = performance.now() - t0;
                     r.m.frames++;
                     if (r.m.frames > WARMUP) { r.m.frame.add(dt * 1000); r.m.work.add(ms); }
-                    updateHud(s, r, "Rendering mode: static phase-space samples from the standard map; metric is visible phase samples per second.");
+                    updateHud(s, r, "Rendering mode: static phase-space samples from the standard map.");
                 };
                 r.destroy = () => { wgpu.destroy(); c.remove(); };
                 return r;
             };
-
             const ThreeRendering = async (s) => {
                 const c = createCanvas();
                 const d = source(s.count);
@@ -423,7 +426,6 @@
                 r.destroy = () => { removeEventListener("resize", resize); controls.dispose(); geometry.dispose(); material.dispose(); renderer.dispose(); c.remove(); };
                 return r;
             };
-
             const BabylonRendering = async (s) => {
                 const c = createCanvas();
                 const d = source(s.count);
@@ -460,7 +462,6 @@
                 r.destroy = () => { removeEventListener("resize", resize); scene.dispose(); engine.dispose(); c.remove(); };
                 return r;
             };
-
             const WasmGPUComputing = async (s) => {
                 const c = createCanvas();
                 const data = computeSourceData(s.count);
@@ -495,23 +496,69 @@
                         kernelMs = await timer.readMs();
                         timestampReadMs = performance.now() - tr0;
                     }
-                    await recordCompute(s, r, submitMs, syncMs, kernelMs, timestampReadMs, () => state.read(0, 16), "Compute mode: WasmGPU native WebGPU storage-buffer compute. Throughput uses GPU timestamp time when available, otherwise synchronized wall-clock time; validation readback is separate.");
+                    await recordCompute(s, r, submitMs, syncMs, kernelMs, timestampReadMs, () => state.read(0, 16), "Compute mode: WasmGPU native WebGPU storage-buffer compute.");
                 };
                 r.destroy = () => { timer?.destroy(); state.destroy(); params.destroy(); wgpu.destroy(); c.remove(); };
                 return r;
             };
-
             const ThreeComputing = async (s) => {
-                stage.textContent = "";
-                const r = makeRunner("Three.js", "unsupported: native WebGPU compute not implemented here");
-                r.unsupported = true;
-                r.step = () => {
-                    r.m.frames++;
-                    updateHud(s, r, "Three.js compute is intentionally not run: GPUComputationRenderer is a WebGL render-target ping-pong helper, not native WebGPU storage-buffer compute. This example does not attempt a TSL/WebGPURenderer compute implementation.");
+                if (!navigator.gpu) throw new Error("Three.js WebGPU compute mode requires WebGPU.");
+                if (!THREEGPU.WebGPURenderer || !THREEGPU.StorageBufferAttribute) throw new Error("Three.js WebGPU compute classes are not available from three/webgpu.");
+                const c = createCanvas();
+                const data = computeSourceData(s.count);
+                const renderer = new THREEGPU.WebGPURenderer({ canvas: c, antialias: false, powerPreference: "high-performance" });
+                renderer.setSize(1, 1, false);
+                await renderer.init();
+                if (renderer.backend?.isWebGPUBackend !== true) throw new Error("Three.js compute benchmark requires the native WebGPU backend.");
+                const queue = renderer.backend?.device?.queue;
+                if (!queue?.onSubmittedWorkDone) throw new Error("Three.js compute benchmark requires access to WebGPURenderer's GPUQueue for synchronized wall-clock timing.");
+                const stateAttribute = new THREEGPU.StorageBufferAttribute(data, 4);
+                const sentinelAttribute = new THREEGPU.StorageBufferAttribute(new Float32Array(4), 4);
+                const state = storage(stateAttribute, "vec4", s.count);
+                const sentinel = storage(sentinelAttribute, "vec4", 1);
+                const k = float(MAP_K);
+                const invTau = float(MAP_K / TAU);
+                const computeStep = Fn(() => {
+                    const cell = state.element(instanceIndex);
+                    const q = cell.x.toVar();
+                    const p = cell.y.toVar();
+                    const stretch = cell.z.toVar();
+                    Loop(s.iterations, () => {
+                        const angle = q.mul(TAU);
+                        const c = k.mul(angle.cos());
+                        stretch.addAssign(c.add(1.0).abs().add(0.0001).log());
+                        p.assign(p.add(invTau.mul(angle.sin())).fract());
+                        q.assign(q.add(p).fract());
+                    });
+                    cell.assign(vec4(q, p, stretch, cell.w));
+                });
+                const computeNode = computeStep().compute(s.count, [WORKGROUP_SIZE]);
+                computeNode.setName?.("Standard Map Step");
+                const copySentinel = Fn(() => { sentinel.element(instanceIndex).assign(state.element(instanceIndex)); });
+                const sentinelNode = copySentinel().compute(1, [1]);
+                sentinelNode.setName?.("Copy Validation Sentinel");
+                const batchNodes = Array.from({ length: s.batches }, () => computeNode);
+                batchNodes.push(sentinelNode);
+                const readSample = async () => {
+                    const bytes = renderer.getArrayBufferAsync ? await renderer.getArrayBufferAsync(sentinelAttribute) : await renderer.backend?.getArrayBufferAsync?.(sentinelAttribute);
+                    if (!bytes) throw new Error("Three.js WebGPURenderer does not expose storage-buffer readback in this build.");
+                    return bytes instanceof ArrayBuffer ? bytes.slice(0, 16) : bytes;
                 };
+                const r = makeRunner("Three.js", "WebGPU WebGPURenderer + TSL StorageBufferAttribute compute");
+                r.dispatchedCount = s.count;
+                r.expected = Array.from(data.slice(0, 4));
+                r.step = async () => {
+                    const t0 = performance.now();
+                    renderer.compute(batchNodes);
+                    const submitMs = performance.now() - t0;
+                    await queue.onSubmittedWorkDone();
+                    const syncMs = performance.now() - t0;
+                    r.m.queueSubmits++;
+                    await recordCompute(s, r, submitMs, syncMs, NaN, NaN, readSample, "Compute mode: Three.js native WebGPU compute via WebGPURenderer and TSL ComputeNode over StorageBufferAttribute.");
+                };
+                r.destroy = () => { computeNode.dispose?.(); sentinelNode.dispose?.(); renderer.dispose(); c.remove(); };
                 return r;
             };
-
             const BabylonComputing = async (s) => {
                 if (!BABYLON.WebGPUEngine || !BABYLON.ComputeShader || !BABYLON.StorageBuffer) throw new Error("Babylon.js WebGPU compute classes are not available.");
                 if (!navigator.gpu) throw new Error("Babylon.js compute mode requires WebGPU.");
@@ -539,15 +586,12 @@
                 r.expected = Array.from(data.slice(0, 4));
                 r.step = async () => {
                     const t0 = performance.now();
-                    for (let i = 0; i < s.batches; i++) {
-                        const ok = shader.dispatch(workgroups, 1, 1);
-                        if (!ok) throw new Error("Babylon.js ComputeShader dispatch returned false.");
-                    }
+                    for (let i = 0; i < s.batches; i++) if (!shader.dispatch(workgroups, 1, 1)) throw new Error("Babylon.js ComputeShader dispatch returned false.");
                     engine.flushFramebuffer();
                     const submitMs = performance.now() - t0;
                     await queue.onSubmittedWorkDone();
                     const syncMs = performance.now() - t0;
-                    await recordCompute(s, r, submitMs, syncMs, NaN, NaN, () => state.read(0, 16, undefined, true), "Compute mode: Babylon.js native WebGPU ComputeShader/storage-buffer path. Timing is synchronized wall-clock over dispatch + engine flush + GPUQueue completion; validation readback is separate.");
+                    await recordCompute(s, r, submitMs, syncMs, NaN, NaN, () => state.read(0, 16, undefined, true), "Compute mode: Babylon.js native WebGPU ComputeShader and storage-buffer path.");
                 };
                 r.destroy = () => { state.dispose(); params.dispose(); engine.dispose(); c.remove(); };
                 return r;
