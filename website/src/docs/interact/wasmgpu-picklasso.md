@@ -14,7 +14,7 @@ const result = await wgpu.pickLasso(scene, camera, points, opts);
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `scene` | `Scene` | Yes | Scene to query for pickable elements. |
+| `scene` | `Scene` | Yes | Scene to query for pickable mesh, point cloud, glyph field, and nodelink elements. |
 | `camera` | `Camera` | Yes | Camera used to project the lasso query. |
 | `points` | `PickLassoPoint[]` | Yes | Ordered polygon points in canvas CSS pixels; at least 3 points are needed for non-empty selection. |
 | `opts` | `PickRegionQuery` | No | Optional limits and payload flags for lasso queries. |
@@ -43,6 +43,8 @@ type PickRegionResult = {
 };
 ```
 
+Each hit in `result.hits` uses the same `PickHit` contract as [WasmGPU.pick](./wasmgpu-pick.md), so nodelink region picks can report node-or-edge payloads when attributes are included.
+
 ## Example
 ```js
 const canvas = document.querySelector("canvas");
@@ -67,5 +69,6 @@ wgpu.run((dt) => {
 ## See Also
 - [WasmGPU.pick](./wasmgpu-pick.md)
 - [WasmGPU.pickRect](./wasmgpu-pickrect.md)
+- [WasmGPU.createNodeLink](../objects/wasmgpu-createnodelink.md)
 - [WasmGPU.createSelectionStore().toggle](./wasmgpu-interact-selectionstore-toggle.md)
 - [WasmGPU.createAnnotation.toolkit().ingestSelectionHit](./wasmgpu-interact-annotationtoolkit-ingestselectionhit.md)

@@ -1,13 +1,14 @@
 # Scene.remove
 
 ## Summary
-Scene.remove removes a `Mesh`, `PointCloud`, or `GlyphField` instance from the scene if it exists. Removing a missing object is a no-op. The method returns the same scene for chaining.
+Scene.remove removes a `Mesh`, `PointCloud`, `GlyphField`, or `NodeLink` instance from the scene if it exists. Removing a missing object is a no-op. The method returns the same scene for chaining.
 
 ## Syntax
 ```ts
 Scene.remove(mesh: Mesh): Scene
 Scene.remove(pointCloud: PointCloud): Scene
 Scene.remove(glyphField: GlyphField): Scene
+Scene.remove(nodeLink: NodeLink): Scene
 const result = scene.remove(object);
 ```
 
@@ -17,13 +18,14 @@ const result = scene.remove(object);
 | `mesh` | `Mesh` | Conditional | Mesh instance to remove from `scene.meshes`. |
 | `pointCloud` | `PointCloud` | Conditional | Point cloud instance to remove from `scene.pointClouds`. |
 | `glyphField` | `GlyphField` | Conditional | Glyph field instance to remove from `scene.glyphFields`. |
+| `nodeLink` | `NodeLink` | Conditional | NodeLink instance to remove from `scene.nodeLinks`. |
 
 ## Returns
 `Scene` - The same scene instance after removal attempt.
 
 ## Type Details
 ```ts
-type SceneObject = Mesh | PointCloud | GlyphField;
+type SceneObject = Mesh | PointCloud | GlyphField | NodeLink;
 ```
 
 ## Example
@@ -32,9 +34,15 @@ const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
 
 const scene = wgpu.createScene();
-const mesh = wgpu.createMesh(wgpu.geometry.box(1, 1, 1), wgpu.material.unlit({ color: [1, 0.6, 0.2] }));
-scene.add(mesh);
-scene.remove(mesh);
+const graph = wgpu.createNodeLink({
+    nodePositions: new Float32Array([
+        -0.5, 0.0, 0.0,
+         0.5, 0.0, 0.0
+    ]),
+    edges: new Uint16Array([0, 1])
+});
+scene.add(graph);
+scene.remove(graph);
 ```
 
 ## See Also
@@ -43,3 +51,4 @@ scene.remove(mesh);
 - [Scene.meshes](./wasmgpu-world-scene-meshes.md)
 - [Scene.pointClouds](./wasmgpu-world-scene-pointclouds.md)
 - [Scene.glyphFields](./wasmgpu-world-scene-glyphfields.md)
+- [Scene.nodeLinks](./wasmgpu-world-scene-nodelinks.md)

@@ -1,7 +1,7 @@
 # WasmGPU.createPointCloud
 
 ## Summary
-WasmGPU.createPointCloud creates a GPU-backed point cloud from packed point/scalar data. It supports scale transforms and colormap-driven visual mapping.
+WasmGPU.createPointCloud creates a GPU-backed point cloud from packed point data or external GPU buffers. Point appearance can come from scalar-to-colormap mapping or from per-point RGBA colors.
 
 ## Syntax
 ```ts
@@ -12,57 +12,66 @@ const result = wgpu.createPointCloud(descriptor);
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `descriptor` | `PointCloudDescriptor` | Yes | Descriptor object that defines the initial configuration for this runtime object. |
+| `descriptor` | `PointCloudDescriptor` | Yes | Descriptor object used to configure point data, colors, bounds, and point rendering behavior. |
 
 ## Returns
-`PointCloud` - PointCloud runtime object configured for scalar-based point rendering.
+`PointCloud` - PointCloud runtime object configured for scalar-driven or RGBA-driven point rendering.
 
 ## Type Details
 ### PointCloudDescriptor
 
 ```ts
-type PointCloudDescriptor = {
-    data?: Float32Array;
-    pointsBuffer?: GPUBuffer | { buffer: GPUBuffer };
-    pointCount?: number;
-    boundsMin?: [number, number, number];
-    boundsMax?: [number, number, number];
-    boundsCenter?: [number, number, number];
-    boundsRadius?: number;
-    blendMode?: BlendMode;
-    depthWrite?: boolean;
-    depthTest?: boolean;
-    basePointSize?: number;
-    minPointSize?: number;
-    maxPointSize?: number;
-    sizeAttenuation?: number;
-    opacity?: number;
-    colormap?: PointCloudColormap | Colormap;
-    colormapStops?: Color4[];
-    softness?: number;
-    scaleTransform: ScaleTransformDescriptor;
-    visible?: boolean;
-    name?: string;
-    keepCPUData?: boolean;
-    ndShape?: number[];
+type PointCloudDescriptor = {
+    data?: Float32Array;
+    colors?: Float32Array;
+    pointsBuffer?: GPUBuffer | { buffer: GPUBuffer };
+    colorsBuffer?: GPUBuffer | { buffer: GPUBuffer };
+    pointCount?: number;
+    boundsMin?: [number, number, number];
+    boundsMax?: [number, number, number];
+    boundsCenter?: [number, number, number];
+    boundsRadius?: number;
+    blendMode?: BlendMode;
+    depthWrite?: boolean;
+    depthTest?: boolean;
+    basePointSize?: number;
+    minPointSize?: number;
+    maxPointSize?: number;
+    sizeAttenuation?: number;
+    opacity?: number;
+    colormap?: PointCloudColormap | Colormap;
+    colormapStops?: Color4[];
+    colorMode?: PointCloudColorMode;
+    softness?: number;
+    scaleTransform: ScaleTransformDescriptor;
+    visible?: boolean;
+    name?: string;
+    keepCPUData?: boolean;
+    ndShape?: number[];
 };
 ```
 
 #### PointCloudDescriptor Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `data` | `Float32Array` | No | Packed numeric data consumed by this API. |
-| `pointsBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | GPU buffer handle used by this operation. |
-| `pointCount` | `number` | No | Number of points represented by the supplied data source. |
-| `boundsMin` | `[number, number, number]` | No | Explicit minimum bounds corner supplied in descriptor space. |
-| `boundsMax` | `[number, number, number]` | No | Explicit maximum bounds corner supplied in descriptor space. |
-| `boundsCenter` | `[number, number, number]` | No | Explicit bounds sphere center supplied in descriptor space. |
-| `boundsRadius` | `number` | No | Numeric input controlling `boundsRadius` for this operation. |
-| `blendMode` | `BlendMode` | No | Blend mode controlling fragment compositing behavior. |
-| `depthWrite` | `boolean` | No | Boolean flag that toggles `depthWrite` behavior. |
-| `depthTest` | `boolean` | No | Boolean flag that toggles `depthTest` behavior. |
-| `basePointSize` | `number` | No | Numeric input controlling `basePointSize` for this operation. |
-| `minPointSize` | `number` | No | Numeric input controlling `minPointSize` for this operation. |
+| `data` | `Float32Array` | No | Packed point tuples in `[x, y, z, scalar]` order. This is the CPU-array path for point positions and scalar values. |
+| `colors` | `Float32Array` | No | Packed per-point RGBA float tuples in `[r, g, b, a]` order. Use this with `colorMode: "rgba"` when each point already has final colors. |
+| `pointsBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | External GPU buffer containing packed `[x, y, z, scalar]` float tuples. When this path is used, `pointCount` is required because the runtime cannot infer it from the buffer. |
+| `colorsBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | External GPU buffer containing packed `[r, g, b, a]` float tuples. Point count must already be known from `data`, `pointsBuffer`, or `pointCount`. |
+| `pointCount` | `number` | No | Number of points represented by external GPU buffers. |
+| `colorMode` | `PointCloudColorMode` | No | `"scalar"` maps the fourth component of each point through `scaleTransform` and a colormap. `"rgba"` uses `colors` or `colorsBuffer` directly. Supplying `colors` or `colorsBuffer` switches the default to `"rgba"`. |
+| `colormap` | `PointCloudColormap \| Colormap` | No | Colormap used when `colorMode` is `"scalar"`. |
+| `colormapStops` | `Color4[]` | No | Explicit stop list for a custom scalar colormap. |
+| `scaleTransform` | `ScaleTransformDescriptor` | Yes | Scalar mapping descriptor over packed point data. This is still part of the point cloud even if you later switch to RGBA colors. |
+| `boundsMin`, `boundsMax`, `boundsCenter`, `boundsRadius` | Bounds fields | No | Optional explicit bounds. These are useful when point positions live only in external GPU buffers or when CPU arrays are not retained after upload. |
+| `keepCPUData` | `boolean` | No | Retains CPU copies after upload. Without retained CPU data, helpers that inspect per-point records have less information to work with. |
+| `ndShape` | `number[]` | No | Optional multidimensional shape used to decode linear point indices into `ndIndex` values during picking. |
+
+### PointCloudColorMode
+
+```ts
+type PointCloudColorMode = "rgba" | "scalar";
+```
 
 ### PointCloudColormap
 
@@ -79,82 +88,61 @@ type Color4 = [number, number, number, number];
 ### ScaleTransformDescriptor
 
 ```ts
-type ScaleTransformDescriptor = {
-    mode?: ScaleMode;
-    clampMode?: ScaleClampMode;
-    valueMode?: ScaleValueMode;
-    componentCount?: number;
-    componentIndex?: number;
-    stride?: number;
-    offset?: number;
-    domainMin?: number;
-    domainMax?: number;
-    clampMin?: number;
-    clampMax?: number;
-    percentileLow?: number;
-    percentileHigh?: number;
-    logBase?: number;
-    symlogLinThresh?: number;
-    gamma?: number;
-    invert?: boolean;
+type ScaleTransformDescriptor = {
+    mode?: ScaleMode;
+    clampMode?: ScaleClampMode;
+    valueMode?: ScaleValueMode;
+    componentCount?: number;
+    componentIndex?: number;
+    stride?: number;
+    offset?: number;
+    domainMin?: number;
+    domainMax?: number;
+    clampMin?: number;
+    clampMax?: number;
+    percentileLow?: number;
+    percentileHigh?: number;
+    logBase?: number;
+    symlogLinThresh?: number;
+    gamma?: number;
+    invert?: boolean;
 };
 ```
 
-#### ScaleTransformDescriptor Fields
-| Name | Type | Required | Description |
-| --- | --- | --- | --- |
-| `mode` | `ScaleMode` | No | Mode selector controlling behavior for this operation or descriptor. |
-| `clampMode` | `ScaleClampMode` | No | Clamping mode used by scale transforms. |
-| `valueMode` | `ScaleValueMode` | No | Value extraction mode used when mapping source data into scale inputs. |
-| `componentCount` | `number` | No | Numeric input controlling `componentCount` for this operation. |
-| `componentIndex` | `number` | No | Numeric input controlling `componentIndex` for this operation. |
-| `stride` | `number` | No | Numeric input controlling `stride` for this operation. |
-| `offset` | `number` | No | Numeric input controlling `offset` for this operation. |
-| `domainMin` | `number` | No | Numeric input controlling `domainMin` for this operation. |
-| `domainMax` | `number` | No | Numeric input controlling `domainMax` for this operation. |
-| `clampMin` | `number` | No | Numeric input controlling `clampMin` for this operation. |
-| `clampMax` | `number` | No | Numeric input controlling `clampMax` for this operation. |
-| `percentileLow` | `number` | No | Numeric input controlling `percentileLow` for this operation. |
+Use `basePointSize`, `minPointSize`, `maxPointSize`, `sizeAttenuation`, `softness`, `opacity`, `blendMode`, `depthWrite`, `depthTest`, `visible`, and `name` to tune draw behavior and appearance.
 
-### BuiltinColormapName
-
-```ts
-type BuiltinColormapName = "grayscale" | "turbo" | "viridis" | "magma" | "plasma" | "inferno";
-```
-
-### ScaleMode
-
-```ts
-type ScaleMode = "linear" | "log" | "symlog";
-```
-
-### ScaleClampMode
-
-```ts
-type ScaleClampMode = "none" | "range" | "percentile";
-```
-
-### ScaleValueMode
-
-```ts
-type ScaleValueMode = "component" | "magnitude";
-```
+External-buffer workflows are useful when your data is already on the GPU. They avoid a JavaScript-side copy at creation time, but they do not automatically give the runtime CPU-readable point records or statistics.
 
 ## Example
 ```js
 const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
 
-const pointCloud = wgpu.createPointCloud({ data: new Float32Array([0, 0, 0, 0.1, 1, 0, 0, 0.8]), scaleTransform: { mode: "linear", domainMin: 0, domainMax: 1 } });
-const descriptor = { data: new Float32Array([0, 0, 0, 0.2, 1, 0, 0, 0.9]), scaleTransform: { mode: "linear", domainMin: 0, domainMax: 1 } };
-const result = wgpu.createPointCloud(descriptor);
-console.log(result);
+const cloud = wgpu.createPointCloud({
+    data: new Float32Array([
+        -1.0, 0.0, 0.0, 0.10,
+         0.0, 0.9, 0.0, 0.35,
+         0.9, 0.1, 0.0, 0.70,
+         0.1, -0.8, 0.0, 0.95
+    ]),
+    colors: new Float32Array([
+        0.20, 0.55, 0.95, 1.0,
+        0.35, 0.80, 0.55, 1.0,
+        0.95, 0.70, 0.25, 1.0,
+        0.92, 0.30, 0.32, 1.0
+    ]),
+    colorMode: "rgba",
+    scaleTransform: { mode: "linear", domainMin: 0, domainMax: 1 },
+    basePointSize: 9,
+    minPointSize: 3,
+    maxPointSize: 18,
+    keepCPUData: true
+});
 ```
 
 ## See Also
-- [WasmGPU.animation.createClip](./wasmgpu-animation-createclip.md)
-- [WasmGPU.animation.createPlayer](./wasmgpu-animation-createplayer.md)
-- [WasmGPU.animation.createSkin](./wasmgpu-animation-createskin.md)
-- [WasmGPU.colormap.builtin](./wasmgpu-colormap-builtin.md)
-- [WasmGPU.colormap.fromPalette](./wasmgpu-colormap-frompalette.md)
+- [WasmGPU.createNodeLink](./wasmgpu-createnodelink.md)
+- [WasmGPU.createGlyphField](./wasmgpu-createglyphfield.md)
+- [PointCloud.scaleTransform](./wasmgpu-objects-pointcloud-scaletransform.md)
 - [WasmGPU.colormap.fromStops](./wasmgpu-colormap-fromstops.md)
+- [WasmGPU.createOverlay.legend](../world/wasmgpu-createoverlay-legend.md)

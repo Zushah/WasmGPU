@@ -20,7 +20,7 @@ This accessor does not take parameters.
 ```ts
 type AnnotationProbeReadout = {
     hit: boolean;
-    kind: "mesh" | "pointcloud" | "glyphfield" | null;
+    kind: "mesh" | "pointcloud" | "glyphfield" | "nodelink" | null;
     objectId: number | null;
     elementIndex: number | null;
     worldPosition: [number, number, number] | null;
@@ -28,6 +28,8 @@ type AnnotationProbeReadout = {
     attributes: PickAttributes | null;
 };
 ```
+
+For `NodeLink` hits, `attributes.component` can tell you whether the hover target is a node or an edge when pick attributes are present.
 
 ## Example
 ```js

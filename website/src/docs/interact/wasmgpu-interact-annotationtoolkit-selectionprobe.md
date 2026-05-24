@@ -20,7 +20,7 @@ This accessor does not take parameters.
 ```ts
 type AnnotationSelectionReadout = {
     hit: boolean;
-    kind: "mesh" | "pointcloud" | "glyphfield" | null;
+    kind: "mesh" | "pointcloud" | "glyphfield" | "nodelink" | null;
     objectId: number | null;
     elementIndex: number | null;
     worldPosition: [number, number, number] | null;
@@ -31,6 +31,8 @@ type AnnotationSelectionReadout = {
     anchorRole: "marker" | "start" | "end" | "a" | "b" | "c" | null;
 };
 ```
+
+When the current selection comes from a `NodeLink`, `attributes.component` can distinguish node hits from edge hits if pick attributes were included.
 
 ## Example
 ```js

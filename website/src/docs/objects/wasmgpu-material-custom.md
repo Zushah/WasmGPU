@@ -21,28 +21,37 @@ const result = wgpu.material.custom(options);
 ### CustomMaterialDescriptor
 
 ```ts
-type CustomMaterialDescriptor = MaterialDescriptor & {
-    vertexShader?: string;
-    fragmentShader: string;
-    uniforms?: Record<string, UniformDefinition>;
+type CustomMaterialDescriptor = MaterialDescriptor & {
+
+    vertexShader?: string;
+
+    fragmentShader: string;
+
+    uniforms?: Record<string, UniformDefinition>;
+
 };
 ```
 
 #### CustomMaterialDescriptor Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `vertexShader` | `string` | No | String input controlling `vertexShader` for this operation. |
-| `fragmentShader` | `string` | Yes | String input controlling `fragmentShader` for this operation. |
+| `vertexShader` | `string` | No | Optional WGSL vertex shader override. Leave unset to use the built-in passthrough path for this material type. |
+| `fragmentShader` | `string` | Yes | WGSL fragment shader source used by the material. |
 | `uniforms` | `Record<string, UniformDefinition>` | No | Custom-material uniform definition map keyed by uniform name. |
 
 ### MaterialDescriptor
 
 ```ts
-type MaterialDescriptor = {
-    blendMode?: BlendMode;
-    cullMode?: CullMode;
-    depthWrite?: boolean;
-    depthTest?: boolean;
+type MaterialDescriptor = {
+
+    blendMode?: BlendMode;
+
+    cullMode?: CullMode;
+
+    depthWrite?: boolean;
+
+    depthTest?: boolean;
+
 };
 ```
 
@@ -51,23 +60,26 @@ type MaterialDescriptor = {
 | --- | --- | --- | --- |
 | `blendMode` | `BlendMode` | No | Blend mode controlling fragment compositing behavior. |
 | `cullMode` | `CullMode` | No | Face-culling mode used during rasterization. |
-| `depthWrite` | `boolean` | No | Boolean flag that toggles `depthWrite` behavior. |
-| `depthTest` | `boolean` | No | Boolean flag that toggles `depthTest` behavior. |
+| `depthWrite` | `boolean` | No | Controls whether this material writes to the depth buffer. |
+| `depthTest` | `boolean` | No | Controls whether this material participates in depth testing. |
 
 ### UniformDefinition
 
 ```ts
-type UniformDefinition = {
-    type: UniformType;
-    value: number | number[];
+type UniformDefinition = {
+
+    type: UniformType;
+
+    value: number | number[];
+
 };
 ```
 
 #### UniformDefinition Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `type` | `UniformType` | Yes | Type discriminator used by the associated descriptor or glTF field. |
-| `value` | `number \| number[]` | Yes | Array input for `value` used by this API call. |
+| `type` | `UniformType` | Yes | WGSL-side uniform layout expected for this value. |
+| `value` | `number \| number[]` | Yes | Initial scalar or packed vector/matrix data uploaded for this uniform. |
 
 ### UniformType
 

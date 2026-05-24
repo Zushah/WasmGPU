@@ -29,7 +29,7 @@ const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
 
 const pointCloud = wgpu.createPointCloud({ data: new Float32Array([0, 0, 0, 0.1, 1, 0, 0, 0.8]), scaleTransform: { mode: "linear", domainMin: 0, domainMax: 1 } });
-const buffer = wgpu.gpu.device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+const buffer = somePointBuffer;
 const pointCount = 2;
 pointCloud.setPointsBuffer(buffer, pointCount);
 console.log("updated");

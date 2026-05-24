@@ -1,7 +1,7 @@
 # WasmGPU.gltf.load
 
 ## Summary
-WasmGPU.gltf.load handles glTF/GLB loading, parsing, accessor extraction, or import into WasmGPU scene objects.
+WasmGPU.gltf.load reads a `.gltf` or `.glb` source into a `GltfDocument`. It resolves buffer payloads, optionally preloads image bytes, and leaves scene conversion for [WasmGPU.gltf.import](./wasmgpu-gltf-import.md).
 
 ## Syntax
 ```ts
@@ -12,41 +12,66 @@ const result = await wgpu.gltf.load(source, options);
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `source` | `string \| ArrayBuffer` | Yes | glTF/GLB source as URL/path string or in-memory ArrayBuffer payload. |
-| `options` | `LoadGltfOptions` | No | Optional configuration object that customizes behavior for this call. |
+| `source` | `string \| ArrayBuffer` | Yes | glTF JSON or GLB binary source. URL strings can reference `.gltf` or `.glb` files. |
+| `options` | `LoadGltfOptions` | No | Optional loading controls for URI resolution, fetching, image preloading, and warnings. |
 
 ## Returns
-`Promise<GltfDocument>` - Promise that resolves to `GltfDocument` when asynchronous work completes.
+`Promise<GltfDocument>` - Loaded glTF document containing parsed JSON, resolved buffers, optional image payloads, and the resolved base URL.
 
 ## Type Details
 ### LoadGltfOptions
 
 ```ts
-type LoadGltfOptions = {
-    baseUrl?: string;
-    fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-    loadImages?: boolean;
-    onWarning?: (message: string) => void;
+type LoadGltfOptions = {
+    baseUrl?: string;
+    fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    loadImages?: boolean;
+    onWarning?: (message: string) => void;
 };
 ```
 
 #### LoadGltfOptions Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `baseUrl` | `string` | No | Base URL used to resolve relative glTF asset URIs. |
-| `fetch` | `(input: RequestInfo \| URL, init?: RequestInit) => Promise<Response>` | No | Callback/function value used by this API call. |
-| `loadImages` | `boolean` | No | When true, image payloads are also resolved during loading. |
-| `onWarning` | `(message: string) => void` | No | Callback invoked for recoverable warnings during load/import. |
+| `baseUrl` | `string` | No | Base URL for external buffers and images. For URL sources, the loader defaults this to the source file's directory. For in-memory `ArrayBuffer` sources, pass this when the asset still references external URIs. |
+| `fetch` | `(input: RequestInfo \| URL, init?: RequestInit) => Promise<Response>` | No | Custom fetch implementation for URL loading. |
+| `loadImages` | `boolean` | No | When true, image payloads are also resolved into `doc.images`. Leave it false if you only want JSON and buffers up front. |
+| `onWarning` | `(message: string) => void` | No | Callback for recoverable load warnings. |
+
+### GltfDocument
+
+```ts
+type GltfDocument = {
+    json: GltfRoot;
+    buffers: ArrayBuffer[];
+    images?: ArrayBuffer[];
+    baseUrl: string;
+};
+```
+
+#### GltfDocument Fields
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `json` | `GltfRoot` | Yes | Parsed glTF JSON root. |
+| `buffers` | `ArrayBuffer[]` | Yes | Resolved binary buffers, including the BIN chunk from a GLB when present. |
+| `images` | `ArrayBuffer[]` | No | Resolved image payloads when `loadImages` is enabled. |
+| `baseUrl` | `string` | Yes | Base URL used to resolve relative asset references during import. |
+
+For string sources, `.glb` files are parsed as GLB and other paths are treated as glTF JSON. For `ArrayBuffer` sources, WasmGPU auto-detects GLB by magic number and otherwise treats the bytes as UTF-8 JSON text.
+
+`load()` does not create meshes, materials, textures, cameras, lights, or animations. Use [WasmGPU.gltf.import](./wasmgpu-gltf-import.md) after loading when you want runtime scene resources.
 
 ## Example
 ```js
 const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
 
-const source = "./model.glb";
-const options = { baseUrl: "./assets/", loadImages: true, onWarning: (message) => console.warn(message) };
-const result = await wgpu.gltf.load(source, options);
-console.log(result);
+const doc = await wgpu.gltf.load("./model.glb", {
+    loadImages: true,
+    onWarning: (message) => console.warn(message)
+});
+
+console.log(doc.json.asset.version, doc.buffers.length, doc.images?.length ?? 0);
 ```
 
 ## See Also

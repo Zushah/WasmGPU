@@ -1,13 +1,14 @@
 # WasmGPU.createHeapArena
 
 ## Summary
-WasmGPU.createHeapArena creates a reusable heap-backed arena allocator for WebAssembly memory.
-Allocations returned from this arena are represented as `WasmSlice` views and remain valid until the arena is reset or destroyed.
-Use heap arenas for longer-lived temporary buffers that should outlive a single frame.
+WasmGPU.createHeapArena creates a caller-managed arena inside WasmGPU's built-in WebAssembly driver memory.
+Use it when your staging data should outlive a single frame, but you still want a clear reset or destroy point instead of independent heap allocations.
+Arena allocations return either raw pointers or `WasmSlice` wrappers, and they become invalid after the arena resets or is destroyed.
 
 ## Syntax
 ```ts
 WasmGPU.createHeapArena(capBytes: number, align?: number): WasmHeapArena
+WasmGPU.driver.createHeapArena(capBytes: number, align?: number): WasmHeapArena
 const arena = wgpu.createHeapArena(capBytes, align);
 ```
 
@@ -37,21 +38,36 @@ type WasmHeapArena = {
 };
 ```
 
+#### WasmHeapArena Fields and Methods
+- `basePtr` is the base Wasm address for the arena allocation.
+- `capBytes` is the total capacity in bytes.
+- `usedBytes()` reports how much of that capacity is currently consumed.
+- `reset()` rewinds the arena head and bumps the arena epoch.
+- `destroy()` invalidates the arena permanently.
+- `alloc(bytes, alignBytes?)` returns a raw Wasm pointer for custom layouts.
+- `allocF32`, `allocU32`, `allocI32`, and `allocU8` return `WasmSlice` wrappers with epoch-aware lifetime checks.
+
+#### Arena Lifetime
+- Arena slices use `kind: "arena"` and become invalid after `reset()` or `destroy()`.
+- `WasmSlice.isAlive()` and `assertAlive()` use the arena epoch to catch stale access.
+- `WasmSlice.free()` is only for heap-owned slices. Arena slices end their lifetime through arena reset or destroy.
+- This is a staging arena, not a general-purpose per-slice free list. Use `reset()` to reuse its storage as a block.
+
 ## Example
 ```js
 const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
 
 const arena = wgpu.createHeapArena(4 * 1024 * 1024, 16);
-const weights = arena.allocF32(1024);
-weights.write(new Float32Array(1024).fill(1));
+const weights = arena.allocF32(4);
+weights.write([0.5, 1.0, 1.5, 2.0]);
 
-console.log(arena.usedBytes(), arena.epoch());
+console.log(weights.view()[2], arena.usedBytes(), arena.epoch());
 arena.reset();
 arena.destroy();
 ```
 
 ## See Also
-- [WasmGPU.interop.createHeapArena](./wasmgpu-interop-createheaparena.md)
-- [WasmGPU.interop.WasmHeapArena.allocF32](./wasmgpu-interop-wasmheaparena-allocf32.md)
+- [WasmGPU.driver](./wasmgpu-driver.md)
 - [WasmGPU.frameArena](./wasmgpu-framearena.md)
+- [WasmGPU.python](./wasmgpu-python.md)

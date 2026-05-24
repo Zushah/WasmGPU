@@ -4,6 +4,7 @@
 WasmGPU.python provides ndarray-oriented data transfer utilities for Python-JS interop workflows.
 It supports sending arrays into Wasm memory, receiving typed views/copies back, in-place updates, and freeing heap-owned transfers.
 This API is designed to pair with Pyodide or any bridge that exposes Python buffers.
+It is separate from [WasmGPU.webassembly](./wasmgpu-webassembly.md), which reads directly from foreign WebAssembly modules.
 
 ## Syntax
 ```ts
@@ -58,4 +59,6 @@ wgpu.python.free(handle);
 - [WasmGPU.python.sendNdarray](./wasmgpu-python-sendndarray.md)
 - [WasmGPU.python.receiveNdarray](./wasmgpu-python-receivendarray.md)
 - [WasmGPU.python.free](./wasmgpu-python-free.md)
-- [WasmGPU.interop](./wasmgpu-interop.md)
+- [WasmGPU.createHeapArena](./wasmgpu-createheaparena.md)
+- [WasmGPU.frameArena](./wasmgpu-framearena.md)
+- [WasmGPU.webassembly](./wasmgpu-webassembly.md)

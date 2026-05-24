@@ -36,7 +36,7 @@ const texture = wgpu.texture.create2D({ source: { kind: "url", url: "./albedo.pn
 const device = wgpu.gpu.device;
 const queue = wgpu.gpu.queue;
 const colorSpace = "linear";
-const fallbackView = wgpu.gpu.device.createTexture({ size: { width: 1, height: 1 }, format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST }).createView();
+const fallbackView = someFallbackTextureView;
 const result = texture.getView(device, queue, colorSpace, fallbackView);
 console.log(result);
 ```

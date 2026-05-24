@@ -1,7 +1,7 @@
 # WasmGPU.gltf.readAccessor
 
 ## Summary
-WasmGPU.gltf.readAccessor handles glTF/GLB loading, parsing, accessor extraction, or import into WasmGPU scene objects.
+WasmGPU.gltf.readAccessor reads one accessor from a loaded glTF document and returns its metadata plus the typed-array payload for that accessor. Strided accessors are deinterleaved when needed, and sparse patches are applied before the result is returned.
 
 ## Syntax
 ```ts
@@ -22,11 +22,16 @@ const result = wgpu.gltf.readAccessor(doc, accessorIndex);
 ### GltfDocument
 
 ```ts
-type GltfDocument = {
-    json: GltfRoot;
-    buffers: ArrayBuffer[];
-    images?: ArrayBuffer[];
-    baseUrl: string;
+type GltfDocument = {
+
+    json: GltfRoot;
+
+    buffers: ArrayBuffer[];
+
+    images?: ArrayBuffer[];
+
+    baseUrl: string;
+
 };
 ```
 
@@ -41,14 +46,22 @@ type GltfDocument = {
 ### AccessorView
 
 ```ts
-type AccessorView = {
-    accessor: GltfAccessor;
-    componentType: GltfAccessorComponentType;
-    type: GltfAccessorType;
-    count: number;
-    numComponents: number;
-    normalized: boolean;
-    array: GltfTypedArray;
+type AccessorView = {
+
+    accessor: GltfAccessor;
+
+    componentType: GltfAccessorComponentType;
+
+    type: GltfAccessorType;
+
+    count: number;
+
+    numComponents: number;
+
+    normalized: boolean;
+
+    array: GltfTypedArray;
+
 };
 ```
 
@@ -57,35 +70,55 @@ type AccessorView = {
 | --- | --- | --- | --- |
 | `accessor` | `GltfAccessor` | Yes | Accessor metadata object selected for this read operation. |
 | `componentType` | `GltfAccessorComponentType` | Yes | glTF accessor component type enum describing scalar storage width/type. |
-| `type` | `GltfAccessorType` | Yes | Type discriminator used by the associated descriptor or glTF field. |
-| `count` | `number` | Yes | Numeric input controlling `count` for this operation. |
-| `numComponents` | `number` | Yes | Numeric input controlling `numComponents` for this operation. |
-| `normalized` | `boolean` | Yes | Boolean flag that toggles `normalized` behavior. |
+| `type` | `GltfAccessorType` | Yes | Accessor shape such as `SCALAR`, `VEC3`, or `MAT4`. |
+| `count` | `number` | Yes | Number of accessor elements in the returned payload. |
+| `numComponents` | `number` | Yes | Number of scalar components per accessor element. |
+| `normalized` | `boolean` | Yes | Whether integer accessor values should be normalized when interpreted. |
 | `array` | `GltfTypedArray` | Yes | Typed-array payload containing accessor data. |
 
 ### GltfRoot
 
 ```ts
-type GltfRoot = {
-    asset: GltfAsset;
-    scene?: GltfID;
-    scenes?: GltfScene[];
-    nodes?: GltfNode[];
-    meshes?: GltfMesh[];
-    buffers?: GltfBuffer[];
-    bufferViews?: GltfBufferView[];
-    accessors?: GltfAccessor[];
-    materials?: GltfMaterial[];
-    textures?: GltfTexture[];
-    images?: GltfImage[];
-    samplers?: GltfSampler[];
-    skins?: GltfSkin[];
-    animations?: GltfAnimation[];
-    cameras?: GltfCamera[];
-    extensionsUsed?: string[];
-    extensionsRequired?: string[];
-    extensions?: GltfExtensions;
-    extras?: GltfExtras;
+type GltfRoot = {
+
+    asset: GltfAsset;
+
+    scene?: GltfID;
+
+    scenes?: GltfScene[];
+
+    nodes?: GltfNode[];
+
+    meshes?: GltfMesh[];
+
+    buffers?: GltfBuffer[];
+
+    bufferViews?: GltfBufferView[];
+
+    accessors?: GltfAccessor[];
+
+    materials?: GltfMaterial[];
+
+    textures?: GltfTexture[];
+
+    images?: GltfImage[];
+
+    samplers?: GltfSampler[];
+
+    skins?: GltfSkin[];
+
+    animations?: GltfAnimation[];
+
+    cameras?: GltfCamera[];
+
+    extensionsUsed?: string[];
+
+    extensionsRequired?: string[];
+
+    extensions?: GltfExtensions;
+
+    extras?: GltfExtras;
+
 };
 ```
 
@@ -94,33 +127,46 @@ type GltfRoot = {
 | --- | --- | --- | --- |
 | `asset` | `GltfAsset` | Yes | glTF asset metadata block. |
 | `scene` | `GltfID` | No | Default scene index or scene reference in glTF/root metadata. |
-| `scenes` | `GltfScene[]` | No | Array input for `scenes` used by this API call. |
-| `nodes` | `GltfNode[]` | No | Array input for `nodes` used by this API call. |
-| `meshes` | `GltfMesh[]` | No | Array input for `meshes` used by this API call. |
-| `buffers` | `GltfBuffer[]` | No | Array input for `buffers` used by this API call. |
-| `bufferViews` | `GltfBufferView[]` | No | Array input for `bufferViews` used by this API call. |
-| `accessors` | `GltfAccessor[]` | No | Array input for `accessors` used by this API call. |
-| `materials` | `GltfMaterial[]` | No | Array input for `materials` used by this API call. |
-| `textures` | `GltfTexture[]` | No | Array input for `textures` used by this API call. |
-| `images` | `GltfImage[]` | No | Array input for `images` used by this API call. |
-| `samplers` | `GltfSampler[]` | No | Array input for `samplers` used by this API call. |
+| `scenes` | `GltfScene[]` | No | All scene definitions declared in the asset. |
+| `nodes` | `GltfNode[]` | No | All node definitions declared in the asset. |
+| `meshes` | `GltfMesh[]` | No | All mesh definitions declared in the asset. |
+| `buffers` | `GltfBuffer[]` | No | Binary buffer declarations referenced by buffer views. |
+| `bufferViews` | `GltfBufferView[]` | No | Byte-range slices into the declared buffers. |
+| `accessors` | `GltfAccessor[]` | No | Accessor metadata entries available for reads. |
+| `materials` | `GltfMaterial[]` | No | Material definitions referenced by meshes. |
+| `textures` | `GltfTexture[]` | No | Texture definitions referenced by materials. |
+| `images` | `GltfImage[]` | No | Image declarations referenced by textures. |
+| `samplers` | `GltfSampler[]` | No | Sampler definitions referenced by textures. |
 
 ### GltfAccessor
 
 ```ts
-type GltfAccessor = {
-    bufferView?: GltfID;
-    byteOffset?: number;
-    componentType: GltfAccessorComponentType;
-    normalized?: boolean;
-    count: number;
-    type: GltfAccessorType;
-    max?: number[];
-    min?: number[];
-    sparse?: GltfAccessorSparse;
-    name?: string;
-    extras?: GltfExtras;
-    extensions?: GltfExtensions;
+type GltfAccessor = {
+
+    bufferView?: GltfID;
+
+    byteOffset?: number;
+
+    componentType: GltfAccessorComponentType;
+
+    normalized?: boolean;
+
+    count: number;
+
+    type: GltfAccessorType;
+
+    max?: number[];
+
+    min?: number[];
+
+    sparse?: GltfAccessorSparse;
+
+    name?: string;
+
+    extras?: GltfExtras;
+
+    extensions?: GltfExtensions;
+
 };
 ```
 
@@ -128,15 +174,15 @@ type GltfAccessor = {
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `bufferView` | `GltfID` | No | Index of the glTF bufferView backing this field. |
-| `byteOffset` | `number` | No | Numeric input controlling `byteOffset` for this operation. |
+| `byteOffset` | `number` | No | Byte offset within the referenced buffer view. |
 | `componentType` | `GltfAccessorComponentType` | Yes | glTF accessor component type enum describing scalar storage width/type. |
-| `normalized` | `boolean` | No | Boolean flag that toggles `normalized` behavior. |
-| `count` | `number` | Yes | Numeric input controlling `count` for this operation. |
-| `type` | `GltfAccessorType` | Yes | Type discriminator used by the associated descriptor or glTF field. |
-| `max` | `number[]` | No | Array input for `max` used by this API call. |
-| `min` | `number[]` | No | Array input for `min` used by this API call. |
+| `normalized` | `boolean` | No | Whether integer values should be normalized on read. |
+| `count` | `number` | Yes | Number of accessor elements. |
+| `type` | `GltfAccessorType` | Yes | Accessor shape such as `SCALAR`, `VEC3`, or `MAT4`. |
+| `max` | `number[]` | No | Optional maximum bounds stored in the source asset. |
+| `min` | `number[]` | No | Optional minimum bounds stored in the source asset. |
 | `sparse` | `GltfAccessorSparse` | No | Sparse accessor payload defining index/value patch data. |
-| `name` | `string` | No | String input controlling `name` for this operation. |
+| `name` | `string` | No | Optional glTF name for this accessor. |
 | `extras` | `GltfExtras` | No | Opaque application-specific metadata preserved by loader/import utilities. |
 | `extensions` | `GltfExtensions` | No | Extension payload map (usually keyed by extension name). |
 
@@ -161,22 +207,28 @@ type GltfTypedArray = | Int8Array | Uint8Array | Int16Array | Uint16Array | Int3
 ### GltfAsset
 
 ```ts
-type GltfAsset = {
-    version: string;
-    generator?: string;
-    copyright?: string;
-    minVersion?: string;
-    extras?: GltfExtras;
+type GltfAsset = {
+
+    version: string;
+
+    generator?: string;
+
+    copyright?: string;
+
+    minVersion?: string;
+
+    extras?: GltfExtras;
+
 };
 ```
 
 #### GltfAsset Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `version` | `string` | Yes | String input controlling `version` for this operation. |
-| `generator` | `string` | No | String input controlling `generator` for this operation. |
-| `copyright` | `string` | No | String input controlling `copyright` for this operation. |
-| `minVersion` | `string` | No | String input controlling `minVersion` for this operation. |
+| `version` | `string` | Yes | Declared glTF version string, typically `"2.0"`. |
+| `generator` | `string` | No | Optional tool string describing which exporter produced the asset. |
+| `copyright` | `string` | No | Optional copyright notice from the asset metadata. |
+| `minVersion` | `string` | No | Optional minimum glTF version required by the asset. |
 | `extras` | `GltfExtras` | No | Opaque application-specific metadata preserved by loader/import utilities. |
 
 ### GltfID
@@ -188,19 +240,24 @@ type GltfID = number;
 ### GltfScene
 
 ```ts
-type GltfScene = {
-    nodes?: GltfID[];
-    name?: string;
-    extras?: GltfExtras;
-    extensions?: GltfExtensions;
+type GltfScene = {
+
+    nodes?: GltfID[];
+
+    name?: string;
+
+    extras?: GltfExtras;
+
+    extensions?: GltfExtensions;
+
 };
 ```
 
 #### GltfScene Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `nodes` | `GltfID[]` | No | Array input for `nodes` used by this API call. |
-| `name` | `string` | No | String input controlling `name` for this operation. |
+| `nodes` | `GltfID[]` | No | Root node indices belonging to this scene. |
+| `name` | `string` | No | Optional glTF scene name. |
 | `extras` | `GltfExtras` | No | Opaque application-specific metadata preserved by loader/import utilities. |
 | `extensions` | `GltfExtensions` | No | Extension payload map (usually keyed by extension name). |
 

@@ -22,8 +22,16 @@ selection.add(hit);
 ## Type Details
 ```ts
 type PickHit = {
-    kind: "mesh" | "pointcloud" | "glyphfield";
-    object: Mesh | PointCloud | GlyphField;
+    kind:
+        | "mesh"
+        | "pointcloud"
+        | "glyphfield"
+        | "nodelink";
+    object:
+        | Mesh
+        | PointCloud
+        | GlyphField
+        | NodeLink;
     objectId: number;
     elementIndex: number;
     worldPosition: [number, number, number];
@@ -32,9 +40,16 @@ type PickHit = {
         scalar?: number | null;
         vector?: [number, number, number, number] | null;
         packedPoint?: [number, number, number, number] | null;
+        component?: "node" | "edge" | null;
+        componentIndex?: number | null;
+        color?: [number, number, number, number] | null;
+        edgeEndpoints?: [number, number] | null;
+        edgePositions?: [number, number, number, number, number, number] | null;
     } | null;
 };
 ```
+
+Nodelink node hits and edge hits remain distinct selection entries because the store key is built from `(objectId, elementIndex)`.
 
 ## Example
 ```js

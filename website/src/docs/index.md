@@ -1,10 +1,10 @@
-# WasmGPU v0.7.0
+# WasmGPU v0.8.0
 
 WebGPU × WebAssembly rendering and computing engine for scientific workloads in the browser.
 
-The WebGPU engine is written in TypeScript, spanning **scene & assets** (meshes, pointclouds, glyphfields, data materials, lights, cameras, glTF 2.0 assets, mipmapped texture sampling, transparency, animations, 4- or 8-influence skinning, and richer built-in geometry including 2D primitives plus cartesian and parametric curves and surfaces for graphing); **rendering architecture** (WebAssembly-driven frustum culling, opaque draw batching with automatic instanced rendering, optional subpixel morphological anti-aliasing, configurable canvas format selection, and GPU ID-pass picking for both single-hit queries and rectangular or lasso region queries with typed results); **interaction, overlays, & diagnostics** (orbit/trackball orthographic/perspective camera navigation with bounds-based scene framing, inspection views, and a composable overlay and annotation toolkit with triads, grids, legends, markers, probes, and measurements); and **compute & interop** (a first-class WebGPU compute subsystem with reusable pipelines and buffers, an extensive kernels library, an ndarray abstraction, asynchronous readback utilities, a unified scale-transform model shared across rendering and computing workflows, and Python-in-the-browser interoperability).
+The WebGPU engine is written in TypeScript, spanning **scene & assets** (meshes, pointclouds, glyphfields, nodelinks, data materials, lights, cameras, glTF 2.0 assets with over a dozen extensions, metadata, and animation-extension coverage, mipmapped texture sampling, transparency including transmission rendering, animations, 4- or 8-influence skinning, and rich built-in geometry including cartesian and parametric curves and surfaces for mathematics); **rendering architecture** (WebAssembly-powered frustum culling, previous-frame occlusion culling, opaque draw batching with automatic instanced rendering, optional subpixel morphological anti-aliasing, configurable canvas format selection, and GPU ID-pass picking for both single-hit queries and rectangular or lasso region queries with typed results); **interaction, overlays, & diagnostics** (orbit/trackball orthographic/perspective camera navigation with bounds-based scene framing, inspection views, and a composable overlay and annotation toolkit with triads, grids, legends, markers, probes, and measurements); and **compute & interop** (a first-class compute subsystem with reusable pipelines and buffers, an extensive kernels library, an ndarray abstraction, asynchronous readback utilities, a unified scale-transform model shared across rendering and computing workflows, external WebAssembly module interoperability, and Python-in-the-browser interoperability).
 
-The WebAssembly driver is written in Rust, spanning **data layout & transforms** (transforms stored in SoA memory with per-index dirty tracking and partial local or world propagation plus model and normal matrix packing); **animation & asset hot paths** (animation sampling and joint-matrix generation executed in WebAssembly together with glTF accessor deinterleaving, sparse patch application, numeric conversion, and mesh normal generation); **bounds, culling, & visibility** (world-space bounds computation for geometry, pointclouds, and glyphfields together with frustum plane extraction and sphere-frustum culling kernels); **array semantics & zero-copy staging** (ndarray indexing utilities for explicit shape-and-stride byte-offset math plus uniforms and instance data staged as zero-copy views into WebAssembly memory with explicit typed-slice handles for JavaScript interop); and **performance envelope** (hot-path allocations avoided via cached pipelines and bind-group layouts plus a frame arena and user heap arenas, with builds optimized via LLVM and Binaryen and SIMD128 enabled for even higher throughput).
+The WebAssembly driver is written in Rust, spanning **data layout & transforms** (transforms stored in SoA memory with per-index dirty tracking and partial local or world propagation plus model and normal matrix packing); **animation & asset hot paths** (animation sampling and joint-matrix generation executed in WebAssembly together with glTF accessor deinterleaving, sparse patch application, numeric conversion, richer import-side data preparation, and mesh normal generation); **bounds, culling, & visibility** (world-space bounds computation for geometry, pointclouds, glyphfields, and nodelinks together with frustum plane extraction, sphere-frustum culling kernels, and CPU-side support for render-only occlusion filtering); **array semantics & zero-copy staging** (ndarray indexing utilities for explicit shape-and-stride byte-offset math plus uniforms and instance data staged as zero-copy views into WebAssembly memory with explicit typed-slice handles and module-facing views for external WebAssembly interoperability); and **performance envelope** (hot-path allocations avoided via cached pipelines and bind-group layouts plus a frame arena and user heap arenas, with builds optimized via LLVM and Binaryen and SIMD128 enabled for even higher throughput).
 
 ## Install
 
@@ -13,7 +13,7 @@ npm install @zushah/wasmgpu
 ```
 
 ```text
-https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.7.0/dist/WasmGPU.iife.min.js
+https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.8.0/dist/WasmGPU.iife.min.js
 ```
 
 ## Quick Links
@@ -24,31 +24,31 @@ https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.7.0/dist/WasmGPU.iife.min.js
 
 ## Architecture Diagram
 
-The diagram below reflects currently implemented subsystems and runtime flow in WasmGPU v0.7.0.
+The diagram below reflects the implemented architecture of WasmGPU v0.8.0.
 
-Solid arrows indicate control flow while dashed arrows indicate data and resource flow.
+Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
 
 ```mermaid
 flowchart LR
     subgraph API["Public API"]
         APP["User Application"]
-        ENG["WasmGPU v0.7.0"]
-        FAC["Factory surface: scene, camera, controls, geometry, material, texture, mesh, pointcloud, glyphfield, light, asset import, animation, overlay, annotation"]
+        ENG["WasmGPU v0.8.0"]
+        FAC["Factory surface: scene, camera, controls, geometry, material, texture, mesh, pointcloud, glyphfield, nodelink, light, asset import, animation, overlay, annotation, interop"]
     end
 
-    subgraph RT["WebGPU Engine"]
+    subgraph WGPU["WebGPU Engine"]
         LOOP["Frame loop"]
         REND["Renderer"]
         SCALE["Scaling service"]
         OVER["Overlay framework"]
         ANNO["Annotation toolkit"]
         PICK["Picking utility"]
-        CAPI["Compute subsystem"]
+        COMP["Compute subsystem"]
         CBUF["Buffer resource manager"]
-        CPIPE["Pipeline controller"]
-        CPLAN["Dispatch workgroup planner"]
-        CKERN["Kernels library"]
-        CARR["N-dimensional array abstraction for CPU & GPU memory"]
+        CPIP["Pipeline controller"]
+        CDIS["Dispatch workgroup planner"]
+        CKER["Kernels library"]
+        CND["N-dimensional array model for CPU & GPU memory"]
         CREAD["Asynchronous readback ring"]
         CSCR["Scratch buffer pool"]
     end
@@ -56,34 +56,37 @@ flowchart LR
     subgraph DATA["Object & Data Model"]
         SCN["Scene"]
         TSTORE["Transform store in SoA memory"]
-        MESH["Mesh with geometry, material, & texture"]
-        PGG["Pointcloud & glyphfield"]
+        MESH["Mesh with geometry, material, texture, morphing, & skinning"]
+        PGN["Pointcloud, glyphfield, & nodelink"]
         CMAP["Colormapping"]
-        SKIN["Skin instance data"]
+        SKIN["Skinning instance data"]
         ASTORE["Annotation store"]
         ALOAD["Loader for glTF 2.0 asset data"]
         ADEC["Accessor decoding & data conversion"]
         AIMP["Importer from asset data to scene resources"]
+        AMETA["Imported nodes, metadata, variants, cameras, & lights"]
+        WINT["WebAssembly interop"]
+        PY["Python interop"]
     end
 
     subgraph WASM["WebAssembly Driver"]
         WHEAP["Heap allocation for persistent typed memory"]
-        WFAR["Frame arena for transient typed memory"]
-        WTR["Transform propagation"]
+        WFRAME["Frame arena for transient typed memory"]
+        WTRANS["Transform propagation"]
         WMATH["Matrix, vector, & quaternion mathematics"]
         WND["N-dimensional array indexing & stride-offsetting"]
-        WMESH["Mesh normal generation"]
+        WNORM["Mesh normal generation"]
         WGLTF["glTF accessor decoding, sparse patching, & numeric conversion"]
-        WANI["Animation sampling & joint matrix generation"]
-        WBOUNDS["Bounds for mesh, pointcloud, & glyphfield"]
+        WANIM["Animation sampling & joint matrix generation"]
+        WBOUNDS["Bounds computation"]
         WCULL["Frustum culling"]
     end
 
     subgraph GPU["Browser Resources"]
         DEV["Graphics device & queue"]
         CACHE["Pipeline cache & bindgroup cache"]
-        RES["Graphics buffers, textures, & samplers"]
-        RPASS["Render passes for opaque geometry, transparent geometry, post-processing, & user interaction"]
+        RES["Buffers, textures, & samplers"]
+        RPASS["Render passes for opaques, transparents, transmissions, post-processing, & user interaction"]
         CPASS["Compute passes for kernels"]
     end
 
@@ -96,96 +99,92 @@ flowchart LR
 
     class APP,ENG,FAC darkblue;
     class LOOP,REND,SCALE,OVER,ANNO,PICK green;
-    class CAPI,CBUF,CPIPE,CPLAN,CKERN,CARR,CREAD,CSCR lightblue;
-    class SCN,TSTORE,MESH,PGG,CMAP,SKIN,ASTORE,ALOAD,ADEC,AIMP yellow;
-    class WHEAP,WFAR,WTR,WMATH,WND,WMESH,WGLTF,WANI,WBOUNDS,WCULL purple;
+    class COMP,CBUF,CPIP,CDIS,CKER,CND,CREAD,CSCR lightblue;
+    class SCN,TSTORE,MESH,PGN,CMAP,SKIN,ASTORE,ALOAD,ADEC,AIMP,AMETA,WINT,PY yellow;
+    class WHEAP,WFRAME,WTRANS,WMATH,WND,WNORM,WGLTF,WANIM,WBOUNDS,WCULL purple;
     class DEV,CACHE,RES,RPASS,CPASS pink;
-    
+
     APP --> ENG
     ENG --> FAC
     ENG --> LOOP
+    ENG --> REND
+    ENG --> COMP
+    ENG --> SCALE
     ENG --> OVER
     ENG --> ANNO
-    ENG --> PICK
-    ENG --> CAPI
-
     FAC --> SCN
+    FAC --> TSTORE
     FAC --> MESH
-    FAC --> PGG
-    FAC --> CMAP
-    FAC --> SKIN
+    FAC --> PGN
     FAC --> ALOAD
-    MESH --> CMAP
+    FAC --> AIMP
+    FAC --> WINT
+    FAC --> PY
 
-    ALOAD --> ADEC --> AIMP
-    AIMP -.-> SCN
-    AIMP -.-> MESH
-    AIMP -.-> SKIN
-    AIMP -.-> TSTORE
-    ADEC -.-> WGLTF
+    SCN --> MESH
+    SCN --> PGN
+    MESH --> TSTORE
+    PGN --> TSTORE
+    SKIN --> MESH
+    ALOAD --> ADEC
+    ADEC --> AIMP
+    AIMP --> SCN
+    AIMP --> MESH
+    AIMP --> SKIN
+    AIMP --> AMETA
+    CMAP --> MESH
+    CMAP --> PGN
+    SCALE --> CMAP
+    SCALE --> PGN
 
     LOOP --> REND
-    SCN --> REND
-    TSTORE --> REND
-    MESH --> REND
-    PGG --> REND
-    CMAP --> REND
-    SKIN --> REND
-    OVER --> REND
-    REND --> PICK
-    PICK --> ANNO
-    ASTORE --> ANNO
-    ANNO --> OVER
-
-    CAPI --> CBUF
-    CAPI --> CPIPE
-    CAPI --> CPLAN
-    CAPI --> CKERN
-    CAPI --> CARR
-    CAPI --> CREAD
-    CAPI --> CSCR
-    CAPI --> SCALE
-    SCALE --> MESH
-    SCALE --> PGG
-    SCALE --> CMAP
-    CBUF --> CPASS
-    CPIPE --> CPASS
-    CPLAN --> CPASS
-    CKERN --> CPASS
-    CSCR --> CPASS
-    CPASS --> DEV
-    CREAD --> DEV
-
-    REND --> RPASS
+    LOOP --> WFRAME
+    REND --> DEV
     REND --> CACHE
-    CACHE --> DEV
-    RPASS --> DEV
+    REND --> RES
+    REND --> RPASS
+    REND --> PICK
+    REND --> SCN
+    REND --> TSTORE
+    REND --> WCULL
+    REND --> WBOUNDS
+    PICK --> RPASS
+    OVER --> SCN
+    ANNO --> ASTORE
+    ANNO --> PICK
+    ANNO --> SCN
 
-    ENG -.-> WHEAP
-    LOOP -.-> WFAR
-    WHEAP -.-> TSTORE
-    WHEAP -.-> CARR
-    WFAR -.-> REND
-    TSTORE -.-> WTR
-    WTR -.-> WMATH
-    SKIN -.-> WANI
-    WANI -.-> WMATH
-    MESH -.-> WMESH
-    WMESH -.-> MESH
+    COMP --> CBUF
+    COMP --> CPIP
+    COMP --> CDIS
+    COMP --> CKER
+    COMP --> CND
+    COMP --> CREAD
+    COMP --> CSCR
+    CBUF --> RES
+    CPIP --> CPASS
+    CDIS --> CPASS
+    CKER --> CPASS
+    CND --> CBUF
+    CREAD --> RES
+    CSCR --> RES
+    CPASS --> DEV
+
+    TSTORE -.-> WTRANS
+    MESH -.-> WNORM
     MESH -.-> WBOUNDS
-    PGG -.-> WBOUNDS
-    WBOUNDS -.-> WCULL
-    REND -.-> WCULL
-    WCULL -.-> REND
-    WTR -.-> TSTORE
-    WANI -.-> RES
-    WGLTF -.-> ADEC
-    WGLTF -.-> WND
-    WND -.-> CARR
-    CBUF -.-> MESH
-    MESH -.-> RES
-    REND -.-> RES
-    CBUF -.-> RES
+    PGN -.-> WBOUNDS
+    ADEC -.-> WGLTF
+    SKIN -.-> WANIM
+    CND -.-> WND
+    REND -.-> WFRAME
+    REND -.-> WMATH
+    COMP -.-> WHEAP
+    WINT -.-> CBUF
+    PY --> WHEAP
+    PY --> WFRAME
+    WHEAP -.-> RES
+    WFRAME -.-> RES
 ```
 
 ## Architecture Video
@@ -255,7 +254,7 @@ Check out the examples [here](../examples/index.html).
 Super basic example to render a cube:
 ```js
 // Setup
-import { WasmGPU } from "https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.7.0/dist/WasmGPU.min.js";
+import { WasmGPU } from "https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.8.0/dist/WasmGPU.min.js";
 const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas, { antialias: true});
 
@@ -301,5 +300,6 @@ Suggested starting points:
 - [WasmGPU.createMesh](./objects/wasmgpu-createmesh.md)
 - [WasmGPU.createCamera.perspective](./world/wasmgpu-createcamera-perspective.md)
 - [WasmGPU.createControls.orbit](./interact/wasmgpu-createcontrols-orbit.md)
+- [WasmGPU.webassembly](./interop/wasmgpu-webassembly.md)
 - [WasmGPU.python](./interop/wasmgpu-python.md)
 - [WasmGPU.math](./math/wasmgpu-math.md)

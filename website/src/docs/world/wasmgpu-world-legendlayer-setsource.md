@@ -1,7 +1,7 @@
 # LegendLayer.setSource
 
 ## Summary
-LegendLayer.setSource switches the legend data source and marks legend state dirty for redraw. The layer unsubscribes from previous source signals and subscribes to the new source when available. Use this when changing scalar fields or colormaps interactively.
+LegendLayer.setSource switches the legend data source and marks legend state dirty for redraw. The layer unsubscribes from previous source signals and subscribes to the new source when available. Use this when changing point-cloud scalar fields, glyph mappings, or nodelink node/edge scalar views interactively.
 
 ## Syntax
 ```ts
@@ -28,11 +28,22 @@ type OverlayLegendExplicitSource = {
 };
 ```
 
+### OverlayLegendNodeLinkSource
+
+```ts
+type OverlayLegendNodeLinkSource = {
+    nodelink: NodeLink;
+    component?: "node" | "edge";
+};
+```
+
 ### OverlayLegendSource
 
 ```ts
-type OverlayLegendSource = PointCloud | GlyphField | DataMaterial | OverlayLegendExplicitSource;
+type OverlayLegendSource = PointCloud | GlyphField | NodeLink | OverlayLegendNodeLinkSource | DataMaterial | OverlayLegendExplicitSource;
 ```
+
+Passing a `NodeLink` directly binds to node scalars. Use `{ nodelink, component: "edge" }` when the legend should track edge scale and edge colormap state.
 
 ## Example
 ```js
@@ -51,4 +62,5 @@ legend.setSource({
 ## See Also
 - [WasmGPU.createOverlay.legend](./wasmgpu-createoverlay-legend.md)
 - [LegendLayer.update](./wasmgpu-world-legendlayer-update.md)
+- [WasmGPU.createNodeLink](../objects/wasmgpu-createnodelink.md)
 - [OverlaySystem.invalidate](./wasmgpu-world-overlaysystem-invalidate.md)

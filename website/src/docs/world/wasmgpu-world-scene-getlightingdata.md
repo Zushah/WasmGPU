@@ -25,7 +25,7 @@ type Color = [number, number, number];
 ### LightType
 
 ```ts
-type LightType = "ambient" | "directional" | "point";
+type LightType = "ambient" | "directional" | "point" | "spot";
 ```
 
 ## Example
@@ -36,6 +36,7 @@ const wgpu = await WasmGPU.create(canvas);
 const scene = wgpu.createScene();
 scene.addLight(wgpu.createLight.ambient({ intensity: 0.15 }));
 scene.addLight(wgpu.createLight.directional({ direction: [0.3, -1, 0.2], intensity: 1.1 }));
+scene.addLight(wgpu.createLight.spot({ position: [0, 2, 1], direction: [0, -1, -0.2], range: 10 }));
 
 const lighting = scene.getLightingData();
 console.log(lighting.ambient, lighting.lights.length);

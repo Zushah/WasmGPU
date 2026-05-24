@@ -2,7 +2,7 @@
 
 ## Summary
 WasmGPU.frameArena.reset discards all frame-arena allocations and advances the arena epoch.
-Any frame-based `WasmSlice` allocated before reset is no longer valid.
+Any frame-based `WasmSlice` allocated through `wgpu.driver.frame.alloc*()` before reset is no longer valid.
 
 ## Syntax
 ```ts
@@ -30,4 +30,5 @@ console.log(wgpu.frameArena.epoch(), wgpu.frameArena.usedBytes());
 ## See Also
 - [WasmGPU.frameArena.epoch](./wasmgpu-framearena-epoch.md)
 - [WasmGPU.frameArena.usedBytes](./wasmgpu-framearena-usedbytes.md)
-- [WasmGPU.interop.frame.allocU8](./wasmgpu-interop-frame-allocu8.md)
+- [WasmGPU.driver](./wasmgpu-driver.md)
+- [WasmGPU.frameArena.alloc](./wasmgpu-framearena-alloc.md)

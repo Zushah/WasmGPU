@@ -58,5 +58,6 @@ scene.addLight(key);
 ## See Also
 - [WasmGPU.createLight.ambient](./wasmgpu-createlight-ambient.md)
 - [WasmGPU.createLight.point](./wasmgpu-createlight-point.md)
+- [WasmGPU.createLight.spot](./wasmgpu-createlight-spot.md)
 - [DirectionalLight.direction](./wasmgpu-world-directionallight-direction.md)
 - [Scene.addLight](./wasmgpu-world-scene-addlight.md)

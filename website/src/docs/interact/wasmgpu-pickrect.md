@@ -14,7 +14,7 @@ const result = await wgpu.pickRect(scene, camera, x0, y0, x1, y1, opts);
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `scene` | `Scene` | Yes | Scene to query for pickable mesh, point cloud, and glyph field elements. |
+| `scene` | `Scene` | Yes | Scene to query for pickable mesh, point cloud, glyph field, and nodelink elements. |
 | `camera` | `Camera` | Yes | Camera used for the region query projection. |
 | `x0` | `number` | Yes | First corner X coordinate in CSS pixel space. |
 | `y0` | `number` | Yes | First corner Y coordinate in CSS pixel space. |
@@ -40,6 +40,8 @@ type PickRegionResult = {
     sampledPixels: number; // number of framebuffer pixels scanned
 };
 ```
+
+Each hit in `result.hits` uses the same `PickHit` contract as [WasmGPU.pick](./wasmgpu-pick.md), including nodelink node-versus-edge payloads when attributes are requested.
 
 ## Example
 ```js
@@ -68,5 +70,6 @@ wgpu.run((dt) => {
 ## See Also
 - [WasmGPU.pick](./wasmgpu-pick.md)
 - [WasmGPU.pickLasso](./wasmgpu-picklasso.md)
+- [WasmGPU.createNodeLink](../objects/wasmgpu-createnodelink.md)
 - [WasmGPU.createSelectionStore().replace](./wasmgpu-interact-selectionstore-replace.md)
 - [WasmGPU.createSelectionStore().apply](./wasmgpu-interact-selectionstore-apply.md)

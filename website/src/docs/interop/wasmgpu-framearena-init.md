@@ -3,7 +3,7 @@
 ## Summary
 WasmGPU.frameArena.init initializes or reinitializes the global frame arena capacity.
 Calling init refreshes the frame-arena epoch and returns the base pointer.
-Use this only if you need a non-default capacity.
+`WasmGPU.create()` already initializes the frame arena for normal runtime usage, so call this only when you need a different capacity.
 
 ## Syntax
 ```ts

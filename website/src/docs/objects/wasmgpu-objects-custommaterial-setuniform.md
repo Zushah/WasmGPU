@@ -13,7 +13,7 @@ material.setUniform(name, value);
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `name` | `string` | Yes | Human-readable identifier used for labels, debugging, or lookup keys. |
-| `value` | `number \| number[]` | Yes | Array input for `value` used by this API call. |
+| `value` | `number \| number[]` | Yes | Replacement scalar or packed vector/matrix data for the named uniform. |
 
 ## Returns
 `void` - No return value. The call applies side effects to runtime state and/or GPU resources.

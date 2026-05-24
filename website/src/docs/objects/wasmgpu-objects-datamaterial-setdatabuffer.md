@@ -28,7 +28,7 @@ const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
 
 const material = wgpu.material.data({ data: new Float32Array([0.2, 0.4, 0.7, 1.0]), scaleTransform: { mode: "linear", domainMin: 0, domainMax: 1 }, colormap: "viridis" });
-const buffer = wgpu.gpu.device.createBuffer({ size: 64, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+const buffer = someStorageBuffer;
 material.setDataBuffer(buffer);
 console.log("updated");
 ```

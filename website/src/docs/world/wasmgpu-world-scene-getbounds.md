@@ -1,7 +1,7 @@
 # Scene.getBounds
 
 ## Summary
-Scene.getBounds computes an aggregate bounding volume from meshes, point clouds, and glyph fields. By default it only considers visible objects, but you can include hidden objects with `visibleOnly: false`. The result includes box and sphere bounds plus empty/partial flags.
+Scene.getBounds computes an aggregate bounding volume from meshes, point clouds, glyph fields, and nodelinks. By default it only considers visible objects, so visible nodelinks are included automatically and hidden ones are skipped unless you pass `visibleOnly: false`. The result includes box and sphere bounds plus empty/partial flags.
 
 ## Syntax
 ```ts
@@ -29,7 +29,7 @@ type SceneBoundsOptions = {
 #### SceneBoundsOptions Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `visibleOnly` | `boolean` | No | When true (default), ignore objects with `visible === false`. |
+| `visibleOnly` | `boolean` | No | When true (default), ignore objects with `visible === false` across meshes, point clouds, glyph fields, and nodelinks. |
 
 ### Vec3
 
@@ -56,7 +56,17 @@ const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
 
 const scene = wgpu.createScene();
-scene.add(wgpu.createMesh(wgpu.geometry.box(2, 1, 1), wgpu.material.unlit({ color: [0.7, 0.8, 1.0] })));
+scene.add(wgpu.createNodeLink({
+    nodePositions: new Float32Array([
+        -1.0, 0.0, 0.0,
+         0.0, 1.0, 0.0,
+         1.0, 0.0, 0.0
+    ]),
+    edges: new Uint16Array([
+        0, 1,
+        1, 2
+    ])
+}));
 const visibleBounds = scene.getBounds();
 const allBounds = scene.getBounds({ visibleOnly: false });
 console.log(visibleBounds, allBounds);
@@ -66,4 +76,5 @@ console.log(visibleBounds, allBounds);
 - [Scene.visibleMeshes](./wasmgpu-world-scene-visiblemeshes.md)
 - [Scene.visiblePointClouds](./wasmgpu-world-scene-visiblepointclouds.md)
 - [Scene.visibleGlyphFields](./wasmgpu-world-scene-visibleglyphfields.md)
-- [Scene.traverseVisible](./wasmgpu-world-scene-traversevisible.md)
+- [Scene.visibleNodeLinks](./wasmgpu-world-scene-visiblenodelinks.md)
+- [Scene.traverseVisibleNodeLinks](./wasmgpu-world-scene-traversevisiblenodelinks.md)

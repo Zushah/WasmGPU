@@ -19,7 +19,7 @@ This property does not take parameters.
 ### LightType
 
 ```ts
-type LightType = "ambient" | "directional" | "point";
+type LightType = "ambient" | "directional" | "point" | "spot";
 ```
 
 ## Example
@@ -30,6 +30,7 @@ const wgpu = await WasmGPU.create(canvas);
 const scene = wgpu.createScene();
 scene.addLight(wgpu.createLight.ambient({ intensity: 0.2 }));
 scene.addLight(wgpu.createLight.point({ position: [1, 2, 1], range: 10 }));
+scene.addLight(wgpu.createLight.spot({ position: [-1, 2, 0], direction: [0, -1, 0], range: 14 }));
 console.log(scene.lights.length, scene.lights.map(l => l.type));
 ```
 
@@ -38,3 +39,4 @@ console.log(scene.lights.length, scene.lights.map(l => l.type));
 - [Scene.addLight](./wasmgpu-world-scene-addlight.md)
 - [Scene.removeLight](./wasmgpu-world-scene-removelight.md)
 - [Scene.getLightingData](./wasmgpu-world-scene-getlightingdata.md)
+- [WasmGPU.createLight.spot](./wasmgpu-createlight-spot.md)

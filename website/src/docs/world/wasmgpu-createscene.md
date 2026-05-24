@@ -1,7 +1,7 @@
 # WasmGPU.createScene
 
 ## Summary
-WasmGPU.createScene constructs a `Scene` container for world objects and lights. Use this as the root object you populate with meshes, point clouds, and glyph fields, then render with a camera. The optional background color controls the clear color used before drawing scene content.
+WasmGPU.createScene constructs a `Scene` container for world objects and lights. Use this as the root object you populate with meshes, point clouds, glyph fields, and nodelinks, then render with a camera. The optional background color controls the clear color used before drawing scene content.
 
 ## Syntax
 ```ts
@@ -46,5 +46,6 @@ wgpu.render(scene, camera);
 - [WasmGPU.createCamera.perspective](./wasmgpu-createcamera-perspective.md)
 - [WasmGPU.createCamera.orthographic](./wasmgpu-createcamera-orthographic.md)
 - [Scene.add](./wasmgpu-world-scene-add.md)
+- [Scene.nodeLinks](./wasmgpu-world-scene-nodelinks.md)
 - [Scene.addLight](./wasmgpu-world-scene-addlight.md)
 - [Scene.getBounds](./wasmgpu-world-scene-getbounds.md)

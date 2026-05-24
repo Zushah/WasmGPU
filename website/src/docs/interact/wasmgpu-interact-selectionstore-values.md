@@ -20,8 +20,16 @@ This API does not take parameters.
 ```ts
 type SelectionEntry = {
     key: string; // "<objectId>:<elementIndex>"
-    kind: "mesh" | "pointcloud" | "glyphfield";
-    object: Mesh | PointCloud | GlyphField;
+    kind:
+        | "mesh"
+        | "pointcloud"
+        | "glyphfield"
+        | "nodelink";
+    object:
+        | Mesh
+        | PointCloud
+        | GlyphField
+        | NodeLink;
     objectId: number;
     elementIndex: number;
     worldPosition: [number, number, number];
@@ -29,6 +37,8 @@ type SelectionEntry = {
     attributes: PickAttributes | null;
 };
 ```
+
+For nodelinks, entries preserve the original node-or-edge element identity through `elementIndex`, and `attributes.component` can tell you which side of the graph the hit came from when attributes were included.
 
 ## Example
 ```js

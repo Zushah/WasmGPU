@@ -30,4 +30,4 @@ wgpu.python.free(handle);
 ## See Also
 - [WasmGPU.python.sendNdarray](./wasmgpu-python-sendndarray.md)
 - [WasmGPU.frameArena.reset](./wasmgpu-framearena-reset.md)
-- [WasmGPU.createHeapArena().reset](./wasmgpu-interop-wasmheaparena-reset.md)
+- [WasmGPU.createHeapArena](./wasmgpu-createheaparena.md)

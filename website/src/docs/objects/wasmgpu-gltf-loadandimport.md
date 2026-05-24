@@ -1,180 +1,113 @@
 # WasmGPU.gltf.loadAndImport
 
 ## Summary
-WasmGPU.gltf.loadAndImport handles glTF/GLB loading, parsing, accessor extraction, or import into WasmGPU scene objects.
+WasmGPU.gltf.loadAndImport combines [WasmGPU.gltf.load](./wasmgpu-gltf-load.md) and [WasmGPU.gltf.import](./wasmgpu-gltf-import.md) into one call. It loads a `.gltf` or `.glb` source, resolves buffers and optional image payloads, then converts the document into WasmGPU scene resources and import metadata.
+
+Use `loadAndImport()` when you want the imported WasmGPU objects immediately. Use `load()` and `import()` separately when you need to inspect or modify the loaded document before conversion.
 
 ## Syntax
 ```ts
-WasmGPU.gltf.loadAndImport(source: string | ArrayBuffer, options?: { load?: LoadGltfOptions; import?: ImportGltfOptions; }): Promise<GltfImportResult>
+WasmGPU.gltf.loadAndImport(source: string | ArrayBuffer, options?: {
+    load?: LoadGltfOptions;
+    import?: ImportGltfOptions;
+}): Promise<GltfImportResult>
+
 const result = await wgpu.gltf.loadAndImport(source, options);
 ```
 
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `source` | `string \| ArrayBuffer` | Yes | glTF/GLB source as URL/path string or in-memory ArrayBuffer payload. |
-| `options` | `{ load?: LoadGltfOptions; import?: ImportGltfOptions; }` | No | Optional configuration object that customizes behavior for this call. |
+| `source` | `string \| ArrayBuffer` | Yes | glTF JSON or GLB binary source. URL strings can reference `.gltf` or `.glb` files. |
+| `options` | `{ load?: LoadGltfOptions; import?: ImportGltfOptions; }` | No | Optional loading and import controls. `options.load` is passed to `load()`, and `options.import` is passed to `import()`. |
 
 ## Returns
-`Promise<GltfImportResult>` - Promise that resolves to `GltfImportResult` when asynchronous work completes.
+`Promise<GltfImportResult>` - Promise that resolves to the same import result you would get from calling `load()` and then `import()` yourself.
 
 ## Type Details
-### LoadGltfOptions
+### LoadAndImport Options
 
 ```ts
-type LoadGltfOptions = {
-    baseUrl?: string;
-    fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
-    loadImages?: boolean;
-    onWarning?: (message: string) => void;
+type LoadAndImportOptions = {
+    load?: LoadGltfOptions;
+    import?: ImportGltfOptions;
 };
 ```
 
-#### LoadGltfOptions Fields
+#### LoadAndImport Options Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `baseUrl` | `string` | No | Base URL used to resolve relative glTF asset URIs. |
-| `fetch` | `(input: RequestInfo \| URL, init?: RequestInit) => Promise<Response>` | No | Callback/function value used by this API call. |
-| `loadImages` | `boolean` | No | When true, image payloads are also resolved during loading. |
-| `onWarning` | `(message: string) => void` | No | Callback invoked for recoverable warnings during load/import. |
+| `load` | `LoadGltfOptions` | No | Loading options for URI resolution, fetch overrides, image preloading, and warnings. |
+| `import` | `ImportGltfOptions` | No | Import options for scene selection, destination scene ownership, normal generation, optional camera or light import, and warnings. |
+
+### LoadGltfOptions
+
+```ts
+type LoadGltfOptions = {
+    baseUrl?: string;
+    fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+    loadImages?: boolean;
+    onWarning?: (message: string) => void;
+};
+```
 
 ### ImportGltfOptions
 
 ```ts
-type ImportGltfOptions = {
-    sceneIndex?: number;
-    targetScene?: Scene;
-    addToScene?: boolean;
-    computeMissingNormals?: boolean;
-    importCameras?: boolean;
-    importLights?: boolean;
-    onWarning?: (message: string) => void;
+type ImportGltfOptions = {
+    sceneIndex?: number;
+    targetScene?: Scene;
+    addToScene?: boolean;
+    computeMissingNormals?: boolean;
+    importCameras?: boolean;
+    importLights?: boolean;
+    onWarning?: (message: string) => void;
 };
 ```
-
-#### ImportGltfOptions Fields
-| Name | Type | Required | Description |
-| --- | --- | --- | --- |
-| `sceneIndex` | `number` | No | Scene index to import from the glTF document. |
-| `targetScene` | `Scene` | No | Existing scene instance used as import destination. |
-| `addToScene` | `boolean` | No | When true, imported objects are inserted into the target scene automatically. |
-| `computeMissingNormals` | `boolean` | No | When true, normals are computed when missing from source geometry. |
-| `importCameras` | `boolean` | No | When true, glTF cameras are imported. |
-| `importLights` | `boolean` | No | When true, KHR_lights_punctual lights are imported. |
-| `onWarning` | `(message: string) => void` | No | Callback invoked for recoverable warnings during load/import. |
 
 ### GltfImportResult
 
 ```ts
-type GltfImportResult = {
-    scene: Scene;
-    meshes: Mesh[];
-    nodeTransforms: Transform[];
-    lights: Light[];
-    cameras: Camera[];
-    skins: ImportedSkin[];
-    animations: ImportedAnimation[];
-    clips: AnimationClip[];
-    destroy(): void;
+type GltfImportResult = {
+    scene: Scene;
+    meshes: Mesh[];
+    nodes: GltfImportedNode[];
+    lights: Light[];
+    cameras: Camera[];
+    skins: ImportedSkin[];
+    animations: ImportedAnimation[];
+    clips: AnimationClip[];
+    metadata: GltfImportMetadata;
+    destroy(): void;
 };
 ```
 
-#### GltfImportResult Fields
-| Name | Type | Required | Description |
-| --- | --- | --- | --- |
-| `scene` | `Scene` | Yes | Default scene index or scene reference in glTF/root metadata. |
-| `meshes` | `Mesh[]` | Yes | Array input for `meshes` used by this API call. |
-| `nodeTransforms` | `Transform[]` | Yes | Array input for `nodeTransforms` used by this API call. |
-| `lights` | `Light[]` | Yes | Array input for `lights` used by this API call. |
-| `cameras` | `Camera[]` | Yes | Array input for `cameras` used by this API call. |
-| `skins` | `ImportedSkin[]` | Yes | Array input for `skins` used by this API call. |
-| `animations` | `ImportedAnimation[]` | Yes | Array input for `animations` used by this API call. |
-| `clips` | `AnimationClip[]` | Yes | Array input for `clips` used by this API call. |
-| `destroy` | `() => void` | Yes | Callback/function value used by this API call. |
+`result.nodes` exposes the imported hierarchy, visibility state, and attached meshes, lights, or cameras. `result.metadata` preserves names, `extras`, extensions, XMP metadata, extension support states, and material variants from the source asset. `result.destroy()` releases imported runtime resources and removes imported meshes or lights from the destination scene when they were added during import.
 
-### ImportedSkin
-
-```ts
-type ImportedSkin = {
-    name?: string;
-    joints: Transform[];
-    inverseBindMatrices?: Float32Array;
-    skeleton?: Transform;
-    runtime: Skin;
-};
-```
-
-#### ImportedSkin Fields
-| Name | Type | Required | Description |
-| --- | --- | --- | --- |
-| `name` | `string` | No | String input controlling `name` for this operation. |
-| `joints` | `Transform[]` | Yes | Joint transforms in skin order. |
-| `inverseBindMatrices` | `Float32Array` | No | Optional packed inverse bind matrices (`jointCount * 16`) or `null`. |
-| `skeleton` | `Transform` | No | Optional root transform/index of the imported skeleton hierarchy. |
-| `runtime` | `Skin` | Yes | Runtime object instance created from imported source data. |
-
-### ImportedAnimation
-
-```ts
-type ImportedAnimation = {
-    name?: string;
-    samplers: ImportedAnimationSampler[];
-    channels: ImportedAnimationChannel[];
-    clip: AnimationClip | null;
-};
-```
-
-#### ImportedAnimation Fields
-| Name | Type | Required | Description |
-| --- | --- | --- | --- |
-| `name` | `string` | No | String input controlling `name` for this operation. |
-| `samplers` | `ImportedAnimationSampler[]` | Yes | Array input for `samplers` used by this API call. |
-| `channels` | `ImportedAnimationChannel[]` | Yes | Array input for `channels` used by this API call. |
-| `clip` | `AnimationClip \| null` | Yes | AnimationClip used by playback/update operations. |
-
-### ImportedAnimationSampler
-
-```ts
-type ImportedAnimationSampler = {
-    interpolation: "LINEAR" | "STEP" | "CUBICSPLINE";
-    input: Float32Array;
-    output: Float32Array;
-};
-```
-
-#### ImportedAnimationSampler Fields
-| Name | Type | Required | Description |
-| --- | --- | --- | --- |
-| `interpolation` | `"LINEAR" \| "STEP" \| "CUBICSPLINE"` | Yes | Interpolation mode for animation sampler evaluation. |
-| `input` | `Float32Array` | Yes | Typed numeric/binary data consumed by this operation. |
-| `output` | `Float32Array` | Yes | Typed numeric/binary data consumed by this operation. |
-
-### ImportedAnimationChannel
-
-```ts
-type ImportedAnimationChannel = {
-    sampler: number;
-    targetNode: Transform | null;
-    path: "translation" | "rotation" | "scale" | "weights";
-};
-```
-
-#### ImportedAnimationChannel Fields
-| Name | Type | Required | Description |
-| --- | --- | --- | --- |
-| `sampler` | `number` | Yes | Numeric input controlling `sampler` for this operation. |
-| `targetNode` | `Transform \| null` | Yes | Resolved runtime target transform for an animation channel. |
-| `path` | `"translation" \| "rotation" \| "scale" \| "weights"` | Yes | Animation channel target path (translation/rotation/scale/weights). |
+For the full `LoadGltfOptions`, `ImportGltfOptions`, `GltfImportedNode`, `GltfImportMetadata`, material-variant controls, and extension-support details, use the dedicated [WasmGPU.gltf.load](./wasmgpu-gltf-load.md) and [WasmGPU.gltf.import](./wasmgpu-gltf-import.md) pages.
 
 ## Example
 ```js
 const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
+const scene = wgpu.createScene();
 
-const source = "./model.glb";
-const options = { load: { loadImages: true }, import: { importLights: true, importCameras: true } };
-const result = await wgpu.gltf.loadAndImport(source, options);
-console.log(result);
+const result = await wgpu.gltf.loadAndImport("./model.glb", {
+    load: { loadImages: true },
+    import: {
+        targetScene: scene,
+        importCameras: true,
+        importLights: true
+    }
+});
+
+console.log(result.nodes.map((node) => node.name));
+console.log(result.metadata.variants.names);
+
+const clip = result.clips[0];
+if (clip) {
+    clip.sample(0.5);
+}
 ```
 
 ## See Also

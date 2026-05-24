@@ -32,8 +32,16 @@ type PickQuery = {
 type PickResult = PickHit;
 
 type PickHit = {
-    kind: "mesh" | "pointcloud" | "glyphfield";
-    object: Mesh | PointCloud | GlyphField;
+    kind:
+        | "mesh"
+        | "pointcloud"
+        | "glyphfield"
+        | "nodelink";
+    object:
+        | Mesh
+        | PointCloud
+        | GlyphField
+        | NodeLink;
     objectId: number;
     elementIndex: number;
     worldPosition: [number, number, number];
@@ -42,9 +50,16 @@ type PickHit = {
         scalar?: number | null;
         vector?: [number, number, number, number] | null;
         packedPoint?: [number, number, number, number] | null;
+        component?: "node" | "edge" | null;
+        componentIndex?: number | null;
+        color?: [number, number, number, number] | null;
+        edgeEndpoints?: [number, number] | null;
+        edgePositions?: [number, number, number, number, number, number] | null;
     } | null;
 };
 ```
+
+Nodelink hits use the same `PickHit` envelope as meshes, point clouds, and glyph fields. When `includeAttributes` is true, `attributes.component` and `attributes.componentIndex` tell you whether the hit came from a node or an edge. Node hits can expose scalar/color data, and edge hits can expose scalar/color plus edge endpoints and endpoint positions when matching CPU-side nodelink records are still available. Node hits can also decode `ndIndex` from `ndShape`; edge hits return `ndIndex: null`.
 
 ## Example
 ```js
@@ -72,4 +87,5 @@ canvas.addEventListener("click", async (event) => {
 - [WasmGPU.pickRect](./wasmgpu-pickrect.md)
 - [WasmGPU.pickLasso](./wasmgpu-picklasso.md)
 - [WasmGPU.createSelectionStore](./wasmgpu-createselectionstore.md)
+- [WasmGPU.createNodeLink](../objects/wasmgpu-createnodelink.md)
 - [WasmGPU.createAnnotation.toolkit](./wasmgpu-createannotation-toolkit.md)

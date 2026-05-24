@@ -61,6 +61,7 @@ scene.addLight(probeLight);
 ## See Also
 - [WasmGPU.createLight.ambient](./wasmgpu-createlight-ambient.md)
 - [WasmGPU.createLight.directional](./wasmgpu-createlight-directional.md)
+- [WasmGPU.createLight.spot](./wasmgpu-createlight-spot.md)
 - [PointLight.position](./wasmgpu-world-pointlight-position.md)
 - [PointLight.range](./wasmgpu-world-pointlight-range.md)
 - [Scene.addLight](./wasmgpu-world-scene-addlight.md)

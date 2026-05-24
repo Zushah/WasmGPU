@@ -3,7 +3,7 @@
 ## Summary
 WasmGPU.frameArena.epoch returns the current frame-arena generation counter.
 The epoch increments after `init()` and `reset()`.
-Frame-allocated `WasmSlice` objects use this value to detect stale access.
+Frame `WasmSlice` objects created through `wgpu.driver.frame.alloc*()` use this value to detect stale access after reset.
 
 ## Syntax
 ```ts
@@ -30,5 +30,5 @@ console.log(e0, e1);
 
 ## See Also
 - [WasmGPU.frameArena.reset](./wasmgpu-framearena-reset.md)
-- [WasmGPU.interop.WasmSlice.isAlive](./wasmgpu-interop-wasmslice-isalive.md)
-- [WasmGPU.interop.WasmSlice.assertAlive](./wasmgpu-interop-wasmslice-assertalive.md)
+- [WasmGPU.driver](./wasmgpu-driver.md)
+- [WasmGPU.frameArena.allocF32](./wasmgpu-framearena-allocf32.md)
