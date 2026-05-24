@@ -1,10 +1,10 @@
 # WasmGPU Architecture
 
-Last updated: May 21st, 2026.
+Last updated: May 24th, 2026.
 
-Last commit: May 16th, 2026, [**`55169d6`**](https://www.github.com/Zushah/WasmGPU/commit/55169d6).
+Last commit: May 24th, 2026, [**`8853415`**](https://www.github.com/Zushah/WasmGPU/commit/8853415).
 
-Last release: March 30th, 2026, [**`v0.7.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.7.0).
+Last release: May 24th, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
 ## Contents
 
@@ -223,7 +223,7 @@ flowchart LR
     WFRAME -.-> RES
 ```
 
-This diagram describes the current source tree, including [unreleased work](https://www.github.com/Zushah/WasmGPU/compare/v0.7.0...main) after [v0.7.0](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.7.0). Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
+This diagram describes the current source tree, including [unreleased work](https://www.github.com/Zushah/WasmGPU/compare/v0.8.0...main) after [v0.8.0](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0). Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
 
 ### 1.2. Public API surface
 
@@ -764,6 +764,7 @@ Architectural role:
 
 Important files:
 
+- `./examples/benchmark.html`: performance benchmarking WasmGPU against Three.js and Babylon.js for both rendering and computing.
 - `./examples/controls.html`: camera controls and interaction.
 - `./examples/esm.html`: ES module bundle usage.
 - `./examples/iife.html`: IIFE bundle usage.
@@ -797,7 +798,7 @@ Architectural role:
 
 Important files and directories:
 
-- `./README.md`: release-facing project overview. It currently describes v0.7.0.
+- `./README.md`: release-facing project overview. It currently describes v0.8.0.
 - `./CHANGELOG.md`: release notes through the latest documented release.
 - `./CONTRIBUTING.md`: shorter contributor guide for questions, issues, feature requests, and code contributions.
 - `./website/src/`: website source files, pages, and documentation.
@@ -968,7 +969,7 @@ Recent history mostly follows Conventional Commits:
 - common types: `feat`, `fix`, `test`, `docs`, `chore`, `refactor`, and `perf`;
 - scopes are file or folder names without extensions, such as `renderer`, `gltf`, `material`, `nodelink`, `examples`, or `rust`;
 - subjects are usually lowercase, concise, and have no final period;
-- release commits use a pattern like `chore(release): v0.7.0`.
+- release commits use a pattern like `chore(release): v0.8.0`.
 
 Examples from repository history include:
 
@@ -978,7 +979,7 @@ Examples from repository history include:
 - `test(material): cover defaults, uniforms, shaders, data, colormaps, & cleanup`
 - `docs(examples): update protein example with nodelink`
 - `perf(rust): move transform, culling, bounds, & glTF hot paths to WebAssembly`
-- `chore(release): v0.7.0`
+- `chore(release): v0.8.0`
 
 Use a commit body when the subject cannot explain the change, especially for API behavior, memory ownership, generated artifacts, release work, or changes that touch multiple subsystems.
 

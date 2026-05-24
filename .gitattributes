@@ -2,7 +2,6 @@
 website/* linguist-detectable=false
 examples/* linguist-detectable=false
 test/* linguist-detectable=false
-esbuild.config.js linguist-detectable=false
 *.wgsl text
 *.wat text
 *.wasm binary

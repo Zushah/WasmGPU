@@ -56,17 +56,18 @@
             <section class="release reveal">
                 <div class="section-head">
                     <p class="eyebrow">Latest release</p>
-                    <h2>v0.7.0 <span class="release-date">Released Monday, March 30, 2026</span></h2>
+                    <h2>v0.8.0 <span class="release-date">Released Sunday, May 24, 2026</span></h2>
                 </div>
                 <div class="release-grid">
                     <article class="panel release-panel">
                         <h3>Highlights</h3>
                         <ul class="release-highlights">
-                            <li>Added overlay framework, annotation toolkit, and picking utilities.</li>
-                            <li>Added 2D primitives and mathematical graphing primitives.</li>
-                            <li>Added bounded scene/object framing and inspection views to the camera navigation subsystem.</li>
-                            <li>Added a unified scale transform model shared across pointclouds, glyphfields, data materials, and computed statistics.</li>
-                            <li>Changed frame and load pipelines to have greater performance by moving transform, culling, bounds, & glTF hot paths to the WebAssembly driver.</li>
+                            <li>Added broader glTF 2.0 compatibility with full support for over a dozen official extensions.</li>
+                            <li>Added the nodelink scientific visualization primitive.</li>
+                            <li>Added compute kernels for real/complex LU factoring and solving.</li>
+                            <li>Added external WebAssembly interop for typed views over foreign modules.</li>
+                            <li>Added renderer warmup and occlusion culling.</li>
+                            <li>Fixed glTF animation robustness by refreshing animation sampler views after WebAssembly allocations.</li>
                         </ul>
                     </article>
                     <div class="release-badges">
@@ -74,17 +75,17 @@
                             <span class="material-icons-outlined">download</span>
                             <span><strong>Manual installation</strong><small>Download WasmGPU.min.js</small></span>
                         </a>
-                        <a class="release-chip" href="https://raw.githubusercontent.com/Zushah/WasmGPU/v0.7.0/dist/WasmGPU.js" target="_blank" rel="noreferrer" aria-label="Minified JavaScript bundle size">
+                        <a class="release-chip" href="https://raw.githubusercontent.com/Zushah/WasmGPU/v0.8.0/dist/WasmGPU.js" target="_blank" rel="noreferrer" aria-label="Minified JavaScript bundle size">
                             <span class="material-icons-outlined">data_object</span>
-                            <span><strong>JavaScript bundle</strong><small>17.1k lines of code in 450.6k bytes</small></span>
+                            <span><strong>JavaScript bundle</strong><small>22.9k lines of code in 838.7k bytes</small></span>
                         </a>
-                        <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/releases/tag/v0.7.0" target="_blank" rel="noreferrer" aria-label="Release notes">
+                        <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0" target="_blank" rel="noreferrer" aria-label="Release notes">
                             <span class="material-icons-outlined">article</span>
                             <span><strong>Release notes</strong><small>Full details of the updates</small></span>
                         </a>
-                        <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/compare/v0.6.0...v0.7.0" target="_blank" rel="noreferrer" aria-label="Compare changes">
+                        <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/compare/v0.7.0...v0.8.0" target="_blank" rel="noreferrer" aria-label="Compare changes">
                             <span class="material-icons-outlined">insights</span>
-                            <span><strong>Compare changes</strong><small>71.7k additions and 11.7k deletions across 836 files</small></span>
+                            <span><strong>Compare changes</strong><small>44.9k additions and 16.7k deletions across 274 files</small></span>
                         </a>
                         <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/issues" target="_blank" rel="noreferrer" aria-label="Give feedback">
                             <span class="material-icons-outlined">bug_report</span>
@@ -115,7 +116,7 @@
                             <span class="material-icons-outlined">cloud_download</span>
                             <h3>CDN bundle</h3>
                         </header>
-                        <pre id="install-cdn"><code>https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.7.0/dist/WasmGPU.iife.min.js</code></pre>
+                        <pre id="install-cdn"><code>https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.8.0/dist/WasmGPU.iife.min.js</code></pre>
                         <button class="copy-btn" type="button" data-copy-target="install-cdn">
                             <span class="material-icons-outlined">content_copy</span>
                             Copy link
@@ -167,7 +168,7 @@
                     <article class="panel reveal" style="--delay: 280ms;">
                         <span class="material-icons-outlined">image</span>
                         <h3>glTF 2.0</h3>
-                        <p>Built-in support for importing and rendering core glTF 2.0 assets with PBR and unlit materials.</p>
+                        <p>Built-in support for importing glTF 2.0 assets with over a dozen supported extensions.</p>
                     </article>
                     <article class="panel reveal" style="--delay: 320ms;">
                         <span class="material-icons-outlined">api</span>
@@ -178,7 +179,7 @@
             </section>
         </main>
         <footer class="site-footer container">
-            <p>&copy; <span id="year"></span> <a href="https://www.github.com/Zushah" target="_blank" rel="noreferrer">Zushah</a>. All rights reserved.</p>
+            <p>Copyright &copy; <span id="year"></span> <a href="https://www.github.com/Zushah" target="_blank" rel="noreferrer">Zushah</a>.</p>
         </footer>
         <script src="./script.js"></script>
     </body>

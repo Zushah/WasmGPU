@@ -23,9 +23,9 @@ DOCS_ASSETS_BUILD_DIR = BUILD_DIR / "docs" / "assets"
 DIST_MINIFIED_SOURCE = ROOT_DIR / "dist" / "WasmGPU.min.js"
 DIST_MINIFIED_BUILD = BUILD_DIR / "WasmGPU.min.js"
 IIFE_SCRIPT_OLD = '<script src="../dist/WasmGPU.iife.min.js"></script>'
-IIFE_SCRIPT_NEW = '<script src="https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.7.0/dist/WasmGPU.iife.min.js"></script>'
+IIFE_SCRIPT_NEW = '<script src="https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.8.0/dist/WasmGPU.iife.min.js"></script>'
 ESM_IMPORT_OLD = 'import { WasmGPU } from "../dist/WasmGPU.min.js";'
-ESM_IMPORT_NEW = 'import { WasmGPU } from "https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.7.0/dist/WasmGPU.min.js";'
+ESM_IMPORT_NEW = 'import { WasmGPU } from "https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.8.0/dist/WasmGPU.min.js";'
 
 def ensure_required_paths() -> None:
     required_paths = [

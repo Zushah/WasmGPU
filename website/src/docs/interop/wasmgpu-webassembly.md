@@ -4,20 +4,19 @@
 WasmGPU.webassembly wraps foreign WebAssembly instances, exports objects, or memory objects so you can read typed arrays, byte ranges, UTF-8 strings, and `DataView` regions from external linear memory.
 Use this when your data lives in another WebAssembly module.
 It does not expose WasmGPU's own internal Rust/WebAssembly driver memory.
+Its factory methods return `WasmModule` wrappers for those foreign memory sources.
 
 ## Syntax
 ```ts
-WasmGPU.webassembly: typeof webassemblyInterop
+WasmGPU.webassembly: WebAssemblyInterop
 const webassembly = wgpu.webassembly;
-
-import { webassemblyInterop } from "wasmgpu";
 ```
 
 ## Parameters
 This accessor does not take parameters.
 
 ## Returns
-`typeof webassemblyInterop` - Factory helpers for `WasmModule`.
+`WebAssemblyInterop` - Factory helpers for `WasmModule`.
 
 ## Type Details
 ```ts
@@ -34,9 +33,9 @@ type WasmModuleOptions = {
 ```
 
 #### Factory Methods
-- `fromInstance(instance, options?)` wraps a `WebAssembly.Instance` or any object with an `exports` field.
-- `fromExports(exportsObject, options?)` wraps an exports object directly.
-- `fromMemory(memory, options?)` wraps a standalone `WebAssembly.Memory` when you only need memory access.
+- [`WasmGPU.webassembly.fromInstance(instance, options?)`](./wasmgpu-webassembly-frominstance.md) wraps a `WebAssembly.Instance` or any object with an `exports` field.
+- [`WasmGPU.webassembly.fromExports(exportsObject, options?)`](./wasmgpu-webassembly-fromexports.md) wraps an exports object directly.
+- [`WasmGPU.webassembly.fromMemory(memory, options?)`](./wasmgpu-webassembly-frommemory.md) wraps a standalone `WebAssembly.Memory` when you only need memory access.
 
 #### WasmModule
 `WasmModule` resolves pointers and lengths against a foreign module and creates typed memory views.
@@ -121,6 +120,9 @@ console.log(copy);
 ```
 
 ## See Also
+- [WasmGPU.webassembly.fromInstance](./wasmgpu-webassembly-frominstance.md)
+- [WasmGPU.webassembly.fromExports](./wasmgpu-webassembly-fromexports.md)
+- [WasmGPU.webassembly.fromMemory](./wasmgpu-webassembly-frommemory.md)
 - [WasmGPU.driver](./wasmgpu-driver.md)
 - [WasmGPU.frameArena](./wasmgpu-framearena.md)
 - [WasmGPU.python](./wasmgpu-python.md)

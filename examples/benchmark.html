@@ -53,6 +53,7 @@
                     <option value="500000" selected>500k</option>
                     <option value="1000000">1M</option>
                     <option value="5000000">5M</option>
+                    <option value="8388608">Storage Buffer Binding Size Limit</option>
                 </select>
                 <label for="iter-select">iterations</label>
                 <select id="iter-select">
@@ -240,6 +241,7 @@
             const makeParams = (s) => new Float32Array([MAP_K, s.iterations, 0, 0]);
             const throughput = (units, ms) => ms > 0 ? units / (ms / 1000) : NaN;
             const units = (n) => n >= 1e9 ? `${fmt(n / 1e9, 2)} B/s` : `${fmt(n / 1e6, 1)} M/s`;
+            const rateText = (n) => Number.isFinite(n) ? units(n) : "n/a";
             const sampleArray = (bytes) => {
                 if (!bytes) return null;
                 if (bytes instanceof Float32Array) return Array.from(bytes.slice(0, 4));
@@ -295,9 +297,11 @@
             const updateHud = (s, r, note) => {
                 const m = r.m;
                 const isRender = s.mode === "render";
-                const timingMs = isRender ? m.frame.median() : (m.kernel.count ? m.kernel.median() : m.sync.median());
                 const computeUnits = s.count * s.iterations * s.batches;
-                const rate = (!isRender && r.unsupported) ? NaN : throughput(isRender ? s.count : computeUnits, timingMs);
+                const renderRate = throughput(s.count, m.frame.median());
+                const syncRate = throughput(computeUnits, m.sync.median());
+                const kernelRate = m.kernel.count ? throughput(computeUnits, m.kernel.median()) : NaN;
+                const rate = isRender ? renderRate : syncRate;
                 const lines = [
                     `Phase-Space ${isRender ? "Rendering" : "Compute"} Benchmark`,
                     `engine: ${r.name}`,
@@ -319,14 +323,15 @@
                         "map steps: n/a",
                         `runs: ${int(m.frames)}`
                     ] : [
-                        `timing basis: ${m.kernel.count ? "GPU timestamp kernel time" : "wall-clock synchronized time"}`,
+                        `timing basis: synchronized wall-clock time`,
                         `kernel GPU median: ${m.kernel.count ? fmt(m.kernel.median()) : "n/a"} ms`,
                         `sync wall median: ${fmt(m.sync.median())} ms`,
                         `sync wall p95: ${fmt(m.sync.p95())} ms`,
                         `submit median: ${m.submit.count ? fmt(m.submit.median()) + " ms" : "n/a"}`,
                         `timestamp read median: ${m.timestampRead.count ? fmt(m.timestampRead.median()) : "n/a"} ms`,
                         `validation readback median: ${m.validationRead.count ? fmt(m.validationRead.median()) : "n/a"} ms`,
-                        `map steps: ${units(rate)}`,
+                        `map steps (sync wall): ${rateText(syncRate)}`,
+                        `map steps (GPU kernel): ${rateText(kernelRate)}`,
                         `runs: ${int(m.frames)}`,
                         `queue submits: ${int(m.queueSubmits)}`,
                         `sample [q,p,stretch]: ${sampleLine(r.sample)}`,
@@ -553,7 +558,6 @@
                     const submitMs = performance.now() - t0;
                     await queue.onSubmittedWorkDone();
                     const syncMs = performance.now() - t0;
-                    r.m.queueSubmits++;
                     await recordCompute(s, r, submitMs, syncMs, NaN, NaN, readSample, "Compute mode: Three.js native WebGPU compute via WebGPURenderer and TSL ComputeNode over StorageBufferAttribute.");
                 };
                 r.destroy = () => { computeNode.dispose?.(); sentinelNode.dispose?.(); renderer.dispose(); c.remove(); };

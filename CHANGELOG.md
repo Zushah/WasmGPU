@@ -1,6 +1,20 @@
 # WasmGPU changelog
 All release notes of WasmGPU are recorded in this file.
 
+## [v0.8.0](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0) - 05/24/2026
+The ninth release of WasmGPU. Commits: [`v0.7.0...v0.8.0`](https://www.github.com/Zushah/WasmGPU/compare/v0.7.0...v0.8.0)
+- Added substantially broader glTF 2.0 runtime fidelity with morph-target import, base and per-node morph weights, morph-weight animation playback, imported node records, extension metadata, safe imported-asset shutdown, texture transforms, material variants, XMP metadata, bound punctual lights, spot lights, node visibility, and animation pointers.
+- Added much richer glTF 2.0 material support covering clearcoat, specular, index of refraction, sheen, iridescence, anisotropy, transmission, diffuse transmission, volume, and dispersion, which makes the physically based material model substantially closer to modern glTF assets and more useful for real asset inspection rather than only simple demonstration scenes.
+- Added the nodelink scientific visualization primitive, with node and edge rendering paths that can represent graph, molecule, and relationship data alongside meshes, pointclouds, glyphfields, overlays, picking, scaling, and colormaps.
+- Added LU factorization and solve compute kernels for real and complex systems, expanding the compute subsystem from general-purpose parallel primitives toward domain-relevant computational science.
+- Added external WebAssembly interoperability, as a sibling to the existing Python interoperability, so WasmGPU can wrap foreign WebAssembly instances, exports, or memories and create typed views over other linear memories, making it easier to connect additional WebAssembly modules to WasmGPU workflows.
+- Added occlusion culling using previous-frame hierarchical Z-buffer data, with explicit culling statistics and safety rules that keep picking and warmup unfiltered while conservatively excluding ambiguous occluders from capture.
+- Added renderer warmup and configurable WebGPU device-limit requests, so applications can prepare render paths more deliberately and request larger buffer or binding limits when the workload requires them.
+- Added per-point coloring for point clouds, allowing point cloud data to use explicit RGBA color buffers in addition to scalar-driven colormaps, just like glyphfields and nodelinks.
+- Fixed glTF animation robustness by refreshing animation sampler views after WebAssembly allocations, preventing stale memory views from corrupting animation playback after importer-side allocation activity.
+- Fixed close-range camera inspection by further relaxing the perspective near clip.
+- Added a benchmark example that exercises both rendering and computing and compares WasmGPU's performance against Three.js and Babylon.js.
+
 ## [v0.7.0](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.7.0) - 03/30/2026
 The eighth release of WasmGPU. Commits: [`v0.6.0...v0.7.0`](https://www.github.com/Zushah/WasmGPU/compare/v0.6.0...v0.7.0)
 - Added an interactive analysis stack built around GPU ID-pass picking, rectangular and lasso region selection, composable overlay layers, and an annotation toolkit, so applications can move from raw hits to typed selections, legends, triads, probes, markers, and distance or angle measurements.

@@ -5,7 +5,7 @@
  */
 (() => {
     const FOOTER_CLASS = "wasmgpu-docs-footer";
-    const FOOTER_HTML = '<p>&copy; <span id="year"></span> <a href="https://www.github.com/Zushah" target="_blank" rel="noreferrer">Zushah</a>. All rights reserved.</p>';
+    const FOOTER_HTML = '<p>Copyright &copy; <span id="year"></span> <a href="https://www.github.com/Zushah" target="_blank" rel="noreferrer">Zushah</a>.</p>';
     const ensureFooter = () => {
         const content = document.querySelector(".md-content__inner");
         if (!content) return;

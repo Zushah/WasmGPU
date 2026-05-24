@@ -31,6 +31,7 @@ export function transform_pack_model_normal_mat4_from_ptrs(outPtr: number, matPt
 export function cull_write_planes_from_view_projection(outPlanesPtr: number, viewProjPtr: number): number;
 export function cull_prepare_world_spheres_from_ptrs(outCentersPtr: number, outRadiiPtr: number, worldPtrsPtr: number, localCentersPtr: number, localRadiiPtr: number, count: number): number;
 export function cull_spheres_frustum(outIndicesPtr: number, centersPtr: number, radiiPtr: number, count: number, frustumPtr: number): number;
+export function cull_spheres_occlusion(outIndicesPtr: number, outStatsPtr: number, centersPtr: number, radiiPtr: number, count: number, viewProjPtr: number, viewportWidth: number, viewportHeight: number, mipOffsetsPtr: number, mipWidthsPtr: number, mipHeightsPtr: number, mipCount: number, depthValuesPtr: number, depthValuesLen: number, nearPlaneEpsilon: number, maxScreenCoverage: number, depthBias: number): number;
 
 export function bounds_pointcloud_xyzs(outBoxMinPtr: number, outBoxMaxPtr: number, outSphereCenterPtr: number, outSphereRadiusPtr: number, pointsPtr: number, pointCount: number, strideF32: number): number;
 export function bounds_glyph_instances(outBoxMinPtr: number, outBoxMaxPtr: number, outSphereCenterPtr: number, outSphereRadiusPtr: number, positionsPtr: number, scalesPtr: number, rotationsPtr: number, instanceCount: number, glyphCenterPtr: number, glyphRadius: number): number;

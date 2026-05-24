@@ -7,8 +7,8 @@
     </a>
 </p>
 <p align="center">
-    <a href="https://www.github.com/Zushah/WasmGPU/releases/tag/v0.7.0"><img src="https://img.shields.io/badge/release-v0.7.0-005a9c?logo=github&logoColor=white" alt="Latest release"></a>
-    <a href="https://raw.githubusercontent.com/Zushah/WasmGPU/v0.7.0/dist/WasmGPU.js"><img src="https://img.shields.io/badge/minified-450.6_kB-654ff0?logo=javascript&logoColor=white" alt="450.6 kilobytes minified bundle size"></a>
+    <a href="https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0"><img src="https://img.shields.io/badge/release-v0.8.0-005a9c?logo=github&logoColor=white" alt="Latest release"></a>
+    <a href="https://raw.githubusercontent.com/Zushah/WasmGPU/v0.8.0/dist/WasmGPU.js"><img src="https://img.shields.io/badge/minified-838.7_kB-654ff0?logo=javascript&logoColor=white" alt="838.7 kilobytes minified bundle size"></a>
     <a href="https://www.npmjs.com/package/@zushah/wasmgpu"><img src="https://img.shields.io/npm/dm/%40zushah%2Fwasmgpu?logo=npm&logoColor=white&color=9b8df5" alt="npm downloads per month"></a>
     <a href="https://www.jsdelivr.com/package/gh/Zushah/WasmGPU"><img src="https://img.shields.io/jsdelivr/gh/hm/Zushah/WasmGPU?color=654ff0&logo=jsdelivr&logoColor=white" alt="jsDelivr requests per month"></a>
     <a href="https://www.github.com/Zushah/WasmGPU/blob/main/LICENSE.md"><img src="https://img.shields.io/badge/license-MPL--2.0-005a9c?logo=gitbook&logoColor=white" alt="Mozilla Public License 2.0"></a>
@@ -17,40 +17,40 @@
 ## About
 
 - 🔥 WebGPU × WebAssembly rendering and computing engine for scientific workloads in the browser.
-- 🚀 Latest release: [**`v0.7.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.7.0).
+- 🚀 Latest release: [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 - 💡 Website: [https://zushah.github.io/WasmGPU](https://zushah.github.io/WasmGPU).
-- ⚙️ WebGPU engine written in TypeScript, spanning **scene & assets** (meshes, pointclouds, glyphfields, data materials, lights, cameras, glTF 2.0 assets, mipmapped texture sampling, transparency, animations, 4- or 8-influence skinning, and richer built-in geometry including 2D primitives plus cartesian and parametric curves and surfaces for graphing); **rendering architecture** (WebAssembly-driven frustum culling, opaque draw batching with automatic instanced rendering, optional subpixel morphological anti-aliasing, configurable canvas format selection, and GPU ID-pass picking for both single-hit queries and rectangular or lasso region queries with typed results); **interaction, overlays, & diagnostics** (orbit/trackball orthographic/perspective camera navigation with bounds-based scene framing, inspection views, and a composable overlay and annotation toolkit with triads, grids, legends, markers, probes, and measurements); and **compute & interop** (a first-class WebGPU compute subsystem with reusable pipelines and buffers, an extensive kernels library, an ndarray abstraction, asynchronous readback utilities, a unified scale-transform model shared across rendering and computing workflows, and Python-in-the-browser interoperability).
-- 🦀 WebAssembly driver written in Rust, spanning **data layout & transforms** (transforms stored in SoA memory with per-index dirty tracking and partial local or world propagation plus model and normal matrix packing); **animation & asset hot paths** (animation sampling and joint-matrix generation executed in WebAssembly together with glTF accessor deinterleaving, sparse patch application, numeric conversion, and mesh normal generation); **bounds, culling, & visibility** (world-space bounds computation for geometry, pointclouds, and glyphfields together with frustum plane extraction and sphere-frustum culling kernels); **array semantics & zero-copy staging** (ndarray indexing utilities for explicit shape-and-stride byte-offset math plus uniforms and instance data staged as zero-copy views into WebAssembly memory with explicit typed-slice handles for JavaScript interop); and **performance envelope** (hot-path allocations avoided via cached pipelines and bind-group layouts plus a frame arena and user heap arenas, with builds optimized via LLVM and Binaryen and SIMD128 enabled for even higher throughput).
+- ⚙️ WebGPU engine written in TypeScript, spanning **scene & assets** (meshes, pointclouds, glyphfields, nodelinks, data materials, lights, cameras, glTF 2.0 assets with over a dozen extensions, metadata, and animation-extension coverage, mipmapped texture sampling, transparency including transmission rendering, animations, 4- or 8-influence skinning, and rich built-in geometry including cartesian and parametric curves and surfaces for mathematics); **rendering architecture** (WebAssembly-powered frustum culling, previous-frame occlusion culling, opaque draw batching with automatic instanced rendering, optional subpixel morphological anti-aliasing, configurable canvas format selection, and GPU ID-pass picking for both single-hit queries and rectangular or lasso region queries with typed results); **interaction, overlays, & diagnostics** (orbit/trackball orthographic/perspective camera navigation with bounds-based scene framing, inspection views, and a composable overlay and annotation toolkit with triads, grids, legends, markers, probes, and measurements); and **compute & interop** (a first-class compute subsystem with reusable pipelines and buffers, an extensive kernels library, an ndarray abstraction, asynchronous readback utilities, a unified scale-transform model shared across rendering and computing workflows, external WebAssembly module interoperability, and Python-in-the-browser interoperability).
+- 🦀 WebAssembly driver written in Rust, spanning **data layout & transforms** (transforms stored in SoA memory with per-index dirty tracking and partial local or world propagation plus model and normal matrix packing); **animation & asset hot paths** (animation sampling and joint-matrix generation executed in WebAssembly together with glTF accessor deinterleaving, sparse patch application, numeric conversion, richer import-side data preparation, and mesh normal generation); **bounds, culling, & visibility** (world-space bounds computation for geometry, pointclouds, glyphfields, and nodelinks together with frustum plane extraction, sphere-frustum culling kernels, and CPU-side support for render-only occlusion filtering); **array semantics & zero-copy staging** (ndarray indexing utilities for explicit shape-and-stride byte-offset math plus uniforms and instance data staged as zero-copy views into WebAssembly memory with explicit typed-slice handles and module-facing views for external WebAssembly interoperability); and **performance envelope** (hot-path allocations avoided via cached pipelines and bind-group layouts plus a frame arena and user heap arenas, with builds optimized via LLVM and Binaryen and SIMD128 enabled for even higher throughput).
 
 ## Architecture Diagram
 
-The diagram below reflects the current runtime flow of WasmGPU.
+The diagram below reflects the implemented architecture of WasmGPU v0.8.0.
 
-Solid arrows indicate control flow while dashed arrows indicate data flow.
+Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
 
-Click [here](https://mermaid.live/view#pako:eNp9WG1v4jgQ_itWTtpPbsVLKS0rnZRC6FZLKQJ6SHe9DyYYyDWJc47Tllvtf78ZOySxKVuttuHJeDyvzwz94YViw72Bt43Fe7hnUpHJ_CUl8JMX651k2Z74s4e_XrxZsY6jED-8eH8bCfzxZzN4-ZxzSfwsAwmmIpFaIsH0HkRWLE_uZ8_krXXZv2xZAmN_CAJjFiohD3Cv3LKQD0ge8pRTErKESwa_RaqkiHNKdlwkXMkDJQlTXEYspkTxD1VIEE94vqckE1GqwlgUGxCPD9l-G_EYnuNot1eUsDznikRJJiR-SqNEm02JeOMyZgfEUqFsX3i6eUmd2MyX6Bpfo2dBuotSbnk2eXrC8Iwl-EBiITLr7TyYjuDtHBRzyaX1bjH0JwG8XIQsjtIdgQC_RaGt_emPYA4iT8ZmssVb3oV8tRM0nT6BkF_5Q5QQ8WukLKnZw_A7JjkKX_G2QkVxpA6WyNDUwVAkWaE4hiA_5IonttDd8xiE7ortFipC8lwUMuSQp5TtHA-Hs4dZoO_MOLjIjwmOT-Qm_hTkRlGeMRXuCbq4k6LISBZDmlzx78Ecxb9zmfI4h4yvJZOuK3MM3PRiEyU8zSEoLCZMSggiW-dKQiVioLZCwu3P5AvB9CY8Ea6eeeBjBv38kIZ7KVJR5OA026xZ-EokRNIWXwznOqVS-7E2QcogHb-ssZG_9DHN6394qMCYEVOMPELbxk7FTLVy7tTgcrF8mmOgl5KlOfiUkBwajZMoJQvhf-bXY7D4BgceoZXIe6T2n3bcl2PP2YV0j80-q9oPxOr-s6Px6M90PcVgEssyN1qL7w_aIShIMDVXLIVC2oDvdnkfvWsUuHbPlpo86URNBINW04ndxcsx6Vy2Si44VTwKkJX8MOR5DvIbDkyJvfFFy2K1Qt_lLtn5D4_o1YOmFrxKiqRxBTSf4bWqN_Jf5n7lLx4Nw_igI1nHBzKS0ZtT86tvgY7lN84ywuJYGBbWfmZoJPRpqog6ZHzzWb5XY39e0RSTPGX6qMKCiX59cjm3KiuTImO70xmwevSXuqSYktEHJW8cyR6L6N8CKypFc6G29hyZOMztw5omP-vWCJjzwyQF2jba8Aux3UKslVtMq2ZJp1hwMRQ1cMcnpt5PlshhukCYm35KgIVkzonmIg18IWkBIwqG45maWPnTB12h5ZghOUuy2Jj9D3YKeg5hOWvR3dPzdLRAXhVFusl1ck7n3NlOWw2fJxOd3yJXRULCIo6bAfqs8IDx8D4p3nG0z0-KFX9GwR8gc4_ykDIIEU4onVJecIdwh99srmfhHkXXkEHD5RpxxuOiqd7QZV6N-hw91pEE1D448xeLarBCpqB1TNCgOMG4Bp3pEs-w5FUDzUSuLqCUMfdligsMA8Sal8PBGVHmwuNsbNz4asbQZ7EOYxAb8S0Qg3xdx2DXNorjwW9XQf92PKZQ0OKVD35r3XXubo4fL96jjdoPOtkHDZE44fV1u9cdfXVU7iTnaamv0xl1-6Nan3896g7P67vqttu-q0_vTQ0b2_2hZWOrF9y0zuvsdK66XVfngQNTvZcKx-O7TvemUnjrX41a5xX2_M6w1XIVZoWEYigV3rVv_IaFcGLsX59V2Ana173gRGGUvlb29QK_aV8nuO6cVXc1gqR0vlqZxlWZwi5MYd2tUt68UW-LFJdCqrc_ivsdxf2N4npmcmodwJWM4spF9TJF9apE9QZEccehekGhuHfUGbQ0wNJAzYJAkSEpjG-Kg5ni9KVmuFI9PSkORIrjrUycpUdPIIpzhMJIoJruKfA21cRLNadS5EFakhnVpFSmzFIFrEI1X0AoFlT3MtUNptNRipr_IaLk4uJ3_IZhAHjQAITYBjC0NoLBtRGMtI1g2G0EI37MKuYRMYihDaDLNgJhtQGMsaMFAm4jOuwGQo2Nc6X3-N5IQmrMA6SnfImJurhsmldDtYENser-GjOVUaL6DkR1Mo9GYGD11Vi3BoILHcToccDKpxqCMDkI-uuqB0MdCHPpQPjk5FA3kZ1ovzasAcJTo0RKQyDxJgPQbi6EzXeCQSu6GDami0GbuhA2rYtBCzuQ5ohjxOHRKb0aq4qvhuryQ3dKg6HFSgz9OQXBoRMQPToBkW5OTmMDIwjtXULoZg05aZvXZytMs8IxCvBo65vbVzT6VhctElSzZDUIfGUw_fq06BtwnSg8ZbDTCtdal0fBZSmn6bBZvRoENizl4OlE0LSHAaukrmq0BhuShlsbzXSClh_KN8jBzSA7oOFox9XKKytQlQtA2iWENGEw5I4TcFUpPN7c6AVdlefcrK6oja6g-qSGPOrt4HuBN1Cy4NSDNT1h-NH7geIvHn7hgK1zAI84kl-8l_QnnMlY-qcQyfEYLKi7vTfYsjiHT0UG3-T4KGKwKdcietccwn6uvAFsO1qHN_jhfXiD9mXnut26ven1ey341-3dUu_gDS5agPf6_fbNVafd63e63dvuT-r9py9uXQLevm5dXd90O-2bPiwbHt9E8KXp0fzBTv_d7uf_9Ya82A) to interactively view the diagram if it doesn't properly appear below.
+Click [here](https://mermaid.live/view#pako:eNqNWFlv4zgS_iuEBugnJvAVXwMsIF9pI_EB25mgd7MPtEzbmuhakkriafR_3ypSVkQ6nl2_xPpULFbVV5fz0wvSHff63j5K34MjE4o8rl4SAh-Zbw-CZUfiL6f_evGW-TYKA3x48f5tJPDjL5fw8klyQfwsAwmmwjSxRMbzexB5ZjK-Xz6Rt9pt97ZmCUz8IQhMWKBScYJ7xZ4FvE9kwBNOScBiLhj8TRMl0khScuBpzJU4URIzxUXIIkoU_1C5APGYyyMlWRomKojSfAfi0Sk77kMewfcEvI3C5JWSKDwcFSVMSq5IGGepwKckjLUDlKRvXETshFiSqgIEpVykWWk9T3YviROuZ_AS_eVbdHecHMKEW-4-LhYYs4kAx0iUVtThZzWej-DtClRzwYX1bj30H8fwch0wcOJAIOpvYWBrX_wxXoHIwphP9njLeypebdbm8wUI-aVrRKVp9BoqS2o5HT4g82HwirflKoxCdbJEhosZ-jJM4yxXHIMgT1Lx2BYaPE1AaJDv95Amgss0FwEH8hJ2cDwcLqdLfWWGNPEz6ZErNpquQWwUyoyp4EjQwYNI84xkEfDlSj_okDxwkfBIAvNbwYTjhw76_GYXxjyREBAWESYEBDDGjCH7VIBtT-QbQVJjHqeugtXYRxW-PCXBUaRJmktwle22LHglAuJni6-HK02k0PZvTWgyIOFvc2vkb3wkd_snDxQYM2KKkRla6OTJXCvnTuZt1pvFChNoI1giwaeYSKg5DnlN1qn_lV-z8fo7HJhBVZH3UB3_R_GlIjuCrxRsk5A0iev38h4tW16pzm9lfdrBmvkmySKwmGWZq3T9MNX-FheCN1KxBDJsB-Gx8_4cgErm6wjYUo8LzeVjyqAGNfeHaDMhjdta0S8uFY_G2MP8IOBSgvyOQ19FW75pWcxjKEjptkZ_qstnqtsPXiXSuHIFVKXpgmXRSPv4bKzzoTi_0-GT2AMVw_OUvDFgKFHy3EYlBlm3PlvT83S-MU3Lh9vjbXS66HWavh_I3kkdIW7_Vy_01zNH7UiEb059Pn8fa4K_c5YRFkWpGSI68BlGDTpKoog6ZeDiFzn6PFlBJMqWygRPmD6sMM3Dvz-7WfnztVUSGXjFDpdz7Hnmb3QtMCXCD4gtx4GFAf1PjqWQoM1QFEeOMyRwAny1wYTQ6D9MqkhQvOM36X4PGaDcNH-eL1azcy0mWAoRVCM0uy9MvX_cYMvVacvcpKQE2qaQnOjmWZRrkkN-wIC_kqnP_nw604VTTEgiWZxFxu4_sZ7RdYjLVZMGi6f5CCM9SPNkJ-EinBlfCA6fHh81mblUeUyCPIqqofgqz8zIHYj0HReR1ZfFMhr_ATL3KA_kQDBwdGryeG7X_9Affh9bU4gFRxTdAldmzGjEmdvrcsbJsiXqetORAtSWX_rrdTnogQooEKmzFrIPbEIdmJIZprM6P8WhRGokbjhS3UCqIrcFhTk6r8sSVik3rMPivvOorlz4agbjVxEOIhAb8T20I_G6jXJO9mEU9X9rjTu9yYRCwqavvP9bbdAYdM-PN-_hTh37jeyDBtiy4XW7ftcc_e6oPAjOk0JfozFqdkaf-vz2qDm8rq_VrNd9V59uaxUb652hZWPtbtytXdfZaLSaTVfniUM7ei8UTiaDRrNbKuz5rVHtusI7vzGs1VyFWS4gFwqFg3rXr1gIJyZ--6rCxrjevhtfKIRpWdp3N_ar9jXG7cZVda0RkNL43WIa13kK-zqFlbykvHqjXl4p7qhUL6MU102K6yTFbdFwah3ADZHiBkhxt6O4uVFcyCisXFRvTRSXoU_2rNOwyVCztVDcRCjsDxTXAYozn5pxTvW8pjiCKQ5UqscixZFGlz8KCi2teuBQMzaomQBUd3cKbZrqPkt1C6W67dGid1HdmgoKLYXQW6juGhCaNdWlTXXBaXrKGEN0yc3NP_AXkQHgiwYg3DaAYbYRjLmNYGRtRFNiQ8iPjSBZBkGSzbG5DZiI2xiG30aACxvQPDjQ9GzjGUFaHD0_zvEBQ5y7zkh5F766sBHeXmCYII4ybZ8xC3KlwOCbYyl-s-NSIhVdpRDc40A6_wyGueqcLKHSJ02boRTeuZgWMyBmhZMMJWSy2YD4WoOQlw6is9TBIGddBHPXwbC-HagMUIlUGShBXTYuZkqq4A9bh3MvJq7DAiSuiW_lkhL8NK-E9Mki6IuCG-xELgR9yYWgS7nQw7mQPqEzCZ8I9jMXg-5WQHC3HXC8urChdBzvvsAeimBUsTOjnx7h7c4F2FqdK7EtlclhQEMbublFZnQ_rFabRrEpXoAWiViEF6ipLw1jQ63Wpgaxv1b8MVeNqsly-2VyaxRbdjXaGsTebkBsNQb8jBEMhBtb6oxUrtBvzckybuZ9CXrUO8Cy7vWVyDn1YHeOGT56P1H8xcNfAbAg9uErztEX7yX5BWcylvwzTePzMdglD0evv2eRhKc8gx9tfBQyWGo_RfR-OISdWXn9ntbg9X96H_BwW-u06q1OvdbtNLutJvVOXr9x2-v1OnedXq3T63bazUbrF_X-0lfWbnuwN7W6tXq71-i1G-076vFdCL9hZuZ_gPpfgb_-C-Os4DI) to interactively view the diagram if it doesn't properly appear below.
 
 ```mermaid
 flowchart LR
     subgraph API["Public API"]
         APP["User Application"]
-        ENG["WasmGPU v0.7.0"]
-        FAC["Factory surface: scene, camera, controls, geometry, material, texture, mesh, pointcloud, glyphfield, light, asset import, animation, overlay, annotation"]
+        ENG["WasmGPU v0.8.0"]
+        FAC["Factory surface: scene, camera, controls, geometry, material, texture, mesh, pointcloud, glyphfield, nodelink, light, asset import, animation, overlay, annotation, interop"]
     end
 
-    subgraph RT["WebGPU Engine"]
+    subgraph WGPU["WebGPU Engine"]
         LOOP["Frame loop"]
         REND["Renderer"]
         SCALE["Scaling service"]
         OVER["Overlay framework"]
         ANNO["Annotation toolkit"]
         PICK["Picking utility"]
-        CAPI["Compute subsystem"]
+        COMP["Compute subsystem"]
         CBUF["Buffer resource manager"]
-        CPIPE["Pipeline controller"]
-        CPLAN["Dispatch workgroup planner"]
-        CKERN["Kernels library"]
-        CARR["N-dimensional array abstraction for CPU & GPU memory"]
+        CPIP["Pipeline controller"]
+        CDIS["Dispatch workgroup planner"]
+        CKER["Kernels library"]
+        CND["N-dimensional array model for CPU & GPU memory"]
         CREAD["Asynchronous readback ring"]
         CSCR["Scratch buffer pool"]
     end
@@ -58,34 +58,37 @@ flowchart LR
     subgraph DATA["Object & Data Model"]
         SCN["Scene"]
         TSTORE["Transform store in SoA memory"]
-        MESH["Mesh with geometry, material, & texture"]
-        PGG["Pointcloud & glyphfield"]
+        MESH["Mesh with geometry, material, texture, morphing, & skinning"]
+        PGN["Pointcloud, glyphfield, & nodelink"]
         CMAP["Colormapping"]
-        SKIN["Skin instance data"]
+        SKIN["Skinning instance data"]
         ASTORE["Annotation store"]
         ALOAD["Loader for glTF 2.0 asset data"]
         ADEC["Accessor decoding & data conversion"]
         AIMP["Importer from asset data to scene resources"]
+        AMETA["Imported nodes, metadata, variants, cameras, & lights"]
+        WINT["WebAssembly interop"]
+        PY["Python interop"]
     end
 
     subgraph WASM["WebAssembly Driver"]
         WHEAP["Heap allocation for persistent typed memory"]
-        WFAR["Frame arena for transient typed memory"]
-        WTR["Transform propagation"]
+        WFRAME["Frame arena for transient typed memory"]
+        WTRANS["Transform propagation"]
         WMATH["Matrix, vector, & quaternion mathematics"]
         WND["N-dimensional array indexing & stride-offsetting"]
-        WMESH["Mesh normal generation"]
+        WNORM["Mesh normal generation"]
         WGLTF["glTF accessor decoding, sparse patching, & numeric conversion"]
-        WANI["Animation sampling & joint matrix generation"]
-        WBOUNDS["Bounds for mesh, pointcloud, & glyphfield"]
+        WANIM["Animation sampling & joint matrix generation"]
+        WBOUNDS["Bounds computation"]
         WCULL["Frustum culling"]
     end
 
     subgraph GPU["Browser Resources"]
         DEV["Graphics device & queue"]
         CACHE["Pipeline cache & bindgroup cache"]
-        RES["Graphics buffers, textures, & samplers"]
-        RPASS["Render passes for opaque geometry, transparent geometry, post-processing, & user interaction"]
+        RES["Buffers, textures, & samplers"]
+        RPASS["Render passes for opaques, transparents, transmissions, post-processing, & user interaction"]
         CPASS["Compute passes for kernels"]
     end
 
@@ -98,96 +101,92 @@ flowchart LR
 
     class APP,ENG,FAC darkblue;
     class LOOP,REND,SCALE,OVER,ANNO,PICK green;
-    class CAPI,CBUF,CPIPE,CPLAN,CKERN,CARR,CREAD,CSCR lightblue;
-    class SCN,TSTORE,MESH,PGG,CMAP,SKIN,ASTORE,ALOAD,ADEC,AIMP yellow;
-    class WHEAP,WFAR,WTR,WMATH,WND,WMESH,WGLTF,WANI,WBOUNDS,WCULL purple;
+    class COMP,CBUF,CPIP,CDIS,CKER,CND,CREAD,CSCR lightblue;
+    class SCN,TSTORE,MESH,PGN,CMAP,SKIN,ASTORE,ALOAD,ADEC,AIMP,AMETA,WINT,PY yellow;
+    class WHEAP,WFRAME,WTRANS,WMATH,WND,WNORM,WGLTF,WANIM,WBOUNDS,WCULL purple;
     class DEV,CACHE,RES,RPASS,CPASS pink;
-    
+
     APP --> ENG
     ENG --> FAC
     ENG --> LOOP
+    ENG --> REND
+    ENG --> COMP
+    ENG --> SCALE
     ENG --> OVER
     ENG --> ANNO
-    ENG --> PICK
-    ENG --> CAPI
-
     FAC --> SCN
+    FAC --> TSTORE
     FAC --> MESH
-    FAC --> PGG
-    FAC --> CMAP
-    FAC --> SKIN
+    FAC --> PGN
     FAC --> ALOAD
-    MESH --> CMAP
+    FAC --> AIMP
+    FAC --> WINT
+    FAC --> PY
 
-    ALOAD --> ADEC --> AIMP
-    AIMP -.-> SCN
-    AIMP -.-> MESH
-    AIMP -.-> SKIN
-    AIMP -.-> TSTORE
-    ADEC -.-> WGLTF
+    SCN --> MESH
+    SCN --> PGN
+    MESH --> TSTORE
+    PGN --> TSTORE
+    SKIN --> MESH
+    ALOAD --> ADEC
+    ADEC --> AIMP
+    AIMP --> SCN
+    AIMP --> MESH
+    AIMP --> SKIN
+    AIMP --> AMETA
+    CMAP --> MESH
+    CMAP --> PGN
+    SCALE --> CMAP
+    SCALE --> PGN
 
     LOOP --> REND
-    SCN --> REND
-    TSTORE --> REND
-    MESH --> REND
-    PGG --> REND
-    CMAP --> REND
-    SKIN --> REND
-    OVER --> REND
-    REND --> PICK
-    PICK --> ANNO
-    ASTORE --> ANNO
-    ANNO --> OVER
-
-    CAPI --> CBUF
-    CAPI --> CPIPE
-    CAPI --> CPLAN
-    CAPI --> CKERN
-    CAPI --> CARR
-    CAPI --> CREAD
-    CAPI --> CSCR
-    CAPI --> SCALE
-    SCALE --> MESH
-    SCALE --> PGG
-    SCALE --> CMAP
-    CBUF --> CPASS
-    CPIPE --> CPASS
-    CPLAN --> CPASS
-    CKERN --> CPASS
-    CSCR --> CPASS
-    CPASS --> DEV
-    CREAD --> DEV
-
-    REND --> RPASS
+    LOOP --> WFRAME
+    REND --> DEV
     REND --> CACHE
-    CACHE --> DEV
-    RPASS --> DEV
+    REND --> RES
+    REND --> RPASS
+    REND --> PICK
+    REND --> SCN
+    REND --> TSTORE
+    REND --> WCULL
+    REND --> WBOUNDS
+    PICK --> RPASS
+    OVER --> SCN
+    ANNO --> ASTORE
+    ANNO --> PICK
+    ANNO --> SCN
 
-    ENG -.-> WHEAP
-    LOOP -.-> WFAR
-    WHEAP -.-> TSTORE
-    WHEAP -.-> CARR
-    WFAR -.-> REND
-    TSTORE -.-> WTR
-    WTR -.-> WMATH
-    SKIN -.-> WANI
-    WANI -.-> WMATH
-    MESH -.-> WMESH
-    WMESH -.-> MESH
+    COMP --> CBUF
+    COMP --> CPIP
+    COMP --> CDIS
+    COMP --> CKER
+    COMP --> CND
+    COMP --> CREAD
+    COMP --> CSCR
+    CBUF --> RES
+    CPIP --> CPASS
+    CDIS --> CPASS
+    CKER --> CPASS
+    CND --> CBUF
+    CREAD --> RES
+    CSCR --> RES
+    CPASS --> DEV
+
+    TSTORE -.-> WTRANS
+    MESH -.-> WNORM
     MESH -.-> WBOUNDS
-    PGG -.-> WBOUNDS
-    WBOUNDS -.-> WCULL
-    REND -.-> WCULL
-    WCULL -.-> REND
-    WTR -.-> TSTORE
-    WANI -.-> RES
-    WGLTF -.-> ADEC
-    WGLTF -.-> WND
-    WND -.-> CARR
-    CBUF -.-> MESH
-    MESH -.-> RES
-    REND -.-> RES
-    CBUF -.-> RES
+    PGN -.-> WBOUNDS
+    ADEC -.-> WGLTF
+    SKIN -.-> WANIM
+    CND -.-> WND
+    REND -.-> WFRAME
+    REND -.-> WMATH
+    COMP -.-> WHEAP
+    WINT -.-> CBUF
+    PY --> WHEAP
+    PY --> WFRAME
+    WHEAP -.-> RES
+    WFRAME -.-> RES
 ```
 
 ## Architecture Comparison Tables
@@ -220,23 +219,23 @@ flowchart LR
 | **Uniform Uploads** | Manual packing | Extraction & packing | Zero-copy views & no packing |
 | **Render State Caching** | Manual | State filtering | Pipeline caching |
 | **Instancing** | Manual | Manual | Automatic |
-| **Visibility Culling** | Not available | Frustum culling in JavaScript | Frustum culling in WebAssembly |
+| **Visibility Culling** | Not available | Frustum culling in JavaScript | Frustum & occlusion culling in WebAssembly |
 | **Picking** | Manual GPU / CPU picking | Often CPU-centered | GPU ID-pass with typed hits |
 | **Skinning** | Not available | Data textures | Storage buffers |
 | **Anti-aliasing** | Not available | MSAA | SMAA |
 | **Textures** | Manual | Managed objects | Managed objects |
 | **Animation System** | Not available | Executed in JavaScript | Executed in WebAssembly |
 | **Asset Importing** | Not available | glTF 2.0 | glTF 2.0 |
-| **Camera Controls** | Not available | Built-in | Built-in unified orbit & trackball navigation |
+| **Camera Controls** | Not available | Built-in | Built-in |
 
 ### 4. Compute Workloads and Scientific Visualizations
 |  | **WebGL / WebGPU** | **Three.js / Babylon.js** | **WasmGPU** |
 | :--- | :--- | :--- | :--- |
-| **GPGPU** | Manual, low-level, high-boilerplate | Integrated, high-abstraction, scene-centric | Automated, kernel-driven, compute-optimized |
+| **GPGPU** | Manual, low-level, high-boilerplate | Integrated, renderer-adjacent, framework-specific | Automated, kernel-driven, compute-optimized |
 | **Ndarray Abstraction** | Not available | Not available | CPU & GPU ndarrays |
 | **GPU Readback** | Manual | Manual | Async readback ring |
 | **Python Interoperability** | Not available | Not available | With Pyodide |
-| **Scientific Primitives** | Manual | Manual | Point clouds & glyph fields |
+| **Scientific Primitives** | Manual | Manual | Pointclouds, glyphfields, & nodelinks |
 | **Mathematical Geometry** | Manual | Manual | Cartesian & parametric curves & surfaces |
 | **Scaling Statistics** | Manual | Manual | Min/max & percentile analysis |
 | **Colormap Support** | Manual | Manual | Built-ins & custom |
@@ -246,19 +245,20 @@ flowchart LR
 
 ## Getting Started
 
-Examples: 
-1. [`./examples/esm.html`](https://zushah.github.io/WasmGPU/examples/esm.html) to see how to get started with the ESM build.
-2. [`./examples/iife.html`](https://zushah.github.io/WasmGPU/examples/iife.html) to see how to get started with the IIFE build.
-3. [`./examples/gltf.html`](https://zushah.github.io/WasmGPU/examples/gltf.html) to see how a glTF model of a chessboard can be loaded and imported.
-4. [`./examples/controls.html`](https://zushah.github.io/WasmGPU/examples/controls.html) to see how the camera controls and navigation functionalities work.
-5. [`./examples/picking.html`](https://zushah.github.io/WasmGPU/examples/picking.html) to see how the picking, probing, and selecting utility works.
-6. [`./examples/scaling.html`](https://zushah.github.io/WasmGPU/examples/scaling.html) to see how the scaling service and colormapping works.
-7. [`./examples/overlay.html`](https://zushah.github.io/WasmGPU/examples/overlay.html) to see how the overlay framework and annotation toolkit works.
-8. [`./examples/mandelbulb.html`](https://zushah.github.io/WasmGPU/examples/mandelbulb.html) to see how the compute subsystem can be used to render a Mandelbulb fractal.
-9. [`./examples/galaxy.html`](https://zushah.github.io/WasmGPU/examples/galaxy.html) to see how a point cloud can be used with Python intero via Pyodide and the compute subsystem to render a realistic galaxy.
-10. [`./examples/fluid.html`](https://zushah.github.io/WasmGPU/examples/fluid.html) to see how a glyph field and a point cloud can be used with Python interop, the compute subsystem, navigation, selection, and overlay features to render a fluid dynamics demo.
-11. [`./examples/graphing.html`](https://zushah.github.io/WasmGPU/examples/graphing.html) to see how the mathematical function primitives and data materials can be used with Python interop, navigation, selection, and overlay features to render for a 3D graphing calculator.
-12. [`./examples/protein.html`](https://zushah.github.io/WasmGPU/examples/protein.html) to see how a point cloud can be used with Python interop, navigation, selection, colormap, and overlay features to render a visualization of a protein structure (hemoglobin) from the Protein Data Bank.
+Examples:
+1. [`./examples/benchmark.html`](https://zushah.github.io/WasmGPU/examples/benchmark.html) to see how the performance of WasmGPU compares to Three.js and Babylon.js for both rendering and computing.
+2. [`./examples/esm.html`](https://zushah.github.io/WasmGPU/examples/esm.html) to see how to get started with the ESM build.
+3. [`./examples/iife.html`](https://zushah.github.io/WasmGPU/examples/iife.html) to see how to get started with the IIFE build.
+4. [`./examples/gltf.html`](https://zushah.github.io/WasmGPU/examples/gltf.html) to see how a glTF model of a chessboard can be loaded and imported.
+5. [`./examples/controls.html`](https://zushah.github.io/WasmGPU/examples/controls.html) to see how the camera controls and navigation functionalities work.
+6. [`./examples/picking.html`](https://zushah.github.io/WasmGPU/examples/picking.html) to see how the picking, probing, and selecting utility works.
+7. [`./examples/scaling.html`](https://zushah.github.io/WasmGPU/examples/scaling.html) to see how the scaling service and colormapping works.
+8. [`./examples/overlay.html`](https://zushah.github.io/WasmGPU/examples/overlay.html) to see how the overlay framework and annotation toolkit works.
+9. [`./examples/mandelbulb.html`](https://zushah.github.io/WasmGPU/examples/mandelbulb.html) to see how the compute subsystem can be used to render a Mandelbulb fractal.
+10. [`./examples/galaxy.html`](https://zushah.github.io/WasmGPU/examples/galaxy.html) to see how a point cloud can be used with Python intero via Pyodide and the compute subsystem to render a realistic galaxy.
+11. [`./examples/fluid.html`](https://zushah.github.io/WasmGPU/examples/fluid.html) to see how a glyph field and a point cloud can be used with Python interop, the compute subsystem, navigation, selection, and overlay features to render a fluid dynamics demo.
+12. [`./examples/graphing.html`](https://zushah.github.io/WasmGPU/examples/graphing.html) to see how the mathematical function primitives and data materials can be used with Python interop, navigation, selection, and overlay features to render for a 3D graphing calculator.
+13. [`./examples/protein.html`](https://zushah.github.io/WasmGPU/examples/protein.html) to see how a point cloud can be used with Python interop, navigation, selection, colormap, and overlay features to render a visualization of a protein structure (hemoglobin) from the Protein Data Bank.
 
 Super basic example to render a cube:
 ```js
@@ -304,7 +304,7 @@ wgpu.run((dt, time) => {
 
 Using the IIFE bundle instead of the ESM bundle is exactly the same as above, except you must use an HTML `script` tag instead of a JavaScript `import` statement:
 ```html
-<script src="https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.7.0/dist/WasmGPU.iife.min.js"></script>
+<script src="https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.8.0/dist/WasmGPU.iife.min.js"></script>
 ```
 
 To get started with the comprehensive [documentation](https://zushah.github.io/WasmGPU/docs/), consider visiting the pages for these fundamentals first:
@@ -313,6 +313,7 @@ To get started with the comprehensive [documentation](https://zushah.github.io/W
 - [`WasmGPU.createMesh`](https://zushah.github.io/WasmGPU/docs/objects/wasmgpu-createmesh/)
 - [`WasmGPU.createCamera.perspective`](https://zushah.github.io/WasmGPU/docs/world/wasmgpu-createcamera-perspective/)
 - [`WasmGPU.createControls.orbit`](https://zushah.github.io/WasmGPU/docs/interact/wasmgpu-createcontrols-orbit/)
+- [`WasmGPU.webassembly`](https://zushah.github.io/WasmGPU/docs/interop/wasmgpu-webassembly/)
 - [`WasmGPU.python`](https://zushah.github.io/WasmGPU/docs/interop/wasmgpu-python/)
 - [`WasmGPU.math`](https://zushah.github.io/WasmGPU/docs/math/wasmgpu-math/)
 
@@ -320,6 +321,12 @@ To get started with the comprehensive [documentation](https://zushah.github.io/W
 
 Asking questions, reporting bugs, suggesting features, and contributing code is very welcome. The guidelines can be found [here](https://www.github.com/Zushah/WasmGPU/blob/main/CONTRIBUTING.md).
 
+## Acknowledgements
+
+- [@Zushah](https://www.github.com/Zushah): main author.
+- [@ZacharyVarley](https://www.github.com/ZacharyVarley): LU factor and solve kernels ([#3](https://www.github.com/Zushah/WasmGPU/pull/3)).
+- [@L1quidH2O](https://www.github.com/L1quidH2O): optimization of pointcloud shader ([#1](https://www.github.com/Zushah/WasmGPU/pull/1)).
+
 ## License
 
-WasmGPU is available under the [Mozilla Public License 2.0 (MPL-2.0)](https://www.github.com/Zushah/WasmGPU/blob/main/LICENSE.md).
+WasmGPU is available under the [Mozilla Public License 2.0](https://www.github.com/Zushah/WasmGPU/blob/main/LICENSE.md).
