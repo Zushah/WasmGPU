@@ -8,6 +8,7 @@ import { Mesh, registerMeshSceneOwner, unregisterMeshSceneOwner } from "./mesh";
 import { PointCloud } from "./pointcloud";
 import { GlyphField } from "./glyphfield";
 import { NodeLink } from "./nodelink";
+import { SplatField } from "./splatfield";
 import { Color } from "../graphics/material";
 import { Light, AmbientLight } from "./light";
 import { Bounds3, emptyBounds, unionBounds } from "./bounds";
@@ -25,6 +26,7 @@ export class Scene {
     private _pointClouds: PointCloud[] = [];
     private _glyphFields: GlyphField[] = [];
     private _nodeLinks: NodeLink[] = [];
+    private _splatFields: SplatField[] = [];
     private _lights: Light[] = [];
     private _background: Color;
     static readonly MAX_LIGHTS = 8;
@@ -57,11 +59,16 @@ export class Scene {
         return this._nodeLinks;
     }
 
+    get splatFields(): readonly SplatField[] {
+        return this._splatFields;
+    }
+
     add(mesh: Mesh): this;
     add(pointCloud: PointCloud): this;
     add(glyphField: GlyphField): this;
     add(nodeLink: NodeLink): this;
-    add(obj: Mesh | PointCloud | GlyphField | NodeLink): this {
+    add(splatField: SplatField): this;
+    add(obj: Mesh | PointCloud | GlyphField | NodeLink | SplatField): this {
         if (obj instanceof Mesh) {
             if (obj.destroyed) throw new Error("Scene: cannot add a destroyed mesh.");
             if (!this._meshes.includes(obj)) {
@@ -72,8 +79,10 @@ export class Scene {
             if (!this._pointClouds.includes(obj)) this._pointClouds.push(obj);
         } else if (obj instanceof GlyphField) {
             if (!this._glyphFields.includes(obj)) this._glyphFields.push(obj);
-        } else {
+        } else if (obj instanceof NodeLink) {
             if (!this._nodeLinks.includes(obj)) this._nodeLinks.push(obj);
+        } else {
+            if (!this._splatFields.includes(obj)) this._splatFields.push(obj);
         }
         return this;
     }
@@ -82,7 +91,8 @@ export class Scene {
     remove(pointCloud: PointCloud): this;
     remove(glyphField: GlyphField): this;
     remove(nodeLink: NodeLink): this;
-    remove(obj: Mesh | PointCloud | GlyphField | NodeLink): this {
+    remove(splatField: SplatField): this;
+    remove(obj: Mesh | PointCloud | GlyphField | NodeLink | SplatField): this {
         if (obj instanceof Mesh) {
             const idx = this._meshes.indexOf(obj);
             if (idx !== -1) this._meshes.splice(idx, 1);
@@ -93,9 +103,12 @@ export class Scene {
         } else if (obj instanceof GlyphField) {
             const idx = this._glyphFields.indexOf(obj);
             if (idx !== -1) this._glyphFields.splice(idx, 1);
-        } else {
+        } else if (obj instanceof NodeLink) {
             const idx = this._nodeLinks.indexOf(obj);
             if (idx !== -1) this._nodeLinks.splice(idx, 1);
+        } else {
+            const idx = this._splatFields.indexOf(obj);
+            if (idx !== -1) this._splatFields.splice(idx, 1);
         }
         return this;
     }
@@ -106,6 +119,7 @@ export class Scene {
         this._pointClouds = [];
         this._glyphFields = [];
         this._nodeLinks = [];
+        this._splatFields = [];
         return this;
     }
 
@@ -121,6 +135,11 @@ export class Scene {
 
     clearNodeLinks(): this {
         this._nodeLinks = [];
+        return this;
+    }
+
+    clearSplatFields(): this {
+        this._splatFields = [];
         return this;
     }
 
@@ -179,6 +198,14 @@ export class Scene {
         return this._nodeLinks.filter(n => n.name === name);
     }
 
+    findSplatFieldByName(name: string): SplatField | undefined {
+        return this._splatFields.find(s => s.name === name);
+    }
+
+    findAllSplatFieldsByName(name: string): SplatField[] {
+        return this._splatFields.filter(s => s.name === name);
+    }
+
     get visibleMeshes(): Mesh[] {
         return this._meshes.filter(m => m.visible);
     }
@@ -193,6 +220,10 @@ export class Scene {
 
     get visibleNodeLinks(): NodeLink[] {
         return this._nodeLinks.filter(n => n.visible);
+    }
+
+    get visibleSplatFields(): SplatField[] {
+        return this._splatFields.filter(s => s.visible);
     }
 
     get enabledLights(): Light[] {
@@ -231,10 +262,12 @@ export class Scene {
         const clouds = visibleOnly ? this.visiblePointClouds : this._pointClouds;
         const glyphs = visibleOnly ? this.visibleGlyphFields : this._glyphFields;
         const links = visibleOnly ? this.visibleNodeLinks : this._nodeLinks;
+        const splats = visibleOnly ? this.visibleSplatFields : this._splatFields;
         for (const mesh of meshes) addBounds(mesh.getWorldBounds());
         for (const pointCloud of clouds) addBounds(pointCloud.getWorldBounds());
         for (const glyphField of glyphs) addBounds(glyphField.getWorldBounds());
         for (const nodeLink of links) addBounds(nodeLink.getWorldBounds());
+        for (const splatField of splats) addBounds(splatField.getWorldBounds());
         return aggregated;
     }
 
@@ -270,6 +303,14 @@ export class Scene {
         for (const n of this._nodeLinks) if (n.visible) callback(n);
     }
 
+    traverseSplatFields(callback: (s: SplatField) => void): void {
+        for (const s of this._splatFields) callback(s);
+    }
+
+    traverseVisibleSplatFields(callback: (s: SplatField) => void): void {
+        for (const s of this._splatFields) if (s.visible) callback(s);
+    }
+
     destroy(): void {
         const meshes = [...this._meshes];
         for (const mesh of meshes) this.remove(mesh);
@@ -277,10 +318,12 @@ export class Scene {
         for (const pc of this._pointClouds) pc.destroy();
         for (const g of this._glyphFields) g.destroy();
         for (const n of this._nodeLinks) n.destroy();
+        for (const s of this._splatFields) s.destroy();
         this._meshes = [];
         this._pointClouds = [];
         this._glyphFields = [];
         this._nodeLinks = [];
+        this._splatFields = [];
         this._lights = [];
     }
 }

@@ -4,13 +4,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { alignTo, createDepthTexture } from "../utils";
+import { alignTo, ceilDiv, createDepthTexture } from "../utils";
 import { Transform, TransformStore } from "./transform";
 import { Scene } from "../world/scene";
 import { DirectionalLight, PointLight, SpotLight, resolveLightDirection, resolveLightPosition } from "../world/light";
 import { Camera } from "../world/camera";
 import { Mesh, getMeshLocalBoundsSource, getMeshVertexBuffers, getMeshVertexSource, hasMeshMorphRuntime } from "../world/mesh";
 import { PointCloud } from "../world/pointcloud";
+import { SplatField } from "../world/splatfield";
 import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
 import type { PickLassoPoint, PickQuery, PickRegionQuery } from "../world/picking";
@@ -19,8 +20,15 @@ import { Material, BlendMode, CullMode, UnlitMaterial, StandardMaterial, DataMat
 import { driver, animf, cullf, frameArena, frustumf, mat4, mat4f, transformf, wasm, WasmPtr } from "../wasm";
 import smaaWGSL from "../wgsl/core/smaa.wgsl";
 import pointCloudWGSL from "../wgsl/world/pointcloud.wgsl";
+import splatFieldWGSL from "../wgsl/world/splatfield.wgsl";
+import splatFieldSortWGSL from "../wgsl/world/splatfield-sort.wgsl";
+import splatFieldRadixFlagsWGSL from "../wgsl/world/splatfield-radix-flags.wgsl";
+import splatFieldRadixCountZerosWGSL from "../wgsl/world/splatfield-radix-count-zeros.wgsl";
+import splatFieldRadixScatterPairsWGSL from "../wgsl/world/splatfield-radix-scatter-pairs.wgsl";
 import glyphFieldWGSL from "../wgsl/world/glyphfield.wgsl";
 import nodeLinkWGSL from "../wgsl/world/nodelink.wgsl";
+import scanBlockExclusiveU32WGSL from "../wgsl/compute/scan-block-exclusive-u32.wgsl";
+import scanAddBlockOffsetsU32WGSL from "../wgsl/compute/scan-add-block-offsets-u32.wgsl";
 import pickMeshWGSL from "../wgsl/core/picking-mesh.wgsl";
 import pickMeshSkinnedWGSL from "../wgsl/core/picking-mesh-skinned.wgsl";
 import pickMeshSkinned8WGSL from "../wgsl/core/picking-mesh-skinned8.wgsl";
@@ -81,6 +89,14 @@ type PointCloudDrawItem = {
     sortKey: number;
 };
 
+type SplatFieldDrawItem = {
+    field: SplatField;
+    pipeline: GPURenderPipeline;
+    pipelineId: number;
+    fieldId: number;
+    sortKey: number;
+};
+
 type GlyphDrawItem = {
     field: GlyphField;
     geometry: Geometry;
@@ -102,7 +118,20 @@ type NodeLinkDrawItem = {
     sortKey: number;
 };
 
-type TransparentDrawItem = DrawItem | PointCloudDrawItem | GlyphDrawItem | NodeLinkDrawItem;
+type TransparentDrawItem = DrawItem | PointCloudDrawItem | SplatFieldDrawItem | GlyphDrawItem | NodeLinkDrawItem;
+
+type SplatFieldSortState = {
+    sortedIndexBuffer: GPUBuffer | null;
+    sortedIndexCapacity: number;
+    transformBuffer: GPUBuffer | null;
+};
+
+type SplatFieldSortScanLevel = {
+    blockSums: GPUBuffer | null;
+    blockSumsCapacity: number;
+    blockOffsets: GPUBuffer | null;
+    blockOffsetsCapacity: number;
+};
 
 type OcclusionCandidateKind = "mesh" | "pointcloud" | "glyphfield" | "nodelink";
 
@@ -285,6 +314,28 @@ export class Renderer {
     private pointCloudDrawItemPoolUsed: number = 0;
     private opaquePointCloudDrawList: PointCloudDrawItem[] = [];
     private transparentPointCloudDrawList: PointCloudDrawItem[] = [];
+    private splatFieldBindGroupLayout: GPUBindGroupLayout | null = null;
+    private splatFieldDrawItemPool: SplatFieldDrawItem[] = [];
+    private splatFieldDrawItemPoolUsed: number = 0;
+    private transparentSplatFieldDrawList: SplatFieldDrawItem[] = [];
+    private cullSplatFieldScratch: SplatField[] = [];
+    private readonly splatFieldSortStates: Map<SplatField, SplatFieldSortState> = new Map();
+    private splatSortCapacity: number = 0;
+    private splatSortKeyA: GPUBuffer | null = null;
+    private splatSortKeyB: GPUBuffer | null = null;
+    private splatSortIndexA: GPUBuffer | null = null;
+    private splatSortIndexB: GPUBuffer | null = null;
+    private splatSortFlags: GPUBuffer | null = null;
+    private splatSortPrefix: GPUBuffer | null = null;
+    private splatSortZerosCount: GPUBuffer | null = null;
+    private splatSortScanLevels: SplatFieldSortScanLevel[] = [];
+    private computePipelineCache: Map<string, GPUComputePipeline> = new Map();
+    private splatSortKeygenBindGroupLayout: GPUBindGroupLayout | null = null;
+    private splatSortFlagsBindGroupLayout: GPUBindGroupLayout | null = null;
+    private splatSortScanBlockBindGroupLayout: GPUBindGroupLayout | null = null;
+    private splatSortScanAddBindGroupLayout: GPUBindGroupLayout | null = null;
+    private splatSortZeroCountBindGroupLayout: GPUBindGroupLayout | null = null;
+    private splatSortScatterBindGroupLayout: GPUBindGroupLayout | null = null;
     private glyphFieldBindGroupLayout: GPUBindGroupLayout | null = null;
     private glyphFieldDummyAttributesBuffer: GPUBuffer | null = null;
     private glyphFieldDrawItemPool: GlyphDrawItem[] = [];
@@ -604,6 +655,13 @@ export class Renderer {
         return item;
     }
 
+    private acquireSplatFieldDrawItem(): SplatFieldDrawItem {
+        const i = this.splatFieldDrawItemPoolUsed++;
+        let item = this.splatFieldDrawItemPool[i];
+        if (!item) { item = { field: null as unknown as SplatField, pipeline: null as unknown as GPURenderPipeline, pipelineId: 0, fieldId: 0, sortKey: 0 }; this.splatFieldDrawItemPool[i] = item; }
+        return item;
+    }
+
     private acquireGlyphFieldDrawItem(): GlyphDrawItem {
         const idx = this.glyphFieldDrawItemPoolUsed++;
         if (idx >= this.glyphFieldDrawItemPool.length) this.glyphFieldDrawItemPool.push({} as any);
@@ -640,6 +698,7 @@ export class Renderer {
         this.writeLightingUniforms(scene);
         this.buildDrawLists(scene, camera);
         this.buildPointCloudDrawLists(scene, camera);
+        this.buildSplatFieldDrawLists(scene, camera);
         this.buildGlyphFieldDrawLists(scene, camera);
         this.buildNodeLinkDrawLists(scene, camera);
     }
@@ -665,6 +724,7 @@ export class Renderer {
         this.prepareSceneFrameBase(scene, camera);
         this.applyRenderCullingAndStats(camera);
         const encoder = this.device.createCommandEncoder();
+        this.encodeSplatFieldSorts(encoder);
         const timestampWrites = (this.gpuTimingEnabled && this.gpuQuerySet) ? ({ querySet: this.gpuQuerySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } as any) : undefined;
         const timestampBeginWrites = (this.gpuTimingEnabled && this.gpuQuerySet) ? ({ querySet: this.gpuQuerySet, beginningOfPassWriteIndex: 0 } as any) : undefined;
         const timestampEndWrites = (this.gpuTimingEnabled && this.gpuQuerySet) ? ({ querySet: this.gpuQuerySet, endOfPassWriteIndex: 1 } as any) : undefined;
@@ -805,6 +865,7 @@ export class Renderer {
         this.warmMeshDrawList(this.transparentDrawList);
         this.warmPointCloudDrawList(this.opaquePointCloudDrawList);
         this.warmPointCloudDrawList(this.transparentPointCloudDrawList);
+        this.warmSplatFieldDrawList(this.transparentSplatFieldDrawList);
         this.warmGlyphFieldDrawList(this.opaqueGlyphFieldDrawList);
         this.warmGlyphFieldDrawList(this.transparentGlyphFieldDrawList);
         this.warmNodeLinkDrawList(this.opaqueNodeLinkDrawList);
@@ -1242,10 +1303,37 @@ export class Renderer {
         this.instanceBufferCapacityBytes = 0;
         this.globalBindGroups = [];
         this.pipelineCache.clear();
+        this.computePipelineCache.clear();
         this.shaderCache.clear();
         this.pointCloudBindGroupLayout = null;
         this.pointCloudDummyColorsBuffer?.destroy();
         this.pointCloudDummyColorsBuffer = null;
+        this.splatFieldBindGroupLayout = null;
+        for (const [field, state] of this.splatFieldSortStates) this.destroySplatFieldSortState(field, state);
+        this.splatFieldSortStates.clear();
+        this.splatSortKeyA?.destroy();
+        this.splatSortKeyB?.destroy();
+        this.splatSortIndexA?.destroy();
+        this.splatSortIndexB?.destroy();
+        this.splatSortFlags?.destroy();
+        this.splatSortPrefix?.destroy();
+        this.splatSortZerosCount?.destroy();
+        this.splatSortKeyA = null;
+        this.splatSortKeyB = null;
+        this.splatSortIndexA = null;
+        this.splatSortIndexB = null;
+        this.splatSortFlags = null;
+        this.splatSortPrefix = null;
+        this.splatSortZerosCount = null;
+        this.splatSortCapacity = 0;
+        for (const level of this.splatSortScanLevels) { level.blockSums?.destroy(); level.blockOffsets?.destroy(); }
+        this.splatSortScanLevels = [];
+        this.splatSortKeygenBindGroupLayout = null;
+        this.splatSortFlagsBindGroupLayout = null;
+        this.splatSortScanBlockBindGroupLayout = null;
+        this.splatSortScanAddBindGroupLayout = null;
+        this.splatSortZeroCountBindGroupLayout = null;
+        this.splatSortScatterBindGroupLayout = null;
         this.glyphFieldBindGroupLayout = null;
         this.nodeLinkBindGroupLayout = null;
         this.glyphFieldDummyAttributesBuffer?.destroy();
@@ -2407,6 +2495,88 @@ export class Renderer {
         this.transparentPointCloudDrawList.sort((a, b) => b.sortKey - a.sortKey || a.pipelineId - b.pipelineId || a.cloudId - b.cloudId);
     }
 
+    private buildSplatFieldDrawLists(scene: Scene, camera: Camera): void {
+        const sceneFields = new Set(scene.splatFields);
+        for (const [field, state] of this.splatFieldSortStates) {
+            if (sceneFields.has(field)) continue;
+            this.destroySplatFieldSortState(field, state);
+            this.splatFieldSortStates.delete(field);
+        }
+        this.splatFieldDrawItemPoolUsed = 0;
+        this.transparentSplatFieldDrawList.length = 0;
+        this.cullSplatFieldScratch.length = 0;
+        for (const field of scene.splatFields) {
+            if (!field.visible) continue;
+            if (field.splatCount <= 0) continue;
+            this.cullSplatFieldScratch.push(field);
+        }
+        if (this.cullSplatFieldScratch.length === 0) return;
+        const ts = TransformStore.global();
+        const f32 = ts.f32();
+        const camX = camera.position[0];
+        const camY = camera.position[1];
+        const camZ = camera.position[2];
+        const visible: SplatField[] = [];
+        if (this.frustumCullingEnabled) {
+            const bounded: SplatField[] = [];
+            const unbounded: SplatField[] = [];
+            for (const field of this.cullSplatFieldScratch) {
+                if (field.boundsRadius > 0) bounded.push(field);
+                else unbounded.push(field);
+            }
+            if (bounded.length > 0) {
+                this.ensureCullingCapacity(bounded.length);
+                const bcount = bounded.length;
+                const worldPtrsPtr = frameArena.alloc(bcount * 4, 4) as WasmPtr;
+                const localCentersPtr = frameArena.allocF32(bcount * 3) as WasmPtr;
+                const localRadiiPtr = frameArena.allocF32(bcount) as WasmPtr;
+                const worldPtrs = ts.u32().subarray(worldPtrsPtr >>> 2, (worldPtrsPtr >>> 2) + bcount);
+                const localCenters = ts.f32().subarray(localCentersPtr >>> 2, (localCentersPtr >>> 2) + bcount * 3);
+                const localRadii = ts.f32().subarray(localRadiiPtr >>> 2, (localRadiiPtr >>> 2) + bcount);
+                for (let i = 0; i < bounded.length; i++) {
+                    const field = bounded[i];
+                    const base = i * 3;
+                    worldPtrs[i] = field.transform.worldMatrixPtr >>> 0;
+                    localCenters[base + 0] = field.boundsCenter[0];
+                    localCenters[base + 1] = field.boundsCenter[1];
+                    localCenters[base + 2] = field.boundsCenter[2];
+                    localRadii[i] = field.boundsRadius;
+                }
+                cullf.prepareWorldSpheresFromPtrs(this.cullCentersPtr, this.cullRadiiPtr, worldPtrsPtr, localCentersPtr, localRadiiPtr, bcount);
+                const planesPtr = frameArena.allocF32(24) as WasmPtr;
+                frustumf.writePlanesFromViewProjection(planesPtr, this.cameraUniformStagingPtr);
+                const outPtr = frameArena.alloc(bounded.length * 4, 4) as WasmPtr;
+                const numVisible = cullf.spheresFrustum(outPtr, this.cullCentersPtr, this.cullRadiiPtr, bounded.length, planesPtr);
+                const u32 = ts.u32();
+                const outBase = outPtr >>> 2;
+                for (let i = 0; i < numVisible; i++) visible.push(bounded[u32[outBase + i]]);
+            }
+            for (const field of unbounded) visible.push(field);
+        } else for (const field of this.cullSplatFieldScratch) visible.push(field);
+        this.recordFrustumCounts(this.cullSplatFieldScratch.length, visible.length);
+        for (const field of visible) {
+            const pipeline = this.getOrCreateSplatFieldPipeline();
+            const item = this.acquireSplatFieldDrawItem();
+            item.field = field;
+            item.pipeline = pipeline;
+            item.pipelineId = this.getObjectId(pipeline);
+            item.fieldId = this.getObjectId(field);
+            const worldBase = field.transform.worldMatrixPtr >>> 2;
+            const cx = field.boundsCenter[0];
+            const cy = field.boundsCenter[1];
+            const cz = field.boundsCenter[2];
+            const cwx = f32[worldBase + 0] * cx + f32[worldBase + 4] * cy + f32[worldBase + 8] * cz + f32[worldBase + 12];
+            const cwy = f32[worldBase + 1] * cx + f32[worldBase + 5] * cy + f32[worldBase + 9] * cz + f32[worldBase + 13];
+            const cwz = f32[worldBase + 2] * cx + f32[worldBase + 6] * cy + f32[worldBase + 10] * cz + f32[worldBase + 14];
+            const dx = cwx - camX;
+            const dy = cwy - camY;
+            const dz = cwz - camZ;
+            item.sortKey = dx * dx + dy * dy + dz * dz;
+            this.transparentSplatFieldDrawList.push(item);
+        }
+        this.transparentSplatFieldDrawList.sort((a, b) => b.sortKey - a.sortKey || a.pipelineId - b.pipelineId || a.fieldId - b.fieldId);
+    }
+
     private buildGlyphFieldDrawLists(scene: Scene, camera: Camera): void {
         this.glyphFieldDrawItemPoolUsed = 0;
         this.opaqueGlyphFieldDrawList.length = 0;
@@ -2934,6 +3104,15 @@ export class Renderer {
         }
     }
 
+    private warmSplatFieldDrawList(items: SplatFieldDrawItem[]): void {
+        for (const item of items) {
+            const field = item.field;
+            if (!field.visible) continue;
+            if (field.splatCount <= 0) continue;
+            this.ensureSplatFieldBindGroup(field);
+        }
+    }
+
     private warmGlyphFieldDrawList(items: GlyphDrawItem[]): void {
         for (const item of items) {
             const field = item.field;
@@ -3078,6 +3257,43 @@ export class Renderer {
         }
     }
 
+    private executeSplatFieldDrawList(pass: GPURenderPassEncoder, items: SplatFieldDrawItem[]): void {
+        if (items.length === 0) return;
+        const bytes = driver.bytes();
+        let lastPipeline: GPURenderPipeline | null = null;
+        let lastField: SplatField | null = null;
+        for (let i = 0; i < items.length; i++) {
+            const item = items[i];
+            const field = item.field;
+            if (!field.visible) continue;
+            if (field.splatCount <= 0) continue;
+            this.ensureSplatFieldBindGroup(field);
+            if (!field.bindGroup) continue;
+            if (item.pipeline !== lastPipeline) {
+                pass.setPipeline(item.pipeline);
+                lastPipeline = item.pipeline;
+                lastField = null;
+            }
+            if (field !== lastField) {
+                pass.setBindGroup(1, field.bindGroup);
+                lastField = field;
+            }
+            if (this.modelBufferIndex >= this.modelUniformBuffers.length) this.ensureModelBufferPool(this.modelBufferIndex + 1);
+            const modelSlot = this.modelBufferIndex++;
+            const modelBuffer = this.modelUniformBuffers[modelSlot];
+            const globalBindGroup = this.globalBindGroups[modelSlot];
+            const modelPtr = field.transform.worldMatrixPtr as WasmPtr;
+            const invPtr = this.modelUniformStagingPtr as WasmPtr;
+            const normalPtr = (this.modelUniformStagingPtr + 16 * 4) as WasmPtr;
+            mat4f.invert(invPtr, modelPtr);
+            mat4f.transpose(normalPtr, invPtr);
+            this.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
+            this.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
+            pass.setBindGroup(0, globalBindGroup);
+            pass.draw(6, field.splatCount);
+        }
+    }
+
     private executeGlyphFieldDrawList(pass: GPURenderPassEncoder, list: GlyphDrawItem[]): void {
         if (list.length === 0) return;
         const bytes = driver.bytes();
@@ -3188,12 +3404,14 @@ export class Renderer {
         for (const item of this.transparentGlyphFieldDrawList) this.transparentMergedDrawList.push(item);
         for (const item of this.transparentPointCloudDrawList) this.transparentMergedDrawList.push(item);
         for (const item of this.transparentNodeLinkDrawList) this.transparentMergedDrawList.push(item);
+        for (const item of this.transparentSplatFieldDrawList) this.transparentMergedDrawList.push(item);
         if (this.transparentMergedDrawList.length === 0) return;
         const typeOrder = (x: TransparentDrawItem): number => {
             if ("mesh" in x) return 0;
-            if ("field" in x) return 1;
+            if ("field" in x && "geometry" in x) return 1;
             if ("cloud" in x) return 2;
-            return 3;
+            if ("link" in x) return 3;
+            return 4;
         };
         this.transparentMergedDrawList.sort((a, b) => {
             const d0 = b.sortKey - a.sortKey;
@@ -3220,8 +3438,8 @@ export class Renderer {
                 const bp = b as PointCloudDrawItem;
                 return ap.cloudId - bp.cloudId;
             }
-            const aIsGlyph = "field" in a;
-            const bIsGlyph = "field" in b;
+            const aIsGlyph = "field" in a && "geometry" in a;
+            const bIsGlyph = "field" in b && "geometry" in b;
             if (aIsGlyph && bIsGlyph) {
                 const ag = a as GlyphDrawItem;
                 const bg = b as GlyphDrawItem;
@@ -3234,6 +3452,13 @@ export class Renderer {
                 const bn = b as NodeLinkDrawItem;
                 return (an.geometryId - bn.geometryId) || (an.linkId - bn.linkId);
             }
+            const aIsSplat = "field" in a && !("geometry" in a);
+            const bIsSplat = "field" in b && !("geometry" in b);
+            if (aIsSplat && bIsSplat) {
+                const as = a as SplatFieldDrawItem;
+                const bs = b as SplatFieldDrawItem;
+                return as.fieldId - bs.fieldId;
+            }
             return typeOrder(a) - typeOrder(b);
         });
         const bytes = driver.bytes();
@@ -3244,6 +3469,7 @@ export class Renderer {
         let lastSkinned: boolean = false;
         let lastSkinned8: boolean = false;
         let lastCloud: PointCloud | null = null;
+        let lastSplatField: SplatField | null = null;
         let lastGlyph: GlyphField | null = null;
         let lastNodeLink: NodeLink | null = null;
         for (let i = 0; i < this.transparentMergedDrawList.length; i++) {
@@ -3262,6 +3488,7 @@ export class Renderer {
                     lastSkinned = false;
                     lastSkinned8 = false;
                     lastCloud = null;
+                    lastSplatField = null;
                     lastGlyph = null;
                     lastNodeLink = null;
                 }
@@ -3330,7 +3557,7 @@ export class Renderer {
                 else pass.draw(geometry.vertexCount);
                 continue;
             }
-            if ("field" in item) {
+            if ("field" in item && "geometry" in item) {
                 const drawItem = item as GlyphDrawItem;
                 const field = drawItem.field;
                 const geometry = drawItem.geometry;
@@ -3347,7 +3574,9 @@ export class Renderer {
                     lastSkinned = false;
                     lastSkinned8 = false;
                     lastCloud = null;
+                    lastSplatField = null;
                     lastGlyph = null;
+                    lastNodeLink = null;
                 }
                 if (geometry !== lastGeometry) {
                     geometry.upload(this.device);
@@ -3360,6 +3589,7 @@ export class Renderer {
                     pass.setBindGroup(1, field.bindGroup);
                     lastGlyph = field;
                     lastCloud = null;
+                    lastSplatField = null;
                     lastMaterial = null;
                     lastNodeLink = null;
                 }
@@ -3395,12 +3625,14 @@ export class Renderer {
                     lastSkinned = false;
                     lastSkinned8 = false;
                     lastCloud = null;
+                    lastSplatField = null;
                     lastGlyph = null;
                     lastNodeLink = null;
                 }
                 if (cloud !== lastCloud) {
                     pass.setBindGroup(1, cloud.bindGroup);
                     lastCloud = cloud;
+                    lastSplatField = null;
                     lastGlyph = null;
                     lastMaterial = null;
                     lastNodeLink = null;
@@ -3420,6 +3652,49 @@ export class Renderer {
                 pass.draw(6, cloud.pointCount);
                 continue;
             }
+            if ("field" in item && !("geometry" in item)) {
+                const drawItem = item as SplatFieldDrawItem;
+                const field = drawItem.field;
+                if (!field.visible) continue;
+                if (field.splatCount <= 0) continue;
+                this.ensureSplatFieldBindGroup(field);
+                if (!field.bindGroup) continue;
+                if (drawItem.pipeline !== lastPipeline) {
+                    pass.setPipeline(drawItem.pipeline);
+                    lastPipeline = drawItem.pipeline;
+                    lastMaterial = null;
+                    lastGeometry = null;
+                    lastVertexSourceId = -1;
+                    lastSkinned = false;
+                    lastSkinned8 = false;
+                    lastCloud = null;
+                    lastSplatField = null;
+                    lastGlyph = null;
+                    lastNodeLink = null;
+                }
+                if (field !== lastSplatField) {
+                    pass.setBindGroup(1, field.bindGroup);
+                    lastSplatField = field;
+                    lastCloud = null;
+                    lastGlyph = null;
+                    lastMaterial = null;
+                    lastNodeLink = null;
+                }
+                if (this.modelBufferIndex >= this.modelUniformBuffers.length) this.ensureModelBufferPool(this.modelBufferIndex + 1);
+                const modelSlot = this.modelBufferIndex++;
+                const modelBuffer = this.modelUniformBuffers[modelSlot];
+                const globalBindGroup = this.globalBindGroups[modelSlot];
+                const modelPtr = field.transform.worldMatrixPtr as WasmPtr;
+                const invPtr = this.modelUniformStagingPtr;
+                const normalPtr = (this.modelUniformStagingPtr + 16 * 4) as WasmPtr;
+                mat4f.invert(invPtr, modelPtr);
+                mat4f.transpose(normalPtr, invPtr);
+                this.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
+                this.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
+                pass.setBindGroup(0, globalBindGroup);
+                pass.draw(6, field.splatCount);
+                continue;
+            }
             if ("link" in item) {
                 const drawItem = item as NodeLinkDrawItem;
                 const link = drawItem.link;
@@ -3434,6 +3709,7 @@ export class Renderer {
                     lastSkinned = false;
                     lastSkinned8 = false;
                     lastCloud = null;
+                    lastSplatField = null;
                     lastGlyph = null;
                     lastNodeLink = null;
                 }
@@ -3448,6 +3724,7 @@ export class Renderer {
                     pass.setBindGroup(1, link.bindGroup);
                     lastNodeLink = link;
                     lastCloud = null;
+                    lastSplatField = null;
                     lastGlyph = null;
                     lastMaterial = null;
                 }
@@ -4361,6 +4638,31 @@ export class Renderer {
         }
     }
 
+    private getPremultipliedAlphaBlendState(): GPUBlendState {
+        return {
+            color: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add"
+            },
+            alpha: {
+                srcFactor: "one",
+                dstFactor: "one-minus-src-alpha",
+                operation: "add"
+            }
+        };
+    }
+
+    private bindSizedBuffer(buffer: GPUBuffer, size: number, offset: number = 0): GPUBufferBinding {
+        return { buffer, offset, size };
+    }
+
+    private getOrCreateShaderModule(code: string): GPUShaderModule {
+        let module = this.shaderCache.get(code);
+        if (!module) { module = this.device.createShaderModule({ code }); this.shaderCache.set(code, module); }
+        return module;
+    }
+
     private getMaterialBindGroupKey(material: Material): string {
         if (material instanceof UnlitMaterial) {
             const bc = material.baseColorTexture;
@@ -4567,6 +4869,461 @@ export class Renderer {
             size: cap,
             usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST
         });
+    }
+
+    private getOrCreateSplatFieldSortState(field: SplatField): SplatFieldSortState {
+        let state = this.splatFieldSortStates.get(field);
+        if (!state) { state = { sortedIndexBuffer: null, sortedIndexCapacity: 0, transformBuffer: null }; this.splatFieldSortStates.set(field, state); }
+        if (!state.transformBuffer) state.transformBuffer = this.device.createBuffer({ size: 16 * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        if (field.splatCount > state.sortedIndexCapacity) {
+            state.sortedIndexBuffer?.destroy();
+            let cap = Math.max(1, state.sortedIndexCapacity || 256);
+            while (cap < field.splatCount) cap *= 2;
+            state.sortedIndexCapacity = cap;
+            state.sortedIndexBuffer = this.device.createBuffer({ size: cap * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+            field.bindGroupKey = null;
+        }
+        return state;
+    }
+
+    private destroySplatFieldSortState(field: SplatField, state: SplatFieldSortState): void {
+        state.sortedIndexBuffer?.destroy();
+        state.transformBuffer?.destroy();
+        field.bindGroup = null;
+        field.bindGroupKey = null;
+    }
+
+    private ensureSplatSortCapacity(count: number): void {
+        if (count <= this.splatSortCapacity) return;
+        let cap = Math.max(1, this.splatSortCapacity || 256);
+        while (cap < count) cap *= 2;
+        const keyUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
+        const indexUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
+        this.splatSortKeyA?.destroy();
+        this.splatSortKeyB?.destroy();
+        this.splatSortIndexA?.destroy();
+        this.splatSortIndexB?.destroy();
+        this.splatSortFlags?.destroy();
+        this.splatSortPrefix?.destroy();
+        this.splatSortZerosCount?.destroy();
+        this.splatSortCapacity = cap;
+        this.splatSortKeyA = this.device.createBuffer({ size: cap * 4, usage: keyUsage });
+        this.splatSortKeyB = this.device.createBuffer({ size: cap * 4, usage: keyUsage });
+        this.splatSortIndexA = this.device.createBuffer({ size: cap * 4, usage: indexUsage });
+        this.splatSortIndexB = this.device.createBuffer({ size: cap * 4, usage: indexUsage });
+        this.splatSortFlags = this.device.createBuffer({ size: cap * 4, usage: GPUBufferUsage.STORAGE });
+        this.splatSortPrefix = this.device.createBuffer({ size: cap * 4, usage: GPUBufferUsage.STORAGE });
+        this.splatSortZerosCount = this.device.createBuffer({ size: 4, usage: GPUBufferUsage.STORAGE });
+    }
+
+    private ensureSplatSortScanLevel(level: number, count: number): SplatFieldSortScanLevel {
+        while (this.splatSortScanLevels.length <= level) this.splatSortScanLevels.push({ blockSums: null, blockSumsCapacity: 0, blockOffsets: null, blockOffsetsCapacity: 0 });
+        const scanLevel = this.splatSortScanLevels[level];
+        if (count > scanLevel.blockSumsCapacity) {
+            scanLevel.blockSums?.destroy();
+            let cap = Math.max(1, scanLevel.blockSumsCapacity || 1);
+            while (cap < count) cap *= 2;
+            scanLevel.blockSumsCapacity = cap;
+            scanLevel.blockSums = this.device.createBuffer({ size: cap * 4, usage: GPUBufferUsage.STORAGE });
+        }
+        if (count > scanLevel.blockOffsetsCapacity) {
+            scanLevel.blockOffsets?.destroy();
+            let cap = Math.max(1, scanLevel.blockOffsetsCapacity || 1);
+            while (cap < count) cap *= 2;
+            scanLevel.blockOffsetsCapacity = cap;
+            scanLevel.blockOffsets = this.device.createBuffer({ size: cap * 4, usage: GPUBufferUsage.STORAGE });
+        }
+        return scanLevel;
+    }
+
+    private ensureSplatSortFrameCapacity(count: number, level: number = 0): void {
+        if (count <= 0) return;
+        if (level === 0) this.ensureSplatSortCapacity(count);
+        const numBlocks = ceilDiv(count, 512);
+        this.ensureSplatSortScanLevel(level, numBlocks);
+        if (numBlocks > 1) this.ensureSplatSortFrameCapacity(numBlocks, level + 1);
+    }
+
+    private getSplatFieldBindGroupLayout(): GPUBindGroupLayout {
+        if (this.splatFieldBindGroupLayout) return this.splatFieldBindGroupLayout;
+        this.splatFieldBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+                { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+                { binding: 3, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
+                { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
+                { binding: 5, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform", minBindingSize: 16 } }
+            ]
+        });
+        return this.splatFieldBindGroupLayout;
+    }
+
+    private getOrCreateSplatFieldPipeline(): GPURenderPipeline {
+        const key = `splatfield:${this.format}`;
+        const cached = this.pipelineCache.get(key);
+        if (cached) return cached;
+        const shaderModule = this.getOrCreateShaderModule(splatFieldWGSL);
+        const pipeline = this.device.createRenderPipeline({
+            label: key,
+            layout: this.device.createPipelineLayout({
+                bindGroupLayouts: [this.globalBindGroupLayout, this.getSplatFieldBindGroupLayout()]
+            }),
+            vertex: { module: shaderModule, entryPoint: "vs_main", buffers: [] },
+            fragment: {
+                module: shaderModule,
+                entryPoint: "fs_main",
+                targets: [{
+                    format: this.format,
+                    blend: this.getPremultipliedAlphaBlendState()
+                }]
+            },
+            primitive: {
+                topology: "triangle-list",
+                cullMode: "none"
+            },
+            depthStencil: {
+                format: "depth24plus",
+                depthWriteEnabled: false,
+                depthCompare: "less"
+            }
+        });
+        this.pipelineCache.set(key, pipeline);
+        return pipeline;
+    }
+
+    private getSplatFieldBindGroupKey(field: SplatField, state: SplatFieldSortState): string {
+        const centerOpacity = field.centerOpacityBuffer;
+        const rotation = field.rotationBuffer;
+        const scale = field.scaleBuffer;
+        const color = field.colorBuffer;
+        const uniform = field.uniformBuffer;
+        const sorted = state.sortedIndexBuffer;
+        return `splatfield:${centerOpacity ? this.getObjectId(centerOpacity) : 0}:${rotation ? this.getObjectId(rotation) : 0}:${scale ? this.getObjectId(scale) : 0}:${color ? this.getObjectId(color) : 0}:${sorted ? this.getObjectId(sorted) : 0}:${uniform ? this.getObjectId(uniform) : 0}`;
+    }
+
+    private ensureSplatFieldBindGroup(field: SplatField): void {
+        field.upload(this.device, this.queue);
+        if (!field.centerOpacityBuffer || !field.rotationBuffer || !field.scaleBuffer || !field.colorBuffer) return;
+        if (field.splatCount <= 0) return;
+        const state = this.getOrCreateSplatFieldSortState(field);
+        if (!state.sortedIndexBuffer) return;
+        if (!field.uniformBuffer) {
+            field.uniformBuffer = this.device.createBuffer({
+                size: field.getUniformBufferSize(),
+                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
+            });
+            field.bindGroupKey = null;
+        }
+        if (field.dirtyUniforms) {
+            const data = field.getUniformData();
+            this.queue.writeBuffer(field.uniformBuffer, 0, data.buffer, data.byteOffset, data.byteLength);
+            field.markUniformsClean();
+        }
+        const key = this.getSplatFieldBindGroupKey(field, state);
+        if (field.bindGroup && field.bindGroupKey === key) return;
+        field.bindGroup = this.device.createBindGroup({
+            layout: this.getSplatFieldBindGroupLayout(),
+            entries: [
+                { binding: 0, resource: { buffer: field.centerOpacityBuffer } },
+                { binding: 1, resource: { buffer: field.rotationBuffer } },
+                { binding: 2, resource: { buffer: field.scaleBuffer } },
+                { binding: 3, resource: { buffer: field.colorBuffer } },
+                { binding: 4, resource: { buffer: state.sortedIndexBuffer } },
+                { binding: 5, resource: { buffer: field.uniformBuffer } }
+            ]
+        });
+        field.bindGroupKey = key;
+    }
+
+    private getSplatSortKeygenBindGroupLayout(): GPUBindGroupLayout {
+        if (this.splatSortKeygenBindGroupLayout) return this.splatSortKeygenBindGroupLayout;
+        this.splatSortKeygenBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", minBindingSize: 64 } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
+            ]
+        });
+        return this.splatSortKeygenBindGroupLayout;
+    }
+
+    private getSplatSortFlagsBindGroupLayout(): GPUBindGroupLayout {
+        if (this.splatSortFlagsBindGroupLayout) return this.splatSortFlagsBindGroupLayout;
+        this.splatSortFlagsBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
+            ]
+        });
+        return this.splatSortFlagsBindGroupLayout;
+    }
+
+    private getSplatSortScanBlockBindGroupLayout(): GPUBindGroupLayout {
+        if (this.splatSortScanBlockBindGroupLayout) return this.splatSortScanBlockBindGroupLayout;
+        this.splatSortScanBlockBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
+            ]
+        });
+        return this.splatSortScanBlockBindGroupLayout;
+    }
+
+    private getSplatSortScanAddBindGroupLayout(): GPUBindGroupLayout {
+        if (this.splatSortScanAddBindGroupLayout) return this.splatSortScanAddBindGroupLayout;
+        this.splatSortScanAddBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } }
+            ]
+        });
+        return this.splatSortScanAddBindGroupLayout;
+    }
+
+    private getSplatSortZeroCountBindGroupLayout(): GPUBindGroupLayout {
+        if (this.splatSortZeroCountBindGroupLayout) return this.splatSortZeroCountBindGroupLayout;
+        this.splatSortZeroCountBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
+            ]
+        });
+        return this.splatSortZeroCountBindGroupLayout;
+    }
+
+    private getSplatSortScatterBindGroupLayout(): GPUBindGroupLayout {
+        if (this.splatSortScatterBindGroupLayout) return this.splatSortScatterBindGroupLayout;
+        this.splatSortScatterBindGroupLayout = this.device.createBindGroupLayout({
+            entries: [
+                { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
+                { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+                { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
+            ]
+        });
+        return this.splatSortScatterBindGroupLayout;
+    }
+
+    private getOrCreateSplatSortKeygenPipeline(): GPUComputePipeline {
+        const key = "splat:sort:keygen";
+        const cached = this.computePipelineCache.get(key);
+        if (cached) return cached;
+        const pipeline = this.device.createComputePipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.getSplatSortKeygenBindGroupLayout()] }),
+            compute: {
+                module: this.getOrCreateShaderModule(splatFieldSortWGSL),
+                entryPoint: "main"
+            }
+        });
+        this.computePipelineCache.set(key, pipeline);
+        return pipeline;
+    }
+
+    private getOrCreateSplatSortFlagsPipeline(bit: number): GPUComputePipeline {
+        const key = `splat:sort:flags:${bit | 0}`;
+        const cached = this.computePipelineCache.get(key);
+        if (cached) return cached;
+        const pipeline = this.device.createComputePipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.getSplatSortFlagsBindGroupLayout()] }),
+            compute: {
+                module: this.getOrCreateShaderModule(splatFieldRadixFlagsWGSL),
+                entryPoint: "main",
+                constants: { BIT: bit | 0 }
+            }
+        });
+        this.computePipelineCache.set(key, pipeline);
+        return pipeline;
+    }
+
+    private getOrCreateSplatSortScanBlockPipeline(): GPUComputePipeline {
+        const key = "splat:sort:scan:blockExclusiveU32";
+        const cached = this.computePipelineCache.get(key);
+        if (cached) return cached;
+        const pipeline = this.device.createComputePipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.getSplatSortScanBlockBindGroupLayout()] }),
+            compute: {
+                module: this.getOrCreateShaderModule(scanBlockExclusiveU32WGSL),
+                entryPoint: "main"
+            }
+        });
+        this.computePipelineCache.set(key, pipeline);
+        return pipeline;
+    }
+
+    private getOrCreateSplatSortScanAddPipeline(): GPUComputePipeline {
+        const key = "splat:sort:scan:addOffsetsU32";
+        const cached = this.computePipelineCache.get(key);
+        if (cached) return cached;
+        const pipeline = this.device.createComputePipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.getSplatSortScanAddBindGroupLayout()] }),
+            compute: {
+                module: this.getOrCreateShaderModule(scanAddBlockOffsetsU32WGSL),
+                entryPoint: "main"
+            }
+        });
+        this.computePipelineCache.set(key, pipeline);
+        return pipeline;
+    }
+
+    private getOrCreateSplatSortZeroCountPipeline(): GPUComputePipeline {
+        const key = "splat:sort:zerosCount";
+        const cached = this.computePipelineCache.get(key);
+        if (cached) return cached;
+        const pipeline = this.device.createComputePipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.getSplatSortZeroCountBindGroupLayout()] }),
+            compute: {
+                module: this.getOrCreateShaderModule(splatFieldRadixCountZerosWGSL),
+                entryPoint: "main"
+            }
+        });
+        this.computePipelineCache.set(key, pipeline);
+        return pipeline;
+    }
+
+    private getOrCreateSplatSortScatterPipeline(bit: number): GPUComputePipeline {
+        const key = `splat:sort:scatter:${bit | 0}`;
+        const cached = this.computePipelineCache.get(key);
+        if (cached) return cached;
+        const pipeline = this.device.createComputePipeline({
+            layout: this.device.createPipelineLayout({ bindGroupLayouts: [this.getSplatSortScatterBindGroupLayout()] }),
+            compute: {
+                module: this.getOrCreateShaderModule(splatFieldRadixScatterPairsWGSL),
+                entryPoint: "main",
+                constants: { BIT: bit | 0 }
+            }
+        });
+        this.computePipelineCache.set(key, pipeline);
+        return pipeline;
+    }
+
+    private encodeSplatSortScanExclusive(pass: GPUComputePassEncoder, input: GPUBuffer, count: number, out: GPUBuffer, level: number = 0): void {
+        if (count <= 0) return;
+        const numBlocks = ceilDiv(count, 512);
+        const scanLevel = this.ensureSplatSortScanLevel(level, numBlocks);
+        const scanBlocksBg = this.device.createBindGroup({
+            layout: this.getSplatSortScanBlockBindGroupLayout(),
+            entries: [
+                { binding: 0, resource: this.bindSizedBuffer(input, count * 4) },
+                { binding: 1, resource: this.bindSizedBuffer(out, count * 4) },
+                { binding: 2, resource: this.bindSizedBuffer(scanLevel.blockSums!, numBlocks * 4) }
+            ]
+        });
+        pass.setPipeline(this.getOrCreateSplatSortScanBlockPipeline());
+        pass.setBindGroup(0, scanBlocksBg);
+        pass.dispatchWorkgroups(numBlocks, 1, 1);
+        if (numBlocks <= 1) return;
+        this.encodeSplatSortScanExclusive(pass, scanLevel.blockSums!, numBlocks, scanLevel.blockOffsets!, level + 1);
+        const addOffsetsBg = this.device.createBindGroup({
+            layout: this.getSplatSortScanAddBindGroupLayout(),
+            entries: [
+                { binding: 0, resource: this.bindSizedBuffer(out, count * 4) },
+                { binding: 1, resource: this.bindSizedBuffer(scanLevel.blockOffsets!, numBlocks * 4) }
+            ]
+        });
+        pass.setPipeline(this.getOrCreateSplatSortScanAddPipeline());
+        pass.setBindGroup(0, addOffsetsBg);
+        pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
+    }
+
+    private encodeSplatFieldSort(pass: GPUComputePassEncoder, field: SplatField, state: SplatFieldSortState): GPUBuffer | null {
+        if (!field.centerOpacityBuffer) return null;
+        if (!state.transformBuffer || !state.sortedIndexBuffer) return null;
+        const count = field.splatCount | 0;
+        if (count <= 0) return null;
+        this.ensureSplatSortCapacity(count);
+        const mvpPtr = frameArena.allocF32(16) as WasmPtr;
+        mat4f.mul(mvpPtr, this.cameraUniformStagingPtr, field.transform.worldMatrixPtr as WasmPtr);
+        this.queue.writeBuffer(state.transformBuffer, 0, driver.bytes(), mvpPtr, 16 * 4);
+        const keygenBg = this.device.createBindGroup({
+            layout: this.getSplatSortKeygenBindGroupLayout(),
+            entries: [
+                { binding: 0, resource: this.bindSizedBuffer(field.centerOpacityBuffer, count * 16) },
+                { binding: 1, resource: { buffer: state.transformBuffer } },
+                { binding: 2, resource: this.bindSizedBuffer(this.splatSortKeyA!, count * 4) },
+                { binding: 3, resource: this.bindSizedBuffer(this.splatSortIndexA!, count * 4) }
+            ]
+        });
+        pass.setPipeline(this.getOrCreateSplatSortKeygenPipeline());
+        pass.setBindGroup(0, keygenBg);
+        pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
+        let keyIn = this.splatSortKeyA!;
+        let keyOut = this.splatSortKeyB!;
+        let valueIn = this.splatSortIndexA!;
+        let valueOut = this.splatSortIndexB!;
+        for (let bit = 0; bit < 32; bit++) {
+            const flagsBg = this.device.createBindGroup({
+                layout: this.getSplatSortFlagsBindGroupLayout(),
+                entries: [
+                    { binding: 0, resource: this.bindSizedBuffer(keyIn, count * 4) },
+                    { binding: 1, resource: this.bindSizedBuffer(this.splatSortFlags!, count * 4) }
+                ]
+            });
+            pass.setPipeline(this.getOrCreateSplatSortFlagsPipeline(bit));
+            pass.setBindGroup(0, flagsBg);
+            pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
+            this.encodeSplatSortScanExclusive(pass, this.splatSortFlags!, count, this.splatSortPrefix!);
+            const zerosCountBg = this.device.createBindGroup({
+                layout: this.getSplatSortZeroCountBindGroupLayout(),
+                entries: [
+                    { binding: 0, resource: this.bindSizedBuffer(this.splatSortFlags!, count * 4) },
+                    { binding: 1, resource: this.bindSizedBuffer(this.splatSortPrefix!, count * 4) },
+                    { binding: 2, resource: this.bindSizedBuffer(this.splatSortZerosCount!, 4) }
+                ]
+            });
+            pass.setPipeline(this.getOrCreateSplatSortZeroCountPipeline());
+            pass.setBindGroup(0, zerosCountBg);
+            pass.dispatchWorkgroups(1, 1, 1);
+            const scatterBg = this.device.createBindGroup({
+                layout: this.getSplatSortScatterBindGroupLayout(),
+                entries: [
+                    { binding: 0, resource: this.bindSizedBuffer(keyIn, count * 4) },
+                    { binding: 1, resource: this.bindSizedBuffer(valueIn, count * 4) },
+                    { binding: 2, resource: this.bindSizedBuffer(this.splatSortPrefix!, count * 4) },
+                    { binding: 3, resource: this.bindSizedBuffer(this.splatSortZerosCount!, 4) },
+                    { binding: 4, resource: this.bindSizedBuffer(keyOut, count * 4) },
+                    { binding: 5, resource: this.bindSizedBuffer(valueOut, count * 4) }
+                ]
+            });
+            pass.setPipeline(this.getOrCreateSplatSortScatterPipeline(bit));
+            pass.setBindGroup(0, scatterBg);
+            pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
+            const nextKeyIn = keyOut;
+            keyOut = keyOut === this.splatSortKeyA ? this.splatSortKeyB! : this.splatSortKeyA!;
+            keyIn = nextKeyIn;
+            const nextValueIn = valueOut;
+            valueOut = valueOut === this.splatSortIndexA ? this.splatSortIndexB! : this.splatSortIndexA!;
+            valueIn = nextValueIn;
+        }
+        return valueIn;
+    }
+
+    private encodeSplatFieldSorts(encoder: GPUCommandEncoder): void {
+        if (this.transparentSplatFieldDrawList.length === 0) return;
+        let maxCount = 0;
+        for (const item of this.transparentSplatFieldDrawList) {
+            const field = item.field;
+            if (!field.visible) continue;
+            if (field.splatCount <= 0) continue;
+            if (field.splatCount > maxCount) maxCount = field.splatCount;
+        }
+        this.ensureSplatSortFrameCapacity(maxCount);
+        for (const item of this.transparentSplatFieldDrawList) {
+            const field = item.field;
+            field.upload(this.device, this.queue);
+            if (!field.centerOpacityBuffer || !field.rotationBuffer || !field.scaleBuffer) continue;
+            if (field.splatCount <= 0) continue;
+            const state = this.getOrCreateSplatFieldSortState(field);
+            const computePass = encoder.beginComputePass();
+            const finalIndices = this.encodeSplatFieldSort(computePass, field, state);
+            computePass.end();
+            if (finalIndices && state.sortedIndexBuffer) encoder.copyBufferToBuffer(finalIndices, 0, state.sortedIndexBuffer, 0, field.splatCount * 4);
+        }
     }
 
     private getPointCloudBindGroupLayout(): GPUBindGroupLayout {

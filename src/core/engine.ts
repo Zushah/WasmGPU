@@ -9,7 +9,7 @@ import type { RendererPickHit } from "./renderer";
 import { PerformanceStats } from "./stats";
 import type { PerformanceStatsDescriptor } from "./stats";
 import { Transform } from "./transform";
-import { Compute} from "../compute";
+import { Compute } from "../compute";
 import type { ComputeDescriptor } from "../compute";
 import { loadGltf, importGltf, parseGLB, readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32 } from "../gltf";
 import type { GltfDocument, LoadGltfOptions, ImportGltfOptions, GltfImportResult, ParsedGLB, AccessorView } from "../gltf";
@@ -44,6 +44,8 @@ import type { PickAttributes, PickHit, PickLassoPoint, PickQuery, PickRegionQuer
 import { PointCloud } from "../world/pointcloud";
 import type { PointCloudDescriptor } from "../world/pointcloud";
 import { Scene } from "../world/scene";
+import { SplatField } from "../world/splatfield";
+import type { SplatFieldDescriptor } from "../world/splatfield";
 
 export type WasmGPUDescriptor = RendererDescriptor & {
     // Future options: physics, audio, etc.
@@ -468,6 +470,10 @@ export class WasmGPU {
 
     createNodeLink(descriptor: NodeLinkDescriptor): NodeLink {
         return new NodeLink(descriptor);
+    }
+
+    createSplatField(descriptor: SplatFieldDescriptor): SplatField {
+        return new SplatField(descriptor);
     }
 
     readonly colormap = {

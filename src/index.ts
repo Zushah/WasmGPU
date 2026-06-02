@@ -51,4 +51,6 @@ export { PointCloud } from "./world/pointcloud";
 export type { PointCloudDescriptor, PointCloudColormap, PointCloudVisualChangeKind } from "./world/pointcloud";
 export { Scene } from "./world/scene";
 export type { SceneDescriptor, SceneBoundsOptions } from "./world/scene";
+export { SplatField } from "./world/splatfield";
+export type { SplatFieldDescriptor, SplatFieldColorSpace } from "./world/splatfield";
 export { WasmGPU as default } from "./core/engine";
