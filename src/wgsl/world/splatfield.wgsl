@@ -54,9 +54,8 @@ fn safeClipW(w: f32) -> f32 {
     return select(1e-6, w, abs(w) > 1e-6);
 }
 
-fn projectToNdc(worldPos: vec3f) -> vec2f {
-    let clip = camera.viewProj * vec4f(worldPos, 1.0);
-    return clip.xy / safeClipW(clip.w);
+fn row4(m: mat4x4f, r: u32) -> vec4f {
+    return vec4f(m[0][r], m[1][r], m[2][r], m[3][r]);
 }
 
 fn quadCorner(vertexIndex: u32) -> vec2f {
@@ -76,18 +75,26 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) ins
     let scaleValue = max(abs(scales[splatIndex].xyz), vec3f(1e-6));
     let colorValue = colors[splatIndex];
     let worldCenter4 = model.model * vec4f(centerOpacityValue.xyz, 1.0);
-    let worldCenter = worldCenter4.xyz;
     let clipCenter = camera.viewProj * worldCenter4;
-    let centerNdc = clipCenter.xy / safeClipW(clipCenter.w);
-    let axisX = rotateByQuat(vec3f(scaleValue.x * 3.0, 0.0, 0.0), rotationValue);
-    let axisY = rotateByQuat(vec3f(0.0, scaleValue.y * 3.0, 0.0), rotationValue);
-    let axisZ = rotateByQuat(vec3f(0.0, 0.0, scaleValue.z * 3.0), rotationValue);
-    let ndcX = projectToNdc(worldCenter + (model.model * vec4f(axisX, 0.0)).xyz) - centerNdc;
-    let ndcY = projectToNdc(worldCenter + (model.model * vec4f(axisY, 0.0)).xyz) - centerNdc;
-    let ndcZ = projectToNdc(worldCenter + (model.model * vec4f(axisZ, 0.0)).xyz) - centerNdc;
-    let covXX = dot(vec3f(ndcX.x, ndcY.x, ndcZ.x), vec3f(ndcX.x, ndcY.x, ndcZ.x));
-    let covXY = dot(vec3f(ndcX.x, ndcY.x, ndcZ.x), vec3f(ndcX.y, ndcY.y, ndcZ.y));
-    let covYY = dot(vec3f(ndcX.y, ndcY.y, ndcZ.y), vec3f(ndcX.y, ndcY.y, ndcZ.y));
+    let guardedClipW = safeClipW(clipCenter.w);
+    let localAxisX = rotateByQuat(vec3f(scaleValue.x, 0.0, 0.0), rotationValue);
+    let localAxisY = rotateByQuat(vec3f(0.0, scaleValue.y, 0.0), rotationValue);
+    let localAxisZ = rotateByQuat(vec3f(0.0, 0.0, scaleValue.z), rotationValue);
+    let worldAxisX = (model.model * vec4f(localAxisX, 0.0)).xyz;
+    let worldAxisY = (model.model * vec4f(localAxisY, 0.0)).xyz;
+    let worldAxisZ = (model.model * vec4f(localAxisZ, 0.0)).xyz;
+    let viewProjRow0 = row4(camera.viewProj, 0u);
+    let viewProjRow1 = row4(camera.viewProj, 1u);
+    let viewProjRow3 = row4(camera.viewProj, 3u);
+    let invClipWSq = 1.0 / (guardedClipW * guardedClipW);
+    let jx = (viewProjRow0.xyz * guardedClipW - clipCenter.x * viewProjRow3.xyz) * invClipWSq;
+    let jy = (viewProjRow1.xyz * guardedClipW - clipCenter.y * viewProjRow3.xyz) * invClipWSq;
+    let a0 = vec2f(dot(jx, worldAxisX), dot(jy, worldAxisX));
+    let a1 = vec2f(dot(jx, worldAxisY), dot(jy, worldAxisY));
+    let a2 = vec2f(dot(jx, worldAxisZ), dot(jy, worldAxisZ));
+    let covXX = a0.x * a0.x + a1.x * a1.x + a2.x * a2.x;
+    let covXY = a0.x * a0.y + a1.x * a1.y + a2.x * a2.y;
+    let covYY = a0.y * a0.y + a1.y * a1.y + a2.y * a2.y;
     let trace = covXX + covYY;
     let diff = covXX - covYY;
     let root = sqrt(max(0.0, diff * diff + 4.0 * covXY * covXY));
@@ -100,8 +107,8 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) ins
         axis0 = vec2f(0.0, 1.0);
     }
     let axis1 = vec2f(-axis0.y, axis0.x);
-    let basis0 = axis0 * sqrt(lambda0);
-    let basis1 = axis1 * sqrt(lambda1);
+    let basis0 = axis0 * sqrt(lambda0) * 3.0;
+    let basis1 = axis1 * sqrt(lambda1) * 3.0;
     let corner = quadCorner(vertexIndex);
     let ndcOffset = (basis0 * corner.x) + (basis1 * corner.y);
     let clipOffset = ndcOffset * clipCenter.w;
