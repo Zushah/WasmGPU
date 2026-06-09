@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: June 2nd, 2026.
+Last updated: June 9th, 2026.
 
-Last commit: June 1st, 2026, [**`0d1ff8d`**](https://www.github.com/Zushah/WasmGPU/commit/0d1ff8d).
+Last commit: June 4th, 2026, [**`2c71b8f`**](https://www.github.com/Zushah/WasmGPU/commit/2c71b8f).
 
 Last release: May 24th, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -255,11 +255,11 @@ It also exposes accessors from `./src/wasm/index.ts` for the WebAssembly driver 
 
 ### 1.4. WebGPU engine
 
-The WebGPU engine coordinates the browser-facing parts of the runtime. Its main files are `./src/core/engine.ts`, `./src/core/renderer.ts`, `./src/core/stats.ts`, `./src/core/transform.ts`, and all of the subsystem directories under `./src/`.
+The WebGPU engine coordinates the browser-facing parts of the runtime. Its main files are `./src/core/engine.ts`, `./src/core/renderer.ts`, the internal renderer helper modules under `./src/core/`, `./src/core/stats.ts`, `./src/core/transform.ts`, and the subsystem directories under `./src/`.
 
 The engine reads scene objects, transform state, camera state, material state, texture state, compute descriptors, overlay descriptors, and WebAssembly memory views. It mutates cached renderer state, GPU buffers, bind groups, draw lists, pick state, performance counters, per-frame staging memory, and optional occlusion hierarchy resources used by render-only previous-frame occlusion culling.
 
-`./src/core/renderer.ts` is the largest TypeScript file and has the highest change risk. It creates the WebGPU adapter, device, queue, context, fallback textures, global buffers, bind group layouts, pipeline caches, shader caches, draw-list pools, culling scratch state, pick resources, optional occlusion hierarchy textures and readback slots, and optional SMAA resources. It reads from the scene model and graphics objects, then writes commands into WebGPU command encoders.
+`./src/core/renderer.ts` owns the public `Renderer` class and the renderer-facing orchestration path. It creates the WebGPU adapter, device, queue, context, fallback textures, global buffers, bind group layouts, pipeline caches, shader caches, draw-list pools, culling scratch state, pick resources, optional occlusion hierarchy textures and readback slots, and optional SMAA resources. Internal modules under `./src/core/` hold the mechanical helper bodies for resources, timing, postprocessing, transmission, drawlists, materials, objects, picking, and occlusion. `Renderer` is the only public runtime renderer class.
 
 `./src/core/stats.ts` stores frame timing, GPU timing when timestamp queries are available, and frame counters. `./src/core/transform.ts` owns the global transform store and calls Rust functions for transform propagation.
 
@@ -319,7 +319,7 @@ Pointclouds, glyphfields, nodelinks, and splatfields are separate scene object t
 
 `./src/world/splatfield.ts` handles precomputed Gaussian splat records. It reads friendly CPU arrays or caller-supplied packed GPU buffers for center-plus-opacity, rotation, scale, and color data. CPU-side inputs are packed into vec4-aligned storage buffers, and sRGB colors are decoded to linear during packing or in the shader for external color buffers when requested. Bounds can come from explicit descriptors or from conservative CPU-side center-plus-scale expansion. `SplatField.destroy()` destroys internally created buffers and optionally destroys caller-supplied external buffers when `ownBuffers: true`. The renderer treats splatfields as transparent-only objects, GPU-sorts each field by camera depth, and does not include them in picking or render-only occlusion capture yet.
 
-Before changing one of these object types, inspect the matching WGSL under `./src/wgsl/world/`, renderer draw-list code in `./src/core/renderer.ts`, picking types in `./src/world/picking.ts` when the object participates in picking, scale source descriptors in `./src/scaling/` when the object participates in scaling, and tests such as `./test/nodelink.test.js` or `./test/splatfield.test.js`.
+Before changing one of these object types, inspect the matching WGSL under `./src/wgsl/world/`, the renderer drawlist and object helper code under `./src/core/renderer.ts`, `./src/core/drawlists.ts`, `./src/core/objects.ts`, `./src/core/picking.ts`, and `./src/core/occlusion.ts` when applicable, picking types in `./src/world/picking.ts` when the object participates in picking, scale source descriptors in `./src/scaling/` when the object participates in scaling, and tests such as `./test/nodelink.test.js` or `./test/splatfield.test.js`.
 
 ### 1.9. Lights, cameras, and controls
 
@@ -333,7 +333,7 @@ Camera, controls, and light changes should be checked against renderer uniform p
 
 ### 1.10. Rendering pipeline
 
-The renderer is implemented in `./src/core/renderer.ts`. It stores the WebGPU device, queue, canvas context, and swapchain format. It owns renderer-created bind group layouts, fallback resources, pipeline caches, shader caches, model buffers, instance buffers, culling scratch memory, pick resources, optional occlusion hierarchy resources, and optional SMAA resources.
+The public renderer class is implemented in `./src/core/renderer.ts`. It stores the WebGPU device, queue, canvas context, and swapchain format. It owns renderer-created bind group layouts, fallback resources, pipeline caches, shader caches, model buffers, instance buffers, culling scratch memory, pick resources, optional occlusion hierarchy resources, and optional SMAA resources. The helper files under `./src/core/` split the implementation mechanically by responsibility: `./src/core/resources.ts`, `./src/core/timing.ts`, `./src/core/postprocessing.ts`, `./src/core/transmission.ts`, `./src/core/drawlists.ts`, `./src/core/materials.ts`, `./src/core/objects.ts`, `./src/core/picking.ts`, and `./src/core/occlusion.ts`.
 
 `Renderer.create()` requests a WebGPU adapter and device. It currently supports descriptor fields for antialiasing, power preference, canvas format, frustum culling, frustum culling stats, occlusion culling, occlusion culling stats, and requested device limits such as maximum buffer and binding sizes.
 
@@ -353,9 +353,9 @@ The renderer is implemented in `./src/core/renderer.ts`. It stores the WebGPU de
 - submit the command buffer;
 - optionally capture a low-resolution opaque depth hierarchy for a later frame and schedule its readback without blocking the current frame.
 
-The renderer reads scene objects, transform world matrices, material state, texture views, geometry buffers, pointcloud buffers, glyphfield buffers, nodelink buffers, splatfield buffers, camera matrices, light data, and WebAssembly culling results. It mutates GPU buffers, bind groups, pipeline caches, draw-list pools, pick textures, timing query buffers, private splatfield sort buffers, internal counters, and the bounded ring of occlusion readback slots.
+The renderer reads scene objects, transform world matrices, material state, texture views, geometry buffers, pointcloud buffers, glyphfield buffers, nodelink buffers, splatfield buffers, camera matrices, light data, and WebAssembly culling results. It mutates GPU buffers, bind groups, pipeline caches, draw-list pools, pick textures, timing query buffers, private splatfield sort buffers, internal counters, and the bounded ring of occlusion readback slots. Picking helpers are in `./src/core/picking.ts` while render-only previous-frame occlusion helpers are in `./src/core/occlusion.ts`. Note that picking and warmup do not apply render-only previous-frame occlusion filtering.
 
-Changing render behavior usually means checking `./src/core/renderer.ts`, the graphics classes in `./src/graphics/`, object classes in `./src/world/`, WGSL shader variants in `./src/wgsl/`, and renderer-focused tests in `./test/`.
+Changing render behavior usually means checking `./src/core/renderer.ts`, the relevant helper module(s) under `./src/core/`, the graphics classes in `./src/graphics/`, object classes in `./src/world/`, WGSL shader variants in `./src/wgsl/`, and renderer-focused tests in `./test/`.
 
 ### 1.11. Browser runtime resources
 
@@ -367,7 +367,7 @@ Changing browser resource layout requires checking usage flags, bind group layou
 
 ### 1.12. Picking, overlays, and annotations
 
-Picking types and selection helpers are implemented in `./src/world/picking.ts`. The renderer implements the actual pick passes in `./src/core/renderer.ts`. Pick rendering writes object and element identifiers into GPU textures, then reads back the requested pixel or region.
+Picking types and selection helpers are implemented in `./src/world/picking.ts`. The renderer keeps the public pick wrappers in `./src/core/renderer.ts`, while `./src/core/picking.ts` implements the actual pick passes. Pick rendering writes object and element identifiers into GPU textures, then reads back the requested pixel or region.
 
 The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./src/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, and nodelinks when CPU records are available. Splatfields are not part of pick passes yet. Pick preparation uses the renderer's base scene-preparation path only, so it does not apply render-only occlusion filtering and does not consume previous-frame occlusion results.
 
@@ -541,7 +541,16 @@ Architectural role:
 
 Important files:
 
-- `./src/core/renderer.ts`: central render implementation. It creates the WebGPU device and context, configures limits, manages caches, builds draw lists, uploads uniforms, runs frustum and optional previous-frame occlusion culling, encodes render passes, handles transmission and SMAA paths, implements picking, and owns the occlusion hierarchy textures and readback ring.
+- `./src/core/renderer.ts`: public `Renderer` class and orchestrator. It creates the WebGPU device and context, configures limits, owns renderer state, coordinates the helper modules below, preserves the public renderer API surface, and keeps render, warmup, resize, pick wrapper, and destroy sequencing in one place.
+- `./src/core/resources.ts`: renderer-global buffers, fallback textures, staging views, object IDs, and uniform writes.
+- `./src/core/timing.ts`: GPU timestamp-query setup and readback.
+- `./src/core/postprocessing.ts`: current SMAA resource creation, resize, and execution.
+- `./src/core/transmission.ts`: transmission target lifecycle and transmissive draw detection.
+- `./src/core/drawlists.ts`: drawitem pools, drawlist building, culling-capacity helpers, and transparent merged execution.
+- `./src/core/materials.ts`: material pipeline, shader-module, bind-group, blend, and cull helpers.
+- `./src/core/objects.ts`: mesh, pointcloud, glyphfield, nodelink, and splatfield helpers.
+- `./src/core/picking.ts`: pick target resources, pick queries, pick draw execution, and pick pipelines.
+- `./src/core/occlusion.ts`: render-only previous-frame occlusion resource lifecycle, hierarchy validity checks, conservative opaque filtering, capture/readback, and occlusion pipelines.
 - `./src/core/transform.ts`: global transform store and `Transform` class. It stores transform data in WebAssembly memory and calls Rust transform functions.
 - `./src/core/stats.ts`: frame and GPU timing counters plus the nested public culling stats display used by the runtime.
 - `./src/utils/index.ts`: shared internal helpers used across subsystems.
@@ -757,7 +766,7 @@ Important directories:
 
 Common interactions:
 
-- `./src/core/renderer.ts` imports render shaders.
+- `./src/core/renderer.ts` and the internal renderer helper modules under `./src/core/` import render shaders.
 - `./src/compute/kernels.ts` imports compute shaders.
 - `./esbuild.config.js` minifies WGSL imports during bundling.
 
@@ -778,7 +787,7 @@ Important files:
 - `./examples/overlay.html`: overlay layers.
 - `./examples/picking.html`: picking and selection.
 - `./examples/scaling.html`: scaling and colormap behavior.
-- `./examples/fluid.html`, `./examples/galaxy.html`, `./examples/graphing.html`, `./examples/mandelbulb.html`, and `./examples/protein.html`: larger rendering and compute examples.
+- `./examples/fluid.html`, `./examples/galaxy.html`, `./examples/graphing.html`, `./examples/mandelbulb.html`, `./examples/protein.html`, and `./examples/terrain.html`: larger rendering and compute examples.
 
 Examples import built bundles from `./dist/`. When source changes public behavior, update examples when preparing a release or when a specific example fix is needed.
 
