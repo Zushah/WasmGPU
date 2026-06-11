@@ -17,6 +17,11 @@ fn safeClipW(w: f32) -> f32 {
     return select(1e-6, w, abs(w) > 1e-6);
 }
 
+fn splatCenterRenderable(clip: vec4f) -> bool {
+    let eps = 1e-6;
+    return (clip.w > eps) && (clip.z >= -eps) && (clip.z <= clip.w + eps);
+}
+
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
@@ -25,6 +30,11 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let clip = sortTransform.mvp * vec4f(centerOpacity[i].xyz, 1.0);
+    if (!splatCenterRenderable(clip)) {
+        keysOut[i] = 0xffffffffu;
+        indicesOut[i] = i;
+        return;
+    }
     let depth = clamp(clip.z / safeClipW(clip.w), 0.0, 1.0);
     let farToNear = 1.0 - depth;
     keysOut[i] = u32(round(farToNear * 4294967040.0));

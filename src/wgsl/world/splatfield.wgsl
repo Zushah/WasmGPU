@@ -54,8 +54,22 @@ fn safeClipW(w: f32) -> f32 {
     return select(1e-6, w, abs(w) > 1e-6);
 }
 
+fn splatCenterRenderable(clip: vec4f) -> bool {
+    let eps = 1e-6;
+    return (clip.w > eps) && (clip.z >= -eps) && (clip.z <= clip.w + eps);
+}
+
 fn row4(m: mat4x4f, r: u32) -> vec4f {
     return vec4f(m[0][r], m[1][r], m[2][r], m[3][r]);
+}
+
+fn invalidVertex() -> VertexOutput {
+    var out: VertexOutput;
+    out.position = vec4f(2.0, 2.0, 2.0, 1.0);
+    out.localCoord = vec2f(0.0);
+    out.color = vec3f(0.0);
+    out.alphaBase = 0.0;
+    return out;
 }
 
 fn quadCorner(vertexIndex: u32) -> vec2f {
@@ -76,6 +90,9 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) ins
     let colorValue = colors[splatIndex];
     let worldCenter4 = model.model * vec4f(centerOpacityValue.xyz, 1.0);
     let clipCenter = camera.viewProj * worldCenter4;
+    if (!splatCenterRenderable(clipCenter)) {
+        return invalidVertex();
+    }
     let guardedClipW = safeClipW(clipCenter.w);
     let localAxisX = rotateByQuat(vec3f(scaleValue.x, 0.0, 0.0), rotationValue);
     let localAxisY = rotateByQuat(vec3f(0.0, scaleValue.y, 0.0), rotationValue);
@@ -109,6 +126,15 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) ins
     let axis1 = vec2f(-axis0.y, axis0.x);
     let basis0 = axis0 * sqrt(lambda0) * 3.0;
     let basis1 = axis1 * sqrt(lambda1) * 3.0;
+    let viewportHeight = max(camera.viewportHeight, 1.0);
+    let radiusNdc = max(length(basis0), length(basis1));
+    let radiusPx = radiusNdc * 0.5 * viewportHeight;
+    let maxRadiusPx = max(96.0, min(512.0, viewportHeight * 0.45));
+    let fadeStartPx = maxRadiusPx * 0.75;
+    if (radiusPx >= maxRadiusPx) {
+        return invalidVertex();
+    }
+    let radiusFade = 1.0 - smoothstep(fadeStartPx, maxRadiusPx, radiusPx);
     let corner = quadCorner(vertexIndex);
     let ndcOffset = (basis0 * corner.x) + (basis1 * corner.y);
     let clipOffset = ndcOffset * clipCenter.w;
@@ -116,7 +142,7 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) ins
     if (splatField.params.y > 0.5) {
         linearColor = linearFromSrgb(linearColor);
     }
-    let alphaBase = clamp(colorValue.a, 0.0, 1.0) * clamp(centerOpacityValue.w, 0.0, 1.0) * clamp(splatField.params.x, 0.0, 1.0);
+    let alphaBase = clamp(colorValue.a, 0.0, 1.0) * clamp(centerOpacityValue.w, 0.0, 1.0) * clamp(splatField.params.x, 0.0, 1.0) * radiusFade;
     var out: VertexOutput;
     out.position = clipCenter + vec4f(clipOffset, 0.0, 0.0);
     out.localCoord = corner;
