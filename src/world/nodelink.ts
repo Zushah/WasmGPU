@@ -68,6 +68,7 @@ export type NodeLinkDescriptor = {
     visible?: boolean;
     name?: string;
     keepCPUData?: boolean;
+    ownBuffers?: boolean;
     ndShape?: number[];
 };
 
@@ -78,13 +79,9 @@ type PendingWrite = { target: PendingWriteTarget; byteOffset: number; bytes: Uin
 const UNIFORM_FLOAT_COUNT = 128;
 const UNIFORM_BYTE_SIZE = UNIFORM_FLOAT_COUNT * 4;
 
-const normalizeNodeScaleTransform = (transform: ScaleTransformDescriptor | ScaleTransform | undefined): ScaleTransform => {
-    return normalizeScaleTransform({ componentCount: 1, componentIndex: 0, stride: 1, offset: 0, mode: "linear", clampMode: "range", domainMin: 0, domainMax: 1, clampMin: 0, clampMax: 1, gamma: 1, invert: false, ...(transform ?? {}) });
-};
+const normalizeNodeScaleTransform = (transform: ScaleTransformDescriptor | ScaleTransform | undefined): ScaleTransform => normalizeScaleTransform({ componentCount: 1, componentIndex: 0, stride: 1, offset: 0, mode: "linear", clampMode: "range", domainMin: 0, domainMax: 1, clampMin: 0, clampMax: 1, gamma: 1, invert: false, ...(transform ?? {}) });
 
-const normalizeEdgeScaleTransform = (transform: ScaleTransformDescriptor | ScaleTransform | undefined): ScaleTransform => {
-    return normalizeScaleTransform({ componentCount: 1, componentIndex: 0, stride: 1, offset: 0, mode: "linear", clampMode: "range", domainMin: 0, domainMax: 1, clampMin: 0, clampMax: 1, gamma: 1, invert: false, ...(transform ?? {}) });
-};
+const normalizeEdgeScaleTransform = (transform: ScaleTransformDescriptor | ScaleTransform | undefined): ScaleTransform => normalizeScaleTransform({ componentCount: 1, componentIndex: 0, stride: 1, offset: 0, mode: "linear", clampMode: "range", domainMin: 0, domainMax: 1, clampMin: 0, clampMax: 1, gamma: 1, invert: false, ...(transform ?? {}) });
 
 const colorModeId = (mode: NodeLinkColorMode): number => mode === "rgba" ? 0 : mode === "scalar" ? 1 : 2;
 const nodeGeometryModeId = (mode: NodeLinkNodeGeometryMode): number => mode === "points" ? 0 : mode === "spheres" ? 1 : mode === "ellipsoids" ? 2 : 3;
@@ -137,6 +134,13 @@ export class NodeLink {
     private _edgesExternal: boolean = false;
     private _edgeScalarsExternal: boolean = false;
     private _edgeColorsExternal: boolean = false;
+    private _nodePositionsOwned: boolean = false;
+    private _nodeScalarsOwned: boolean = false;
+    private _nodeColorsOwned: boolean = false;
+    private _nodeRadiiOwned: boolean = false;
+    private _edgesOwned: boolean = false;
+    private _edgeScalarsOwned: boolean = false;
+    private _edgeColorsOwned: boolean = false;
     private _nodePositionsDirty: boolean = true;
     private _nodeScalarsDirty: boolean = true;
     private _nodeColorsDirty: boolean = true;
@@ -147,6 +151,7 @@ export class NodeLink {
     private _uniformDirty: boolean = true;
     private _boundsSource: BoundsSourceMode = "none";
     private _keepCPUData: boolean = false;
+    private _ownExternalBuffers: boolean = false;
     private _ndShape: number[] | null = null;
     private _nodeGeometryMode: NodeLinkNodeGeometryMode = "points";
     private _edgeGeometryMode: NodeLinkEdgeGeometryMode = "lines";
@@ -188,6 +193,7 @@ export class NodeLink {
         if (desc.depthWrite !== undefined) this.depthWrite = !!desc.depthWrite;
         if (desc.depthTest !== undefined) this.depthTest = !!desc.depthTest;
         if (desc.keepCPUData !== undefined) this._keepCPUData = !!desc.keepCPUData;
+        this._ownExternalBuffers = !!desc.ownBuffers;
         if (desc.ndShape !== undefined) this.ndShape = desc.ndShape;
         if (desc.nodeGeometryMode !== undefined) this._nodeGeometryMode = desc.nodeGeometryMode;
         if (desc.edgeGeometryMode !== undefined) this._edgeGeometryMode = desc.edgeGeometryMode;
@@ -208,21 +214,21 @@ export class NodeLink {
         if (desc.lit !== undefined) this._lit = !!desc.lit;
         this.applyExplicitBounds(desc);
         if (desc.nodePositions) this.setNodePositions(desc.nodePositions, { stride: desc.nodePositionsStride ?? 3, keepCPUData: this._keepCPUData });
-        else if (desc.nodePositionsBuffer) this.setNodePositionsBuffer(resolveGPUBuffer(desc.nodePositionsBuffer), desc.nodeCount ?? 0);
+        else if (desc.nodePositionsBuffer) this.setNodePositionsBuffer(resolveGPUBuffer(desc.nodePositionsBuffer), desc.nodeCount ?? 0, { ownBuffer: this._ownExternalBuffers });
         else if (desc.nodeCount !== undefined) this._nodeCount = Math.max(0, desc.nodeCount | 0);
         if (desc.edges) this.setEdges(desc.edges, { keepCPUData: this._keepCPUData });
-        else if (desc.edgesBuffer) this.setEdgesBuffer(resolveGPUBuffer(desc.edgesBuffer), desc.edgeCount ?? 0);
+        else if (desc.edgesBuffer) this.setEdgesBuffer(resolveGPUBuffer(desc.edgesBuffer), desc.edgeCount ?? 0, { ownBuffer: this._ownExternalBuffers });
         else if (desc.edgeCount !== undefined) this._edgeCount = Math.max(0, desc.edgeCount | 0);
         if (desc.nodeScalars) this.setNodeScalars(desc.nodeScalars, { keepCPUData: this._keepCPUData });
-        else if (desc.nodeScalarsBuffer) this.setNodeScalarsBuffer(resolveGPUBuffer(desc.nodeScalarsBuffer));
+        else if (desc.nodeScalarsBuffer) this.setNodeScalarsBuffer(resolveGPUBuffer(desc.nodeScalarsBuffer), { ownBuffer: this._ownExternalBuffers });
         if (desc.nodeColors) this.setNodeColors(desc.nodeColors, { keepCPUData: this._keepCPUData });
-        else if (desc.nodeColorsBuffer) this.setNodeColorsBuffer(resolveGPUBuffer(desc.nodeColorsBuffer));
+        else if (desc.nodeColorsBuffer) this.setNodeColorsBuffer(resolveGPUBuffer(desc.nodeColorsBuffer), { ownBuffer: this._ownExternalBuffers });
         if (desc.nodeRadii) this.setNodeRadii(desc.nodeRadii, { stride: desc.nodeRadiiStride ?? 3, keepCPUData: this._keepCPUData });
-        else if (desc.nodeRadiiBuffer) this.setNodeRadiiBuffer(resolveGPUBuffer(desc.nodeRadiiBuffer));
+        else if (desc.nodeRadiiBuffer) this.setNodeRadiiBuffer(resolveGPUBuffer(desc.nodeRadiiBuffer), { ownBuffer: this._ownExternalBuffers });
         if (desc.edgeScalars) this.setEdgeScalars(desc.edgeScalars, { keepCPUData: this._keepCPUData });
-        else if (desc.edgeScalarsBuffer) this.setEdgeScalarsBuffer(resolveGPUBuffer(desc.edgeScalarsBuffer));
+        else if (desc.edgeScalarsBuffer) this.setEdgeScalarsBuffer(resolveGPUBuffer(desc.edgeScalarsBuffer), { ownBuffer: this._ownExternalBuffers });
         if (desc.edgeColors) this.setEdgeColors(desc.edgeColors, { keepCPUData: this._keepCPUData });
-        else if (desc.edgeColorsBuffer) this.setEdgeColorsBuffer(resolveGPUBuffer(desc.edgeColorsBuffer));
+        else if (desc.edgeColorsBuffer) this.setEdgeColorsBuffer(resolveGPUBuffer(desc.edgeColorsBuffer), { ownBuffer: this._ownExternalBuffers });
     }
 
     private applyExplicitBounds(desc: NodeLinkDescriptor): void {
@@ -250,6 +256,79 @@ export class NodeLink {
         this.boundsMax = [0, 0, 0];
         this.boundsCenter = [0, 0, 0];
         this.boundsRadius = 0;
+    }
+
+    private clearPendingWrites(target: PendingWriteTarget): void {
+        let next = 0;
+        for (let i = 0; i < this._pendingWrites.length; i++) {
+            const write = this._pendingWrites[i];
+            if (write.target === target) continue;
+            this._pendingWrites[next++] = write;
+        }
+        this._pendingWrites.length = next;
+    }
+
+    private replaceNodePositionsBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.nodePositionsBuffer !== buffer) {
+            this.clearPendingWrites("nodePositions");
+            if (this.nodePositionsBuffer && this._nodePositionsOwned) this.nodePositionsBuffer.destroy();
+        }
+        this.nodePositionsBuffer = buffer;
+        this._nodePositionsOwned = !!buffer && owned;
+    }
+
+    private replaceNodeScalarsBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.nodeScalarsBuffer !== buffer) {
+            this.clearPendingWrites("nodeScalars");
+            if (this.nodeScalarsBuffer && this._nodeScalarsOwned) this.nodeScalarsBuffer.destroy();
+        }
+        this.nodeScalarsBuffer = buffer;
+        this._nodeScalarsOwned = !!buffer && owned;
+    }
+
+    private replaceNodeColorsBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.nodeColorsBuffer !== buffer) {
+            this.clearPendingWrites("nodeColors");
+            if (this.nodeColorsBuffer && this._nodeColorsOwned) this.nodeColorsBuffer.destroy();
+        }
+        this.nodeColorsBuffer = buffer;
+        this._nodeColorsOwned = !!buffer && owned;
+    }
+
+    private replaceNodeRadiiBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.nodeRadiiBuffer !== buffer) {
+            this.clearPendingWrites("nodeRadii");
+            if (this.nodeRadiiBuffer && this._nodeRadiiOwned) this.nodeRadiiBuffer.destroy();
+        }
+        this.nodeRadiiBuffer = buffer;
+        this._nodeRadiiOwned = !!buffer && owned;
+    }
+
+    private replaceEdgesBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.edgesBuffer !== buffer) {
+            this.clearPendingWrites("edges");
+            if (this.edgesBuffer && this._edgesOwned) this.edgesBuffer.destroy();
+        }
+        this.edgesBuffer = buffer;
+        this._edgesOwned = !!buffer && owned;
+    }
+
+    private replaceEdgeScalarsBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.edgeScalarsBuffer !== buffer) {
+            this.clearPendingWrites("edgeScalars");
+            if (this.edgeScalarsBuffer && this._edgeScalarsOwned) this.edgeScalarsBuffer.destroy();
+        }
+        this.edgeScalarsBuffer = buffer;
+        this._edgeScalarsOwned = !!buffer && owned;
+    }
+
+    private replaceEdgeColorsBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.edgeColorsBuffer !== buffer) {
+            this.clearPendingWrites("edgeColors");
+            if (this.edgeColorsBuffer && this._edgeColorsOwned) this.edgeColorsBuffer.destroy();
+        }
+        this.edgeColorsBuffer = buffer;
+        this._edgeColorsOwned = !!buffer && owned;
     }
 
     private validateNodeArrayLength(length: number, stride: number, label: string): number {
@@ -605,6 +684,7 @@ export class NodeLink {
     setNodePositions(data: Float32Array, opts: { stride?: 3 | 4; keepCPUData?: boolean } = {}): void {
         const stride = opts.stride ?? 3;
         const count = this.validateNodeArrayLength(data.length, stride, "nodePositions");
+        this.replaceNodePositionsBuffer(null, false);
         this._nodeCount = count;
         this._nodePositionsCPU = this.packVec4FromStride(data, stride);
         this._nodePositionsExternal = false;
@@ -626,10 +706,10 @@ export class NodeLink {
         this.clearComputedBoundsIfNeeded();
     }
 
-    setNodePositionsBuffer(buffer: GPUBuffer, nodeCount: number): void {
+    setNodePositionsBuffer(buffer: GPUBuffer, nodeCount: number, opts: { ownBuffer?: boolean } = {}): void {
         assert(!!buffer, "NodeLink: nodePositionsBuffer is required.");
         assert(Number.isInteger(nodeCount) && nodeCount >= 0, "NodeLink: nodeCount must be an integer >= 0.");
-        this.nodePositionsBuffer = buffer;
+        this.replaceNodePositionsBuffer(buffer, !!opts.ownBuffer);
         this._nodeCount = nodeCount | 0;
         this._nodePositionsCPU = null;
         this._nodePositionsExternal = true;
@@ -639,11 +719,13 @@ export class NodeLink {
 
     setNodeScalars(data: Float32Array, opts: { keepCPUData?: boolean } = {}): void {
         assert(data.length === this._nodeCount, "NodeLink: nodeScalars length must equal nodeCount.");
+        this.replaceNodeScalarsBuffer(null, false);
         this._nodeScalarsCPU = new Float32Array(data);
         this._nodeScalarsExternal = false;
         this._nodeScalarsDirty = true;
         this._nodeScaleRevision++;
         this._keepCPUData = opts.keepCPUData ?? this._keepCPUData;
+        this.bindGroupKey = null;
     }
 
     updateNodeScalars(data: Float32Array, startNode: number = 0): void {
@@ -656,8 +738,8 @@ export class NodeLink {
         this._nodeScaleRevision++;
     }
 
-    setNodeScalarsBuffer(buffer: GPUBuffer | null): void {
-        this.nodeScalarsBuffer = buffer;
+    setNodeScalarsBuffer(buffer: GPUBuffer | null, opts: { ownBuffer?: boolean } = {}): void {
+        this.replaceNodeScalarsBuffer(buffer, !!buffer && !!opts.ownBuffer);
         this._nodeScalarsCPU = null;
         this._nodeScalarsExternal = !!buffer;
         this._nodeScalarsDirty = false;
@@ -668,10 +750,12 @@ export class NodeLink {
     setNodeColors(data: Float32Array, opts: { keepCPUData?: boolean } = {}): void {
         assert((data.length % 4) === 0, "NodeLink: nodeColors length must be a multiple of 4.");
         assert((data.length / 4) === this._nodeCount, "NodeLink: nodeColors length must equal nodeCount*4.");
+        this.replaceNodeColorsBuffer(null, false);
         this._nodeColorsCPU = new Float32Array(data);
         this._nodeColorsExternal = false;
         this._nodeColorsDirty = true;
         this._keepCPUData = opts.keepCPUData ?? this._keepCPUData;
+        this.bindGroupKey = null;
     }
 
     updateNodeColors(data: Float32Array, startNode: number = 0): void {
@@ -685,8 +769,8 @@ export class NodeLink {
         else this._nodeColorsDirty = true;
     }
 
-    setNodeColorsBuffer(buffer: GPUBuffer | null): void {
-        this.nodeColorsBuffer = buffer;
+    setNodeColorsBuffer(buffer: GPUBuffer | null, opts: { ownBuffer?: boolean } = {}): void {
+        this.replaceNodeColorsBuffer(buffer, !!buffer && !!opts.ownBuffer);
         this._nodeColorsCPU = null;
         this._nodeColorsExternal = !!buffer;
         this._nodeColorsDirty = false;
@@ -697,10 +781,12 @@ export class NodeLink {
         const stride = opts.stride ?? 3;
         const count = this.validateNodeArrayLength(data.length, stride, "nodeRadii");
         assert(count === this._nodeCount, "NodeLink: nodeRadii count must equal nodeCount.");
+        this.replaceNodeRadiiBuffer(null, false);
         this._nodeRadiiCPU = this.packVec4FromStride(data, stride);
         this._nodeRadiiExternal = false;
         this._nodeRadiiDirty = true;
         this._keepCPUData = opts.keepCPUData ?? this._keepCPUData;
+        this.bindGroupKey = null;
     }
 
     updateNodeRadii(data: Float32Array, startNode: number = 0, stride: 3 | 4 = 3): void {
@@ -714,8 +800,8 @@ export class NodeLink {
         else this._nodeRadiiDirty = true;
     }
 
-    setNodeRadiiBuffer(buffer: GPUBuffer | null): void {
-        this.nodeRadiiBuffer = buffer;
+    setNodeRadiiBuffer(buffer: GPUBuffer | null, opts: { ownBuffer?: boolean } = {}): void {
+        this.replaceNodeRadiiBuffer(buffer, !!buffer && !!opts.ownBuffer);
         this._nodeRadiiCPU = null;
         this._nodeRadiiExternal = !!buffer;
         this._nodeRadiiDirty = false;
@@ -727,11 +813,13 @@ export class NodeLink {
         assert((data.length % 2) === 0, "NodeLink: edges length must be a multiple of 2.");
         const u32 = data instanceof Uint32Array ? data : new Uint32Array(data);
         for (let i = 0; i < u32.length; i++) assert(u32[i] < this._nodeCount, `NodeLink: edge index ${u32[i]} is out of range.`);
+        this.replaceEdgesBuffer(null, false);
         this._edgeCount = (u32.length / 2) | 0;
         this._edgesCPU = new Uint32Array(u32);
         this._edgesExternal = false;
         this._edgesDirty = true;
         this._keepCPUData = opts.keepCPUData ?? this._keepCPUData;
+        this.bindGroupKey = null;
     }
 
     updateEdges(data: Uint16Array | Uint32Array, startEdge: number = 0): void {
@@ -748,10 +836,10 @@ export class NodeLink {
         else this._edgesDirty = true;
     }
 
-    setEdgesBuffer(buffer: GPUBuffer, edgeCount: number): void {
+    setEdgesBuffer(buffer: GPUBuffer, edgeCount: number, opts: { ownBuffer?: boolean } = {}): void {
         assert(!!buffer, "NodeLink: edgesBuffer is required.");
         assert(Number.isInteger(edgeCount) && edgeCount >= 0, "NodeLink: edgeCount must be an integer >= 0.");
-        this.edgesBuffer = buffer;
+        this.replaceEdgesBuffer(buffer, !!opts.ownBuffer);
         this._edgeCount = edgeCount | 0;
         this._edgesCPU = null;
         this._edgesExternal = true;
@@ -761,11 +849,13 @@ export class NodeLink {
 
     setEdgeScalars(data: Float32Array, opts: { keepCPUData?: boolean } = {}): void {
         assert(data.length === this._edgeCount, "NodeLink: edgeScalars length must equal edgeCount.");
+        this.replaceEdgeScalarsBuffer(null, false);
         this._edgeScalarsCPU = new Float32Array(data);
         this._edgeScalarsExternal = false;
         this._edgeScalarsDirty = true;
         this._edgeScaleRevision++;
         this._keepCPUData = opts.keepCPUData ?? this._keepCPUData;
+        this.bindGroupKey = null;
     }
 
     updateEdgeScalars(data: Float32Array, startEdge: number = 0): void {
@@ -778,8 +868,8 @@ export class NodeLink {
         this._edgeScaleRevision++;
     }
 
-    setEdgeScalarsBuffer(buffer: GPUBuffer | null): void {
-        this.edgeScalarsBuffer = buffer;
+    setEdgeScalarsBuffer(buffer: GPUBuffer | null, opts: { ownBuffer?: boolean } = {}): void {
+        this.replaceEdgeScalarsBuffer(buffer, !!buffer && !!opts.ownBuffer);
         this._edgeScalarsCPU = null;
         this._edgeScalarsExternal = !!buffer;
         this._edgeScalarsDirty = false;
@@ -790,10 +880,12 @@ export class NodeLink {
     setEdgeColors(data: Float32Array, opts: { keepCPUData?: boolean } = {}): void {
         assert((data.length % 4) === 0, "NodeLink: edgeColors length must be a multiple of 4.");
         assert((data.length / 4) === this._edgeCount, "NodeLink: edgeColors length must equal edgeCount*4.");
+        this.replaceEdgeColorsBuffer(null, false);
         this._edgeColorsCPU = new Float32Array(data);
         this._edgeColorsExternal = false;
         this._edgeColorsDirty = true;
         this._keepCPUData = opts.keepCPUData ?? this._keepCPUData;
+        this.bindGroupKey = null;
     }
 
     updateEdgeColors(data: Float32Array, startEdge: number = 0): void {
@@ -807,8 +899,8 @@ export class NodeLink {
         else this._edgeColorsDirty = true;
     }
 
-    setEdgeColorsBuffer(buffer: GPUBuffer | null): void {
-        this.edgeColorsBuffer = buffer;
+    setEdgeColorsBuffer(buffer: GPUBuffer | null, opts: { ownBuffer?: boolean } = {}): void {
+        this.replaceEdgeColorsBuffer(buffer, !!buffer && !!opts.ownBuffer);
         this._edgeColorsCPU = null;
         this._edgeColorsExternal = !!buffer;
         this._edgeColorsDirty = false;
@@ -906,35 +998,29 @@ export class NodeLink {
     }
 
     upload(device: GPUDevice, queue: GPUQueue): void {
-        const uploadF32 = (buf: GPUBuffer | null, cpu: Float32Array | null, dirty: boolean): GPUBuffer | null => {
-            if (!dirty || !cpu) return buf;
-            if (!buf) return createBuffer(device, cpu, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+        const uploadF32 = (buf: GPUBuffer | null, owned: boolean, cpu: Float32Array | null, dirty: boolean): { buffer: GPUBuffer | null; owned: boolean; } => {
+            if (!dirty || !cpu) return { buffer: buf, owned };
+            if (!buf || !owned) return { buffer: createBuffer(device, cpu, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST), owned: true };
             try {
                 queue.writeBuffer(buf, 0, cpu.buffer, cpu.byteOffset, cpu.byteLength);
-                return buf;
-            } catch {
-                buf.destroy();
-                return createBuffer(device, cpu, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-            }
+                return { buffer: buf, owned: true };
+            } catch { return { buffer: createBuffer(device, cpu, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST), owned: true }; }
         };
-        const uploadU32 = (buf: GPUBuffer | null, cpu: Uint32Array | null, dirty: boolean): GPUBuffer | null => {
-            if (!dirty || !cpu) return buf;
-            if (!buf) return createBuffer(device, cpu, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
+        const uploadU32 = (buf: GPUBuffer | null, owned: boolean, cpu: Uint32Array | null, dirty: boolean): { buffer: GPUBuffer | null; owned: boolean; } => {
+            if (!dirty || !cpu) return { buffer: buf, owned };
+            if (!buf || !owned) return { buffer: createBuffer(device, cpu, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST), owned: true };
             try {
                 queue.writeBuffer(buf, 0, cpu.buffer, cpu.byteOffset, cpu.byteLength);
-                return buf;
-            } catch {
-                buf.destroy();
-                return createBuffer(device, cpu, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST);
-            }
+                return { buffer: buf, owned: true };
+            } catch { return { buffer: createBuffer(device, cpu, GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST), owned: true }; }
         };
-        if (!this._nodePositionsExternal) this.nodePositionsBuffer = uploadF32(this.nodePositionsBuffer, this._nodePositionsCPU, this._nodePositionsDirty);
-        if (!this._nodeScalarsExternal) this.nodeScalarsBuffer = uploadF32(this.nodeScalarsBuffer, this._nodeScalarsCPU, this._nodeScalarsDirty);
-        if (!this._nodeColorsExternal) this.nodeColorsBuffer = uploadF32(this.nodeColorsBuffer, this._nodeColorsCPU, this._nodeColorsDirty);
-        if (!this._nodeRadiiExternal) this.nodeRadiiBuffer = uploadF32(this.nodeRadiiBuffer, this._nodeRadiiCPU, this._nodeRadiiDirty);
-        if (!this._edgesExternal) this.edgesBuffer = uploadU32(this.edgesBuffer, this._edgesCPU, this._edgesDirty);
-        if (!this._edgeScalarsExternal) this.edgeScalarsBuffer = uploadF32(this.edgeScalarsBuffer, this._edgeScalarsCPU, this._edgeScalarsDirty);
-        if (!this._edgeColorsExternal) this.edgeColorsBuffer = uploadF32(this.edgeColorsBuffer, this._edgeColorsCPU, this._edgeColorsDirty);
+        if (!this._nodePositionsExternal) { const result = uploadF32(this.nodePositionsBuffer, this._nodePositionsOwned, this._nodePositionsCPU, this._nodePositionsDirty); this.replaceNodePositionsBuffer(result.buffer, result.owned); }
+        if (!this._nodeScalarsExternal) { const result = uploadF32(this.nodeScalarsBuffer, this._nodeScalarsOwned, this._nodeScalarsCPU, this._nodeScalarsDirty); this.replaceNodeScalarsBuffer(result.buffer, result.owned); }
+        if (!this._nodeColorsExternal) { const result = uploadF32(this.nodeColorsBuffer, this._nodeColorsOwned, this._nodeColorsCPU, this._nodeColorsDirty); this.replaceNodeColorsBuffer(result.buffer, result.owned); }
+        if (!this._nodeRadiiExternal) { const result = uploadF32(this.nodeRadiiBuffer, this._nodeRadiiOwned, this._nodeRadiiCPU, this._nodeRadiiDirty); this.replaceNodeRadiiBuffer(result.buffer, result.owned); }
+        if (!this._edgesExternal) { const result = uploadU32(this.edgesBuffer, this._edgesOwned, this._edgesCPU, this._edgesDirty); this.replaceEdgesBuffer(result.buffer, result.owned); }
+        if (!this._edgeScalarsExternal) { const result = uploadF32(this.edgeScalarsBuffer, this._edgeScalarsOwned, this._edgeScalarsCPU, this._edgeScalarsDirty); this.replaceEdgeScalarsBuffer(result.buffer, result.owned); }
+        if (!this._edgeColorsExternal) { const result = uploadF32(this.edgeColorsBuffer, this._edgeColorsOwned, this._edgeColorsCPU, this._edgeColorsDirty); this.replaceEdgeColorsBuffer(result.buffer, result.owned); }
         this.flushQueuedWrites(queue);
         if (!this._keepCPUData) this.dropCPUData();
         this._nodePositionsDirty = false;
@@ -1017,14 +1103,19 @@ export class NodeLink {
         return c === "custom" ? Colormap.builtin("grayscale") : Colormap.builtin(c);
     }
 
+    private destroyOwnedBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (!buffer || !owned) return;
+        buffer.destroy();
+    }
+
     destroy(): void {
-        this.nodePositionsBuffer?.destroy();
-        this.nodeScalarsBuffer?.destroy();
-        this.nodeColorsBuffer?.destroy();
-        this.nodeRadiiBuffer?.destroy();
-        this.edgesBuffer?.destroy();
-        this.edgeScalarsBuffer?.destroy();
-        this.edgeColorsBuffer?.destroy();
+        this.destroyOwnedBuffer(this.nodePositionsBuffer, this._nodePositionsOwned);
+        this.destroyOwnedBuffer(this.nodeScalarsBuffer, this._nodeScalarsOwned);
+        this.destroyOwnedBuffer(this.nodeColorsBuffer, this._nodeColorsOwned);
+        this.destroyOwnedBuffer(this.nodeRadiiBuffer, this._nodeRadiiOwned);
+        this.destroyOwnedBuffer(this.edgesBuffer, this._edgesOwned);
+        this.destroyOwnedBuffer(this.edgeScalarsBuffer, this._edgeScalarsOwned);
+        this.destroyOwnedBuffer(this.edgeColorsBuffer, this._edgeColorsOwned);
         this.uniformBuffer?.destroy();
         this.nodePositionsBuffer = null;
         this.nodeScalarsBuffer = null;
@@ -1042,6 +1133,21 @@ export class NodeLink {
         this._ndShape = null;
         this._nodeCount = 0;
         this._edgeCount = 0;
+        this._nodePositionsExternal = false;
+        this._nodeScalarsExternal = false;
+        this._nodeColorsExternal = false;
+        this._nodeRadiiExternal = false;
+        this._edgesExternal = false;
+        this._edgeScalarsExternal = false;
+        this._edgeColorsExternal = false;
+        this._nodePositionsOwned = false;
+        this._nodeScalarsOwned = false;
+        this._nodeColorsOwned = false;
+        this._nodeRadiiOwned = false;
+        this._edgesOwned = false;
+        this._edgeScalarsOwned = false;
+        this._edgeColorsOwned = false;
+        this._ownExternalBuffers = false;
         this.transform.dispose();
     }
 
