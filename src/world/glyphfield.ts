@@ -56,6 +56,7 @@ export type GlyphFieldDescriptor = {
     visible?: boolean;
     name?: string;
     keepCPUData?: boolean;
+    ownBuffers?: boolean;
     ndShape?: number[];
 };
 
@@ -318,6 +319,11 @@ export class GlyphField {
     private _opacity: number = 1.0;
     private _lit: boolean = false;
     private _solidColor: Color4 = [1, 1, 1, 1];
+    private _positionsOwned: boolean = false;
+    private _rotationsOwned: boolean = false;
+    private _scalesOwned: boolean = false;
+    private _attributesOwned: boolean = false;
+    private _ownExternalBuffers: boolean = false;
 
     constructor(desc: GlyphFieldDescriptor) {
         assert(!!desc && !!desc.scaleTransform, "GlyphField: scaleTransform is required.");
@@ -338,6 +344,7 @@ export class GlyphField {
         if (desc.lit !== undefined) this._lit = !!desc.lit;
         if (desc.solidColor !== undefined) this._solidColor = [desc.solidColor[0], desc.solidColor[1], desc.solidColor[2], desc.solidColor[3]];
         if (desc.keepCPUData !== undefined) this._keepCPUData = !!desc.keepCPUData;
+        this._ownExternalBuffers = !!desc.ownBuffers;
         if (desc.ndShape !== undefined) this.ndShape = desc.ndShape;
         const positionsBuffer = desc.positionsBuffer ? resolveGPUBuffer(desc.positionsBuffer) : null;
         const rotationsBuffer = desc.rotationsBuffer ? resolveGPUBuffer(desc.rotationsBuffer) : null;
@@ -347,7 +354,7 @@ export class GlyphField {
             assert(!!positionsBuffer && !!rotationsBuffer && !!scalesBuffer, "GlyphField: positionsBuffer, rotationsBuffer, and scalesBuffer are required when using external buffers.");
             const count = desc.instanceCount ?? 0;
             assert(count > 0, "GlyphField: instanceCount is required when using external buffers.");
-            this.setBuffers(positionsBuffer!, rotationsBuffer!, scalesBuffer!, attributesBuffer, count);
+            this.setBuffers(positionsBuffer!, rotationsBuffer!, scalesBuffer!, attributesBuffer, count, { ownBuffers: this._ownExternalBuffers });
         } else if (desc.positionsPtr || desc.rotationsPtr || desc.scalesPtr) {
             assert(!!desc.positionsPtr && !!desc.rotationsPtr && !!desc.scalesPtr, "GlyphField: positionsPtr, rotationsPtr, and scalesPtr are required when using wasm pointers.");
             const count = desc.instanceCount ?? 0;
@@ -391,6 +398,37 @@ export class GlyphField {
         this.boundsMax = [0, 0, 0];
         this.boundsCenter = [0, 0, 0];
         this.boundsRadius = 0;
+    }
+
+    private replacePositionsBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.positionsBuffer && this.positionsBuffer !== buffer && this._positionsOwned) this.positionsBuffer.destroy();
+        this.positionsBuffer = buffer;
+        this._positionsOwned = !!buffer && owned;
+    }
+
+    private replaceRotationsBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.rotationsBuffer && this.rotationsBuffer !== buffer && this._rotationsOwned) this.rotationsBuffer.destroy();
+        this.rotationsBuffer = buffer;
+        this._rotationsOwned = !!buffer && owned;
+    }
+
+    private replaceScalesBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.scalesBuffer && this.scalesBuffer !== buffer && this._scalesOwned) this.scalesBuffer.destroy();
+        this.scalesBuffer = buffer;
+        this._scalesOwned = !!buffer && owned;
+    }
+
+    private replaceAttributesBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.attributesBuffer && this.attributesBuffer !== buffer && this._attributesOwned) this.attributesBuffer.destroy();
+        this.attributesBuffer = buffer;
+        this._attributesOwned = !!buffer && owned;
+    }
+
+    private releaseInstanceBuffers(): void {
+        this.replacePositionsBuffer(null, false);
+        this.replaceRotationsBuffer(null, false);
+        this.replaceScalesBuffer(null, false);
+        this.replaceAttributesBuffer(null, false);
     }
 
     get instanceCount(): number {
@@ -577,6 +615,8 @@ export class GlyphField {
         if (rotations) assert((rotations.length / 4) === count, "GlyphField: rotations length does not match instanceCount.");
         if (scales) assert((scales.length / 4) === count, "GlyphField: scales length does not match instanceCount.");
         if (attributes) assert((attributes.length / 4) === count, "GlyphField: attributes length does not match instanceCount.");
+        if (this._usingExternalBuffers) this.releaseInstanceBuffers();
+        else if (!attributes) this.replaceAttributesBuffer(null, false);
         this._instanceCount = count;
         this._positionsCPU = positions;
         this._rotationsCPU = rotations;
@@ -598,6 +638,8 @@ export class GlyphField {
     setWasmSoA(positionsPtr: WasmPtr, rotationsPtr: WasmPtr, scalesPtr: WasmPtr, attributesPtr: WasmPtr, instanceCount: number): void {
         const count = instanceCount | 0;
         assert(count > 0, "GlyphField: instanceCount must be > 0.");
+        if (this._usingExternalBuffers) this.releaseInstanceBuffers();
+        else if (!attributesPtr) this.replaceAttributesBuffer(null, false);
         this._instanceCount = count;
         this._positionsCPU = null;
         this._rotationsCPU = null;
@@ -615,14 +657,15 @@ export class GlyphField {
         this.bindGroupKey = null;
     }
 
-    setBuffers(positions: GPUBuffer, rotations: GPUBuffer, scales: GPUBuffer, attributes: GPUBuffer | null, instanceCount: number): void {
+    setBuffers(positions: GPUBuffer, rotations: GPUBuffer, scales: GPUBuffer, attributes: GPUBuffer | null, instanceCount: number, opts: { ownBuffers?: boolean } = {}): void {
         const count = instanceCount | 0;
         assert(count > 0, "GlyphField: instanceCount must be > 0.");
+        const ownBuffers = !!opts.ownBuffers;
         this._instanceCount = count;
-        this.positionsBuffer = positions;
-        this.rotationsBuffer = rotations;
-        this.scalesBuffer = scales;
-        this.attributesBuffer = attributes;
+        this.replacePositionsBuffer(positions, ownBuffers);
+        this.replaceRotationsBuffer(rotations, ownBuffers);
+        this.replaceScalesBuffer(scales, ownBuffers);
+        this.replaceAttributesBuffer(attributes, ownBuffers && !!attributes);
         this._positionsCPU = null;
         this._rotationsCPU = null;
         this._scalesCPU = null;
@@ -697,25 +740,27 @@ export class GlyphField {
         if (this._instanceCount <= 0) { this._dataDirty = false; return; }
         const bytes = driver.bytes();
         const requiredBytes = this._instanceCount * 16;
-        const uploadSoA = (buf: GPUBuffer | null, cpu: Float32Array | null, ptr: WasmPtr, label: string): GPUBuffer | null => {
-            if (!cpu && !ptr) return buf;
+        const uploadSoA = (buf: GPUBuffer | null, owned: boolean, cpu: Float32Array | null, ptr: WasmPtr, label: string): { buffer: GPUBuffer | null; owned: boolean; } => {
+            if (!cpu && !ptr) return { buffer: buf, owned };
             const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
             const byteLength = requiredBytes;
             const source = cpu ?? new Uint8Array(bytes.buffer, ptr >>> 0, byteLength);
-            if (!buf) return createBuffer(device, source, usage, label);
+            if (!buf || !owned) return { buffer: createBuffer(device, source, usage, label), owned: true };
             try {
                 queue.writeBuffer(buf, 0, source.buffer, source.byteOffset, Math.min(source.byteLength, byteLength));
-            } catch {
-                buf.destroy();
-                return createBuffer(device, source, usage, label);
-            }
-            return buf;
+                return { buffer: buf, owned: true };
+            } catch { return { buffer: createBuffer(device, source, usage, label), owned: true }; }
         };
-        this.positionsBuffer = uploadSoA(this.positionsBuffer, this._positionsCPU, this._positionsPtr, "GlyphField.positions");
-        this.rotationsBuffer = uploadSoA(this.rotationsBuffer, this._rotationsCPU, this._rotationsPtr, "GlyphField.rotations");
-        this.scalesBuffer = uploadSoA(this.scalesBuffer, this._scalesCPU, this._scalesPtr, "GlyphField.scales");
-        if (this._attributesCPU || this._attributesPtr) this.attributesBuffer = uploadSoA(this.attributesBuffer, this._attributesCPU, this._attributesPtr, "GlyphField.attributes");
-        else if (!this.attributesBuffer) this.attributesBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: "GlyphField.attributesDummy" });
+        const positions = uploadSoA(this.positionsBuffer, this._positionsOwned, this._positionsCPU, this._positionsPtr, "GlyphField.positions");
+        const rotations = uploadSoA(this.rotationsBuffer, this._rotationsOwned, this._rotationsCPU, this._rotationsPtr, "GlyphField.rotations");
+        const scales = uploadSoA(this.scalesBuffer, this._scalesOwned, this._scalesCPU, this._scalesPtr, "GlyphField.scales");
+        this.replacePositionsBuffer(positions.buffer, positions.owned);
+        this.replaceRotationsBuffer(rotations.buffer, rotations.owned);
+        this.replaceScalesBuffer(scales.buffer, scales.owned);
+        if (this._attributesCPU || this._attributesPtr) {
+            const attributes = uploadSoA(this.attributesBuffer, this._attributesOwned, this._attributesCPU, this._attributesPtr, "GlyphField.attributes");
+            this.replaceAttributesBuffer(attributes.buffer, attributes.owned);
+        } else if (!this.attributesBuffer || !this._attributesOwned) this.replaceAttributesBuffer(device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: "GlyphField.attributesDummy" }), true);
         if (!this._keepCPUData) {
             this._positionsCPU = null;
             this._rotationsCPU = null;
@@ -771,11 +816,16 @@ export class GlyphField {
         }
     }
 
+    private destroyOwnedBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (!buffer || !owned) return;
+        buffer.destroy();
+    }
+
     destroy(): void {
-        this.positionsBuffer?.destroy();
-        this.rotationsBuffer?.destroy();
-        this.scalesBuffer?.destroy();
-        this.attributesBuffer?.destroy();
+        this.destroyOwnedBuffer(this.positionsBuffer, this._positionsOwned);
+        this.destroyOwnedBuffer(this.rotationsBuffer, this._rotationsOwned);
+        this.destroyOwnedBuffer(this.scalesBuffer, this._scalesOwned);
+        this.destroyOwnedBuffer(this.attributesBuffer, this._attributesOwned);
         this.uniformBuffer?.destroy();
         this.positionsBuffer = null;
         this.rotationsBuffer = null;
@@ -790,6 +840,11 @@ export class GlyphField {
         this._attributesCPU = null;
         this._ndShape = null;
         this._instanceCount = 0;
+        this._positionsOwned = false;
+        this._rotationsOwned = false;
+        this._scalesOwned = false;
+        this._attributesOwned = false;
+        this._ownExternalBuffers = false;
         this._visualChangeListeners.clear();
         this.transform.dispose();
     }

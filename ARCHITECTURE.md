@@ -2,7 +2,7 @@
 
 Last updated: June 13th, 2026.
 
-Last commit: June 11th, 2026, [**`ee3d0dd`**](https://www.github.com/Zushah/WasmGPU/commit/ee3d0dd).
+Last commit: June 13th, 2026, [**`650d7d6`**](https://www.github.com/Zushah/WasmGPU/commit/650d7d6).
 
 Last release: May 24th, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -273,7 +273,7 @@ Objects in the scene own different data:
 
 - `./src/world/mesh.ts`: geometry, material references, transform, optional skin, optional morph runtime state, visibility flags, and scene owner references.
 - `./src/world/pointcloud.ts`: point data, bounds, scale source metadata, colormap state, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external point and color buffers.
-- `./src/world/glyphfield.ts`: glyph geometry, instance data, scale source metadata, transform, GPU buffers, uniform buffers, and optional CPU records for picking.
+- `./src/world/glyphfield.ts`: glyph geometry, instance data, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external instance buffers.
 - `./src/world/nodelink.ts`: node data, edge data, node and edge rendering modes, scale source metadata, transform, GPU buffers, uniform buffers, and optional CPU records for picking.
 - `./src/world/splatfield.ts`: Gaussian splat instance data, packed GPU buffers, transform, bounds, optional CPU records for upload and bounds computation, and per-object ownership flags for external buffers.
 
@@ -313,7 +313,7 @@ Pointclouds, glyphfields, nodelinks, and splatfields are separate scene object t
 
 `./src/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available. It owns GPU buffers it creates from CPU data and destroys caller-supplied external point and color buffers only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer.
 
-`./src/world/glyphfield.ts` handles instanced glyph geometry. It can read CPU arrays, WebAssembly structure-of-arrays pointers, or external GPU buffers. It writes instance buffers and uniform buffers. Glyph geometry is a `Geometry` reference used by the renderer; `GlyphField.destroy()` currently destroys only stored instance and uniform buffers and disposes its transform. It does not release the geometry reference. Glyphfield bounds use Rust bounds helpers when CPU arrays or WebAssembly pointers are available.
+`./src/world/glyphfield.ts` handles instanced glyph geometry. It can read CPU arrays, WebAssembly structure-of-arrays pointers, or external GPU buffers. It writes instance buffers and uniform buffers. It owns GPU buffers it creates from CPU arrays or WebAssembly pointers and borrows caller-supplied external instance buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffers: true` is used. Glyph geometry is a `Geometry` reference used by the renderer; `GlyphField.destroy()` currently destroys the stored uniform buffer plus only the instance buffers it owns, and it disposes its transform. It does not release the geometry reference. Glyphfield bounds use Rust bounds helpers when CPU arrays or WebAssembly pointers are available.
 
 `./src/world/nodelink.ts` handles node positions, node scalar or color data, node radii, edges, node geometry modes, edge geometry modes, separate node and edge scale transforms, separate colormaps, uniform data, and picking records. It computes bounds from retained CPU node positions in TypeScript. Its update methods can queue or write GPU-buffer changes for node positions, edges, scalars, radii, and colors. Its `destroy()` method currently destroys the stored node, edge, and uniform buffers, including buffers supplied through external-buffer descriptors. The renderer has nodelink draw and pick paths, and overlay legends can read nodelink scale and colormap state.
 
