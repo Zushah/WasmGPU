@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: June 9th, 2026.
+Last updated: June 13th, 2026.
 
-Last commit: June 4th, 2026, [**`2c71b8f`**](https://www.github.com/Zushah/WasmGPU/commit/2c71b8f).
+Last commit: June 11th, 2026, [**`ee3d0dd`**](https://www.github.com/Zushah/WasmGPU/commit/ee3d0dd).
 
 Last release: May 24th, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -231,7 +231,7 @@ The public API is exported from `./src/index.ts`. It exports the `WasmGPU` class
 
 Applications normally enter through `WasmGPU.create(canvas, descriptor)` in `./src/core/engine.ts`. The runtime initializes WebAssembly, creates a WebGPU renderer, constructs the compute subsystem, and exposes factories for scenes, cameras, controls, geometry, materials, textures, meshes, pointclouds, glyphfields, nodelinks, splatfields, lights, glTF loading, animation, overlays, and annotations.
 
-The public API reads and writes data owned by the objects it creates. For example, a `Mesh` owns a transform, references geometry and material objects, and may own skin or morph runtime state. `PointCloud`, `GlyphField`, `NodeLink`, and `SplatField` keep CPU-side records only when configured to retain CPU data. `PointCloud`, `GlyphField`, and `NodeLink` currently destroy their GPU buffer fields, including buffers supplied through external-buffer descriptors or setters. `SplatField` differs here: it owns internally packed GPU buffers and destroys caller-supplied external buffers only when constructed with `ownBuffers: true`. `DataMaterial` handles externally supplied data buffers differently: it does not destroy a `dataBuffer` supplied by the caller.
+The public API reads and writes data owned by the objects it creates. For example, a `Mesh` owns a transform, references geometry and material objects, and may own skin or morph runtime state. `PointCloud`, `GlyphField`, `NodeLink`, and `SplatField` keep CPU-side records only when configured to retain CPU data. `PointCloud`, `GlyphField`, `NodeLink`, and `SplatField` follow an explicit external-buffer ownership model of owning GPU buffers they create internally and destroying caller-supplied external buffers only when constructed with `ownBuffers: true`. `PointCloud` supports setter-level `ownBuffer: true` on point and color buffer replacement, `GlyphField` supports setter-level `ownBuffers: true` on instance-buffer replacement, and `NodeLink` supports setter-level `ownBuffer: true` on per-channel node and edge buffer replacement. `DataMaterial` handles externally supplied data buffers differently because it does not destroy a `dataBuffer` supplied by the caller.
 
 Before changing exported names, constructor descriptors, or factory return values, inspect `./src/index.ts`, `./src/core/engine.ts`, `./test/*.test.js`, and the examples under `./examples/`. Public API changes often require updates to examples and release-facing documentation when preparing a release.
 
@@ -272,7 +272,7 @@ The renderer reads visible scene objects through scene getters. It also reads sc
 Objects in the scene own different data:
 
 - `./src/world/mesh.ts`: geometry, material references, transform, optional skin, optional morph runtime state, visibility flags, and scene owner references.
-- `./src/world/pointcloud.ts`: point data, bounds, scale source metadata, colormap state, transform, GPU buffers, uniform buffers, and optional CPU records for picking.
+- `./src/world/pointcloud.ts`: point data, bounds, scale source metadata, colormap state, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external point and color buffers.
 - `./src/world/glyphfield.ts`: glyph geometry, instance data, scale source metadata, transform, GPU buffers, uniform buffers, and optional CPU records for picking.
 - `./src/world/nodelink.ts`: node data, edge data, node and edge rendering modes, scale source metadata, transform, GPU buffers, uniform buffers, and optional CPU records for picking.
 - `./src/world/splatfield.ts`: Gaussian splat instance data, packed GPU buffers, transform, bounds, optional CPU records for upload and bounds computation, and per-object ownership flags for external buffers.
@@ -311,7 +311,7 @@ Graphics data is implemented under `./src/graphics/`.
 
 Pointclouds, glyphfields, nodelinks, and splatfields are separate scene object types. They share several patterns: a transform, visibility flags, GPU buffer references, uniform buffers, bind groups, bounds, and renderer-owned draw-list state. Pointclouds, glyphfields, and nodelinks also carry scale transform state plus optional CPU records for picking, while splatfields instead carry packed Gaussian attributes and private renderer-side GPU sort state for transparent rendering.
 
-`./src/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available. Its `destroy()` method currently destroys the stored point and uniform buffers.
+`./src/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available. It owns GPU buffers it creates from CPU data and destroys caller-supplied external point and color buffers only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer.
 
 `./src/world/glyphfield.ts` handles instanced glyph geometry. It can read CPU arrays, WebAssembly structure-of-arrays pointers, or external GPU buffers. It writes instance buffers and uniform buffers. Glyph geometry is a `Geometry` reference used by the renderer; `GlyphField.destroy()` currently destroys only stored instance and uniform buffers and disposes its transform. It does not release the geometry reference. Glyphfield bounds use Rust bounds helpers when CPU arrays or WebAssembly pointers are available.
 
@@ -506,7 +506,7 @@ These invariants are visible in the current code:
 - Buffer writes are padded to four-byte alignment where needed.
 - Opaque occluder capture uses only coverage-safe subsets of meshes, pointclouds, glyphfields, and nodelinks; splatfields are currently excluded from occlusion capture and render-only occlusion filtering.
 - Picking attributes for pointclouds, glyphfields, and nodelinks depend on retained CPU-side records.
-- Splatfield external GPU buffers are borrowed by default and are destroyed only when `ownBuffers: true`.
+- Pointcloud, glyphfield, nodelink, and splatfield external GPU buffers are borrowed by default and are destroyed only when their ownership options request it.
 - Shader uniform layouts, TypeScript packing code, and WGSL structs must match.
 
 ## 2. Codebase

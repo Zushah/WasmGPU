@@ -45,6 +45,7 @@ export type PointCloudDescriptor = {
     visible?: boolean;
     name?: string;
     keepCPUData?: boolean;
+    ownBuffers?: boolean;
     ndShape?: number[];
 };
 
@@ -100,6 +101,9 @@ export class PointCloud {
     private _uniformDirty: boolean = true;
     private _pointsDirty: boolean = true;
     private _colorsDirty: boolean = true;
+    private _pointsOwned: boolean = false;
+    private _colorsOwned: boolean = false;
+    private _ownExternalBuffers: boolean = false;
     private _colorsExternal: boolean = false;
 
     constructor(desc: PointCloudDescriptor) {
@@ -121,13 +125,14 @@ export class PointCloud {
         else if (desc.colors || desc.colorsBuffer) this._colorMode = "rgba";
         if (desc.softness !== undefined) this._softness = desc.softness;
         if (desc.keepCPUData !== undefined) this._keepCPUData = !!desc.keepCPUData;
+        this._ownExternalBuffers = !!desc.ownBuffers;
         if (desc.ndShape !== undefined) this.ndShape = desc.ndShape;
         this.applyExplicitBounds(desc);
         if (desc.data) this.setData(desc.data, { keepCPUData: this._keepCPUData });
-        else if (desc.pointsBuffer) { const buf = resolveGPUBuffer(desc.pointsBuffer); const count = desc.pointCount ?? 0; assert(count > 0, "PointCloud: pointCount is required when using pointsBuffer."); this.setPointsBuffer(buf, count); }
+        else if (desc.pointsBuffer) { const buf = resolveGPUBuffer(desc.pointsBuffer); const count = desc.pointCount ?? 0; assert(count > 0, "PointCloud: pointCount is required when using pointsBuffer."); this.setPointsBuffer(buf, count, { ownBuffer: this._ownExternalBuffers }); }
         else if (desc.pointCount !== undefined) { this._pointCount = desc.pointCount; this._pointsDirty = false; }
         if (desc.colors) this.setColors(desc.colors, { keepCPUData: this._keepCPUData });
-        else if (desc.colorsBuffer) this.setColorsBuffer(resolveGPUBuffer(desc.colorsBuffer));
+        else if (desc.colorsBuffer) this.setColorsBuffer(resolveGPUBuffer(desc.colorsBuffer), { ownBuffer: this._ownExternalBuffers });
     }
 
     private applyExplicitBounds(desc: PointCloudDescriptor): void {
@@ -168,6 +173,18 @@ export class PointCloud {
         this._colorsCPU = null;
         this._colorsDirty = false;
         this.bindGroupKey = null;
+    }
+
+    private replacePointsBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.pointsBuffer && this.pointsBuffer !== buffer && this._pointsOwned) this.pointsBuffer.destroy();
+        this.pointsBuffer = buffer;
+        this._pointsOwned = !!buffer && owned;
+    }
+
+    private replaceColorsBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (this.colorsBuffer && this.colorsBuffer !== buffer && this._colorsOwned) this.colorsBuffer.destroy();
+        this.colorsBuffer = buffer;
+        this._colorsOwned = !!buffer && owned;
     }
 
     get pointCount(): number {
@@ -352,18 +369,20 @@ export class PointCloud {
         this._CPUData = data;
         this._pointCount = data.length / 4;
         this.clearColorsIfCountMismatch();
+        if (this.pointsBuffer && !this._pointsOwned) this.pointsBuffer = null;
         this._pointsDirty = true;
         this._keepCPUData = opts.keepCPUData ?? this._keepCPUData;
         this._scaleRevision++;
+        this.bindGroupKey = null;
         this.clearComputedBoundsIfNeeded();
     }
 
-    setPointsBuffer(buffer: GPUBuffer, pointCount: number): void {
+    setPointsBuffer(buffer: GPUBuffer, pointCount: number, opts: { ownBuffer?: boolean } = {}): void {
         assert(pointCount > 0, "PointCloud: pointCount must be > 0.");
         this._CPUData = null;
         this._pointCount = pointCount;
         this.clearColorsIfCountMismatch();
-        this.pointsBuffer = buffer;
+        this.replacePointsBuffer(buffer, !!opts.ownBuffer);
         this._pointsDirty = false;
         this._scaleRevision++;
         this.bindGroupKey = null;
@@ -374,15 +393,16 @@ export class PointCloud {
         assert((data.length % 4) === 0, "PointCloud: colors length must be a multiple of 4 (r,g,b,a per point).");
         assert((data.length / 4) === this._pointCount, "PointCloud: colors length must equal pointCount*4.");
         this._colorsCPU = new Float32Array(data);
+        if (this.colorsBuffer && !this._colorsOwned) this.colorsBuffer = null;
         this._colorsExternal = false;
         this._colorsDirty = true;
         this._keepCPUData = opts.keepCPUData ?? this._keepCPUData;
         this.bindGroupKey = null;
     }
 
-    setColorsBuffer(buffer: GPUBuffer | null): void {
+    setColorsBuffer(buffer: GPUBuffer | null, opts: { ownBuffer?: boolean } = {}): void {
         if (buffer) assert(this._pointCount > 0, "PointCloud: pointCount must be > 0 when using colorsBuffer.");
-        this.colorsBuffer = buffer;
+        this.replaceColorsBuffer(buffer, !!buffer && !!opts.ownBuffer);
         this._colorsCPU = null;
         this._colorsExternal = !!buffer;
         this._colorsDirty = false;
@@ -460,8 +480,8 @@ export class PointCloud {
                 if (!data) this._pointsDirty = false;
                 else {
                     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
-                    if (!this.pointsBuffer) this.pointsBuffer = createBuffer(device, data, usage);
-                    else try { queue.writeBuffer(this.pointsBuffer, 0, data.buffer, data.byteOffset, data.byteLength); } catch { this.pointsBuffer.destroy(); this.pointsBuffer = createBuffer(device, data, usage); }
+                    if (!this.pointsBuffer || !this._pointsOwned) this.replacePointsBuffer(createBuffer(device, data, usage), true);
+                    else try { queue.writeBuffer(this.pointsBuffer, 0, data.buffer, data.byteOffset, data.byteLength); } catch { this.replacePointsBuffer(createBuffer(device, data, usage), true); }
                     if (!this._keepCPUData) this._CPUData = null;
                     this._pointsDirty = false;
                     this.bindGroupKey = null;
@@ -472,8 +492,8 @@ export class PointCloud {
             const colors = this._colorsCPU;
             if (!colors) { this._colorsDirty = false; return; }
             const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
-            if (!this.colorsBuffer) this.colorsBuffer = createBuffer(device, colors, usage);
-            else try { queue.writeBuffer(this.colorsBuffer, 0, colors.buffer, colors.byteOffset, colors.byteLength); } catch { this.colorsBuffer.destroy(); this.colorsBuffer = createBuffer(device, colors, usage); }
+            if (!this.colorsBuffer || !this._colorsOwned) this.replaceColorsBuffer(createBuffer(device, colors, usage), true);
+            else try { queue.writeBuffer(this.colorsBuffer, 0, colors.buffer, colors.byteOffset, colors.byteLength); } catch { this.replaceColorsBuffer(createBuffer(device, colors, usage), true); }
             if (!this._keepCPUData) this._colorsCPU = null;
             this._colorsDirty = false;
             this.bindGroupKey = null;
@@ -524,9 +544,14 @@ export class PointCloud {
         for (const listener of this._visualChangeListeners) try { listener(kind); } catch { /* ignore */ }
     }
 
+    private destroyOwnedBuffer(buffer: GPUBuffer | null, owned: boolean): void {
+        if (!buffer || !owned) return;
+        buffer.destroy();
+    }
+
     destroy(): void {
-        this.pointsBuffer?.destroy();
-        this.colorsBuffer?.destroy();
+        this.destroyOwnedBuffer(this.pointsBuffer, this._pointsOwned);
+        this.destroyOwnedBuffer(this.colorsBuffer, this._colorsOwned);
         this.uniformBuffer?.destroy();
         this.pointsBuffer = null;
         this.colorsBuffer = null;
@@ -537,6 +562,10 @@ export class PointCloud {
         this._colorsCPU = null;
         this._ndShape = null;
         this._pointCount = 0;
+        this._pointsOwned = false;
+        this._colorsOwned = false;
+        this._ownExternalBuffers = false;
+        this._colorsExternal = false;
         this._visualChangeListeners.clear();
         this.transform.dispose();
     }

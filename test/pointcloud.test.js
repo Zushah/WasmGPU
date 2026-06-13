@@ -10,16 +10,15 @@ import { create, globals } from "webgpu";
 
 Object.assign(globalThis, globals);
 const navigator = { gpu: create([]) };
+Object.defineProperty(globalThis, "navigator", { value: navigator, configurable: true });
+if (!globalThis.window) globalThis.window = {};
+if (typeof globalThis.window.devicePixelRatio !== "number") globalThis.window.devicePixelRatio = 1;
 
-const numberApproxEqual = (a, b, tol = 1e-6, msg = "Numbers differ") => {
-    assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers");
-    assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`);
-};
+const numberApproxEqual = (a, b, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers"); assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`); };
 
-const arraysApproxEqual = (a, b, tol = 1e-6, msg = "Arrays differ") => {
-    assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`);
-    for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`);
-};
+const arraysApproxEqual = (a, b, tol = 1e-6, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`); };
+
+const trackDestroy = (buffer) => { let destroyed = 0; const originalDestroy = buffer.destroy.bind(buffer); buffer.destroy = () => { destroyed++; return originalDestroy(); }; return () => destroyed; };
 
 const gpu = navigator.gpu;
 assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
@@ -27,9 +26,7 @@ const adapter = await gpu.requestAdapter();
 assert.ok(adapter, "Failed to acquire a WebGPU adapter");
 const device = await adapter.requestDevice();
 assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => {
-    throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`);
-});
+device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
 
 await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
 const { PointCloud, Compute } = WasmGPU;
@@ -38,14 +35,22 @@ assert.ok(Compute, "Missing export: Compute");
 const compute = new Compute(device, device.queue);
 assert.ok(compute.kernels && typeof compute.kernels.copyF32 === "function", "Missing kernel: compute.kernels.copyF32");
 
+const readBufferAsF32 = async (buffer, count) => {
+    const out = compute.createStorageBuffer({ label: "pc:read:f32", byteLength: count * 4, copySrc: true });
+    try {
+        compute.kernels.copyF32(buffer, { out, count });
+        await device.queue.onSubmittedWorkDone();
+        return await out.readAs(Float32Array);
+    } finally { out.destroy(); }
+};
+
+const createRawStorageBuffer = (label, data) => device.createBuffer({ label, size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+
 const baseScaleTransform = { componentCount: 4, componentIndex: 3, stride: 4, offset: 0 };
 
 // CPU data path: setData() -> upload() -> pointsBuffer readable by GPU
 {
-    const data = new Float32Array([
-        1.0, 2.0, 3.0, 0.50,
-        4.0, 6.0, 8.0, 0.25,
-    ]);
+    const data = new Float32Array([1.0, 2.0, 3.0, 0.50, 4.0, 6.0, 8.0, 0.25]);
 
     const pc = new PointCloud({ scaleTransform: baseScaleTransform });
     assert.strictEqual(typeof pc.setData, "function", "PointCloud.setData missing");
@@ -58,59 +63,59 @@ const baseScaleTransform = { componentCount: 4, componentIndex: 3, stride: 4, of
 
     assert.ok(pc.pointsBuffer, "PointCloud.pointsBuffer not created after upload");
 
-    const out = compute.createStorageBuffer({
-        label: "pc:cpu_upload:out",
-        byteLength: data.byteLength,
-        copySrc: true
-    });
-
-    compute.kernels.copyF32(pc.pointsBuffer, { out, count: data.length });
-    await device.queue.onSubmittedWorkDone();
-
-    const got = await out.readAs(Float32Array);
+    const got = await readBufferAsF32(pc.pointsBuffer, data.length);
     arraysApproxEqual(got, data, 0, "CPU-uploaded pointsBuffer contents mismatch");
 
-    out.destroy();
     pc.destroy?.();
 }
 
-// External storage buffer path: setPointsBuffer() should use caller-provided buffer (compute interop)
+// External buffers are borrowed by default, owned when requested, and owned replacements are destroyed exactly once.
 {
-    const data = new Float32Array([
-        -1.0, -2.0, -3.0, 10.0,
-        9.0, 8.0, 7.0, 20.0
-    ]);
+    const borrowed = createRawStorageBuffer("pc:ownership:borrowed", new Float32Array(8));
+    const ownedByCtor = createRawStorageBuffer("pc:ownership:ctor", new Float32Array(8));
+    const ownedBySetter = createRawStorageBuffer("pc:ownership:setter", new Float32Array(8));
+    const replaceBorrowed = createRawStorageBuffer("pc:ownership:replace:borrowed", new Float32Array(4));
+    const replaceOwnedA = createRawStorageBuffer("pc:ownership:replace:owned-a", new Float32Array(4));
+    const replaceOwnedB = createRawStorageBuffer("pc:ownership:replace:owned-b", new Float32Array(4));
+    const borrowedDestroyed = trackDestroy(borrowed);
+    const ctorDestroyed = trackDestroy(ownedByCtor);
+    const setterDestroyed = trackDestroy(ownedBySetter);
+    const replaceBorrowedDestroyed = trackDestroy(replaceBorrowed);
+    const replaceOwnedADestroyed = trackDestroy(replaceOwnedA);
+    const replaceOwnedBDestroyed = trackDestroy(replaceOwnedB);
 
-    const src = compute.createStorageBuffer({
-        label: "pc:external:src",
-        data,
-        copySrc: false
-    });
+    new PointCloud({ scaleTransform: baseScaleTransform, pointsBuffer: borrowed, pointCount: 2 }).destroy?.();
+    assert.strictEqual(borrowedDestroyed(), 0, "Expected default external PointCloud pointsBuffer to be borrowed");
 
-    const pc = new PointCloud({ scaleTransform: baseScaleTransform });
-    assert.strictEqual(typeof pc.setPointsBuffer, "function", "PointCloud.setPointsBuffer missing");
-    pc.setPointsBuffer(src.buffer, 2);
+    new PointCloud({ scaleTransform: baseScaleTransform, pointsBuffer: ownedByCtor, pointCount: 2, ownBuffers: true }).destroy?.();
+    assert.strictEqual(ctorDestroyed(), 1, "Expected constructor ownBuffers to transfer PointCloud pointsBuffer ownership");
 
-    pc.upload(device, device.queue);
+    const setterOwned = new PointCloud({ scaleTransform: baseScaleTransform, pointCount: 2 });
+    setterOwned.setColorsBuffer(ownedBySetter, { ownBuffer: true });
+    setterOwned.destroy?.();
+    assert.strictEqual(setterDestroyed(), 1, "Expected setter ownBuffer to transfer PointCloud colorsBuffer ownership");
 
-    assert.strictEqual(pc.pointsBuffer, src.buffer, "PointCloud did not retain the externally provided pointsBuffer");
-    assert.strictEqual(pc.pointCount, 2, "PointCloud.pointCount mismatch for external buffer");
+    const replaced = new PointCloud({ scaleTransform: baseScaleTransform });
+    replaced.setPointsBuffer(replaceBorrowed, 1);
+    replaced.setPointsBuffer(replaceOwnedA, 1, { ownBuffer: true });
+    replaced.setPointsBuffer(replaceOwnedB, 1, { ownBuffer: true });
+    replaced.destroy?.();
+    assert.strictEqual(replaceBorrowedDestroyed(), 0, "Expected replaced borrowed PointCloud pointsBuffer to remain alive");
+    assert.strictEqual(replaceOwnedADestroyed(), 1, "Expected replaced owned PointCloud pointsBuffer to be destroyed exactly once");
+    assert.strictEqual(replaceOwnedBDestroyed(), 1, "Expected final owned PointCloud pointsBuffer to be destroyed exactly once");
 
-    const out = compute.createStorageBuffer({
-        label: "pc:external:out",
-        byteLength: data.byteLength,
-        copySrc: true
-    });
+    const cpu = new PointCloud({ scaleTransform: baseScaleTransform });
+    cpu.setData(new Float32Array([1, 2, 3, 0.25, 4, 5, 6, 0.5]));
+    cpu.setColors(new Float32Array([1, 0, 0, 1, 0, 1, 0, 1]));
+    cpu.upload(device, device.queue);
+    const cpuPointsDestroyed = trackDestroy(cpu.pointsBuffer);
+    const cpuColorsDestroyed = trackDestroy(cpu.colorsBuffer);
+    cpu.destroy?.();
+    assert.strictEqual(cpuPointsDestroyed(), 1, "Expected CPU-created PointCloud pointsBuffer to be destroyed");
+    assert.strictEqual(cpuColorsDestroyed(), 1, "Expected CPU-created PointCloud colorsBuffer to be destroyed");
 
-    compute.kernels.copyF32(pc.pointsBuffer, { out, count: data.length });
-    await device.queue.onSubmittedWorkDone();
-
-    const got = await out.readAs(Float32Array);
-    arraysApproxEqual(got, data, 0, "External pointsBuffer contents mismatch");
-
-    out.destroy();
-    src.destroy();
-    pc.destroy?.();
+    borrowed.destroy();
+    replaceBorrowed.destroy();
 }
 
 // Uniform packing sanity for unified ScaleTransform + visual params.
@@ -138,25 +143,7 @@ const baseScaleTransform = { componentCount: 4, componentIndex: 3, stride: 4, of
     pc.sizeAttenuation = 3.0;
     pc.opacity = 0.25;
     pc.softness = 0.6;
-    pc.setScaleTransform({
-        componentCount: 4,
-        componentIndex: 3,
-        valueMode: "component",
-        stride: 4,
-        offset: 0,
-        mode: "symlog",
-        clampMode: "range",
-        domainMin: -5,
-        domainMax: 5,
-        clampMin: -2,
-        clampMax: 2,
-        percentileLow: 5,
-        percentileHigh: 95,
-        logBase: 10,
-        symlogLinThresh: 0.25,
-        gamma: 2,
-        invert: true
-    });
+    pc.setScaleTransform({ componentCount: 4, componentIndex: 3, valueMode: "component", stride: 4, offset: 0, mode: "symlog", clampMode: "range", domainMin: -5, domainMax: 5, clampMin: -2, clampMax: 2, percentileLow: 5, percentileHigh: 95, logBase: 10, symlogLinThresh: 0.25, gamma: 2, invert: true });
 
     const u = pc.getUniformData();
     assert.ok(u instanceof Float32Array, "getUniformData() should return Float32Array");
@@ -198,10 +185,7 @@ const baseScaleTransform = { componentCount: 4, componentIndex: 3, stride: 4, of
 
 // CPU-side helpers: bounds + scale stats application/source descriptor.
 {
-    const data = new Float32Array([
-        1.0, 2.0, 3.0, 0.50,
-        4.0, 6.0, 8.0, 0.25,
-    ]);
+    const data = new Float32Array([1.0, 2.0, 3.0, 0.50, 4.0, 6.0, 8.0, 0.25]);
 
     const pc = new PointCloud({ scaleTransform: baseScaleTransform });
     pc.setData(data);
@@ -225,15 +209,7 @@ const baseScaleTransform = { componentCount: 4, componentIndex: 3, stride: 4, of
     numberApproxEqual(pc.boundsMax[2], 8.0, 1e-6, "boundsMax.z mismatch");
     assert.ok(pc.boundsRadius > 0, "Expected boundsRadius > 0");
 
-    pc.applyScaleStats({
-        count: 2,
-        finiteCount: 2,
-        min: 0.25,
-        max: 0.50,
-        percentileMin: 0.3,
-        percentileMax: 0.45,
-        histogramBins: 128
-    });
+    pc.applyScaleStats({ count: 2, finiteCount: 2, min: 0.25, max: 0.50, percentileMin: 0.3, percentileMax: 0.45, histogramBins: 128 });
     const t = pc.scaleTransform;
     numberApproxEqual(t.domainMin, 0.25, 1e-6, "scaleTransform.domainMin mismatch after applyScaleStats()");
     numberApproxEqual(t.domainMax, 0.50, 1e-6, "scaleTransform.domainMax mismatch after applyScaleStats()");
