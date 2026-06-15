@@ -132,7 +132,7 @@ export type { DispatchWorkgroups, ComputeDispatchCommand } from "./dispatch";
 export { RGBA8BufferCanvasBlitter } from "./blit";
 export type { RGBA8BufferSource, BlitRGBA8BufferToCanvasOptions } from "./blit";
 export { ComputeKernels } from "./kernels";
-export type { KernelDispatchOptions, ReduceOptions, ArgReduceOptions, ScanOptions, HistogramOptions, CompactOptions, RadixSortOptions, CopyOptions, ScaleExtractOptions, ScaleExtractResult, ScaleHistogramOptions, ScaleRemapOptions, ReduceOp, ArgReduceOp } from "./kernels";
+export type { KernelDispatchOptions, ReduceOptions, ArgReduceOptions, ScanOptions, HistogramOptions, CompactOptions, RadixSortOptions, RadixSortPairsOptions, RadixSortPairsResult, CopyOptions, ScaleExtractOptions, ScaleExtractResult, ScaleHistogramOptions, ScaleRemapOptions, ReduceOp, ArgReduceOp } from "./kernels";
 export { ReadbackRing } from "./readback";
 export type { ReadbackSource, ReadbackRingDescriptor } from "./readback";
 export { Ndarray, CPUndarray, GPUndarray, dtypeInfo } from "./ndarray";

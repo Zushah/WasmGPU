@@ -11,38 +11,15 @@ import { create, globals } from "webgpu";
 Object.assign(globalThis, globals);
 const navigator = { gpu: create([]) };
 
-const numberApproxEqual = (a, b, tol = 1e-5, msg = "Numbers differ") => {
-    assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers");
-    assert.ok(Math.abs(a - b) < tol, `${msg}: ${a} vs ${b}`);
-};
+const numberApproxEqual = (a, b, tol = 1e-5, msg = "Numbers differ") => { assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers"); assert.ok(Math.abs(a - b) < tol, `${msg}: ${a} vs ${b}`); };
 
-const arraysEqualU32 = (a, b, msg = "Arrays differ") => {
-    assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`);
-    for (let i = 0; i < a.length; i++) {
-        assert.strictEqual(a[i] >>> 0, b[i] >>> 0, `${msg} at index ${i}: ${a[i]} vs ${b[i]}`);
-    }
-};
+const arraysEqualU32 = (a, b, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) assert.strictEqual(a[i] >>> 0, b[i] >>> 0, `${msg} at index ${i}: ${a[i]} vs ${b[i]}`); };
 
-const arraysApproxEqualF32 = (a, b, tol = 1e-5, msg = "Arrays differ") => {
-    assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`);
-    for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`);
-};
+const arraysApproxEqualF32 = (a, b, tol = 1e-5, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`); };
 
-const makeRandomU32Array = (n, maxInclusive = 1024) => {
-    const a = new Uint32Array(n);
-    for (let i = 0; i < n; i++) {
-        a[i] = (Math.floor(Math.random() * (maxInclusive + 1)) >>> 0);
-    }
-    return a;
-};
+const makeRandomU32Array = (n, maxInclusive = 1024) => { const a = new Uint32Array(n); for (let i = 0; i < n; i++) a[i] = (Math.floor(Math.random() * (maxInclusive + 1)) >>> 0); return a; };
 
-const makeRandomF32Array = (n, min = -10, max = 10) => {
-    const a = new Float32Array(n);
-    for (let i = 0; i < n; i++) {
-        a[i] = min + (max - min) * Math.random();
-    }
-    return a;
-};
+const makeRandomF32Array = (n, min = -10, max = 10) => { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = min + (max - min) * Math.random(); return a; };
 
 const gpu = navigator.gpu;
 assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
@@ -50,17 +27,11 @@ const adapter = await gpu.requestAdapter();
 assert.ok(adapter, "Failed to acquire a WebGPU adapter");
 const device = await adapter.requestDevice();
 assert.ok(device, "Failed to acquire a WebGPU device");
-
-// Make any validation errors fail the test loudly.
-device.addEventListener("uncapturederror", (e) => {
-    throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`);
-});
+device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
 
 const { Compute, ComputeKernels } = WasmGPU;
 assert.ok(Compute, "Missing export: Compute");
-
 const compute = new Compute(device, device.queue);
-
 const kernels = compute.kernels ?? (ComputeKernels ? new ComputeKernels(device, device.queue) : null);
 assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported ComputeKernels.");
 
@@ -250,6 +221,59 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     const got = await out.readAs(Uint32Array);
     const expected = Array.from(keys, (x) => x >>> 0).sort((a, b) => a - b);
     for (let i = 0; i < n; i++) assert.strictEqual(got[i] >>> 0, expected[i] >>> 0, `radixSortKeysU32 mismatch at index ${i}`);
+}
+
+// Radix sort u32 key-value pairs
+{
+    assert.strictEqual(typeof kernels.radixSortPairsU32, "function", "Missing kernel: radixSortPairsU32");
+
+    {
+        const keys = new Uint32Array([5, 1, 5, 3, 1, 0, 5, 3]);
+        const values = new Uint32Array([50, 10, 51, 30, 11, 0, 52, 31]);
+        const bufKeys = compute.createStorageBuffer({ label: "radix:pairs:keys", data: keys, copySrc: false });
+        const bufValues = compute.createStorageBuffer({ label: "radix:pairs:values", data: values, copySrc: false });
+        const outKeys = compute.createStorageBuffer({ label: "radix:pairs:outKeys", byteLength: keys.byteLength, copySrc: true });
+        const outValues = compute.createStorageBuffer({ label: "radix:pairs:outValues", byteLength: values.byteLength, copySrc: true });
+        const result = kernels.radixSortPairsU32(bufKeys, bufValues, { outKeys, outValues });
+        assert.strictEqual(result.keys, outKeys, "Expected radixSortPairsU32 to return provided outKeys");
+        assert.strictEqual(result.values, outValues, "Expected radixSortPairsU32 to return provided outValues");
+        arraysEqualU32(await result.keys.readAs(Uint32Array), new Uint32Array([0, 1, 1, 3, 3, 5, 5, 5]), "radixSortPairsU32 keys mismatch");
+        arraysEqualU32(await result.values.readAs(Uint32Array), new Uint32Array([0, 10, 11, 30, 31, 50, 51, 52]), "radixSortPairsU32 values mismatch");
+    }
+
+    {
+        const keys = new Uint32Array([7, 4, 9, 4, 8, 2]);
+        const values = new Uint32Array([70, 40, 90, 41, 80, 20]);
+        const bufKeys = compute.createStorageBuffer({ label: "radix:pairs:keys:inPlace", data: keys, copySrc: true });
+        const bufValues = compute.createStorageBuffer({ label: "radix:pairs:values:inPlace", data: values, copySrc: true });
+        const result = kernels.radixSortPairsU32(bufKeys, bufValues, { inPlace: true });
+        assert.strictEqual(result.keys, bufKeys, "Expected in-place radixSortPairsU32 to return the input keys buffer");
+        assert.strictEqual(result.values, bufValues, "Expected in-place radixSortPairsU32 to return the input values buffer");
+        arraysEqualU32(await bufKeys.readAs(Uint32Array), new Uint32Array([2, 4, 4, 7, 8, 9]), "radixSortPairsU32 in-place keys mismatch");
+        arraysEqualU32(await bufValues.readAs(Uint32Array), new Uint32Array([20, 40, 41, 70, 80, 90]), "radixSortPairsU32 in-place values mismatch");
+    }
+
+    {
+        const keys = new Uint32Array([9, 3, 1, 8, 2, 7]);
+        const values = new Uint32Array([90, 30, 10, 80, 20, 70]);
+        const bufKeys = compute.createStorageBuffer({ label: "radix:pairs:keys:partial", data: keys, copySrc: false });
+        const bufValues = compute.createStorageBuffer({ label: "radix:pairs:values:partial", data: values, copySrc: false });
+        const result = kernels.radixSortPairsU32(bufKeys, bufValues, { count: 4 });
+        arraysEqualU32(await result.keys.readAs(Uint32Array), new Uint32Array([1, 3, 8, 9]), "radixSortPairsU32 partial keys mismatch");
+        arraysEqualU32(await result.values.readAs(Uint32Array), new Uint32Array([10, 30, 80, 90]), "radixSortPairsU32 partial values mismatch");
+    }
+
+    {
+        const shared = compute.createStorageBuffer({ label: "radix:pairs:shared", data: new Uint32Array([1, 0]), copySrc: false });
+        assert.throws(() => kernels.radixSortPairsU32(shared, shared), /keys and values must be distinct/, "Expected radixSortPairsU32 to reject aliased key/value buffers");
+    }
+
+    {
+        const keys = compute.createStorageBuffer({ label: "radix:pairs:alias:keys", data: new Uint32Array([2, 1]), copySrc: true });
+        const values = compute.createStorageBuffer({ label: "radix:pairs:alias:values", data: new Uint32Array([20, 10]), copySrc: true });
+        const outValues = compute.createStorageBuffer({ label: "radix:pairs:alias:outValues", byteLength: 8, copySrc: true });
+        assert.throws(() => kernels.radixSortPairsU32(keys, values, { outKeys: keys, outValues }), /output buffers must be distinct from input buffers/, "Expected radixSortPairsU32 to reject aliased output buffers");
+    }
 }
 
 // Batched LU f32 (partial pivot: factor + solve)

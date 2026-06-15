@@ -29,6 +29,7 @@ import compactF32WGSL from "../wgsl/compute/compact-f32.wgsl";
 import compactU32WGSL from "../wgsl/compute/compact-u32.wgsl";
 import sortRadixFlagsU32WGSL from "../wgsl/compute/sort-radix-flags-u32.wgsl";
 import sortRadixScatterU32WGSL from "../wgsl/compute/sort-radix-scatter-u32.wgsl";
+import sortRadixScatterPairsU32WGSL from "../wgsl/compute/sort-radix-scatter-pairs-u32.wgsl";
 import copyF32WGSL from "../wgsl/compute/copy-f32.wgsl";
 import copyU32WGSL from "../wgsl/compute/copy-u32.wgsl";
 import scaleExtractF32WGSL from "../wgsl/compute/scale-extract-f32.wgsl";
@@ -91,6 +92,13 @@ export type RadixSortOptions = KernelDispatchOptions & {
     inPlace?: boolean;
 };
 
+export type RadixSortPairsOptions = KernelDispatchOptions & {
+    count?: number;
+    outKeys?: StorageBuffer;
+    outValues?: StorageBuffer;
+    inPlace?: boolean;
+};
+
 export type CopyOptions = KernelDispatchOptions & {
     count?: number;
     out?: StorageBuffer;
@@ -129,6 +137,11 @@ export type ScaleRemapOptions = KernelDispatchOptions & {
 export type CompactResult = {
     output: StorageBuffer;
     count: StorageBuffer;
+};
+
+export type RadixSortPairsResult = {
+    keys: StorageBuffer;
+    values: StorageBuffer;
 };
 
 type ReduceType = "u32" | "f32";
@@ -568,6 +581,32 @@ export class ComputeKernels {
                             storageBufferLayout({ binding: 1, readOnly: true }),
                             storageBufferLayout({ binding: 2, readOnly: true }),
                             storageBufferLayout({ binding: 3, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getRadixScatterPairsPipeline(bit: number): ComputePipeline {
+        const b = bit | 0;
+        const key = `kernels:radix:scatterPairs:bit${b}`;
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: sortRadixScatterPairsU32WGSL,
+                entryPoint: "main",
+                constants: { BIT: b },
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: true }),
+                            storageBufferLayout({ binding: 3, readOnly: true }),
+                            storageBufferLayout({ binding: 4, readOnly: false }),
+                            storageBufferLayout({ binding: 5, readOnly: false })
                         ]
                     }
                 ]
@@ -1378,7 +1417,6 @@ export class ComputeKernels {
             copySrc: true
         }));
         if (!inPlace) assert(out.byteLength >= count * 4, "radixSortKeysU32: out buffer is too small for requested count");
-
         if (count <= 1) {
             if (!inPlace && count === 1) {
                 const commands: ComputeDispatchCommand[] = [];
@@ -1430,17 +1468,107 @@ export class ComputeKernels {
             inBuf = outBuf;
             outBuf = (outBuf === bufA) ? bufB : bufA;
         }
-        if (inPlace) {
-            if (inBuf !== keys) {
-                this.encodeCopyU32(commands, inBuf, count, keys, "radixSortKeysU32:finalize");
-            }
-        } else {
-            if (inBuf !== out) {
-                this.encodeCopyU32(commands, inBuf, count, out, "radixSortKeysU32:finalize");
-            }
-        }
+        if (inPlace) if (inBuf !== keys) this.encodeCopyU32(commands, inBuf, count, keys, "radixSortKeysU32:finalize");
+        else if (inBuf !== out) this.encodeCopyU32(commands, inBuf, count, out, "radixSortKeysU32:finalize");
         this.execute(commands, opts);
         return out;
+    }
+
+    radixSortPairsU32(keys: StorageBuffer, values: StorageBuffer, opts: RadixSortPairsOptions = {}): RadixSortPairsResult {
+        assert(keys !== values, "radixSortPairsU32: keys and values must be distinct StorageBuffer instances");
+        const count = this.resolveCount(keys, 4, opts.count);
+        this.resolveCount(values, 4, count);
+        const inPlace = opts.inPlace ?? false;
+        assert(!(inPlace && (opts.outKeys !== undefined || opts.outValues !== undefined)), "radixSortPairsU32: outKeys/outValues are not supported when inPlace is true");
+        const outKeys = inPlace ? keys : (opts.outKeys ?? new StorageBuffer(this.device, this.queue, {
+            label: "radixSortPairsU32:outKeys",
+            byteLength: count * 4,
+            copySrc: true
+        }));
+        const outValues = inPlace ? values : (opts.outValues ?? new StorageBuffer(this.device, this.queue, {
+            label: "radixSortPairsU32:outValues",
+            byteLength: count * 4,
+            copySrc: true
+        }));
+        if (!inPlace) {
+            assertByteLengthMultipleOf(outKeys.byteLength, 4, "radixSortPairsU32: outKeys");
+            assertByteLengthMultipleOf(outValues.byteLength, 4, "radixSortPairsU32: outValues");
+            assert(outKeys.byteLength >= count * 4, "radixSortPairsU32: outKeys buffer is too small for requested count");
+            assert(outValues.byteLength >= count * 4, "radixSortPairsU32: outValues buffer is too small for requested count");
+            assert(outKeys !== outValues, "radixSortPairsU32: outKeys and outValues must be distinct StorageBuffer instances");
+            assert(outKeys !== keys && outKeys !== values && outValues !== keys && outValues !== values, "radixSortPairsU32: output buffers must be distinct from input buffers unless inPlace is true");
+        }
+        if (count <= 1) {
+            if (!inPlace && count === 1) {
+                const commands: ComputeDispatchCommand[] = [];
+                this.encodeCopyU32(commands, keys, 1, outKeys, "radixSortPairsU32:keys");
+                this.encodeCopyU32(commands, values, 1, outValues, "radixSortPairsU32:values");
+                this.execute(commands, opts);
+            }
+            return { keys: outKeys, values: outValues };
+        }
+        const flags: BufferResource = this.scratch.acquire(count * 4, "radix:flags");
+        const prefix: BufferResource = this.scratch.acquire(count * 4, "radix:prefix");
+        const zerosCount: BufferResource = this.scratch.acquire(4, "radix:zerosCount");
+        const scratchKeys: BufferResource = this.scratch.acquire(count * 4, "radix:keysScratch");
+        const scratchValues: BufferResource = this.scratch.acquire(count * 4, "radix:valuesScratch");
+        const keyBufA: BufferResource = scratchKeys;
+        const keyBufB: BufferResource = outKeys;
+        const valueBufA: BufferResource = scratchValues;
+        const valueBufB: BufferResource = outValues;
+        let inKeys: BufferResource = keys;
+        let outKeysBuf: BufferResource = keyBufA;
+        let inValues: BufferResource = values;
+        let outValuesBuf: BufferResource = valueBufA;
+        const commands: ComputeDispatchCommand[] = [];
+        for (let bit = 0; bit < 32; bit++) {
+            {
+                const pipeline = this.getRadixFlagsPipeline(bit);
+                const bg = pipeline.createBindGroup(0, {
+                    0: this.bindSized(inKeys, count * 4),
+                    1: this.bindSized(flags, count * 4)
+                }, `radixPairs:bit${bit}:flags:bg`);
+                commands.push({
+                    pipeline,
+                    bindGroups: [bg],
+                    workgroups: workgroups1D(count, 256),
+                    label: `radixPairs:bit${bit}:flags`
+                });
+            }
+            this.encodeScanExclusiveU32Into(commands, flags, count, prefix, `radixPairs:bit${bit}:scan`);
+            this.encodeReduceScalar(commands, "u32", "sum", flags, count, zerosCount, `radixPairs:bit${bit}:zerosCount`);
+            {
+                const pipeline = this.getRadixScatterPairsPipeline(bit);
+                const bg = pipeline.createBindGroup(0, {
+                    0: this.bindSized(inKeys, count * 4),
+                    1: this.bindSized(inValues, count * 4),
+                    2: this.bindSized(prefix, count * 4),
+                    3: this.bindSized(zerosCount, 4),
+                    4: this.bindSized(outKeysBuf, count * 4),
+                    5: this.bindSized(outValuesBuf, count * 4)
+                }, `radixPairs:bit${bit}:scatter:bg`);
+                commands.push({
+                    pipeline,
+                    bindGroups: [bg],
+                    workgroups: workgroups1D(count, 256),
+                    label: `radixPairs:bit${bit}:scatter`
+                });
+            }
+            inKeys = outKeysBuf;
+            outKeysBuf = (outKeysBuf === keyBufA) ? keyBufB : keyBufA;
+            inValues = outValuesBuf;
+            outValuesBuf = (outValuesBuf === valueBufA) ? valueBufB : valueBufA;
+        }
+
+        if (inPlace) {
+            if (inKeys !== keys) this.encodeCopyU32(commands, inKeys, count, keys, "radixSortPairsU32:finalizeKeys");
+            if (inValues !== values) this.encodeCopyU32(commands, inValues, count, values, "radixSortPairsU32:finalizeValues");
+        } else {
+            if (inKeys !== outKeys) this.encodeCopyU32(commands, inKeys, count, outKeys, "radixSortPairsU32:finalizeKeys");
+            if (inValues !== outValues) this.encodeCopyU32(commands, inValues, count, outValues, "radixSortPairsU32:finalizeValues");
+        }
+        this.execute(commands, opts);
+        return { keys: outKeys, values: outValues };
     }
 
     /**
