@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: June 13th, 2026.
+Last updated: June 17th, 2026.
 
-Last commit: June 13th, 2026, [**`0d9bfdf`**](https://www.github.com/Zushah/WasmGPU/commit/0d9bfdf).
+Last commit: June 15th, 2026, [**`b323a06`**](https://www.github.com/Zushah/WasmGPU/commit/b323a06).
 
 Last release: May 24th, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -413,9 +413,9 @@ glTF loading and import are implemented under `./src/gltf/`. The loader reads JS
 
 Accessor decoding is split between TypeScript and Rust. `./src/gltf/accessors.ts` reads accessor descriptors, buffer views, sparse data, component types, normalization rules, and typed-array output requirements. Numeric conversion, deinterleaving, and sparse patching call Rust functions in `./rust/src/accessors.rs`.
 
-`./src/gltf/import.ts` converts loaded asset data into scene resources. Current import code covers geometry, materials, textures, skins, animations, morph targets, node transforms, node visibility, animation pointers, scene selection, metadata, material variants, cameras, punctual lights including spot lights, texture transforms, XMP metadata, and material extensions for clearcoat, specular, transmission, volume, diffuse transmission, dispersion, sheen, iridescence, anisotropy, index of refraction, and emissive strength.
+`./src/gltf/import.ts` converts loaded asset data into scene resources. Current import code covers geometry, materials, textures, skins, animations, morph targets, node transforms, node visibility, animation pointers, scene selection, metadata, material variants, cameras, punctual lights including spot lights, texture transforms, XMP metadata, Gaussian splat primitives from `KHR_gaussian_splatting` into `SplatField`, and material extensions for clearcoat, specular, transmission, volume, diffuse transmission, dispersion, sheen, iridescence, anisotropy, index of refraction, and emissive strength.
 
-The importer mutates scenes, meshes, geometry, materials, textures, animations, skin instances, camera data, and light bindings. It reads loaded asset data, WebAssembly decoding helpers, material extension descriptors, texture resources, and transform state. Before changing glTF import, check `./test/gltf.test.js`, examples using glTF, renderer material paths, texture upload behavior, and animation sampling.
+The importer mutates scenes, meshes, splatfields, geometry, materials, textures, animations, skin instances, camera data, and light bindings. It reads loaded asset data, WebAssembly decoding helpers, material extension descriptors, texture resources, and transform state. Before changing glTF import, check `./test/gltf.test.js`, examples using glTF, renderer material paths, texture upload behavior, and animation sampling.
 
 ### 1.16. Animating, skinning, and morphing
 
@@ -646,7 +646,7 @@ Common interactions:
 Architectural role:
 
 - Implements the asset loading, glTF accessor, and importer areas in the diagram.
-- Converts asset data into scene, graphics, animation, camera, and light objects.
+- Converts asset data into scene, graphics, splatfield, animation, camera, and light objects.
 - Uses Rust for hot accessor conversion paths.
 
 Important files:
@@ -663,6 +663,8 @@ Common interactions:
 
 - `./src/gltf/import.ts` creates objects from `./src/world/` and `./src/graphics/`.
 - `./src/gltf/accessors.ts` calls Rust accessors through `./src/wasm/index.ts`.
+- `KHR_gaussian_splatting` mesh primitives import into `SplatField` scene objects for the supported base Gaussian-splat subset.
+- Unsupported optional `KHR_gaussian_splatting` primitive features are skipped with warnings rather than converted to fallback pointclouds.
 - glTF animation pointers compile to existing transform and morph paths when possible and to JavaScript setters for imported nodes, materials, cameras, and lights.
 - Material extension import must match `StandardMaterial` fields and renderer shader support.
 - glTF changes should be checked against `./test/gltf.test.js` and `./examples/gltf.html`.

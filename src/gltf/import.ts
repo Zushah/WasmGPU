@@ -12,6 +12,7 @@ import { AnimationClip, Skin, type AnimationPointerChannel, type AnimationPointe
 import { Camera, OrthographicCamera, PerspectiveCamera } from "../world/camera";
 import { Scene } from "../world/scene";
 import { Mesh, initializeMeshMorphRuntime, setMeshMorphWeight } from "../world/mesh";
+import { SplatField, type SplatFieldColorSpace } from "../world/splatfield";
 import { DirectionalLight, PointLight, SpotLight, bindLightToTransform, unbindLightTransform, type Light } from "../world/light";
 import { Transform } from "../core/transform";
 import type { GltfDocument, GltfAnimation, GltfAnimationChannel, GltfAnimationSampler, GltfAsset, GltfCamera, GltfExtensions, GltfExtras, GltfMaterial, GltfMesh, GltfNode, GltfPrimitive, GltfPrimitiveAttributes, GltfRoot, GltfScene, GltfSkin, KHRLightsPunctualLight, KHRLightsPunctualNode, KHRLightsPunctualRoot } from "./types";
@@ -115,6 +116,7 @@ export class GltfImportedNode {
     parentIndex: number | null;
     children: number[];
     meshes: Mesh[];
+    splatFields: SplatField[];
     camera: Camera | null;
     light: Light | null;
     private _visible: boolean;
@@ -129,6 +131,7 @@ export class GltfImportedNode {
         this.parentIndex = null;
         this.children = [...(source?.children ?? [])];
         this.meshes = [];
+        this.splatFields = [];
         this.camera = null;
         this.light = null;
         this._visible = getNodeVisibility(source);
@@ -158,6 +161,7 @@ export class GltfImportedNode {
 
     applyVisibility(): void {
         for (const mesh of this.meshes) mesh.visible = this._effectiveVisible;
+        for (const splatField of this.splatFields) splatField.visible = this._effectiveVisible;
         if (this.light) this.light.enabled = this._effectiveVisible;
     }
 
@@ -172,6 +176,7 @@ export class GltfImportedNode {
 export type GltfImportResult = {
     scene: Scene;
     meshes: Mesh[];
+    splatFields: SplatField[];
     nodes: GltfImportedNode[];
     lights: Light[];
     cameras: Camera[];
@@ -207,10 +212,7 @@ const validateMaterialTextureCoordinates = (mat: GltfMaterial | undefined, attrs
     const validateInfo = (info: any | undefined, usage: string): void => {
         if (!info) return;
         const texCoord = getTextureInfoTexCoord(info);
-        if (texCoord < 0 || texCoord > 1) {
-            warn(opts, `${context}: texture usage '${usage}' references TEXCOORD_${texCoord}, but WasmGPU supports TEXCOORD_0 and TEXCOORD_1; using TEXCOORD_0.`);
-            return;
-        }
+        if (texCoord < 0 || texCoord > 1) { warn(opts, `${context}: texture usage '${usage}' references TEXCOORD_${texCoord}, but WasmGPU supports TEXCOORD_0 and TEXCOORD_1; using TEXCOORD_0.`); return; }
         if (attrs[`TEXCOORD_${texCoord}`] === undefined) warn(opts, `${context}: texture usage '${usage}' references missing TEXCOORD_${texCoord}; sampling will use zero coordinates.`);
     };
     validateInfo(mat.pbrMetallicRoughness?.baseColorTexture as any, "baseColor");
@@ -254,6 +256,9 @@ const GL_LINEAR_MIPMAP_LINEAR = 9987;
 const GL_CLAMP_TO_EDGE = 33071;
 const GL_MIRRORED_REPEAT = 33648;
 const GL_REPEAT = 10497;
+const GL_POINTS = 0;
+const KHR_GAUSSIAN_SPLATTING = "KHR_gaussian_splatting";
+const SH_DEGREE_0_FACTOR = 0.2820947917738781;
 
 const gltfWrapToAddressMode = (wrap: number | undefined): GPUAddressMode => {
     switch (wrap) {
@@ -406,6 +411,7 @@ const GLTF_EXTENSION_SUPPORT_STATES: Record<string, GltfImportExtensionSupportSt
     KHR_materials_anisotropy: "supported",
     KHR_materials_ior: "supported",
     KHR_materials_variants: "supported",
+    KHR_gaussian_splatting: "supported",
     KHR_node_visibility: "supported",
     KHR_animation_pointer: "supported",
     KHR_xmp_json_ld: "supported",
@@ -425,6 +431,17 @@ const buildExtensionsMetadata = (json: GltfRoot): GltfImportExtensionsMetadata =
     for (const name of names) support[name] = GLTF_EXTENSION_SUPPORT_STATES[name] ?? "unsupported";
     return { used, required, support };
 };
+
+const GLTF_EXTENSION_SUPPORT_RANK: Record<GltfImportExtensionSupportState, number> = {
+    supported: 0,
+    deferred: 1,
+    partial: 2,
+    unsupported: 3
+};
+
+const markExtensionSupport = (extensions: GltfImportExtensionsMetadata, name: string, state: GltfImportExtensionSupportState): void => { const current = extensions.support[name]; if (!current || GLTF_EXTENSION_SUPPORT_RANK[state] > GLTF_EXTENSION_SUPPORT_RANK[current]) extensions.support[name] = state; };
+
+const isExtensionRequired = (json: GltfRoot, name: string): boolean => (json.extensionsRequired ?? []).includes(name);
 
 const buildXmpMetadata = (json: GltfRoot): GltfImportXmpMetadata => {
     const rootExt = (json.extensions as Record<string, unknown> | undefined)?.["KHR_xmp_json_ld"] as { packets?: unknown[] } | undefined;
@@ -946,13 +963,166 @@ const getPrimitiveVariantMaterials = (doc: GltfDocument, json: GltfRoot, prim: G
     return { variants, ownedMaterials: [...materialByIndex.values()] };
 };
 
+type KHRGaussianSplattingPrimitiveExtension = {
+    kernel?: unknown;
+    colorSpace?: unknown;
+    projection?: unknown;
+    sortingMethod?: unknown;
+};
+
+const getGaussianSplattingExtension = (prim: GltfPrimitive): unknown | undefined => (prim.extensions as Record<string, unknown> | undefined)?.[KHR_GAUSSIAN_SPLATTING];
+
+const failGaussianSplatting = (context: string, message: string): never => { throw new Error(`${KHR_GAUSSIAN_SPLATTING}: ${context}: ${message}`); };
+
+const handleUnsupportedGaussianSplatting = (json: GltfRoot, extensions: GltfImportExtensionsMetadata, opts: ImportGltfOptions, context: string, message: string): null => {
+    markExtensionSupport(extensions, KHR_GAUSSIAN_SPLATTING, "unsupported");
+    if (isExtensionRequired(json, KHR_GAUSSIAN_SPLATTING)) failGaussianSplatting(context, message);
+    warn(opts, `${KHR_GAUSSIAN_SPLATTING}: ${context}: ${message}; skipping primitive. WasmGPU does not implement optional sparse point-cloud fallback conversion for unsupported Gaussian splat primitives in this MVP.`);
+    return null;
+};
+
+const requireSplatAttribute = (attrs: GltfPrimitiveAttributes, semantic: string, context: string): number => {
+    const accessorIndex = attrs[semantic];
+    if (accessorIndex === undefined) return failGaussianSplatting(context, `missing required attribute '${semantic}'.`);
+    return accessorIndex;
+};
+
+const validateSplatAccessor = (json: GltfRoot, accessorIndex: number, expectedType: string, isSupportedEncoding: (componentType: number, normalized: boolean) => boolean, context: string, semantic: string): number => {
+    const accessor = json.accessors?.[accessorIndex];
+    if (!accessor) return failGaussianSplatting(context, `attribute '${semantic}' references missing accessor ${accessorIndex}.`);
+    if (accessor.type !== expectedType) failGaussianSplatting(context, `attribute '${semantic}' must use accessor type ${expectedType}, got ${accessor.type}.`);
+    const normalized = accessor.normalized === true;
+    if (!isSupportedEncoding(accessor.componentType, normalized)) failGaussianSplatting(context, `attribute '${semantic}' has unsupported accessor encoding componentType=${accessor.componentType} normalized=${normalized}.`);
+    return accessor.count | 0;
+};
+
+const validateSplatAttributeCount = (count: number, expectedCount: number, context: string, semantic: string): void => { if (count !== expectedCount) failGaussianSplatting(context, `attribute '${semantic}' count ${count} does not match POSITION count ${expectedCount}.`); };
+
+const isFloatEncoding = (componentType: number): boolean => componentType === 5126;
+const isFloatNonNormalizedEncoding = (componentType: number, normalized: boolean): boolean => componentType === 5126 && !normalized;
+const isNormalizedSignedByteOrShort = (componentType: number, normalized: boolean): boolean => normalized && (componentType === 5120 || componentType === 5122);
+const isUnsignedByteOrShort = (componentType: number): boolean => componentType === 5121 || componentType === 5123;
+const isNormalizedUnsignedByteOrShort = (componentType: number, normalized: boolean): boolean => normalized && isUnsignedByteOrShort(componentType);
+
+const clamp01Number = (value: number): number => Math.max(0, Math.min(1, value));
+
+const validateDecodedSplatAttributeLength = (data: Float32Array, expectedCount: number, componentCount: number, context: string, semantic: string): void => {
+    const expectedLength = expectedCount * componentCount;
+    if (data.length !== expectedLength) failGaussianSplatting(context, `attribute '${semantic}' decoded length ${data.length} does not match expected length ${expectedLength}.`);
+};
+
+const gatherFloatAttribute = (src: Float32Array, componentCount: number, indices: Uint32Array | null): Float32Array => {
+    if (!indices) return src;
+    const out = new Float32Array(indices.length * componentCount);
+    for (let i = 0; i < indices.length; i++) {
+        const srcBase = (indices[i] ?? 0) * componentCount;
+        const dstBase = i * componentCount;
+        for (let c = 0; c < componentCount; c++) out[dstBase + c] = src[srcBase + c] ?? 0;
+    }
+    return out;
+};
+
+const validateSplatIndices = (indices: Uint32Array | null, sourceCount: number, context: string): void => {
+    if (!indices) return;
+    for (let i = 0; i < indices.length; i++) {
+        const index = indices[i]!;
+        if (index >= sourceCount) failGaussianSplatting(context, `indices[${i}] value ${index} is out of range for splat attribute count ${sourceCount}.`);
+    }
+};
+
+const validateFiniteSplatValues = (data: Float32Array, context: string, semantic: string): void => { for (let i = 0; i < data.length; i++) if (!Number.isFinite(data[i])) failGaussianSplatting(context, `attribute '${semantic}' contains non-finite value at component ${i}.`); };
+
+const validateSplatScaleValues = (scales: Float32Array, context: string): void => { validateFiniteSplatValues(scales, context, "KHR_gaussian_splatting:SCALE"); for (let i = 0; i < scales.length; i++) if ((scales[i] ?? 0) < 0) failGaussianSplatting(context, `attribute 'KHR_gaussian_splatting:SCALE' contains negative value at component ${i}.`); };
+
+const validateSplatOpacityValues = (opacities: Float32Array, context: string): void => {
+    validateFiniteSplatValues(opacities, context, "KHR_gaussian_splatting:OPACITY");
+    for (let i = 0; i < opacities.length; i++) {
+        const value = opacities[i] ?? 0;
+        if (value < 0 || value > 1) failGaussianSplatting(context, `attribute 'KHR_gaussian_splatting:OPACITY' contains value outside [0, 1] at component ${i}.`);
+    }
+};
+
+const convertGaussianSplatSh0ToRgb = (sh0: Float32Array): Float32Array => {
+    const out = new Float32Array(sh0.length);
+    for (let i = 0; i < sh0.length; i++) out[i] = clamp01Number((sh0[i] ?? 0) * SH_DEGREE_0_FACTOR + 0.5);
+    return out;
+};
+
+const getIgnoredHigherDegreeSphericalHarmonics = (attrs: GltfPrimitiveAttributes): string[] => Object.keys(attrs).filter((semantic) => attrs[semantic] !== undefined && /^KHR_gaussian_splatting:SH_DEGREE_[123]_COEF_/.test(semantic));
+
+const resolveGaussianSplatColorSpace = (value: unknown): SplatFieldColorSpace | null => {
+    if (value === "lin_rec709_display") return "linear";
+    if (value === "srgb_rec709_display") return "srgb";
+    return null;
+};
+
+const createSplatFieldFromPrimitive = (doc: GltfDocument, json: GltfRoot, gltfMesh: GltfMesh, meshIndex: number, prim: GltfPrimitive, primIndex: number, node: GltfNode, nodeT: Transform, extensions: GltfImportExtensionsMetadata, opts: ImportGltfOptions): SplatField | null => {
+    const context = `Mesh '${gltfMesh.name ?? meshIndex}' primitive ${primIndex}`;
+    const extValue = getGaussianSplattingExtension(prim);
+    if (!extValue || typeof extValue !== "object" || Array.isArray(extValue)) failGaussianSplatting(context, "extension object is required.");
+    const ext = extValue as KHRGaussianSplattingPrimitiveExtension;
+    if (ext.kernel === undefined) failGaussianSplatting(context, "missing required property 'kernel'.");
+    if (ext.kernel !== "ellipse") return handleUnsupportedGaussianSplatting(json, extensions, opts, context, `kernel '${String(ext.kernel)}' is not supported; expected 'ellipse'`);
+    if (ext.colorSpace === undefined) failGaussianSplatting(context, "missing required property 'colorSpace'.");
+    const colorSpace = resolveGaussianSplatColorSpace(ext.colorSpace);
+    if (!colorSpace) return handleUnsupportedGaussianSplatting(json, extensions, opts, context, `colorSpace '${String(ext.colorSpace)}' is not supported`);
+    if (ext.projection !== undefined && ext.projection !== "perspective") return handleUnsupportedGaussianSplatting(json, extensions, opts, context, `projection '${String(ext.projection)}' is not supported; expected 'perspective'`);
+    if (ext.sortingMethod !== undefined && ext.sortingMethod !== "cameraDistance") return handleUnsupportedGaussianSplatting(json, extensions, opts, context, `sortingMethod '${String(ext.sortingMethod)}' is not supported; expected 'cameraDistance'`);
+    const mode = prim.mode ?? 4;
+    if (mode !== GL_POINTS) failGaussianSplatting(context, `primitive mode must be POINTS (0), got ${mode}.`);
+    const attrs = prim.attributes;
+    const positionAcc = requireSplatAttribute(attrs, "POSITION", context);
+    const rotationAcc = requireSplatAttribute(attrs, "KHR_gaussian_splatting:ROTATION", context);
+    const scaleAcc = requireSplatAttribute(attrs, "KHR_gaussian_splatting:SCALE", context);
+    const opacityAcc = requireSplatAttribute(attrs, "KHR_gaussian_splatting:OPACITY", context);
+    const sh0Acc = requireSplatAttribute(attrs, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0", context);
+    const sourceCount = validateSplatAccessor(json, positionAcc, "VEC3", (componentType, normalized) => isFloatNonNormalizedEncoding(componentType, normalized), context, "POSITION");
+    validateSplatAttributeCount(validateSplatAccessor(json, rotationAcc, "VEC4", (componentType, normalized) => isFloatEncoding(componentType) || isNormalizedSignedByteOrShort(componentType, normalized), context, "KHR_gaussian_splatting:ROTATION"), sourceCount, context, "KHR_gaussian_splatting:ROTATION");
+    validateSplatAttributeCount(validateSplatAccessor(json, scaleAcc, "VEC3", (componentType) => isFloatEncoding(componentType) || isUnsignedByteOrShort(componentType), context, "KHR_gaussian_splatting:SCALE"), sourceCount, context, "KHR_gaussian_splatting:SCALE");
+    validateSplatAttributeCount(validateSplatAccessor(json, opacityAcc, "SCALAR", (componentType, normalized) => isFloatEncoding(componentType) || isNormalizedUnsignedByteOrShort(componentType, normalized), context, "KHR_gaussian_splatting:OPACITY"), sourceCount, context, "KHR_gaussian_splatting:OPACITY");
+    validateSplatAttributeCount(validateSplatAccessor(json, sh0Acc, "VEC3", (componentType) => isFloatEncoding(componentType), context, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0"), sourceCount, context, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0");
+    const ignoredSphericalHarmonics = getIgnoredHigherDegreeSphericalHarmonics(attrs);
+    if (ignoredSphericalHarmonics.length > 0) {
+        markExtensionSupport(extensions, KHR_GAUSSIAN_SPLATTING, "partial");
+        warn(opts, `${KHR_GAUSSIAN_SPLATTING}: ${context}: higher-degree spherical harmonic attributes are present but not rendered; using SH_DEGREE_0_COEF_0 only.`);
+    } else markExtensionSupport(extensions, KHR_GAUSSIAN_SPLATTING, "supported");
+    const indices = prim.indices !== undefined ? readIndicesAsUint32(doc, prim.indices) : null;
+    validateSplatIndices(indices, sourceCount, context);
+    const splatCount = indices ? indices.length : sourceCount;
+    const sourcePositions = readAccessorAsFloat32(doc, positionAcc);
+    const sourceRotations = readAccessorAsFloat32(doc, rotationAcc);
+    const sourceScales = readAccessorAsFloat32(doc, scaleAcc);
+    const sourceOpacities = readAccessorAsFloat32(doc, opacityAcc);
+    const sourceSh0 = readAccessorAsFloat32(doc, sh0Acc);
+    validateDecodedSplatAttributeLength(sourcePositions, sourceCount, 3, context, "POSITION");
+    validateDecodedSplatAttributeLength(sourceRotations, sourceCount, 4, context, "KHR_gaussian_splatting:ROTATION");
+    validateDecodedSplatAttributeLength(sourceScales, sourceCount, 3, context, "KHR_gaussian_splatting:SCALE");
+    validateDecodedSplatAttributeLength(sourceOpacities, sourceCount, 1, context, "KHR_gaussian_splatting:OPACITY");
+    validateDecodedSplatAttributeLength(sourceSh0, sourceCount, 3, context, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0");
+    const positions = gatherFloatAttribute(sourcePositions, 3, indices);
+    const rotations = gatherFloatAttribute(sourceRotations, 4, indices);
+    const scales = gatherFloatAttribute(sourceScales, 3, indices);
+    const opacities = gatherFloatAttribute(sourceOpacities, 1, indices);
+    const sh0 = gatherFloatAttribute(sourceSh0, 3, indices);
+    validateFiniteSplatValues(positions, context, "POSITION");
+    validateFiniteSplatValues(rotations, context, "KHR_gaussian_splatting:ROTATION");
+    validateSplatScaleValues(scales, context);
+    validateSplatOpacityValues(opacities, context);
+    validateFiniteSplatValues(sh0, context, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0");
+    const field = new SplatField({
+        name: node.name ?? gltfMesh.name ?? `gltf_splatfield_${meshIndex}_${primIndex}`,
+        positions, rotations, scales, opacities,
+        colors: convertGaussianSplatSh0ToRgb(sh0),
+        splatCount, colorSpace
+    });
+    field.transform.setParent(nodeT);
+    return field;
+};
+
 const buildGeometryFromPrimitive = (doc: GltfDocument, json: GltfRoot, prim: GltfPrimitive, computeMissingNormals: boolean, opts: ImportGltfOptions): Geometry | null => {
     const attrs = prim.attributes;
     const posAcc = attrs["POSITION"];
-    if (posAcc === undefined) {
-        warn(opts, "Primitive missing POSITION; skipping");
-        return null;
-    }
+    if (posAcc === undefined) { warn(opts, "Primitive missing POSITION; skipping"); return null; }
     const positions = readAccessorAsFloat32(doc, posAcc);
     let normals: Float32Array | null = null;
     const nAcc = attrs["NORMAL"];
@@ -1072,19 +1242,24 @@ const buildGeometryFromPrimitive = (doc: GltfDocument, json: GltfRoot, prim: Glt
     });
 };
 
-const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: number, node: GltfNode, nodeT: Transform, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, geometryCache: Map<string, Geometry | null>, variantsController: GltfVariantController, opts: ImportGltfOptions): Mesh[] => {
-    if (node.mesh === undefined) return [];
+type ImportedMeshNodeObjects = {
+    meshes: Mesh[];
+    splatFields: SplatField[];
+};
+
+const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: number, node: GltfNode, nodeT: Transform, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, geometryCache: Map<string, Geometry | null>, variantsController: GltfVariantController, extensions: GltfImportExtensionsMetadata, opts: ImportGltfOptions): ImportedMeshNodeObjects => {
+    if (node.mesh === undefined) return { meshes: [], splatFields: [] };
     const gltfMesh: GltfMesh | undefined = json.meshes?.[node.mesh];
-    if (!gltfMesh) {
-        warn(opts, `nodes[].mesh=${node.mesh} missing; skipping mesh node`);
-        return [];
-    }
-    const out: Mesh[] = [];
+    if (!gltfMesh) { warn(opts, `nodes[].mesh=${node.mesh} missing; skipping mesh node`); return { meshes: [], splatFields: [] }; }
+    const meshes: Mesh[] = [];
+    const splatFields: SplatField[] = [];
     const computeMissingNormals = opts.computeMissingNormals !== false;
     for (let primIndex = 0; primIndex < gltfMesh.primitives.length; primIndex++) {
         const prim = gltfMesh.primitives[primIndex]!;
-        if ((prim.extensions as unknown as Record<string, unknown> | undefined)?.["KHR_draco_mesh_compression"]) {
-            warn(opts, `Mesh ${gltfMesh.name ?? node.mesh} primitive ${primIndex}: KHR_draco_mesh_compression not supported; skipping primitive`);
+        if ((prim.extensions as unknown as Record<string, unknown> | undefined)?.["KHR_draco_mesh_compression"]) { warn(opts, `Mesh ${gltfMesh.name ?? node.mesh} primitive ${primIndex}: KHR_draco_mesh_compression not supported; skipping primitive`); continue; }
+        if (getGaussianSplattingExtension(prim) !== undefined) {
+            const field = createSplatFieldFromPrimitive(doc, json, gltfMesh, node.mesh, prim, primIndex, node, nodeT, extensions, opts);
+            if (field) splatFields.push(field);
             continue;
         }
         const cacheKey = `${node.mesh ?? -1}:${primIndex}`;
@@ -1124,35 +1299,26 @@ const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: numbe
                 material: matJson?.extensions
             }
         };
-        out.push(mesh);
+        meshes.push(mesh);
         const variantMaterials = getPrimitiveVariantMaterials(doc, json, prim, materialCache, textureCache, opts, `Mesh '${gltfMesh.name ?? node.mesh}' primitive ${primIndex}`);
         variantsController.register(mesh, mesh.material, variantMaterials.variants);
         for (const material of variantMaterials.ownedMaterials) material.release();
     }
-    return out;
+    return { meshes, splatFields };
 };
 
 const instantiateCameraNode = (json: GltfRoot, node: GltfNode, nodeT: Transform, opts: ImportGltfOptions): Camera | null => {
     if (node.camera === undefined) return null;
     const cam: GltfCamera | undefined = json.cameras?.[node.camera];
-    if (!cam) {
-        warn(opts, `nodes[].camera=${node.camera} missing; skipping camera`);
-        return null;
-    }
+    if (!cam) { warn(opts, `nodes[].camera=${node.camera} missing; skipping camera`); return null; }
     let out: Camera;
     if (cam.type === "perspective") {
         const p = cam.perspective;
-        if (!p) {
-            warn(opts, `camera[${node.camera}] missing perspective block; skipping`);
-            return null;
-        }
+        if (!p) { warn(opts, `camera[${node.camera}] missing perspective block; skipping`); return null; }
         out = new PerspectiveCamera({ fov: (p.yfov * 180) / Math.PI, aspect: p.aspectRatio, near: p.znear, far: p.zfar ?? 1000 });
     } else {
         const o = cam.orthographic;
-        if (!o) {
-            warn(opts, `camera[${node.camera}] missing orthographic block; skipping`);
-            return null;
-        }
+        if (!o) { warn(opts, `camera[${node.camera}] missing orthographic block; skipping`); return null; }
         out = new OrthographicCamera({ left: -o.xmag, right: o.xmag, top: o.ymag, bottom: -o.ymag, near: o.znear, far: o.zfar });
     }
     out.transform.setParent(nodeT);
@@ -1810,9 +1976,8 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
     for (let i = 0; i < gltfNodes.length; i++) {
         const n: GltfNode = gltfNodes[i]!;
         const t = new Transform();
-        if (n.matrix && n.matrix.length >= 16) {
-            applyNodeMatrixViaWasmDecompose(t, n.matrix);
-        } else {
+        if (n.matrix && n.matrix.length >= 16) applyNodeMatrixViaWasmDecompose(t, n.matrix);
+        else {
             const tr = n.translation ?? [0, 0, 0];
             const ro = n.rotation ?? [0, 0, 0, 1];
             const sc = n.scale ?? [1, 1, 1];
@@ -1843,6 +2008,7 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
     const textureCache = new Map<number, Texture2D>();
     const geometryCache = new Map<string, Geometry | null>();
     const meshes: Mesh[] = [];
+    const splatFields: SplatField[] = [];
     const cameras: Camera[] = [];
     const lights: Light[] = [];
     const cameraRuntimeMap = new Map<number, Camera[]>();
@@ -1854,8 +2020,11 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
         const importedNode = nodes[nodeIndex];
         const nodeT = importedNode?.transform;
         if (!importedNode || !nodeT) return;
-        const createdMeshes = instantiateMeshNode(doc, json, nodeIndex, node, nodeT, materialCache, textureCache, geometryCache, variantsController, opts);
+        const createdObjects = instantiateMeshNode(doc, json, nodeIndex, node, nodeT, materialCache, textureCache, geometryCache, variantsController, extensions, opts);
+        const createdMeshes = createdObjects.meshes;
+        const createdSplatFields = createdObjects.splatFields;
         importedNode.meshes = createdMeshes;
+        importedNode.splatFields = createdSplatFields;
         importedNode.applyVisibility();
         const skinIndex = node.skin !== undefined ? (node.skin | 0) : inheritedSkinIndex;
         if (skinIndex !== undefined) {
@@ -1869,6 +2038,7 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
             }
         }
         for (const m of createdMeshes) { meshes.push(m); if (addToScene) scene.add(m); }
+        for (const s of createdSplatFields) { splatFields.push(s); if (addToScene) scene.add(s); }
         if (opts.importCameras) { const cam = instantiateCameraNode(json, node, nodeT, opts); if (cam) { cameras.push(cam); importedNode.camera = cam; if (node.camera !== undefined) { const cameraIndex = node.camera | 0; const list = cameraRuntimeMap.get(cameraIndex) ?? []; list.push(cam); cameraRuntimeMap.set(cameraIndex, list); } } }
         if (opts.importLights && khrLights) {
             const nodeLight = getNodeKHRLight(node);
@@ -1901,19 +2071,20 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
     const metadata = buildImportMetadata(json, sceneIndex, extensions, xmp, variantsController.public);
     let destroyed = false;
     return {
-        scene, meshes, nodes, lights, cameras, skins, animations, clips, metadata,
+        scene, meshes, splatFields, nodes, lights, cameras, skins, animations, clips, metadata,
         destroy(): void {
             if (destroyed) return;
             destroyed = true;
-            if (addToScene) { for (const m of meshes) scene.remove(m); for (const light of lights) scene.removeLight(light); }
+            if (addToScene) { for (const m of meshes) scene.remove(m); for (const s of splatFields) scene.remove(s); for (const light of lights) scene.removeLight(light); }
             for (const light of lights) unbindLightTransform(light);
             for (const m of meshes) m.destroy();
+            for (const s of splatFields) s.destroy();
             for (const camera of cameras) camera.destroy();
             for (const a of animations) a.clip?.dispose();
             for (const s of skins) s.runtime?.dispose();
             variantsController.destroy();
             for (const tex of textureCache.values()) tex.destroy();
             for (const node of nodes) node.transform.dispose();
-        },
+        }
     };
 };
