@@ -16,67 +16,29 @@ const adapter = await gpu.requestAdapter();
 assert.ok(adapter, "Failed to acquire a WebGPU adapter");
 const device = await adapter.requestDevice();
 assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => {
-    throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`);
-});
-Object.defineProperty(globalThis, "navigator", {
-    value: navigator,
-    configurable: true
-});
+device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
+Object.defineProperty(globalThis, "navigator", { value: navigator, configurable: true });
 if (!globalThis.window) globalThis.window = {};
 if (typeof globalThis.window.devicePixelRatio !== "number") globalThis.window.devicePixelRatio = 1;
 
-const numberApproxEqual = (a, b, tol = 1e-6, msg = "Numbers differ") => {
-    assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers");
-    assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`);
-};
+const numberApproxEqual = (a, b, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers"); assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`); };
 
-const arraysApproxEqual = (a, b, tol = 1e-6, msg = "Arrays differ") => {
-    assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`);
-    for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`);
-};
+const arraysApproxEqual = (a, b, tol = 1e-6, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`); };
 
 const makeCanvas = (width = 640, height = 480) => {
-    const canvas = {
-        width,
-        height,
-        clientWidth: width,
-        clientHeight: height,
-        style: {},
-        addEventListener() {},
-        removeEventListener() {},
-        getBoundingClientRect() {
-            return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight, right: this.clientWidth, bottom: this.clientHeight };
-        }
-    };
+    const canvas = { width, height, clientWidth: width, clientHeight: height, style: {}, addEventListener() {}, removeEventListener() {}, getBoundingClientRect() { return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight, right: this.clientWidth, bottom: this.clientHeight }; } };
     let device = null;
     let format = "rgba8unorm";
     let usage = GPUTextureUsage.RENDER_ATTACHMENT;
     const context = {
-        configure(desc) {
-            device = desc.device;
-            format = desc.format ?? format;
-            usage = desc.usage ?? usage;
-        },
-        getCurrentTexture() {
-            assert.ok(device, "GPUCanvasContext.configure() must be called before getCurrentTexture().");
-            return device.createTexture({
-                size: {
-                    width: Math.max(1, canvas.width | 0),
-                    height: Math.max(1, canvas.height | 0),
-                    depthOrArrayLayers: 1
-                },
-                format,
-                usage: usage | GPUTextureUsage.RENDER_ATTACHMENT
-            });
-        }
+        configure(desc) { device = desc.device; format = desc.format ?? format; usage = desc.usage ?? usage; },
+        getCurrentTexture() { assert.ok(device, "GPUCanvasContext.configure() must be called before getCurrentTexture()."); return device.createTexture({ size: { width: Math.max(1, canvas.width | 0), height: Math.max(1, canvas.height | 0), depthOrArrayLayers: 1 }, format, usage: usage | GPUTextureUsage.RENDER_ATTACHMENT }); }
     };
     canvas.getContext = (kind) => kind === "webgpu" ? context : null;
     return canvas;
 };
 
 await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
-
 const { WasmGPU: Engine, SelectionStore } = WasmGPU;
 assert.ok(Engine, "Missing export: WasmGPU class");
 assert.ok(typeof Engine.prototype.pick === "function", "Missing API: WasmGPU.pick(scene, camera, x, y, opts?)");
@@ -99,12 +61,7 @@ const mesh = wgpu.createMesh(wgpu.geometry.box(2, 2, 2), wgpu.material.unlit({ c
 mesh.transform.setPosition(-2, 0, 0);
 
 const cloud = wgpu.createPointCloud({
-    data: new Float32Array([
-        0, 0, 0, 0.10,
-        1, 0, 0, 0.20,
-        0, 1, 0, 0.30,
-        1, 1, 0, 0.40
-    ]),
+    data: new Float32Array([0, 0, 0, 0.10, 1, 0, 0, 0.20, 0, 1, 0, 0.30, 1, 1, 0, 0.40]),
     keepCPUData: true,
     ndShape: [2, 2],
     basePointSize: 10,
@@ -117,32 +74,17 @@ cloud.transform.setPosition(0, 0, 0);
 const field = wgpu.createGlyphField({
     geometry: wgpu.geometry.box(0.25, 0.25, 0.25),
     instanceCount: 2,
-    positions: new Float32Array([
-        2, 0, 0, 0,
-        2, 1, 0, 0
-    ]),
-    rotations: new Float32Array([
-        0, 0, 0, 1,
-        0, 0, 0, 1
-    ]),
-    scales: new Float32Array([
-        1, 1, 1, 0,
-        1, 1, 1, 0
-    ]),
-    attributes: new Float32Array([
-        0.5, 1.5, 2.5, 3.5,
-        4.5, 5.5, 6.5, 7.5
-    ]),
+    positions: new Float32Array([2, 0, 0, 0, 2, 1, 0, 0]),
+    rotations: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]),
+    scales: new Float32Array([1, 1, 1, 0, 1, 1, 1, 0]),
+    attributes: new Float32Array([0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5, 7.5]),
     keepCPUData: true,
     ndShape: [1, 2],
     scaleTransform: glyphScaleTransform
 });
 
 const cloudNoCPU = wgpu.createPointCloud({
-    data: new Float32Array([
-        -1, -1, 0, 0.8,
-        -2, -2, 0, 0.9
-    ]),
+    data: new Float32Array([-1, -1, 0, 0.8, -2, -2, 0, 0.9]),
     keepCPUData: false,
     ndShape: [2, 1],
     scaleTransform: pointScaleTransform
@@ -150,34 +92,36 @@ const cloudNoCPU = wgpu.createPointCloud({
 cloudNoCPU.upload(wgpu.gpu.device, wgpu.gpu.queue);
 
 const link = wgpu.createNodeLink({
-    nodePositions: new Float32Array([
-        0, 0, 0,
-        1, 0, 0,
-        0, 1, 0,
-        1, 1, 0
-    ]),
-    edges: new Uint16Array([
-        0, 1,
-        2, 3
-    ]),
+    nodePositions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 1, 1, 0]),
+    edges: new Uint16Array([0, 1, 2, 3]),
     nodeScalars: new Float32Array([0.1, 0.2, 0.3, 0.4]),
-    nodeColors: new Float32Array([
-        1, 0, 0, 1,
-        0, 1, 0, 1,
-        0, 0, 1, 1,
-        1, 1, 0, 1
-    ]),
+    nodeColors: new Float32Array([1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1]),
     edgeScalars: new Float32Array([0.6, 0.9]),
-    edgeColors: new Float32Array([
-        0.2, 0.2, 0.2, 1,
-        0.8, 0.8, 0.8, 1
-    ]),
+    edgeColors: new Float32Array([0.2, 0.2, 0.2, 1, 0.8, 0.8, 0.8, 1]),
     keepCPUData: true,
     ndShape: [2, 2]
 });
 link.upload(wgpu.gpu.device, wgpu.gpu.queue);
 
-scene.add(mesh).add(cloud).add(field).add(cloudNoCPU).add(link);
+const splat = wgpu.createSplatField({
+    positions: new Float32Array([3, 0, 0, 3, 1, 0]),
+    rotations: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]),
+    scales: new Float32Array([0.25, 0.3, 0.35, 0.4, 0.45, 0.5]),
+    opacities: new Float32Array([0.65, 0.85]),
+    colors: new Float32Array([0.7, 0.1, 0.2, 0.9, 0.2, 0.8, 0.3, 0.75]),
+    keepCPUData: true,
+    ndShape: [1, 2]
+});
+
+const splatNoCPU = wgpu.createSplatField({
+    positions: new Float32Array([-3, 0, 0, -3, 1, 0]),
+    scales: new Float32Array([0.2, 0.2, 0.2, 0.2, 0.2, 0.2]),
+    keepCPUData: false,
+    ndShape: [2]
+});
+splatNoCPU.upload(wgpu.gpu.device, wgpu.gpu.queue);
+
+scene.add(mesh).add(cloud).add(field).add(cloudNoCPU).add(link).add(splat).add(splatNoCPU);
 
 const renderer = wgpu.renderer;
 assert.ok(renderer && typeof renderer.pick === "function", "Internal renderer.pick is required for WasmGPU.pick");
@@ -187,13 +131,7 @@ const originalRendererPick = renderer.pick.bind(renderer);
 const originalRendererPickRect = renderer.pickRect.bind(renderer);
 const originalRendererPickLasso = renderer.pickLasso.bind(renderer);
 
-const makePickHit = (kind, object, objectId, elementIndex, worldPosition) => ({
-    kind,
-    object,
-    objectId,
-    elementIndex,
-    worldPosition
-});
+const makePickHit = (kind, object, objectId, elementIndex, worldPosition) => ({ kind, object, objectId, elementIndex, worldPosition });
 
 try {
     renderer.pick = async () => makePickHit("pointcloud", cloud, 11, 3, [1, 1, 0]);
@@ -228,6 +166,31 @@ try {
     assert.deepStrictEqual(glyphHit.ndIndex, [0, 1], "GlyphField nd index decode mismatch");
     assert.ok(glyphHit.attributes, "GlyphField attributes should be present when CPU data exists");
     arraysApproxEqual(glyphHit.attributes.vector, [4.5, 5.5, 6.5, 7.5], 1e-6, "GlyphField vec4 attribute mismatch");
+
+    renderer.pick = async () => makePickHit("splatfield", splat, 51, 1, [3, 1, 0]);
+    const splatHit = await wgpu.pick(scene, camera, 128, 128);
+    assert.ok(splatHit, "Expected splatfield pick hit");
+    assert.strictEqual(splatHit.kind, "splatfield");
+    assert.strictEqual(splatHit.object, splat);
+    assert.strictEqual(splatHit.elementIndex, 1);
+    assert.deepStrictEqual(splatHit.ndIndex, [0, 1], "SplatField nd index decode mismatch");
+    assert.ok(splatHit.attributes, "SplatField attributes should be present when CPU data exists");
+    arraysApproxEqual(splatHit.attributes.position, [3, 1, 0], 1e-6, "SplatField position attribute mismatch");
+    arraysApproxEqual(splatHit.attributes.rotation, [0, 0, 0, 1], 1e-6, "SplatField rotation attribute mismatch");
+    arraysApproxEqual(splatHit.attributes.scale, [0.4, 0.45, 0.5], 1e-6, "SplatField scale attribute mismatch");
+    numberApproxEqual(splatHit.attributes.opacity, 0.85, 1e-6, "SplatField opacity attribute mismatch");
+    arraysApproxEqual(splatHit.attributes.packedSplat, [3, 1, 0, 0.85], 1e-6, "SplatField packed tuple mismatch");
+    arraysApproxEqual(splatHit.attributes.color, [0.2, 0.8, 0.3, 0.75], 1e-6, "SplatField color attribute mismatch");
+
+    const splatNoAttr = await wgpu.pick(scene, camera, 128, 128, { includeAttributes: false });
+    assert.ok(splatNoAttr, "Expected splatfield hit with includeAttributes=false");
+    assert.strictEqual(splatNoAttr.attributes, null, "SplatField attributes should be null when includeAttributes=false");
+
+    renderer.pick = async () => makePickHit("splatfield", splatNoCPU, 52, 1, [-3, 1, 0]);
+    const splatNoCPUHit = await wgpu.pick(scene, camera, 128, 128);
+    assert.ok(splatNoCPUHit, "Expected splatfield hit without CPU records");
+    assert.deepStrictEqual(splatNoCPUHit.ndIndex, [1], "SplatField nd index decode should still work without CPU attributes");
+    assert.strictEqual(splatNoCPUHit.attributes, null, "SplatField attributes should be null when CPU data is unavailable");
 
     renderer.pick = async () => makePickHit("nodelink", link, 41, 2, [0, 1, 0]);
     const nodeLinkNodeHit = await wgpu.pick(scene, camera, 128, 128, { includeAttributes: true });
@@ -367,6 +330,36 @@ try {
     renderer.pick = originalRendererPick;
     renderer.pickRect = originalRendererPickRect;
     renderer.pickLasso = originalRendererPickLasso;
+}
+
+{
+    const pickScene = wgpu.createScene([0, 0, 0]);
+    const pickCamera = wgpu.createCamera.perspective({ fov: 50, near: 0.1, far: 200 });
+    pickCamera.transform.setPosition(0, 0, 8);
+    pickCamera.lookAt(0, 0, 0);
+    const pickSplat = wgpu.createSplatField({
+        positions: new Float32Array([0, 0, 0, 0, 0, 1]),
+        rotations: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]),
+        scales: new Float32Array([0.35, 0.35, 0.35, 0.35, 0.35, 0.35]),
+        opacities: new Float32Array([1, 1]),
+        colors: new Float32Array([1, 0, 0, 1, 0, 1, 0, 1]),
+        keepCPUData: true,
+        ndShape: [2]
+    });
+    pickScene.add(pickSplat);
+
+    const splatPick = await wgpu.pick(pickScene, pickCamera, canvas.clientWidth * 0.5, canvas.clientHeight * 0.5, { includeAttributes: true });
+    assert.ok(splatPick, "Expected splatfield pick before render()");
+    assert.strictEqual(splatPick.kind, "splatfield", "Expected actual renderer pick to return splatfield kind");
+    assert.strictEqual(splatPick.object, pickSplat, "Expected actual renderer pick to return the splatfield object");
+    assert.strictEqual(splatPick.elementIndex, 1, "Expected nearest splat footprint to win depth picking");
+    assert.deepStrictEqual(splatPick.ndIndex, [1], "Actual splatfield pick ndIndex mismatch");
+    assert.ok(splatPick.attributes, "Actual splatfield pick attributes should be present");
+    arraysApproxEqual(splatPick.attributes.position, [0, 0, 1], 1e-6, "Actual splatfield pick position mismatch");
+    arraysApproxEqual(splatPick.attributes.packedSplat, [0, 0, 1, 1], 1e-6, "Actual splatfield pick packed tuple mismatch");
+    assert.ok(splatPick.worldPosition.every(Number.isFinite), "Actual splatfield pick should report a finite world position");
+
+    pickScene.destroy();
 }
 
 {

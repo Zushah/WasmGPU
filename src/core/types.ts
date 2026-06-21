@@ -185,6 +185,13 @@ export type RendererPickHit =
         objectId: number;
         elementIndex: number;
         worldPosition: [number, number, number];
+    } |
+    {
+        kind: "splatfield";
+        object: SplatField;
+        objectId: number;
+        elementIndex: number;
+        worldPosition: [number, number, number];
     };
 
 export type RendererPickRegionMode = "rect" | "lasso";

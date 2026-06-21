@@ -219,11 +219,8 @@ export class WasmGPU {
     private buildPickNdIndex(hit: RendererPickHit): number[] | null {
         if (hit.kind === "pointcloud") return hit.object.mapLinearIndexToNd(hit.elementIndex);
         if (hit.kind === "glyphfield") return hit.object.mapLinearIndexToNd(hit.elementIndex);
-        if (hit.kind === "nodelink") {
-            const decoded = hit.object.decodePickElement(hit.elementIndex);
-            if (!decoded || decoded.component !== "node") return null;
-            return hit.object.mapLinearNodeIndexToNd(decoded.componentIndex);
-        }
+        if (hit.kind === "splatfield") return hit.object.mapLinearIndexToNd(hit.elementIndex);
+        if (hit.kind === "nodelink") { const decoded = hit.object.decodePickElement(hit.elementIndex); if (!decoded || decoded.component !== "node") return null; return hit.object.mapLinearNodeIndexToNd(decoded.componentIndex); }
         return null;
     }
 
@@ -261,9 +258,19 @@ export class WasmGPU {
                 scalar: rec?.scalar ?? null,
                 color: rec?.color ?? null,
                 edgeEndpoints: rec ? [rec.src, rec.dst] : null,
-                edgePositions: (rec && rec.srcPosition && rec.dstPosition)
-                    ? [rec.srcPosition[0], rec.srcPosition[1], rec.srcPosition[2], rec.dstPosition[0], rec.dstPosition[1], rec.dstPosition[2]]
-                    : null
+                edgePositions: (rec && rec.srcPosition && rec.dstPosition) ? [rec.srcPosition[0], rec.srcPosition[1], rec.srcPosition[2], rec.dstPosition[0], rec.dstPosition[1], rec.dstPosition[2]] : null
+            };
+        }
+        if (hit.kind === "splatfield") {
+            const rec = hit.object.getSplatRecord(hit.elementIndex);
+            if (!rec) return null;
+            return {
+                position: rec.position,
+                rotation: rec.rotation,
+                scale: rec.scale,
+                opacity: rec.opacity,
+                packedSplat: rec.packed,
+                color: rec.color
             };
         }
         return null;

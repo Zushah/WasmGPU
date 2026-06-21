@@ -289,6 +289,32 @@ export class SplatField {
         return linearIndexToNdIndex(this._ndShape, index);
     }
 
+    getSplatRecord(index: number): {
+        position: [number, number, number];
+        rotation: [number, number, number, number];
+        scale: [number, number, number];
+        opacity: number;
+        color: [number, number, number, number] | null;
+        packed: [number, number, number, number];
+    } | null {
+        if (!Number.isInteger(index) || index < 0 || index >= this._splatCount) return null;
+        const centerOpacity = this._centerOpacityCPU;
+        const rotation = this._rotationCPU;
+        const scale = this._scaleCPU;
+        if (!centerOpacity || !rotation || !scale) return null;
+        const base = index * 4;
+        const packed: [number, number, number, number] = [centerOpacity[base + 0], centerOpacity[base + 1], centerOpacity[base + 2], centerOpacity[base + 3]];
+        const color = this._colorCPU ? [this._colorCPU[base + 0], this._colorCPU[base + 1], this._colorCPU[base + 2], this._colorCPU[base + 3]] as [number, number, number, number] : null;
+        return {
+            position: [packed[0], packed[1], packed[2]],
+            rotation: [rotation[base + 0], rotation[base + 1], rotation[base + 2], rotation[base + 3]],
+            scale: [scale[base + 0], scale[base + 1], scale[base + 2]],
+            opacity: packed[3],
+            color,
+            packed
+        };
+    }
+
     dropCPUData(): void {
         this._centerOpacityCPU = null;
         this._rotationCPU = null;

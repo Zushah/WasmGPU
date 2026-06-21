@@ -13,6 +13,7 @@ import { Mesh, getMeshVertexBuffers } from "../world/mesh";
 import { PointCloud } from "../world/pointcloud";
 import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
+import { SplatField } from "../world/splatfield";
 import { Scene } from "../world/scene";
 import type { PickLassoPoint, PickRegionQuery } from "../world/picking";
 import { animf, driver, frameArena, mat4, mat4f } from "../wasm";
@@ -23,10 +24,11 @@ import pickMeshSkinned8WGSL from "../wgsl/core/picking-mesh-skinned8.wgsl";
 import pickPointCloudWGSL from "../wgsl/world/picking-pointcloud.wgsl";
 import pickGlyphFieldWGSL from "../wgsl/world/picking-glyphfield.wgsl";
 import pickNodeLinkWGSL from "../wgsl/world/picking-nodelink.wgsl";
+import pickSplatFieldWGSL from "../wgsl/world/picking-splatfield.wgsl";
 import type { RendererContext } from "./context";
-import type { DecodedPickSample, DrawItem, GlyphFieldDrawItem, NodeLinkDrawItem, PointCloudDrawItem, RendererPickHit, RendererPickRegionBounds, RendererPickRegionResult, ResolvedPickRegionQuery } from "./types";
+import type { DecodedPickSample, DrawItem, GlyphFieldDrawItem, NodeLinkDrawItem, PointCloudDrawItem, RendererPickHit, RendererPickRegionBounds, RendererPickRegionResult, ResolvedPickRegionQuery, SplatFieldDrawItem } from "./types";
 import { getCullMode } from "./materials";
-import { ensureGlyphFieldBindGroup, ensureNodeLinkBindGroup, ensurePointCloudBindGroup, getGlyphFieldBindGroupLayout, getNodeLinkBindGroupLayout, getPointCloudBindGroupLayout } from "./objects";
+import { ensureGlyphFieldBindGroup, ensureNodeLinkBindGroup, ensurePointCloudBindGroup, ensureSplatFieldBindGroup, getGlyphFieldBindGroupLayout, getNodeLinkBindGroupLayout, getPointCloudBindGroupLayout, getSplatFieldBindGroupLayout } from "./objects";
 import { ensureModelBufferPool, getObjectId } from "./resources";
 
 const alignTo256 = (x: number): number => (x + 255) & ~255;
@@ -146,6 +148,7 @@ const resolveRendererPickHit = (ctx: RendererContext, camera: Camera, sample: De
     if (obj instanceof PointCloud) return { kind: "pointcloud", object: obj, objectId: sample.objectId, elementIndex: sample.elementIndex, worldPosition };
     if (obj instanceof GlyphField) return { kind: "glyphfield", object: obj, objectId: sample.objectId, elementIndex: sample.elementIndex, worldPosition };
     if (obj instanceof NodeLink) return { kind: "nodelink", object: obj, objectId: sample.objectId, elementIndex: sample.elementIndex, worldPosition };
+    if (obj instanceof SplatField) return { kind: "splatfield", object: obj, objectId: sample.objectId, elementIndex: sample.elementIndex, worldPosition };
     return null;
 };
 
@@ -200,6 +203,7 @@ const executePickRegion = async (ctx: RendererContext, scene: Scene, camera: Cam
     executeGlyphPickDrawList(ctx, pass, ctx.transparentGlyphFieldDrawList);
     executePointCloudPickDrawList(ctx, pass, ctx.opaquePointCloudDrawList);
     executePointCloudPickDrawList(ctx, pass, ctx.transparentPointCloudDrawList);
+    executeSplatFieldPickDrawList(ctx, pass, ctx.transparentSplatFieldDrawList);
     executeNodeLinkPickDrawList(ctx, pass, ctx.opaqueNodeLinkDrawList);
     executeNodeLinkPickDrawList(ctx, pass, ctx.transparentNodeLinkDrawList);
     pass.end();
@@ -575,6 +579,43 @@ const executeNodeLinkPickDrawList = (ctx: RendererContext, pass: GPURenderPassEn
     }
 };
 
+const executeSplatFieldPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, items: SplatFieldDrawItem[]): void => {
+    const bytes = driver.bytes();
+    let lastPipeline: GPURenderPipeline | null = null;
+    let lastField: SplatField | null = null;
+    for (let i = 0; i < items.length; i++) {
+        const field = items[i].field;
+        if (!field.visible || field.splatCount <= 0) continue;
+        ensureSplatFieldBindGroup(ctx, field);
+        if (!field.bindGroup) continue;
+        const pipeline = getOrCreatePickSplatFieldPipeline(ctx);
+        if (pipeline !== lastPipeline) {
+            pass.setPipeline(pipeline);
+            lastPipeline = pipeline;
+            lastField = null;
+        }
+        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
+        const slot = ctx.modelBufferIndex++;
+        const modelBuffer = ctx.modelUniformBuffers[slot];
+        const globalBindGroup = ctx.globalBindGroups[slot];
+        const modelPtr = field.transform.worldMatrixPtr as WasmPtr;
+        const invPtr = ctx.modelUniformStagingPtr;
+        const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
+        mat4f.invert(invPtr, modelPtr);
+        mat4f.transpose(normalPtr, invPtr);
+        ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
+        ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
+        writePickUniform(ctx, slot, getObjectId(ctx, field), 0);
+        pass.setBindGroup(0, globalBindGroup);
+        if (field !== lastField) {
+            pass.setBindGroup(1, field.bindGroup);
+            lastField = field;
+        }
+        pass.setBindGroup(2, ctx.pickBindGroups[slot]);
+        pass.draw(6, field.splatCount);
+    }
+};
+
 const getOrCreatePickMeshPipeline = (ctx: RendererContext, material: Material, skinned: boolean, skinned8: boolean, mirrored: boolean = false): GPURenderPipeline => {
     if (skinned8 && !skinned) skinned = true;
     const cullMode = getCullMode(ctx, material.cullMode);
@@ -757,6 +798,45 @@ const getOrCreatePickNodeLinkPipeline = (ctx: RendererContext, passKind: NodeLin
         fragment: { module: shaderModule, entryPoint: "fs_pick", targets: [{ format: "rg32uint" }, { format: "r32float" }] },
         primitive: { topology, cullMode },
         depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" }
+    });
+    ctx.pipelineCache.set(key, pipeline);
+    return pipeline;
+};
+
+const getOrCreatePickSplatFieldPipeline = (ctx: RendererContext): GPURenderPipeline => {
+    const key = "pick:splatfield";
+    const cached = ctx.pipelineCache.get(key);
+    if (cached) return cached;
+    let shaderModule = ctx.shaderCache.get(pickSplatFieldWGSL);
+    if (!shaderModule) {
+        shaderModule = ctx.device.createShaderModule({ code: pickSplatFieldWGSL });
+        ctx.shaderCache.set(pickSplatFieldWGSL, shaderModule);
+    }
+    const pipelineLayout = ctx.device.createPipelineLayout({
+        bindGroupLayouts: [ctx.globalBindGroupLayout, getSplatFieldBindGroupLayout(ctx), getPickBindGroupLayout(ctx)]
+    });
+    const pipeline = ctx.device.createRenderPipeline({
+        label: key,
+        layout: pipelineLayout,
+        vertex: {
+            module: shaderModule,
+            entryPoint: "vs_main",
+            buffers: []
+        },
+        fragment: {
+            module: shaderModule,
+            entryPoint: "fs_main",
+            targets: [{ format: "rg32uint" }, { format: "r32float" }]
+        },
+        primitive: {
+            topology: "triangle-list",
+            cullMode: "none"
+        },
+        depthStencil: {
+            format: "depth24plus",
+            depthWriteEnabled: true,
+            depthCompare: "less"
+        }
     });
     ctx.pipelineCache.set(key, pipeline);
     return pipeline;

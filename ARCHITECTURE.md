@@ -1,10 +1,10 @@
 # WasmGPU Architecture
 
-Last updated: June 17th, 2026.
+Last updated: Sunday, June 21, 2026.
 
-Last commit: June 15th, 2026, [**`b323a06`**](https://www.github.com/Zushah/WasmGPU/commit/b323a06).
+Last commit: Wednesday, June 17, 2026, [**`7cd8602`**](https://www.github.com/Zushah/WasmGPU/commit/7cd8602).
 
-Last release: May 24th, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
+Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
 ## Contents
 
@@ -277,7 +277,7 @@ Objects in the scene own different data:
 - `./src/world/nodelink.ts`: node data, edge data, node and edge rendering modes, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external node and edge buffers.
 - `./src/world/splatfield.ts`: Gaussian splat instance data, packed GPU buffers, transform, bounds, optional CPU records for upload and bounds computation, and per-object ownership flags for external buffers.
 
-Mesh geometry and materials are reference-counted. `Mesh.destroy()` detaches the mesh from scene owners, destroys morph runtime state, disposes the skin instance, disposes the transform, and releases geometry and material references. `Scene.clear()` and typed clear methods remove scene references; they do not call `destroy()` on removed objects. `Scene.destroy()` calls `destroy()` on current meshes, pointclouds, glyphfields, nodelinks, and splatfields, then clears lights. Pointcloud, glyphfield, nodelink, and splatfield changes should be checked against renderer draw-list building, object-family culling behavior, GPU buffer ownership, picking exclusions, overlay legends where applicable, and tests.
+Mesh geometry and materials are reference-counted. `Mesh.destroy()` detaches the mesh from scene owners, destroys morph runtime state, disposes the skin instance, disposes the transform, and releases geometry and material references. `Scene.clear()` and typed clear methods remove scene references; they do not call `destroy()` on removed objects. `Scene.destroy()` calls `destroy()` on current meshes, pointclouds, glyphfields, nodelinks, and splatfields, then clears lights. Pointcloud, glyphfield, nodelink, and splatfield changes should be checked against renderer draw-list building, object-family culling behavior, GPU buffer ownership, picking paths, overlay legends where applicable, and tests.
 
 ### 1.6. Transforms
 
@@ -309,7 +309,7 @@ Graphics data is implemented under `./src/graphics/`.
 
 ### 1.8. Pointcloud, glyphfield, nodelink, and splatfield data
 
-Pointclouds, glyphfields, nodelinks, and splatfields are separate scene object types. They share several patterns: a transform, visibility flags, GPU buffer references, uniform buffers, bind groups, bounds, and renderer-owned draw-list state. Pointclouds, glyphfields, and nodelinks also carry scale transform state plus optional CPU records for picking, while splatfields instead carry packed Gaussian attributes and private renderer-side GPU sort state for transparent rendering.
+Pointclouds, glyphfields, nodelinks, and splatfields are separate scene object types. They share several patterns: a transform, visibility flags, GPU buffer references, uniform buffers, bind groups, bounds, and renderer-owned draw-list state. Pointclouds, glyphfields, and nodelinks also carry scale transform state plus optional CPU records for picking, while splatfields carry packed Gaussian attributes, optional CPU records for picking, and private renderer-side GPU sort state for transparent rendering.
 
 `./src/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available. It owns GPU buffers it creates from CPU data and destroys caller-supplied external point and color buffers only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer.
 
@@ -317,7 +317,7 @@ Pointclouds, glyphfields, nodelinks, and splatfields are separate scene object t
 
 `./src/world/nodelink.ts` handles node positions, node scalar or color data, node radii, edges, node geometry modes, edge geometry modes, separate node and edge scale transforms, separate colormaps, uniform data, and picking records. It computes bounds from retained CPU node positions in TypeScript. Its update methods can queue or write GPU-buffer changes for node positions, edges, scalars, radii, and colors. It owns GPU buffers it creates from CPU data and borrows caller-supplied external node and edge buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer. The renderer has nodelink draw and pick paths, and overlay legends can read nodelink scale and colormap state.
 
-`./src/world/splatfield.ts` handles precomputed Gaussian splat records. It reads friendly CPU arrays or caller-supplied packed GPU buffers for center-plus-opacity, rotation, scale, and color data. CPU-side inputs are packed into vec4-aligned storage buffers, and sRGB colors are decoded to linear during packing or in the shader for external color buffers when requested. Bounds can come from explicit descriptors or from conservative CPU-side center-plus-scale expansion. `SplatField.destroy()` destroys internally created buffers and optionally destroys caller-supplied external buffers when `ownBuffers: true`. The renderer treats splatfields as transparent-only objects, GPU-sorts each field by camera depth, and does not include them in picking or render-only occlusion capture yet.
+`./src/world/splatfield.ts` handles precomputed Gaussian splat records. It reads friendly CPU arrays or caller-supplied packed GPU buffers for center-plus-opacity, rotation, scale, and color data. CPU-side inputs are packed into vec4-aligned storage buffers, and sRGB colors are decoded to linear during packing or in the shader for external color buffers when requested. Bounds can come from explicit descriptors or from conservative CPU-side center-plus-scale expansion. `SplatField.destroy()` destroys internally created buffers and optionally destroys caller-supplied external buffers when `ownBuffers: true`. The renderer treats splatfields as transparent-only objects, GPU-sorts each field by camera depth for rendering, includes them in nearest-footprint picking without consuming the sorted index buffer, but excludes them from occlusion culling.
 
 Before changing one of these object types, inspect the matching WGSL under `./src/wgsl/world/`, the renderer drawlist and object helper code under `./src/core/renderer.ts`, `./src/core/drawlists.ts`, `./src/core/objects.ts`, `./src/core/picking.ts`, and `./src/core/occlusion.ts` when applicable, picking types in `./src/world/picking.ts` when the object participates in picking, scale source descriptors in `./src/scaling/` when the object participates in scaling, and tests such as `./test/nodelink.test.js` or `./test/splatfield.test.js`.
 
@@ -369,7 +369,7 @@ Changing browser resource layout requires checking usage flags, bind group layou
 
 Picking types and selection helpers are implemented in `./src/world/picking.ts`. The renderer keeps the public pick wrappers in `./src/core/renderer.ts`, while `./src/core/picking.ts` implements the actual pick passes. Pick rendering writes object and element identifiers into GPU textures, then reads back the requested pixel or region.
 
-The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./src/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, and nodelinks when CPU records are available. Splatfields are not part of pick passes yet. Pick preparation uses the renderer's base scene-preparation path only, so it does not apply render-only occlusion filtering and does not consume previous-frame occlusion results.
+The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./src/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, nodelinks, and splatfields when CPU records are available. Pick preparation uses the renderer's base scene-preparation path only, so it does not apply render-only occlusion filtering and does not consume previous-frame occlusion results.
 
 The overlay framework lives under `./src/overlay/`. `./src/overlay/system.ts` creates a DOM overlay root next to the canvas, tracks layers, observes resize and scroll changes, listens to controls when attached, and marks layers dirty for camera, viewport, layout, scale, colormap, or interaction changes. Built-in layers include axis triad, grid, and legend layers.
 
@@ -505,7 +505,7 @@ These invariants are visible in the current code:
 - WebGPU buffer readback requires buffers with copy-source usage.
 - Buffer writes are padded to four-byte alignment where needed.
 - Opaque occluder capture uses only coverage-safe subsets of meshes, pointclouds, glyphfields, and nodelinks; splatfields are currently excluded from occlusion capture and render-only occlusion filtering.
-- Picking attributes for pointclouds, glyphfields, and nodelinks depend on retained CPU-side records.
+- Picking attributes for pointclouds, glyphfields, nodelinks, and splatfields depend on retained CPU-side records.
 - Pointcloud, glyphfield, nodelink, and splatfield external GPU buffers are borrowed by default and are destroyed only when their ownership options request it.
 - Shader uniform layouts, TypeScript packing code, and WGSL structs must match.
 
