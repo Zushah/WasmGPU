@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: Sunday, June 21, 2026.
+Last updated: Tuesday, June 23, 2026.
 
-Last commit: Wednesday, June 17, 2026, [**`7cd8602`**](https://www.github.com/Zushah/WasmGPU/commit/7cd8602).
+Last commit: Sunday, June 21, 2026, [**`d62bb1e`**](https://www.github.com/Zushah/WasmGPU/commit/d62bb1e).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -317,7 +317,7 @@ Pointclouds, glyphfields, nodelinks, and splatfields are separate scene object t
 
 `./src/world/nodelink.ts` handles node positions, node scalar or color data, node radii, edges, node geometry modes, edge geometry modes, separate node and edge scale transforms, separate colormaps, uniform data, and picking records. It computes bounds from retained CPU node positions in TypeScript. Its update methods can queue or write GPU-buffer changes for node positions, edges, scalars, radii, and colors. It owns GPU buffers it creates from CPU data and borrows caller-supplied external node and edge buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer. The renderer has nodelink draw and pick paths, and overlay legends can read nodelink scale and colormap state.
 
-`./src/world/splatfield.ts` handles precomputed Gaussian splat records. It reads friendly CPU arrays or caller-supplied packed GPU buffers for center-plus-opacity, rotation, scale, and color data. CPU-side inputs are packed into vec4-aligned storage buffers, and sRGB colors are decoded to linear during packing or in the shader for external color buffers when requested. Bounds can come from explicit descriptors or from conservative CPU-side center-plus-scale expansion. `SplatField.destroy()` destroys internally created buffers and optionally destroys caller-supplied external buffers when `ownBuffers: true`. The renderer treats splatfields as transparent-only objects, GPU-sorts each field by camera depth for rendering, includes them in nearest-footprint picking without consuming the sorted index buffer, but excludes them from occlusion culling.
+`./src/world/splatfield.ts` handles precomputed Gaussian splat records. It reads friendly CPU arrays or caller-supplied packed GPU buffers for center-plus-opacity, rotation, scale, and either direct color data or spherical harmonic color coefficients. Spherical harmonic coefficients use flat f32 RGB-triple storage for degree 0 through degree 3 and can come from `sh0`, `sh1`, `sh2`, and `sh3` CPU arrays or from an external `shBuffer`. CPU direct colors in sRGB space are decoded to linear during packing. External direct colors in sRGB space and spherical harmonic colors in sRGB space are decoded in the shader. In spherical harmonic mode, the splatfield render shader evaluates RGB from the local-frame view direction; it does not rotate coefficients with Wigner-D matrices. Bounds can come from explicit descriptors or from conservative CPU-side center-plus-scale expansion. `SplatField.destroy()` destroys internally created buffers and optionally destroys caller-supplied external buffers when `ownBuffers: true`. The renderer treats splatfields as transparent-only objects, GPU-sorts each field by camera depth for rendering, includes them in nearest-footprint picking without consuming the sorted index buffer, but excludes them from occlusion culling.
 
 Before changing one of these object types, inspect the matching WGSL under `./src/wgsl/world/`, the renderer drawlist and object helper code under `./src/core/renderer.ts`, `./src/core/drawlists.ts`, `./src/core/objects.ts`, `./src/core/picking.ts`, and `./src/core/occlusion.ts` when applicable, picking types in `./src/world/picking.ts` when the object participates in picking, scale source descriptors in `./src/scaling/` when the object participates in scaling, and tests such as `./test/nodelink.test.js` or `./test/splatfield.test.js`.
 
@@ -353,7 +353,7 @@ The public renderer class is implemented in `./src/core/renderer.ts`. It stores 
 - submit the command buffer;
 - optionally capture a low-resolution opaque depth hierarchy for a later frame and schedule its readback without blocking the current frame.
 
-The renderer reads scene objects, transform world matrices, material state, texture views, geometry buffers, pointcloud buffers, glyphfield buffers, nodelink buffers, splatfield buffers, camera matrices, light data, and WebAssembly culling results. It mutates GPU buffers, bind groups, pipeline caches, draw-list pools, pick textures, timing query buffers, private splatfield sort buffers, internal counters, and the bounded ring of occlusion readback slots. Picking helpers are in `./src/core/picking.ts` while render-only previous-frame occlusion helpers are in `./src/core/occlusion.ts`. Note that picking and warmup do not apply render-only previous-frame occlusion filtering.
+The renderer reads scene objects, transform world matrices, material state, texture views, geometry buffers, pointcloud buffers, glyphfield buffers, nodelink buffers, splatfield buffers, camera matrices, light data, and WebAssembly culling results. It mutates GPU buffers, bind groups, pipeline caches, draw-list pools, pick textures, timing query buffers, private splatfield sort buffers, internal counters, and the bounded ring of occlusion readback slots. Splatfield bind groups include a spherical harmonic storage-buffer binding; non-SH splatfields use a renderer-owned dummy buffer for that binding. Picking helpers are in `./src/core/picking.ts` while render-only previous-frame occlusion helpers are in `./src/core/occlusion.ts`. Note that picking and warmup do not apply render-only previous-frame occlusion filtering.
 
 Changing render behavior usually means checking `./src/core/renderer.ts`, the relevant helper module(s) under `./src/core/`, the graphics classes in `./src/graphics/`, object classes in `./src/world/`, WGSL shader variants in `./src/wgsl/`, and renderer-focused tests in `./test/`.
 
@@ -369,7 +369,7 @@ Changing browser resource layout requires checking usage flags, bind group layou
 
 Picking types and selection helpers are implemented in `./src/world/picking.ts`. The renderer keeps the public pick wrappers in `./src/core/renderer.ts`, while `./src/core/picking.ts` implements the actual pick passes. Pick rendering writes object and element identifiers into GPU textures, then reads back the requested pixel or region.
 
-The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./src/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, nodelinks, and splatfields when CPU records are available. Pick preparation uses the renderer's base scene-preparation path only, so it does not apply render-only occlusion filtering and does not consume previous-frame occlusion results.
+The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./src/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, nodelinks, and splatfields when CPU records are available. Retained splatfield CPU records can include direct color data or spherical harmonic degree and coefficient data. Picking is nearest-footprint/depth picking and does not evaluate spherical harmonic visual contribution. Pick preparation uses the renderer's base scene-preparation path only, so it does not apply render-only occlusion filtering and does not consume previous-frame occlusion results.
 
 The overlay framework lives under `./src/overlay/`. `./src/overlay/system.ts` creates a DOM overlay root next to the canvas, tracks layers, observes resize and scroll changes, listens to controls when attached, and marks layers dirty for camera, viewport, layout, scale, colormap, or interaction changes. Built-in layers include axis triad, grid, and legend layers.
 
@@ -413,7 +413,7 @@ glTF loading and import are implemented under `./src/gltf/`. The loader reads JS
 
 Accessor decoding is split between TypeScript and Rust. `./src/gltf/accessors.ts` reads accessor descriptors, buffer views, sparse data, component types, normalization rules, and typed-array output requirements. Numeric conversion, deinterleaving, and sparse patching call Rust functions in `./rust/src/accessors.rs`.
 
-`./src/gltf/import.ts` converts loaded asset data into scene resources. Current import code covers geometry, materials, textures, skins, animations, morph targets, node transforms, node visibility, animation pointers, scene selection, metadata, material variants, cameras, punctual lights including spot lights, texture transforms, XMP metadata, Gaussian splat primitives from `KHR_gaussian_splatting` into `SplatField`, and material extensions for clearcoat, specular, transmission, volume, diffuse transmission, dispersion, sheen, iridescence, anisotropy, index of refraction, and emissive strength.
+`./src/gltf/import.ts` converts loaded asset data into scene resources. Current import code covers geometry, materials, textures, skins, animations, morph targets, node transforms, node visibility, animation pointers, scene selection, metadata, material variants, cameras, punctual lights including spot lights, texture transforms, XMP metadata, Gaussian splat primitives from `KHR_gaussian_splatting` into `SplatField`, and material extensions for clearcoat, specular, transmission, volume, diffuse transmission, dispersion, sheen, iridescence, anisotropy, index of refraction, and emissive strength. `KHR_gaussian_splatting` import keeps spherical harmonic degree 0 through degree 3 data as `SplatField` coefficients when complete degree data is present.
 
 The importer mutates scenes, meshes, splatfields, geometry, materials, textures, animations, skin instances, camera data, and light bindings. It reads loaded asset data, WebAssembly decoding helpers, material extension descriptors, texture resources, and transform state. Before changing glTF import, check `./test/gltf.test.js`, examples using glTF, renderer material paths, texture upload behavior, and animation sampling.
 
@@ -572,7 +572,7 @@ Important files:
 - `./src/world/pointcloud.ts`: point data, GPU upload, scale source metadata, bounds, and picking records.
 - `./src/world/glyphfield.ts`: glyph instance data, geometry modes, GPU upload, scale source metadata, bounds, and picking records.
 - `./src/world/nodelink.ts`: node and edge data, rendering modes, GPU upload, scale source metadata, bounds, and picking records.
-- `./src/world/splatfield.ts`: Gaussian splat data, packed GPU upload, bounds, color-space handling, and external-buffer ownership.
+- `./src/world/splatfield.ts`: Gaussian splat data, direct colors, spherical harmonic coefficient data, packed GPU upload, bounds, color-space handling, and picking records.
 - `./src/world/camera.ts`: base, perspective, and orthographic cameras.
 - `./src/world/controls.ts`: navigation controls, orbit controls, trackball controls, pointer input, damping, and scene fitting.
 - `./src/world/light.ts`: ambient, directional, point, and spot lights plus glTF light transform binding helpers.
@@ -663,7 +663,7 @@ Common interactions:
 
 - `./src/gltf/import.ts` creates objects from `./src/world/` and `./src/graphics/`.
 - `./src/gltf/accessors.ts` calls Rust accessors through `./src/wasm/index.ts`.
-- `KHR_gaussian_splatting` mesh primitives import into `SplatField` scene objects for the supported base Gaussian-splat subset.
+- `KHR_gaussian_splatting` mesh primitives import into `SplatField` scene objects for the supported Gaussian splat subset.
 - Unsupported optional `KHR_gaussian_splatting` primitive features are skipped with warnings rather than converted to fallback pointclouds.
 - glTF animation pointers compile to existing transform and morph paths when possible and to JavaScript setters for imported nodes, materials, cameras, and lights.
 - Material extension import must match `StandardMaterial` fields and renderer shader support.

@@ -500,7 +500,8 @@ export const getSplatFieldBindGroupLayout = (ctx: RendererContext): GPUBindGroup
             { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
             { binding: 3, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
             { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
-            { binding: 5, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform", minBindingSize: 16 } }
+            { binding: 5, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform", minBindingSize: 16 } },
+            { binding: 6, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }
         ]
     });
     return ctx.splatFieldBindGroupLayout;
@@ -546,7 +547,8 @@ export const getSplatFieldBindGroupKey = (ctx: RendererContext, field: SplatFiel
     const color = field.colorBuffer;
     const uniform = field.uniformBuffer;
     const sorted = state.sortedIndexBuffer;
-    return `splatfield:${centerOpacity ? getObjectId(ctx, centerOpacity) : 0}:${rotation ? getObjectId(ctx, rotation) : 0}:${scale ? getObjectId(ctx, scale) : 0}:${color ? getObjectId(ctx, color) : 0}:${sorted ? getObjectId(ctx, sorted) : 0}:${uniform ? getObjectId(ctx, uniform) : 0}`;
+    const sh = field.shBuffer;
+    return `splatfield:${centerOpacity ? getObjectId(ctx, centerOpacity) : 0}:${rotation ? getObjectId(ctx, rotation) : 0}:${scale ? getObjectId(ctx, scale) : 0}:${color ? getObjectId(ctx, color) : 0}:${sorted ? getObjectId(ctx, sorted) : 0}:${uniform ? getObjectId(ctx, uniform) : 0}:${sh ? getObjectId(ctx, sh) : 0}`;
 };
 
 export const ensureSplatFieldBindGroup = (ctx: RendererContext, field: SplatField): void => {
@@ -567,6 +569,7 @@ export const ensureSplatFieldBindGroup = (ctx: RendererContext, field: SplatFiel
         ctx.queue.writeBuffer(field.uniformBuffer, 0, data.buffer, data.byteOffset, data.byteLength);
         field.markUniformsClean();
     }
+    if (!ctx.splatFieldDummySHBuffer) ctx.splatFieldDummySHBuffer = ctx.device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     const key = getSplatFieldBindGroupKey(ctx, field, state);
     if (field.bindGroup && field.bindGroupKey === key) return;
     field.bindGroup = ctx.device.createBindGroup({
@@ -577,7 +580,8 @@ export const ensureSplatFieldBindGroup = (ctx: RendererContext, field: SplatFiel
             { binding: 2, resource: { buffer: field.scaleBuffer } },
             { binding: 3, resource: { buffer: field.colorBuffer } },
             { binding: 4, resource: { buffer: state.sortedIndexBuffer } },
-            { binding: 5, resource: { buffer: field.uniformBuffer } }
+            { binding: 5, resource: { buffer: field.uniformBuffer } },
+            { binding: 6, resource: { buffer: field.shBuffer ?? ctx.splatFieldDummySHBuffer } }
         ]
     });
     field.bindGroupKey = key;

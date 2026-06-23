@@ -135,6 +135,24 @@ const createStorageBuffer = (gpuDevice, byteLength) => { return gpuDevice.create
 
 const createPackedStorageBuffer = (gpuDevice, gpuQueue, data) => { const buffer = createStorageBuffer(gpuDevice, data.byteLength); if (data.byteLength > 0) gpuQueue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength); return buffer; };
 
+const makeSequence = (length, start = 0) => { const out = new Float32Array(length); for (let i = 0; i < length; i++) out[i] = start + i; return out; };
+
+const makeSphericalHarmonics = (count) => ({ sh0: makeSequence(count * 3, 0), sh1: makeSequence(count * 9, 100), sh2: makeSequence(count * 15, 200), sh3: makeSequence(count * 21, 300) });
+
+const packExpectedSH = (count, degree, sh) => {
+    const floatsPerSplat = [3, 12, 27, 48][degree];
+    const out = new Float32Array(count * floatsPerSplat);
+    for (let i = 0; i < count; i++) {
+        let dst = i * floatsPerSplat;
+        out.set(sh.sh0.subarray(i * 3, i * 3 + 3), dst);
+        dst += 3;
+        if (degree >= 1) { out.set(sh.sh1.subarray(i * 9, i * 9 + 9), dst); dst += 9; }
+        if (degree >= 2) { out.set(sh.sh2.subarray(i * 15, i * 15 + 15), dst); dst += 15; }
+        if (degree >= 3) out.set(sh.sh3.subarray(i * 21, i * 21 + 21), dst);
+    }
+    return out;
+};
+
 const createExternalSplatBuffers = (gpuDevice, gpuQueue, count, zValues = null) => {
     const centerOpacity = new Float32Array(count * 4);
     const rotation = new Float32Array(count * 4);
@@ -160,6 +178,8 @@ const createExternalSplatBuffers = (gpuDevice, gpuQueue, count, zValues = null) 
         scaleBuffer: createPackedStorageBuffer(gpuDevice, gpuQueue, scale)
     };
 };
+
+const createExternalSHBuffer = (gpuDevice, gpuQueue, count, degree) => createPackedStorageBuffer(gpuDevice, gpuQueue, makeSequence(count * [3, 12, 27, 48][degree], 1000));
 
 const makePerspectiveCamera = () => {
     const camera = new PerspectiveCamera({ fov: 60, aspect: 1, near: 0.1, far: 100 });
@@ -259,6 +279,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
     );
     numberApproxEqual(field.getUniformData()[0], 0.35, 1e-6, "opacityScale uniform mismatch");
     assert.strictEqual(field.getUniformData()[1], 0, "Expected CPU-authored colors to be stored in linear space");
+    assert.strictEqual(field.getUniformData()[2], 0, "Expected direct CPU colors to keep SH mode disabled");
 
     field.destroy();
 }
@@ -313,6 +334,58 @@ const makeRenderableField = (count = 3, zValues = null) => {
     rgbaField.destroy();
 }
 
+// Spherical harmonic descriptors infer degree, reject partial inputs, and expose retained CPU records.
+{
+    const sh = makeSphericalHarmonics(2);
+    const degree0 = new SplatField({ positions: new Float32Array([0, 0, 0, 1, 0, 0]), sh0: sh.sh0 });
+    const degree1 = new SplatField({ positions: new Float32Array([0, 0, 0, 1, 0, 0]), sh0: sh.sh0, sh1: sh.sh1 });
+    const degree2 = new SplatField({ positions: new Float32Array([0, 0, 0, 1, 0, 0]), sh0: sh.sh0, sh1: sh.sh1, sh2: sh.sh2 });
+    const degree3 = new SplatField({
+        positions: new Float32Array([1, 2, 3, 4, 5, 6]),
+        rotations: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]),
+        scales: new Float32Array([0.2, 0.3, 0.4, 0.5, 0.6, 0.7]),
+        opacities: new Float32Array([0.25, 0.75]),
+        sh0: sh.sh0, sh1: sh.sh1, sh2: sh.sh2, sh3: sh.sh3, shDegree: 3,
+        colorSpace: "srgb",
+        keepCPUData: true
+    });
+
+    assert.strictEqual(degree0.usesSphericalHarmonics, true, "Expected sh0 to enable spherical harmonic mode");
+    assert.strictEqual(degree0.shDegree, 0, "Expected sh0-only fields to infer degree 0");
+    assert.strictEqual(degree1.shDegree, 1, "Expected sh0+sh1 fields to infer degree 1");
+    assert.strictEqual(degree2.shDegree, 2, "Expected sh0+sh1+sh2 fields to infer degree 2");
+    assert.strictEqual(degree3.shDegree, 3, "Expected sh0+sh1+sh2+sh3 fields to infer degree 3");
+    assert.strictEqual(degree3.getUniformData()[1], 1, "Expected sRGB SH fields to decode evaluated color in shader");
+    assert.strictEqual(degree3.getUniformData()[2], 1, "Expected SH mode uniform flag");
+    assert.strictEqual(degree3.getUniformData()[3], 3, "Expected SH degree uniform value");
+
+    degree3.upload(device, device.queue);
+    const packed = packExpectedSH(2, 3, sh);
+    arraysApproxEqual(await readBufferAsF32(degree3.shBuffer, packed.length), packed, 0, "Packed SH buffer mismatch");
+    arraysApproxEqual(await readBufferAsF32(degree3.colorBuffer, 8), new Float32Array([1, 1, 1, 1, 1, 1, 1, 1]), 0, "Expected SH mode to synthesize alpha-only white color data");
+    const rec = degree3.getSplatRecord(1);
+    assert.ok(rec, "Expected retained SH splat record");
+    assert.strictEqual(rec.sphericalHarmonicsDegree, 3, "Expected retained SH degree in splat record");
+    arraysApproxEqual(rec.sphericalHarmonics, Array.from(packed.subarray(48, 96)), 0, "Expected retained SH record values");
+    degree3.dropCPUData();
+    assert.strictEqual(degree3.getSphericalHarmonicsRecord(1), null, "Expected dropCPUData() to remove retained SH records");
+
+    const ownedShDestroyed = trackDestroy(degree3.shBuffer);
+    degree3.destroy();
+    assert.strictEqual(ownedShDestroyed(), 1, "Expected owned CPU-uploaded shBuffer to be destroyed");
+
+    assert.throws(() => new SplatField({ sh1: sh.sh1 }), /sh0 is required/, "Expected sh1 without sh0 to reject");
+    assert.throws(() => new SplatField({ sh0: sh.sh0, sh2: sh.sh2 }), /sh2 requires sh0 and sh1/, "Expected sh2 without sh1 to reject");
+    assert.throws(() => new SplatField({ sh0: sh.sh0, sh1: sh.sh1, sh3: sh.sh3 }), /sh3 requires sh0, sh1, and sh2/, "Expected sh3 without sh2 to reject");
+    assert.throws(() => new SplatField({ sh0: sh.sh0, sh1: sh.sh1.subarray(0, sh.sh1.length - 1) }), /sh1 length/, "Expected partial degree 1 data to reject");
+    assert.throws(() => new SplatField({ sh0: sh.sh0, sh1: sh.sh1, shDegree: 0 }), /shDegree must match/, "Expected inconsistent explicit degree to reject");
+    assert.throws(() => new SplatField({ positions: new Float32Array([0, 0, 0]), colors: new Float32Array([1, 1, 1]), sh0: new Float32Array([0, 0, 0]) }), /direct colors and spherical harmonic coefficients cannot be mixed/, "Expected direct colors mixed with SH to reject");
+
+    degree0.destroy();
+    degree1.destroy();
+    degree2.destroy();
+}
+
 // External-buffer splatfields validate packed input sizes, preserve ownership semantics, and safely synthesize missing colors.
 {
     assert.throws(
@@ -323,8 +396,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
             try { new SplatField({ centerOpacityBuffer, rotationBuffer, scaleBuffer, splatCount: 2 }); }
             finally { centerOpacityBuffer.destroy(); rotationBuffer.destroy(); scaleBuffer.destroy(); }
         },
-        /centerOpacityBuffer size/,
-        "Expected too-small required packed buffers to throw"
+        /centerOpacityBuffer size/, "Expected too-small required packed buffers to throw"
     );
     assert.throws(
         () => {
@@ -335,8 +407,25 @@ const makeRenderableField = (count = 3, zValues = null) => {
             try { new SplatField({ centerOpacityBuffer, rotationBuffer, scaleBuffer, colorBuffer, splatCount: 2 }); }
             finally { centerOpacityBuffer.destroy(); rotationBuffer.destroy(); scaleBuffer.destroy(); colorBuffer.destroy(); }
         },
-        /colorBuffer size/,
-        "Expected too-small optional colorBuffer to throw"
+        /colorBuffer size/, "Expected too-small optional colorBuffer to throw"
+    );
+    assert.throws(
+        () => {
+            const buffers = createExternalSplatBuffers(device, device.queue, 1);
+            const shBuffer = createStorageBuffer(device, 48);
+            try { new SplatField({ ...buffers, shBuffer, splatCount: 1 }); }
+            finally { buffers.centerOpacityBuffer.destroy(); buffers.rotationBuffer.destroy(); buffers.scaleBuffer.destroy(); shBuffer.destroy(); }
+        },
+        /shDegree is required/, "Expected external shBuffer to require shDegree"
+    );
+    assert.throws(
+        () => {
+            const buffers = createExternalSplatBuffers(device, device.queue, 1);
+            const shBuffer = createStorageBuffer(device, 47);
+            try { new SplatField({ ...buffers, shBuffer, shDegree: 3, splatCount: 1 }); }
+            finally { buffers.centerOpacityBuffer.destroy(); buffers.rotationBuffer.destroy(); buffers.scaleBuffer.destroy(); shBuffer.destroy(); }
+        },
+        /shBuffer size/, "Expected too-small external shBuffer to throw"
     );
 
     const borrowedBuffers = createExternalSplatBuffers(device, device.queue, 2);
@@ -357,6 +446,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
 
     assert.strictEqual(borrowedField.externalColorBufferSrgb, true, "Expected external sRGB color buffers to decode in the shader");
     assert.strictEqual(borrowedField.getUniformData()[1], 1, "Expected external sRGB color buffers to set the decode flag");
+    assert.strictEqual(borrowedField.getUniformData()[2], 0, "Expected direct external colors to keep SH mode disabled");
     arraysApproxEqual(await readBufferAsF32(borrowedField.colorBuffer, 8), new Float32Array([0.25, 0.5, 0.75, 0.8, 0.1, 0.2, 0.3, 0.4]), 0, "Expected supplied external color buffers to remain stored as supplied");
     borrowedField.destroy();
     assert.strictEqual(borrowedCenterDestroyed(), 0, "Expected borrowed centerOpacityBuffer to survive destroy()");
@@ -403,6 +493,31 @@ const makeRenderableField = (count = 3, zValues = null) => {
     assert.strictEqual(ownedRotationDestroyed(), 1, "Expected ownBuffers rotationBuffer to be destroyed");
     assert.strictEqual(ownedScaleDestroyed(), 1, "Expected ownBuffers scaleBuffer to be destroyed");
     assert.strictEqual(ownedColorDestroyed(), 1, "Expected ownBuffers colorBuffer to be destroyed");
+
+    const borrowedShBuffers = createExternalSplatBuffers(device, device.queue, 2);
+    const borrowedSh = createExternalSHBuffer(device, device.queue, 2, 3);
+    const borrowedShDestroyed = trackDestroy(borrowedSh);
+    const borrowedShField = new SplatField({ ...borrowedShBuffers, shBuffer: borrowedSh, shDegree: 3, splatCount: 2, colorSpace: "srgb" });
+    assert.strictEqual(borrowedShField.usesSphericalHarmonics, true, "Expected external shBuffer to enable SH mode");
+    assert.strictEqual(borrowedShField.shDegree, 3, "Expected external shBuffer degree to round-trip");
+    assert.strictEqual(borrowedShField.getUniformData()[1], 1, "Expected sRGB external SH fields to decode evaluated color in shader");
+    assert.strictEqual(borrowedShField.getUniformData()[2], 1, "Expected external SH uniform mode flag");
+    assert.strictEqual(borrowedShField.getUniformData()[3], 3, "Expected external SH uniform degree");
+    borrowedShField.upload(device, device.queue);
+    assert.ok(borrowedShField.colorBuffer, "Expected external SH mode to synthesize a color buffer for alpha");
+    borrowedShField.destroy();
+    assert.strictEqual(borrowedShDestroyed(), 0, "Expected borrowed shBuffer to survive destroy()");
+    borrowedShBuffers.centerOpacityBuffer.destroy();
+    borrowedShBuffers.rotationBuffer.destroy();
+    borrowedShBuffers.scaleBuffer.destroy();
+    borrowedSh.destroy();
+
+    const ownedShBuffers = createExternalSplatBuffers(device, device.queue, 1);
+    const ownedSh = createExternalSHBuffer(device, device.queue, 1, 0);
+    const ownedShDestroyed = trackDestroy(ownedSh);
+    const ownedShField = new SplatField({ ...ownedShBuffers, shBuffer: ownedSh, shDegree: 0, splatCount: 1, ownBuffers: true });
+    ownedShField.destroy();
+    assert.strictEqual(ownedShDestroyed(), 1, "Expected ownBuffers shBuffer to be destroyed");
 }
 
 // Bounds and scene APIs expose splatfields as first-class scene objects with explicit and computed spatial state.
@@ -507,6 +622,26 @@ const makeRenderableField = (count = 3, zValues = null) => {
     assert.strictEqual(sortedIndexDestroyed(), 1, "Expected removed-field sortedIndexBuffer to be destroyed");
     assert.strictEqual(transformDestroyed(), 1, "Expected removed-field transformBuffer to be destroyed");
     sortedField.destroy();
+
+    const shRender = makeSphericalHarmonics(1);
+    const shRenderField = new SplatField({
+        positions: new Float32Array([0, 0, -1]),
+        rotations: new Float32Array([0, 0, 0, 1]),
+        scales: new Float32Array([0.25, 0.2, 0.15]),
+        opacities: new Float32Array([0.9]),
+        sh0: shRender.sh0, sh1: shRender.sh1, sh2: shRender.sh2, sh3: shRender.sh3, shDegree: 3
+    });
+    scene.add(shRenderField);
+    uncapturedError = null;
+    assert.doesNotThrow(() => renderer.render(scene, perspectiveCamera));
+    await rendererAny.queue.onSubmittedWorkDone();
+    assert.strictEqual(uncapturedError, null, "Expected degree-3 SH splatfield perspective rendering to avoid uncaptured WebGPU errors");
+    uncapturedError = null;
+    assert.doesNotThrow(() => renderer.render(scene, makeOrthographicCamera()));
+    await rendererAny.queue.onSubmittedWorkDone();
+    assert.strictEqual(uncapturedError, null, "Expected degree-3 SH splatfield orthographic rendering to avoid uncaptured WebGPU errors");
+    scene.clearSplatFields();
+    shRenderField.destroy();
 
     const anisotropicPerspectiveField = new SplatField({
         positions: new Float32Array([0, 0, -1]),

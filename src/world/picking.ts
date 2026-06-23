@@ -21,6 +21,8 @@ export type PickAttributes = {
     scale?: [number, number, number] | null;
     opacity?: number | null;
     packedSplat?: [number, number, number, number] | null;
+    sphericalHarmonicsDegree?: 0 | 1 | 2 | 3 | null;
+    sphericalHarmonics?: number[] | null;
     component?: "node" | "edge" | null;
     componentIndex?: number | null;
     color?: [number, number, number, number] | null;

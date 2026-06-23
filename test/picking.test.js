@@ -25,6 +25,10 @@ const numberApproxEqual = (a, b, tol = 1e-6, msg = "Numbers differ") => { assert
 
 const arraysApproxEqual = (a, b, tol = 1e-6, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`); };
 
+const makeSequence = (length, start = 0) => { const out = new Float32Array(length); for (let i = 0; i < length; i++) out[i] = start + i; return out; };
+
+const packSHRecord = (index, sh0, sh1, sh2, sh3) => [...Array.from(sh0.subarray(index * 3, index * 3 + 3)), ...Array.from(sh1.subarray(index * 9, index * 9 + 9)), ...Array.from(sh2.subarray(index * 15, index * 15 + 15)), ...Array.from(sh3.subarray(index * 21, index * 21 + 21))];
+
 const makeCanvas = (width = 640, height = 480) => {
     const canvas = { width, height, clientWidth: width, clientHeight: height, style: {}, addEventListener() {}, removeEventListener() {}, getBoundingClientRect() { return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight, right: this.clientWidth, bottom: this.clientHeight }; } };
     let device = null;
@@ -358,6 +362,30 @@ try {
     arraysApproxEqual(splatPick.attributes.position, [0, 0, 1], 1e-6, "Actual splatfield pick position mismatch");
     arraysApproxEqual(splatPick.attributes.packedSplat, [0, 0, 1, 1], 1e-6, "Actual splatfield pick packed tuple mismatch");
     assert.ok(splatPick.worldPosition.every(Number.isFinite), "Actual splatfield pick should report a finite world position");
+
+    pickScene.clearSplatFields();
+    pickSplat.destroy();
+    const actualSh0 = makeSequence(6, 0);
+    const actualSh1 = makeSequence(18, 100);
+    const actualSh2 = makeSequence(30, 200);
+    const actualSh3 = makeSequence(42, 300);
+    const pickSplatSH = wgpu.createSplatField({
+        positions: new Float32Array([0, 0, 0, 0, 0, 1]),
+        rotations: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1]),
+        scales: new Float32Array([0.35, 0.35, 0.35, 0.35, 0.35, 0.35]),
+        opacities: new Float32Array([1, 1]),
+        sh0: actualSh0, sh1: actualSh1, sh2: actualSh2, sh3: actualSh3, shDegree: 3,
+        keepCPUData: true,
+        ndShape: [2]
+    });
+    pickScene.add(pickSplatSH);
+    const splatSHPick = await wgpu.pick(pickScene, pickCamera, canvas.clientWidth * 0.5, canvas.clientHeight * 0.5, { includeAttributes: true });
+    assert.ok(splatSHPick, "Expected actual SH splatfield pick before render()");
+    assert.strictEqual(splatSHPick.kind, "splatfield", "Expected actual SH renderer pick to return splatfield kind");
+    assert.strictEqual(splatSHPick.elementIndex, 1, "Expected actual SH nearest splat footprint to win depth picking");
+    assert.ok(splatSHPick.attributes, "Actual SH splatfield pick attributes should be present");
+    assert.strictEqual(splatSHPick.attributes.sphericalHarmonicsDegree, 3, "Actual SH pick degree mismatch");
+    arraysApproxEqual(splatSHPick.attributes.sphericalHarmonics, packSHRecord(1, actualSh0, actualSh1, actualSh2, actualSh3), 1e-6, "Actual SH pick coefficients mismatch");
 
     pickScene.destroy();
 }

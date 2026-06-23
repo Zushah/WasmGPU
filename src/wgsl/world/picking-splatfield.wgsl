@@ -45,6 +45,7 @@ struct FragmentOutput {
 @group(1) @binding(2) var<storage, read> scales: array<vec4f>;
 @group(1) @binding(3) var<storage, read> colors: array<vec4f>;
 @group(1) @binding(5) var<uniform> splatField: SplatFieldUniforms;
+@group(1) @binding(6) var<storage, read> shCoefficients: array<f32>;
 @group(2) @binding(0) var<uniform> pick: PickUniforms;
 
 fn rotateByQuat(v: vec3f, q: vec4f) -> vec3f {

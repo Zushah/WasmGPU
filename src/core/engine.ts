@@ -270,7 +270,9 @@ export class WasmGPU {
                 scale: rec.scale,
                 opacity: rec.opacity,
                 packedSplat: rec.packed,
-                color: rec.color
+                color: rec.color,
+                sphericalHarmonicsDegree: rec.sphericalHarmonicsDegree,
+                sphericalHarmonics: rec.sphericalHarmonics
             };
         }
         return null;

@@ -235,6 +235,7 @@ export class Renderer {
     opaquePointCloudDrawList: PointCloudDrawItem[] = [];
     transparentPointCloudDrawList: PointCloudDrawItem[] = [];
     splatFieldBindGroupLayout: GPUBindGroupLayout | null = null;
+    splatFieldDummySHBuffer: GPUBuffer | null = null;
     splatFieldDrawItemPool: SplatFieldDrawItem[] = [];
     splatFieldDrawItemPoolUsed: number = 0;
     transparentSplatFieldDrawList: SplatFieldDrawItem[] = [];
@@ -780,6 +781,8 @@ export class Renderer {
         this.pointCloudDummyColorsBuffer?.destroy();
         this.pointCloudDummyColorsBuffer = null;
         this.splatFieldBindGroupLayout = null;
+        this.splatFieldDummySHBuffer?.destroy();
+        this.splatFieldDummySHBuffer = null;
         for (const [field, state] of this.splatFieldSortStates) this.destroySplatFieldSortState(field, state);
         this.splatFieldSortStates.clear();
         this.splatSortKeyA?.destroy();

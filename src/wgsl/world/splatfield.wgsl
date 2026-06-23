@@ -34,6 +34,22 @@ struct VertexOutput {
 @group(1) @binding(3) var<storage, read> colors: array<vec4f>;
 @group(1) @binding(4) var<storage, read> sortedIndices: array<u32>;
 @group(1) @binding(5) var<uniform> splatField: SplatFieldUniforms;
+@group(1) @binding(6) var<storage, read> shCoefficients: array<f32>;
+
+const SH_C0: f32 = 0.28209479177387814;
+const SH_C1: f32 = 0.4886025119029199;
+const SH_C2_0: f32 = 1.0925484305920792;
+const SH_C2_1: f32 = -1.0925484305920792;
+const SH_C2_2: f32 = 0.31539156525252005;
+const SH_C2_3: f32 = -1.0925484305920792;
+const SH_C2_4: f32 = 0.5462742152960396;
+const SH_C3_0: f32 = -0.5900435899266435;
+const SH_C3_1: f32 = 2.890611442640554;
+const SH_C3_2: f32 = -0.4570457994644658;
+const SH_C3_3: f32 = 0.3731763325901154;
+const SH_C3_4: f32 = -0.4570457994644658;
+const SH_C3_5: f32 = 1.445305721320277;
+const SH_C3_6: f32 = -0.5900435899266435;
 
 fn linearFromSrgb(srgb: vec3f) -> vec3f {
     let x = clamp(srgb, vec3f(0.0), vec3f(1.0));
@@ -48,6 +64,59 @@ fn rotateByQuat(v: vec3f, q: vec4f) -> vec3f {
     let s = q.w;
     let t = 2.0 * cross(u, v);
     return v + s * t + cross(u, t);
+}
+
+fn safeNormalize(v: vec3f) -> vec3f {
+    let lenSq = dot(v, v);
+    return select(vec3f(0.0, 0.0, 1.0), v * inverseSqrt(max(lenSq, 1e-12)), lenSq > 1e-12);
+}
+
+fn shCoeffCountForDegree(degree: u32) -> u32 {
+    if (degree == 0u) { return 1u; }
+    if (degree == 1u) { return 4u; }
+    if (degree == 2u) { return 9u; }
+    return 16u;
+}
+
+fn shCoeffBase(splatIndex: u32, degree: u32) -> u32 {
+    return splatIndex * shCoeffCountForDegree(degree) * 3u;
+}
+
+fn readShRGB(splatIndex: u32, coeffIndex: u32, degree: u32) -> vec3f {
+    let base = shCoeffBase(splatIndex, degree) + coeffIndex * 3u;
+    return vec3f(shCoefficients[base + 0u], shCoefficients[base + 1u], shCoefficients[base + 2u]);
+}
+
+fn evaluateSphericalHarmonics(splatIndex: u32, dir: vec3f, degree: u32) -> vec3f {
+    let x = dir.x;
+    let y = dir.y;
+    let z = dir.z;
+    let x2 = x * x;
+    let y2 = y * y;
+    let z2 = z * z;
+    var result = SH_C0 * readShRGB(splatIndex, 0u, degree);
+    if (degree >= 1u) {
+        result += (-SH_C1 * y) * readShRGB(splatIndex, 1u, degree);
+        result += (SH_C1 * z) * readShRGB(splatIndex, 2u, degree);
+        result += (-SH_C1 * x) * readShRGB(splatIndex, 3u, degree);
+    }
+    if (degree >= 2u) {
+        result += (SH_C2_0 * x * y) * readShRGB(splatIndex, 4u, degree);
+        result += (SH_C2_1 * y * z) * readShRGB(splatIndex, 5u, degree);
+        result += (SH_C2_2 * (2.0 * z2 - x2 - y2)) * readShRGB(splatIndex, 6u, degree);
+        result += (SH_C2_3 * x * z) * readShRGB(splatIndex, 7u, degree);
+        result += (SH_C2_4 * (x2 - y2)) * readShRGB(splatIndex, 8u, degree);
+    }
+    if (degree >= 3u) {
+        result += (SH_C3_0 * y * (3.0 * x2 - y2)) * readShRGB(splatIndex, 9u, degree);
+        result += (SH_C3_1 * x * y * z) * readShRGB(splatIndex, 10u, degree);
+        result += (SH_C3_2 * y * (4.0 * z2 - x2 - y2)) * readShRGB(splatIndex, 11u, degree);
+        result += (SH_C3_3 * z * (2.0 * z2 - 3.0 * x2 - 3.0 * y2)) * readShRGB(splatIndex, 12u, degree);
+        result += (SH_C3_4 * x * (4.0 * z2 - x2 - y2)) * readShRGB(splatIndex, 13u, degree);
+        result += (SH_C3_5 * z * (x2 - y2)) * readShRGB(splatIndex, 14u, degree);
+        result += (SH_C3_6 * x * (x2 - 3.0 * y2)) * readShRGB(splatIndex, 15u, degree);
+    }
+    return result + vec3f(0.5);
 }
 
 fn safeClipW(w: f32) -> f32 {
@@ -138,7 +207,15 @@ fn vs_main(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) ins
     let corner = quadCorner(vertexIndex);
     let ndcOffset = (basis0 * corner.x) + (basis1 * corner.y);
     let clipOffset = ndcOffset * clipCenter.w;
-    var linearColor = max(colorValue.rgb, vec3f(0.0));
+    var linearColor: vec3f;
+    if (splatField.params.z > 0.5) {
+        let worldDir = safeNormalize(worldCenter4.xyz - camera.position);
+        let localDir = safeNormalize((transpose(model.normal) * vec4f(worldDir, 0.0)).xyz);
+        let degree = u32(splatField.params.w + 0.5);
+        linearColor = max(evaluateSphericalHarmonics(splatIndex, localDir, degree), vec3f(0.0));
+    } else {
+        linearColor = max(colorValue.rgb, vec3f(0.0));
+    }
     if (splatField.params.y > 0.5) {
         linearColor = linearFromSrgb(linearColor);
     }

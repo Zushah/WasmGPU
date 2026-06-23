@@ -535,14 +535,17 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 {
     const baseTransformCount = TransformStore.global().count;
     const extensionName = "KHR_gaussian_splatting";
-    const sh0Factor = 0.2820947917738781;
     const meshPositions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     const splatPositions = new Float32Array([0, 0, 0, 1, 2, 3, 4, 5, 6]);
     const rotations = new Int16Array([0, 0, 0, 32767, 0, 0, 0, 32767, 0, 0, 0, 32767]);
     const scales = new Uint16Array([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     const opacities = new Uint8Array([128, 255, 64]);
-    const sh0 = new Float32Array([0, 1, -1, 2, -2, 0, 3, -3, 0.5]);
-    const sh1 = new Float32Array([0.25, 0, 0, 0, 0.25, 0, 0, 0, 0.25]);
+    const makeCoeff = (base) => new Float32Array(Array.from({ length: 9 }, (_, i) => base + i / 100));
+    const sh0 = makeCoeff(0.1), sh10 = makeCoeff(1.1), sh11 = makeCoeff(1.2), sh12 = makeCoeff(1.3), sh20 = makeCoeff(2.1), sh21 = makeCoeff(2.2), sh22 = makeCoeff(2.3), sh23 = makeCoeff(2.4), sh24 = makeCoeff(2.5), sh30 = makeCoeff(3.1), sh31 = makeCoeff(3.2), sh32 = makeCoeff(3.3), sh33 = makeCoeff(3.4), sh34 = makeCoeff(3.5), sh35 = makeCoeff(3.6), sh36 = makeCoeff(3.7);
+    const shCoeffEntries = [["KHR_gaussian_splatting:SH_DEGREE_0_COEF_0", sh0], ["KHR_gaussian_splatting:SH_DEGREE_1_COEF_0", sh10], ["KHR_gaussian_splatting:SH_DEGREE_1_COEF_1", sh11], ["KHR_gaussian_splatting:SH_DEGREE_1_COEF_2", sh12], ["KHR_gaussian_splatting:SH_DEGREE_2_COEF_0", sh20], ["KHR_gaussian_splatting:SH_DEGREE_2_COEF_1", sh21], ["KHR_gaussian_splatting:SH_DEGREE_2_COEF_2", sh22], ["KHR_gaussian_splatting:SH_DEGREE_2_COEF_3", sh23], ["KHR_gaussian_splatting:SH_DEGREE_2_COEF_4", sh24], ["KHR_gaussian_splatting:SH_DEGREE_3_COEF_0", sh30], ["KHR_gaussian_splatting:SH_DEGREE_3_COEF_1", sh31], ["KHR_gaussian_splatting:SH_DEGREE_3_COEF_2", sh32], ["KHR_gaussian_splatting:SH_DEGREE_3_COEF_3", sh33], ["KHR_gaussian_splatting:SH_DEGREE_3_COEF_4", sh34], ["KHR_gaussian_splatting:SH_DEGREE_3_COEF_5", sh35], ["KHR_gaussian_splatting:SH_DEGREE_3_COEF_6", sh36]];
+    const shAttributeAccessors = Object.fromEntries(shCoeffEntries.map(([semantic], index) => [semantic, 5 + index]));
+    const shDegreeAttributes = (degree) => Object.fromEntries(shCoeffEntries.filter(([semantic]) => semantic.includes(`SH_DEGREE_${degree}_`)).map(([semantic]) => [semantic, shAttributeAccessors[semantic]]));
+    const packSH = (sourceOrder) => { const out = []; for (const sourceIndex of sourceOrder) { const base = sourceIndex * 3; for (const [, coeff] of shCoeffEntries) out.push(coeff[base], coeff[base + 1], coeff[base + 2]); } return out; };
     const indices = new Uint16Array([2, 0]);
     const badPositions = new Int16Array([0, 0, 0, 1, 2, 3, 4, 5, 6]);
     const negativeScales = new Float32Array([1, 1, 1, 2, -0.5, 2, 3, 3, 3]);
@@ -551,7 +554,9 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     const opacityHigh = new Float32Array([0.5, 1.1, 1]);
     const opacityNonFinite = new Float32Array([0.5, Number.NaN, 1]);
     const badIndices = new Uint16Array([3]);
-    const chunks = [meshPositions, splatPositions, rotations, scales, opacities, sh0, sh1, indices, badPositions, negativeScales, nonFiniteScales, opacityLow, opacityHigh, opacityNonFinite, badIndices];
+    const INDEX_ACCESSOR = 5 + shCoeffEntries.length;
+    const BAD_POSITION_ACCESSOR = INDEX_ACCESSOR + 1, NEGATIVE_SCALE_ACCESSOR = INDEX_ACCESSOR + 2, NONFINITE_SCALE_ACCESSOR = INDEX_ACCESSOR + 3, OPACITY_LOW_ACCESSOR = INDEX_ACCESSOR + 4, OPACITY_HIGH_ACCESSOR = INDEX_ACCESSOR + 5, OPACITY_NONFINITE_ACCESSOR = INDEX_ACCESSOR + 6, BAD_INDICES_ACCESSOR = INDEX_ACCESSOR + 7;
+    const chunks = [meshPositions, splatPositions, rotations, scales, opacities, ...shCoeffEntries.map(([, coeff]) => coeff), indices, badPositions, negativeScales, nonFiniteScales, opacityLow, opacityHigh, opacityNonFinite, badIndices];
     let byteLength = 0;
     const offsets = chunks.map((chunk) => { const offset = byteLength; byteLength += pad4(chunk.byteLength); return offset; });
     const bin = new Uint8Array(byteLength);
@@ -563,24 +568,18 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
         { bufferView: 2, componentType: 5122, normalized: true, count: 3, type: "VEC4" },
         { bufferView: 3, componentType: 5123, count: 3, type: "VEC3" },
         { bufferView: 4, componentType: 5121, normalized: true, count: 3, type: "SCALAR" },
-        { bufferView: 5, componentType: 5126, count: 3, type: "VEC3" },
-        { bufferView: 6, componentType: 5126, count: 3, type: "VEC3" },
-        { bufferView: 7, componentType: 5123, count: 2, type: "SCALAR" },
-        { bufferView: 8, componentType: 5122, count: 3, type: "VEC3" },
-        { bufferView: 9, componentType: 5126, count: 3, type: "VEC3" },
-        { bufferView: 10, componentType: 5126, count: 3, type: "VEC3" },
-        { bufferView: 11, componentType: 5126, count: 3, type: "SCALAR" },
-        { bufferView: 12, componentType: 5126, count: 3, type: "SCALAR" },
-        { bufferView: 13, componentType: 5126, count: 3, type: "SCALAR" },
-        { bufferView: 14, componentType: 5123, count: 1, type: "SCALAR" }
+        ...shCoeffEntries.map((_, index) => ({ bufferView: 5 + index, componentType: 5126, count: 3, type: "VEC3" })),
+        { bufferView: INDEX_ACCESSOR, componentType: 5123, count: 2, type: "SCALAR" },
+        { bufferView: BAD_POSITION_ACCESSOR, componentType: 5122, count: 3, type: "VEC3" },
+        { bufferView: NEGATIVE_SCALE_ACCESSOR, componentType: 5126, count: 3, type: "VEC3" },
+        { bufferView: NONFINITE_SCALE_ACCESSOR, componentType: 5126, count: 3, type: "VEC3" },
+        { bufferView: OPACITY_LOW_ACCESSOR, componentType: 5126, count: 3, type: "SCALAR" },
+        { bufferView: OPACITY_HIGH_ACCESSOR, componentType: 5126, count: 3, type: "SCALAR" },
+        { bufferView: OPACITY_NONFINITE_ACCESSOR, componentType: 5126, count: 3, type: "SCALAR" },
+        { bufferView: BAD_INDICES_ACCESSOR, componentType: 5123, count: 1, type: "SCALAR" }
     ];
-    const baseSplatAttributes = {
-        POSITION: 1,
-        "KHR_gaussian_splatting:ROTATION": 2,
-        "KHR_gaussian_splatting:SCALE": 3,
-        "KHR_gaussian_splatting:OPACITY": 4,
-        "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0": 5
-    };
+    const requiredSplatAttributes = { POSITION: 1, "KHR_gaussian_splatting:ROTATION": 2, "KHR_gaussian_splatting:SCALE": 3, "KHR_gaussian_splatting:OPACITY": 4, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0": 5 };
+    const baseSplatAttributes = { ...requiredSplatAttributes, ...shDegreeAttributes(1), ...shDegreeAttributes(2), ...shDegreeAttributes(3) };
     const baseExtension = { kernel: "ellipse", colorSpace: "lin_rec709_display" };
     const makeSplatPrimitive = (extension = baseExtension, attrs = {}, mode = 0, indicesAccessor = undefined) => ({ mode, material: 0, ...(indicesAccessor !== undefined ? { indices: indicesAccessor } : {}), attributes: { ...baseSplatAttributes, ...attrs }, extensions: { KHR_gaussian_splatting: extension } });
     const makeSplatJson = (primitive, required = true, includeMeshPrimitive = false) => ({
@@ -608,21 +607,14 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.ok(res.splatFields[0] instanceof SplatField);
     assert.equal(res.splatFields[0].splatCount, 3);
     assert.equal(res.splatFields[0].colorSpace, "linear");
+    assert.equal(res.splatFields[0].usesSphericalHarmonics, true);
+    assert.equal(res.splatFields[0].shDegree, 3);
     approxArray(res.splatFields[0].transform.worldPosition, [1, 2, 3]);
     approxArray(Array.from(res.splatFields[0]._centerOpacityCPU), [0, 0, 0, 128 / 255, 1, 2, 3, 1, 4, 5, 6, 64 / 255]);
     approxArray(Array.from(res.splatFields[0]._rotationCPU), [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
     approxArray(Array.from(res.splatFields[0]._scaleCPU), [1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0]);
-    approxArray(Array.from(res.splatFields[0]._colorCPU), [
-        Math.max(0, Math.min(1, sh0[0] * sh0Factor + 0.5)),
-        Math.max(0, Math.min(1, sh0[1] * sh0Factor + 0.5)),
-        Math.max(0, Math.min(1, sh0[2] * sh0Factor + 0.5)), 1,
-        Math.max(0, Math.min(1, sh0[3] * sh0Factor + 0.5)),
-        Math.max(0, Math.min(1, sh0[4] * sh0Factor + 0.5)),
-        Math.max(0, Math.min(1, sh0[5] * sh0Factor + 0.5)), 1,
-        Math.max(0, Math.min(1, sh0[6] * sh0Factor + 0.5)),
-        Math.max(0, Math.min(1, sh0[7] * sh0Factor + 0.5)),
-        Math.max(0, Math.min(1, sh0[8] * sh0Factor + 0.5)), 1
-    ]);
+    approxArray(Array.from(res.splatFields[0]._shCPU), packSH([0, 1, 2]));
+    approxArray(Array.from(res.splatFields[0]._colorCPU), [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
     res.nodes[0].visible = false;
     assert.equal(res.meshes[0].visible, false);
     assert.equal(res.splatFields[0].visible, false);
@@ -632,43 +624,38 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(scene.splatFields.length, 0);
     assert.equal(TransformStore.global().count, baseTransformCount);
 
-    const indexedRes = importGltf(await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, {}, 0, 7)), bin.buffer)), { addToScene: false });
+    const indexedRes = importGltf(await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, {}, 0, INDEX_ACCESSOR)), bin.buffer)), { addToScene: false });
     assert.equal(indexedRes.splatFields.length, 1);
     assert.equal(indexedRes.splatFields[0].splatCount, indices.length);
+    assert.equal(indexedRes.splatFields[0].usesSphericalHarmonics, true);
+    assert.equal(indexedRes.splatFields[0].shDegree, 3);
     approxArray(Array.from(indexedRes.splatFields[0]._centerOpacityCPU), [4, 5, 6, 64 / 255, 0, 0, 0, 128 / 255]);
-    approxArray(Array.from(indexedRes.splatFields[0]._colorCPU), [
-        Math.max(0, Math.min(1, sh0[6] * sh0Factor + 0.5)),
-        Math.max(0, Math.min(1, sh0[7] * sh0Factor + 0.5)),
-        Math.max(0, Math.min(1, sh0[8] * sh0Factor + 0.5)), 1,
-        Math.max(0, Math.min(1, sh0[0] * sh0Factor + 0.5)),
-        Math.max(0, Math.min(1, sh0[1] * sh0Factor + 0.5)),
-        Math.max(0, Math.min(1, sh0[2] * sh0Factor + 0.5)), 1
-    ]);
+    approxArray(Array.from(indexedRes.splatFields[0]._shCPU), packSH([2, 0]));
     indexedRes.destroy();
 
-    const outOfRangeIndexDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, {}, 0, 14)), bin.buffer));
-    assert.throws(() => importGltf(outOfRangeIndexDoc, { addToScene: false }), /indices\[0\] value 3 is out of range/);
-    const strictPositionDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { POSITION: 8 })), bin.buffer));
-    assert.throws(() => importGltf(strictPositionDoc, { addToScene: false }), /POSITION.*componentType=5122/);
-    const negativeScaleDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { "KHR_gaussian_splatting:SCALE": 9 })), bin.buffer));
-    assert.throws(() => importGltf(negativeScaleDoc, { addToScene: false }), /SCALE.*negative value/);
-    const nonFiniteScaleDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { "KHR_gaussian_splatting:SCALE": 10 })), bin.buffer));
-    assert.throws(() => importGltf(nonFiniteScaleDoc, { addToScene: false }), /SCALE.*non-finite value/);
-    const opacityLowDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { "KHR_gaussian_splatting:OPACITY": 11 })), bin.buffer));
-    assert.throws(() => importGltf(opacityLowDoc, { addToScene: false }), /OPACITY.*outside \[0, 1\]/);
-    const opacityHighDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { "KHR_gaussian_splatting:OPACITY": 12 })), bin.buffer));
-    assert.throws(() => importGltf(opacityHighDoc, { addToScene: false }), /OPACITY.*outside \[0, 1\]/);
-    const opacityNonFiniteDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { "KHR_gaussian_splatting:OPACITY": 13 })), bin.buffer));
-    assert.throws(() => importGltf(opacityNonFiniteDoc, { addToScene: false }), /OPACITY.*non-finite value/);
+    const srgbWarnings = [];
+    const srgbRes = importGltf(await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive({ kernel: "ellipse", colorSpace: "srgb_rec709_display" })), bin.buffer)), { addToScene: false, onWarning: (message) => srgbWarnings.push(message) });
+    expectSupport(srgbRes.metadata, [extensionName], "supported");
+    assert.equal(srgbWarnings.length, 0);
+    assert.equal(srgbRes.splatFields[0].colorSpace, "srgb");
+    assert.equal(srgbRes.splatFields[0].usesSphericalHarmonics, true);
+    assert.equal(srgbRes.splatFields[0].shDegree, 3);
+    srgbRes.destroy();
 
-    const partialWarnings = [];
-    const partialPrimitive = makeSplatPrimitive({ kernel: "ellipse", colorSpace: "srgb_rec709_display" }, { "KHR_gaussian_splatting:SH_DEGREE_1_COEF_0": 6 });
-    const partialRes = importGltf(await loadGltf(makeGLB(makeSplatJson(partialPrimitive), bin.buffer)), { addToScene: false, onWarning: (message) => partialWarnings.push(message) });
-    expectSupport(partialRes.metadata, [extensionName], "partial");
-    assert.equal(partialRes.splatFields.length, 1);
-    assert.equal(partialRes.splatFields[0].colorSpace, "srgb");
-    assert.ok(partialWarnings.some((message) => message.includes("higher-degree spherical harmonic attributes are present but not rendered")));
-    partialRes.destroy();
+    const outOfRangeIndexDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, {}, 0, BAD_INDICES_ACCESSOR)), bin.buffer));
+    assert.throws(() => importGltf(outOfRangeIndexDoc, { addToScene: false }), /indices\[0\] value 3 is out of range/);
+    const strictPositionDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { POSITION: BAD_POSITION_ACCESSOR })), bin.buffer));
+    assert.throws(() => importGltf(strictPositionDoc, { addToScene: false }), /POSITION.*componentType=5122/);
+    const negativeScaleDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { "KHR_gaussian_splatting:SCALE": NEGATIVE_SCALE_ACCESSOR })), bin.buffer));
+    assert.throws(() => importGltf(negativeScaleDoc, { addToScene: false }), /SCALE.*negative value/);
+    const nonFiniteScaleDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { "KHR_gaussian_splatting:SCALE": NONFINITE_SCALE_ACCESSOR })), bin.buffer));
+    assert.throws(() => importGltf(nonFiniteScaleDoc, { addToScene: false }), /SCALE.*non-finite value/);
+    const opacityLowDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { "KHR_gaussian_splatting:OPACITY": OPACITY_LOW_ACCESSOR })), bin.buffer));
+    assert.throws(() => importGltf(opacityLowDoc, { addToScene: false }), /OPACITY.*outside \[0, 1\]/);
+    const opacityHighDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { "KHR_gaussian_splatting:OPACITY": OPACITY_HIGH_ACCESSOR })), bin.buffer));
+    assert.throws(() => importGltf(opacityHighDoc, { addToScene: false }), /OPACITY.*outside \[0, 1\]/);
+    const opacityNonFiniteDoc = await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(baseExtension, { "KHR_gaussian_splatting:OPACITY": OPACITY_NONFINITE_ACCESSOR })), bin.buffer));
+    assert.throws(() => importGltf(opacityNonFiniteDoc, { addToScene: false }), /OPACITY.*non-finite value/);
 
     for (const unsupportedExtension of [{ kernel: "box", colorSpace: "lin_rec709_display" }, { kernel: "ellipse", colorSpace: "lin_rec709_display", projection: "orthographic" }, { kernel: "ellipse", colorSpace: "lin_rec709_display", sortingMethod: "none" }]) {
         const optionalWarnings = [];

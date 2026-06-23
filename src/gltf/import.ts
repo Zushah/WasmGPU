@@ -12,7 +12,7 @@ import { AnimationClip, Skin, type AnimationPointerChannel, type AnimationPointe
 import { Camera, OrthographicCamera, PerspectiveCamera } from "../world/camera";
 import { Scene } from "../world/scene";
 import { Mesh, initializeMeshMorphRuntime, setMeshMorphWeight } from "../world/mesh";
-import { SplatField, type SplatFieldColorSpace } from "../world/splatfield";
+import { SplatField, type SplatFieldColorSpace, type SplatFieldSHDegree } from "../world/splatfield";
 import { DirectionalLight, PointLight, SpotLight, bindLightToTransform, unbindLightTransform, type Light } from "../world/light";
 import { Transform } from "../core/transform";
 import type { GltfDocument, GltfAnimation, GltfAnimationChannel, GltfAnimationSampler, GltfAsset, GltfCamera, GltfExtensions, GltfExtras, GltfMaterial, GltfMesh, GltfNode, GltfPrimitive, GltfPrimitiveAttributes, GltfRoot, GltfScene, GltfSkin, KHRLightsPunctualLight, KHRLightsPunctualNode, KHRLightsPunctualRoot } from "./types";
@@ -258,7 +258,6 @@ const GL_MIRRORED_REPEAT = 33648;
 const GL_REPEAT = 10497;
 const GL_POINTS = 0;
 const KHR_GAUSSIAN_SPLATTING = "KHR_gaussian_splatting";
-const SH_DEGREE_0_FACTOR = 0.2820947917738781;
 
 const gltfWrapToAddressMode = (wrap: number | undefined): GPUAddressMode => {
     switch (wrap) {
@@ -1004,8 +1003,6 @@ const isNormalizedSignedByteOrShort = (componentType: number, normalized: boolea
 const isUnsignedByteOrShort = (componentType: number): boolean => componentType === 5121 || componentType === 5123;
 const isNormalizedUnsignedByteOrShort = (componentType: number, normalized: boolean): boolean => normalized && isUnsignedByteOrShort(componentType);
 
-const clamp01Number = (value: number): number => Math.max(0, Math.min(1, value));
-
 const validateDecodedSplatAttributeLength = (data: Float32Array, expectedCount: number, componentCount: number, context: string, semantic: string): void => {
     const expectedLength = expectedCount * componentCount;
     if (data.length !== expectedLength) failGaussianSplatting(context, `attribute '${semantic}' decoded length ${data.length} does not match expected length ${expectedLength}.`);
@@ -1042,13 +1039,74 @@ const validateSplatOpacityValues = (opacities: Float32Array, context: string): v
     }
 };
 
-const convertGaussianSplatSh0ToRgb = (sh0: Float32Array): Float32Array => {
-    const out = new Float32Array(sh0.length);
-    for (let i = 0; i < sh0.length; i++) out[i] = clamp01Number((sh0[i] ?? 0) * SH_DEGREE_0_FACTOR + 0.5);
-    return out;
+const shDegreeCoeffCount = (degree: SplatFieldSHDegree): number => {
+    switch (degree) {
+        case 0: return 1;
+        case 1: return 3;
+        case 2: return 5;
+        case 3: return 7;
+    }
 };
 
-const getIgnoredHigherDegreeSphericalHarmonics = (attrs: GltfPrimitiveAttributes): string[] => Object.keys(attrs).filter((semantic) => attrs[semantic] !== undefined && /^KHR_gaussian_splatting:SH_DEGREE_[123]_COEF_/.test(semantic));
+const shSemantic = (degree: SplatFieldSHDegree, coeff: number): string => `${KHR_GAUSSIAN_SPLATTING}:SH_DEGREE_${degree}_COEF_${coeff}`;
+
+type GaussianSplatSHAttributes = {
+    degree: SplatFieldSHDegree;
+    accessors: Map<string, number>;
+};
+
+const resolveGaussianSplatSHAttributes = (attrs: GltfPrimitiveAttributes, sh0Acc: number, context: string): GaussianSplatSHAttributes => {
+    const complete = [true, false, false, false];
+    const accessors = new Map<string, number>([[shSemantic(0, 0), sh0Acc]]);
+    for (const semantic of Object.keys(attrs)) {
+        if (attrs[semantic] === undefined) continue;
+        const match = /^KHR_gaussian_splatting:SH_DEGREE_(\d+)_COEF_(\d+)$/.exec(semantic);
+        if (!match) continue;
+        const degree = Number(match[1]);
+        const coeff = Number(match[2]);
+        if (degree < 0 || degree > 3) failGaussianSplatting(context, `attribute '${semantic}' uses unsupported spherical harmonic degree ${degree}.`);
+        if (coeff < 0 || coeff >= shDegreeCoeffCount(degree as SplatFieldSHDegree)) failGaussianSplatting(context, `attribute '${semantic}' uses unsupported coefficient index ${coeff} for degree ${degree}.`);
+    }
+    for (const degree of [1, 2, 3] as SplatFieldSHDegree[]) {
+        const required = shDegreeCoeffCount(degree);
+        let present = 0;
+        let firstMissing: string | null = null;
+        for (let coeff = 0; coeff < required; coeff++) {
+            const semantic = shSemantic(degree, coeff);
+            const accessorIndex = attrs[semantic];
+            if (accessorIndex === undefined) {
+                if (!firstMissing) firstMissing = semantic;
+                continue;
+            }
+            present++;
+            accessors.set(semantic, accessorIndex);
+        }
+        if (present > 0 && present !== required) failGaussianSplatting(context, `degree ${degree} spherical harmonic attributes must be complete; missing '${firstMissing}'.`);
+        complete[degree] = present === required;
+    }
+    if (complete[2] && !complete[1]) failGaussianSplatting(context, "degree 2 spherical harmonic attributes require complete degree 1 attributes.");
+    if (complete[3] && (!complete[1] || !complete[2])) failGaussianSplatting(context, "degree 3 spherical harmonic attributes require complete degree 1 and degree 2 attributes.");
+    const degree: SplatFieldSHDegree = complete[3] ? 3 : complete[2] ? 2 : complete[1] ? 1 : 0;
+    return { degree, accessors };
+};
+
+const gatherSHDegreeData = (coefficients: Float32Array[], indices: Uint32Array | null): Float32Array => {
+    if (coefficients.length === 0) return new Float32Array(0);
+    const gathered = coefficients.map((coeff) => gatherFloatAttribute(coeff, 3, indices));
+    const count = (gathered[0]!.length / 3) | 0;
+    const out = new Float32Array(count * coefficients.length * 3);
+    for (let i = 0; i < count; i++) {
+        for (let coeff = 0; coeff < gathered.length; coeff++) {
+            const src = gathered[coeff]!;
+            const srcBase = i * 3;
+            const dstBase = (i * gathered.length + coeff) * 3;
+            out[dstBase + 0] = src[srcBase + 0] ?? 0;
+            out[dstBase + 1] = src[srcBase + 1] ?? 0;
+            out[dstBase + 2] = src[srcBase + 2] ?? 0;
+        }
+    }
+    return out;
+};
 
 const resolveGaussianSplatColorSpace = (value: unknown): SplatFieldColorSpace | null => {
     if (value === "lin_rec709_display") return "linear";
@@ -1076,16 +1134,13 @@ const createSplatFieldFromPrimitive = (doc: GltfDocument, json: GltfRoot, gltfMe
     const scaleAcc = requireSplatAttribute(attrs, "KHR_gaussian_splatting:SCALE", context);
     const opacityAcc = requireSplatAttribute(attrs, "KHR_gaussian_splatting:OPACITY", context);
     const sh0Acc = requireSplatAttribute(attrs, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0", context);
+    const shAttrs = resolveGaussianSplatSHAttributes(attrs, sh0Acc, context);
     const sourceCount = validateSplatAccessor(json, positionAcc, "VEC3", (componentType, normalized) => isFloatNonNormalizedEncoding(componentType, normalized), context, "POSITION");
     validateSplatAttributeCount(validateSplatAccessor(json, rotationAcc, "VEC4", (componentType, normalized) => isFloatEncoding(componentType) || isNormalizedSignedByteOrShort(componentType, normalized), context, "KHR_gaussian_splatting:ROTATION"), sourceCount, context, "KHR_gaussian_splatting:ROTATION");
     validateSplatAttributeCount(validateSplatAccessor(json, scaleAcc, "VEC3", (componentType) => isFloatEncoding(componentType) || isUnsignedByteOrShort(componentType), context, "KHR_gaussian_splatting:SCALE"), sourceCount, context, "KHR_gaussian_splatting:SCALE");
     validateSplatAttributeCount(validateSplatAccessor(json, opacityAcc, "SCALAR", (componentType, normalized) => isFloatEncoding(componentType) || isNormalizedUnsignedByteOrShort(componentType, normalized), context, "KHR_gaussian_splatting:OPACITY"), sourceCount, context, "KHR_gaussian_splatting:OPACITY");
-    validateSplatAttributeCount(validateSplatAccessor(json, sh0Acc, "VEC3", (componentType) => isFloatEncoding(componentType), context, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0"), sourceCount, context, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0");
-    const ignoredSphericalHarmonics = getIgnoredHigherDegreeSphericalHarmonics(attrs);
-    if (ignoredSphericalHarmonics.length > 0) {
-        markExtensionSupport(extensions, KHR_GAUSSIAN_SPLATTING, "partial");
-        warn(opts, `${KHR_GAUSSIAN_SPLATTING}: ${context}: higher-degree spherical harmonic attributes are present but not rendered; using SH_DEGREE_0_COEF_0 only.`);
-    } else markExtensionSupport(extensions, KHR_GAUSSIAN_SPLATTING, "supported");
+    for (const [semantic, accessorIndex] of shAttrs.accessors) validateSplatAttributeCount(validateSplatAccessor(json, accessorIndex, "VEC3", (componentType, normalized) => isFloatNonNormalizedEncoding(componentType, normalized), context, semantic), sourceCount, context, semantic);
+    markExtensionSupport(extensions, KHR_GAUSSIAN_SPLATTING, "supported");
     const indices = prim.indices !== undefined ? readIndicesAsUint32(doc, prim.indices) : null;
     validateSplatIndices(indices, sourceCount, context);
     const splatCount = indices ? indices.length : sourceCount;
@@ -1093,26 +1148,35 @@ const createSplatFieldFromPrimitive = (doc: GltfDocument, json: GltfRoot, gltfMe
     const sourceRotations = readAccessorAsFloat32(doc, rotationAcc);
     const sourceScales = readAccessorAsFloat32(doc, scaleAcc);
     const sourceOpacities = readAccessorAsFloat32(doc, opacityAcc);
-    const sourceSh0 = readAccessorAsFloat32(doc, sh0Acc);
     validateDecodedSplatAttributeLength(sourcePositions, sourceCount, 3, context, "POSITION");
     validateDecodedSplatAttributeLength(sourceRotations, sourceCount, 4, context, "KHR_gaussian_splatting:ROTATION");
     validateDecodedSplatAttributeLength(sourceScales, sourceCount, 3, context, "KHR_gaussian_splatting:SCALE");
     validateDecodedSplatAttributeLength(sourceOpacities, sourceCount, 1, context, "KHR_gaussian_splatting:OPACITY");
-    validateDecodedSplatAttributeLength(sourceSh0, sourceCount, 3, context, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0");
     const positions = gatherFloatAttribute(sourcePositions, 3, indices);
     const rotations = gatherFloatAttribute(sourceRotations, 4, indices);
     const scales = gatherFloatAttribute(sourceScales, 3, indices);
     const opacities = gatherFloatAttribute(sourceOpacities, 1, indices);
-    const sh0 = gatherFloatAttribute(sourceSh0, 3, indices);
     validateFiniteSplatValues(positions, context, "POSITION");
     validateFiniteSplatValues(rotations, context, "KHR_gaussian_splatting:ROTATION");
     validateSplatScaleValues(scales, context);
     validateSplatOpacityValues(opacities, context);
-    validateFiniteSplatValues(sh0, context, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0");
+    const readSHCoeff = (degree: SplatFieldSHDegree, coeff: number): Float32Array => {
+        const semantic = shSemantic(degree, coeff);
+        const accessorIndex = shAttrs.accessors.get(semantic) ?? failGaussianSplatting(context, `missing required attribute '${semantic}'.`);
+        const data = readAccessorAsFloat32(doc, accessorIndex);
+        validateDecodedSplatAttributeLength(data, sourceCount, 3, context, semantic);
+        validateFiniteSplatValues(data, context, semantic);
+        return data;
+    };
+    const sh0 = gatherSHDegreeData([readSHCoeff(0, 0)], indices);
+    const sh1 = shAttrs.degree >= 1 ? gatherSHDegreeData([readSHCoeff(1, 0), readSHCoeff(1, 1), readSHCoeff(1, 2)], indices) : undefined;
+    const sh2 = shAttrs.degree >= 2 ? gatherSHDegreeData([readSHCoeff(2, 0), readSHCoeff(2, 1), readSHCoeff(2, 2), readSHCoeff(2, 3), readSHCoeff(2, 4)], indices) : undefined;
+    const sh3 = shAttrs.degree >= 3 ? gatherSHDegreeData([readSHCoeff(3, 0), readSHCoeff(3, 1), readSHCoeff(3, 2), readSHCoeff(3, 3), readSHCoeff(3, 4), readSHCoeff(3, 5), readSHCoeff(3, 6)], indices) : undefined;
     const field = new SplatField({
         name: node.name ?? gltfMesh.name ?? `gltf_splatfield_${meshIndex}_${primIndex}`,
         positions, rotations, scales, opacities,
-        colors: convertGaussianSplatSh0ToRgb(sh0),
+        sh0, sh1, sh2, sh3,
+        shDegree: shAttrs.degree,
         splatCount, colorSpace
     });
     field.transform.setParent(nodeT);

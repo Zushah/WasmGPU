@@ -9,6 +9,7 @@ import { Transform } from "../core/transform";
 import { Bounds3, boundsFromBox, boundsFromBoxAndSphere, boundsFromSphere, emptyBounds, transformBounds } from "./bounds";
 
 export type SplatFieldColorSpace = "linear" | "srgb";
+export type SplatFieldSHDegree = 0 | 1 | 2 | 3;
 
 export type SplatFieldDescriptor = {
     positions?: Float32Array;
@@ -16,10 +17,16 @@ export type SplatFieldDescriptor = {
     scales?: Float32Array;
     opacities?: Float32Array;
     colors?: Float32Array;
+    sh0?: Float32Array;
+    sh1?: Float32Array;
+    sh2?: Float32Array;
+    sh3?: Float32Array;
+    shDegree?: SplatFieldSHDegree;
     centerOpacityBuffer?: GPUBuffer | { buffer: GPUBuffer };
     rotationBuffer?: GPUBuffer | { buffer: GPUBuffer };
     scaleBuffer?: GPUBuffer | { buffer: GPUBuffer };
     colorBuffer?: GPUBuffer | { buffer: GPUBuffer };
+    shBuffer?: GPUBuffer | { buffer: GPUBuffer };
     splatCount?: number;
     visible?: boolean;
     name?: string;
@@ -43,6 +50,19 @@ const srgbChannelToLinear = (value: number): number => { const x = clamp01(value
 
 const isColorSpace = (value: unknown): value is SplatFieldColorSpace => value === "linear" || value === "srgb";
 
+const isSHDegree = (value: unknown): value is SplatFieldSHDegree => value === 0 || value === 1 || value === 2 || value === 3;
+
+const shCoeffCount = (degree: SplatFieldSHDegree): number => {
+    switch (degree) {
+        case 0: return 1;
+        case 1: return 4;
+        case 2: return 9;
+        case 3: return 16;
+    }
+};
+
+const shFloatCount = (degree: SplatFieldSHDegree): number => shCoeffCount(degree) * 3;
+
 const validateCount = (length: number, stride: number, label: string): number => { assert((length % stride) === 0, `SplatField: ${label} length must be a multiple of ${stride}.`); return (length / stride) | 0; };
 
 const makeWhiteColorData = (count: number): Float32Array => { const out = new Float32Array(count * 4); for (let i = 0; i < count; i++) { const base = i * 4; out[base + 0] = 1; out[base + 1] = 1; out[base + 2] = 1; out[base + 3] = 1; } return out; };
@@ -64,6 +84,45 @@ const resolveColorLayout = (colors: Float32Array, count: number | null): { strid
 
 const validateExternalPackedBufferSize = (buffer: GPUBuffer, splatCount: number, label: string): void => { const minByteSize = splatCount * 16; assert(buffer.size >= minByteSize, `SplatField: ${label} size must be >= splatCount * 16 bytes (${minByteSize}).`); };
 
+const validateExternalSHBufferSize = (buffer: GPUBuffer, splatCount: number, degree: SplatFieldSHDegree): void => { const minByteSize = splatCount * shFloatCount(degree) * 4; assert(buffer.size >= minByteSize, `SplatField: shBuffer size must be >= splatCount * ${shFloatCount(degree)} * 4 bytes (${minByteSize}).`); };
+
+const hasCPUShInputs = (desc: SplatFieldDescriptor): boolean => !!(desc.sh0 || desc.sh1 || desc.sh2 || desc.sh3);
+
+const resolveSHDegreeFromCPU = (desc: SplatFieldDescriptor): SplatFieldSHDegree => {
+    assert(!!desc.sh0, "SplatField: sh0 is required when using spherical harmonic coefficients.");
+    if (desc.sh3) { assert(!!desc.sh1 && !!desc.sh2, "SplatField: sh3 requires sh0, sh1, and sh2."); return 3; }
+    if (desc.sh2) { assert(!!desc.sh1, "SplatField: sh2 requires sh0 and sh1."); return 2; }
+    if (desc.sh1) return 1;
+    return 0;
+};
+
+const validateCPUShInputs = (desc: SplatFieldDescriptor, countHint: number | null): { count: number; degree: SplatFieldSHDegree; data: Float32Array } => {
+    const inferredDegree = resolveSHDegreeFromCPU(desc);
+    if (desc.shDegree !== undefined) { assert(isSHDegree(desc.shDegree), "SplatField: shDegree must be 0, 1, 2, or 3."); assert(desc.shDegree === inferredDegree, "SplatField: shDegree must match the provided spherical harmonic coefficient arrays."); }
+    const sh0 = desc.sh0!;
+    const count = countHint ?? validateCount(sh0.length, 3, "sh0");
+    assert(Number.isInteger(count) && count >= 0, "SplatField: splatCount must be an integer >= 0.");
+    assert(sh0.length === count * 3, "SplatField: sh0 length must equal splatCount * 3.");
+    if (inferredDegree >= 1) assert(desc.sh1 && desc.sh1.length === count * 9, "SplatField: sh1 length must equal splatCount * 9.");
+    else assert(!desc.sh1, "SplatField: shDegree 0 must not provide sh1.");
+    if (inferredDegree >= 2) assert(desc.sh2 && desc.sh2.length === count * 15, "SplatField: sh2 length must equal splatCount * 15.");
+    else assert(!desc.sh2, "SplatField: shDegree 0 or 1 must not provide sh2.");
+    if (inferredDegree >= 3) assert(desc.sh3 && desc.sh3.length === count * 21, "SplatField: sh3 length must equal splatCount * 21.");
+    else assert(!desc.sh3, "SplatField: shDegree 0, 1, or 2 must not provide sh3.");
+    const coeffFloats = shFloatCount(inferredDegree);
+    const out = new Float32Array(count * coeffFloats);
+    for (let i = 0; i < count; i++) {
+        let dst = i * coeffFloats;
+        out[dst++] = sh0[i * 3 + 0] ?? 0;
+        out[dst++] = sh0[i * 3 + 1] ?? 0;
+        out[dst++] = sh0[i * 3 + 2] ?? 0;
+        if (inferredDegree >= 1) { const src = i * 9; out.set(desc.sh1!.subarray(src, src + 9), dst); dst += 9; }
+        if (inferredDegree >= 2) { const src = i * 15; out.set(desc.sh2!.subarray(src, src + 15), dst); dst += 15; }
+        if (inferredDegree >= 3) { const src = i * 21; out.set(desc.sh3!.subarray(src, src + 21), dst); }
+    }
+    return { count, degree: inferredDegree, data: out };
+};
+
 export class SplatField {
     readonly transform: Transform = new Transform();
     name: string | null = null;
@@ -76,6 +135,7 @@ export class SplatField {
     rotationBuffer: GPUBuffer | null = null;
     scaleBuffer: GPUBuffer | null = null;
     colorBuffer: GPUBuffer | null = null;
+    shBuffer: GPUBuffer | null = null;
     uniformBuffer: GPUBuffer | null = null;
     bindGroup: GPUBindGroup | null = null;
     bindGroupKey: string | null = null;
@@ -84,6 +144,7 @@ export class SplatField {
     private _rotationCPU: Float32Array | null = null;
     private _scaleCPU: Float32Array | null = null;
     private _colorCPU: Float32Array | null = null;
+    private _shCPU: Float32Array | null = null;
     private _keepCPUData: boolean = false;
     private _ndShape: number[] | null = null;
     private _boundsSource: BoundsSourceMode = "none";
@@ -95,7 +156,10 @@ export class SplatField {
     private _rotationOwned: boolean = false;
     private _scaleOwned: boolean = false;
     private _colorOwned: boolean = false;
+    private _shOwned: boolean = false;
     private _externalColorBufferSrgb: boolean = false;
+    private _shDegree: SplatFieldSHDegree = 0;
+    private _usesSphericalHarmonics: boolean = false;
 
     constructor(desc: SplatFieldDescriptor = {}) {
         if (desc.name !== undefined) this.name = desc.name;
@@ -103,10 +167,14 @@ export class SplatField {
         if (desc.keepCPUData !== undefined) this._keepCPUData = !!desc.keepCPUData;
         if (desc.ndShape !== undefined) this.ndShape = desc.ndShape;
         if (desc.colorSpace !== undefined) { assert(isColorSpace(desc.colorSpace), `SplatField: invalid colorSpace '${String(desc.colorSpace)}'.`); this._colorSpace = desc.colorSpace; }
+        if (desc.shDegree !== undefined) assert(isSHDegree(desc.shDegree), "SplatField: shDegree must be 0, 1, 2, or 3.");
         if (desc.opacityScale !== undefined) this._opacityScale = Math.max(0, desc.opacityScale);
         this.applyExplicitBounds(desc);
-        const hasCPUInputs = !!(desc.positions || desc.rotations || desc.scales || desc.opacities || desc.colors);
-        const hasExternalInputs = !!(desc.centerOpacityBuffer || desc.rotationBuffer || desc.scaleBuffer || desc.colorBuffer);
+        const hasShInputs = hasCPUShInputs(desc) || !!desc.shBuffer;
+        assert(!(hasShInputs && (desc.colors || desc.colorBuffer)), "SplatField: direct colors and spherical harmonic coefficients cannot be mixed.");
+        assert(!(!hasShInputs && desc.shDegree !== undefined), "SplatField: shDegree requires sh0 or shBuffer.");
+        const hasCPUInputs = !!(desc.positions || desc.rotations || desc.scales || desc.opacities || desc.colors || hasCPUShInputs(desc));
+        const hasExternalInputs = !!(desc.centerOpacityBuffer || desc.rotationBuffer || desc.scaleBuffer || desc.colorBuffer || desc.shBuffer);
         assert(!(hasCPUInputs && hasExternalInputs), "SplatField: CPU-array and external-buffer descriptors cannot be mixed.");
         if (hasExternalInputs) this.setExternalData(desc);
         else if (hasCPUInputs) this.setCPUData(desc);
@@ -155,6 +223,7 @@ export class SplatField {
         const scales = desc.scales ?? null;
         const opacities = desc.opacities ?? null;
         const colors = desc.colors ?? null;
+        const usesSH = hasCPUShInputs(desc);
         const positionCount = positions ? validateCount(positions.length, 3, "positions") : null;
         const rotationCount = rotations ? validateCount(rotations.length, 4, "rotations") : null;
         const scaleCount = scales ? validateCount(scales.length, 3, "scales") : null;
@@ -163,18 +232,23 @@ export class SplatField {
         const colorLayout = colors ? resolveColorLayout(colors, inferredCount) : null;
         const colorStride = colorLayout?.stride ?? 4;
         const colorCount = colorLayout?.count ?? null;
-        const count = inferredCount ?? colorCount ?? 0;
+        const sh = usesSH ? validateCPUShInputs(desc, inferredCount ?? colorCount ?? null) : null;
+        const count = inferredCount ?? colorCount ?? sh?.count ?? 0;
         assert(Number.isInteger(count) && count >= 0, "SplatField: splatCount must be an integer >= 0.");
         if (positionCount !== null) assert(positionCount === count, "SplatField: positions length does not match splatCount.");
         if (rotationCount !== null) assert(rotationCount === count, "SplatField: rotations length does not match splatCount.");
         if (scaleCount !== null) assert(scaleCount === count, "SplatField: scales length does not match splatCount.");
         if (opacityCount !== null) assert(opacityCount === count, "SplatField: opacities length does not match splatCount.");
         if (colorCount !== null) assert(colorCount === count, "SplatField: colors length does not match splatCount.");
+        if (sh) assert(sh.count === count, "SplatField: spherical harmonic coefficient lengths do not match splatCount.");
         this._splatCount = count | 0;
         this._centerOpacityCPU = new Float32Array(count * 4);
         this._rotationCPU = new Float32Array(count * 4);
         this._scaleCPU = new Float32Array(count * 4);
         this._colorCPU = makeWhiteColorData(count);
+        this._shCPU = sh?.data ?? null;
+        this._shDegree = sh?.degree ?? 0;
+        this._usesSphericalHarmonics = !!sh;
         for (let i = 0; i < count; i++) {
             const centerBase = i * 4;
             const positionBase = i * 3;
@@ -212,11 +286,14 @@ export class SplatField {
         this._rotationOwned = true;
         this._scaleOwned = true;
         this._colorOwned = true;
+        this._shOwned = !!sh;
         this.centerOpacityBuffer = null;
         this.rotationBuffer = null;
         this.scaleBuffer = null;
         this.colorBuffer = null;
+        this.shBuffer = null;
         this._dataDirty = true;
+        this._uniformDirty = true;
         this.bindGroupKey = null;
         this.clearComputedBoundsIfNeeded();
         if (this._boundsSource === "none" && count > 0) this.computeBoundsFromCPUData();
@@ -225,31 +302,40 @@ export class SplatField {
     private setExternalData(desc: SplatFieldDescriptor): void {
         assert(!!desc.centerOpacityBuffer && !!desc.rotationBuffer && !!desc.scaleBuffer, "SplatField: centerOpacityBuffer, rotationBuffer, and scaleBuffer are required when using external buffers.");
         assert(Number.isInteger(desc.splatCount) && (desc.splatCount ?? -1) >= 0, "SplatField: splatCount is required when using external buffers.");
+        if (desc.shBuffer) assert(desc.shDegree !== undefined, "SplatField: shDegree is required when using shBuffer.");
         const ownBuffers = !!desc.ownBuffers;
         const splatCount = desc.splatCount! | 0;
         const centerOpacityBuffer = resolveGPUBuffer(desc.centerOpacityBuffer!);
         const rotationBuffer = resolveGPUBuffer(desc.rotationBuffer!);
         const scaleBuffer = resolveGPUBuffer(desc.scaleBuffer!);
         const colorBuffer = desc.colorBuffer ? resolveGPUBuffer(desc.colorBuffer) : null;
+        const shBuffer = desc.shBuffer ? resolveGPUBuffer(desc.shBuffer) : null;
         validateExternalPackedBufferSize(centerOpacityBuffer, splatCount, "centerOpacityBuffer");
         validateExternalPackedBufferSize(rotationBuffer, splatCount, "rotationBuffer");
         validateExternalPackedBufferSize(scaleBuffer, splatCount, "scaleBuffer");
         if (colorBuffer) validateExternalPackedBufferSize(colorBuffer, splatCount, "colorBuffer");
+        if (shBuffer) validateExternalSHBufferSize(shBuffer, splatCount, desc.shDegree!);
         this._splatCount = splatCount;
         this.centerOpacityBuffer = centerOpacityBuffer;
         this.rotationBuffer = rotationBuffer;
         this.scaleBuffer = scaleBuffer;
         this.colorBuffer = colorBuffer;
+        this.shBuffer = shBuffer;
         this._centerOpacityCPU = null;
         this._rotationCPU = null;
         this._scaleCPU = null;
         this._colorCPU = colorBuffer ? null : makeWhiteColorData(splatCount);
+        this._shCPU = null;
         this._centerOpacityOwned = ownBuffers;
         this._rotationOwned = ownBuffers;
         this._scaleOwned = ownBuffers;
         this._colorOwned = ownBuffers && !!colorBuffer;
+        this._shOwned = ownBuffers && !!shBuffer;
         this._externalColorBufferSrgb = !!colorBuffer && this._colorSpace === "srgb";
+        this._shDegree = desc.shDegree ?? 0;
+        this._usesSphericalHarmonics = !!shBuffer;
         this._dataDirty = !colorBuffer && splatCount > 0;
+        this._uniformDirty = true;
         this.bindGroupKey = null;
         this.clearComputedBoundsIfNeeded();
     }
@@ -264,6 +350,14 @@ export class SplatField {
 
     get opacityScale(): number {
         return this._opacityScale;
+    }
+
+    get usesSphericalHarmonics(): boolean {
+        return this._usesSphericalHarmonics;
+    }
+
+    get shDegree(): SplatFieldSHDegree {
+        return this._shDegree;
     }
 
     set opacityScale(value: number) {
@@ -295,6 +389,8 @@ export class SplatField {
         scale: [number, number, number];
         opacity: number;
         color: [number, number, number, number] | null;
+        sphericalHarmonicsDegree: SplatFieldSHDegree | null;
+        sphericalHarmonics: number[] | null;
         packed: [number, number, number, number];
     } | null {
         if (!Number.isInteger(index) || index < 0 || index >= this._splatCount) return null;
@@ -305,14 +401,25 @@ export class SplatField {
         const base = index * 4;
         const packed: [number, number, number, number] = [centerOpacity[base + 0], centerOpacity[base + 1], centerOpacity[base + 2], centerOpacity[base + 3]];
         const color = this._colorCPU ? [this._colorCPU[base + 0], this._colorCPU[base + 1], this._colorCPU[base + 2], this._colorCPU[base + 3]] as [number, number, number, number] : null;
+        const sphericalHarmonics = this.getSphericalHarmonicsRecord(index);
         return {
             position: [packed[0], packed[1], packed[2]],
             rotation: [rotation[base + 0], rotation[base + 1], rotation[base + 2], rotation[base + 3]],
             scale: [scale[base + 0], scale[base + 1], scale[base + 2]],
             opacity: packed[3],
             color,
+            sphericalHarmonicsDegree: sphericalHarmonics ? this._shDegree : null,
+            sphericalHarmonics,
             packed
         };
+    }
+
+    getSphericalHarmonicsRecord(index: number): number[] | null {
+        if (!this._usesSphericalHarmonics || !this._shCPU) return null;
+        if (!Number.isInteger(index) || index < 0 || index >= this._splatCount) return null;
+        const floats = shFloatCount(this._shDegree);
+        const base = index * floats;
+        return Array.from(this._shCPU.subarray(base, base + floats));
     }
 
     dropCPUData(): void {
@@ -320,6 +427,7 @@ export class SplatField {
         this._rotationCPU = null;
         this._scaleCPU = null;
         this._colorCPU = null;
+        this._shCPU = null;
     }
 
     computeBoundsFromCPUData(): void {
@@ -376,14 +484,17 @@ export class SplatField {
         const rotation = uploadBuffer(this.rotationBuffer, this._rotationCPU, "SplatField.rotation");
         const scale = uploadBuffer(this.scaleBuffer, this._scaleCPU, "SplatField.scale");
         const color = uploadBuffer(this.colorBuffer, this._colorCPU, "SplatField.color");
+        const sh = uploadBuffer(this.shBuffer, this._shCPU, "SplatField.sh");
         this.centerOpacityBuffer = centerOpacity.buffer;
         this.rotationBuffer = rotation.buffer;
         this.scaleBuffer = scale.buffer;
         this.colorBuffer = color.buffer;
+        this.shBuffer = sh.buffer;
         if (centerOpacity.created && this.centerOpacityBuffer) this._centerOpacityOwned = true;
         if (rotation.created && this.rotationBuffer) this._rotationOwned = true;
         if (scale.created && this.scaleBuffer) this._scaleOwned = true;
         if (color.created && this.colorBuffer) this._colorOwned = true;
+        if (sh.created && this.shBuffer) this._shOwned = true;
         if (!this._keepCPUData) this.dropCPUData();
         this._dataDirty = false;
         this.bindGroupKey = null;
@@ -396,9 +507,9 @@ export class SplatField {
     getUniformData(): Float32Array {
         const out = new Float32Array(UNIFORM_FLOAT_COUNT);
         out[0] = clamp01(this._opacityScale);
-        out[1] = this._externalColorBufferSrgb ? 1 : 0;
-        out[2] = 0;
-        out[3] = 0;
+        out[1] = this._externalColorBufferSrgb || (this._usesSphericalHarmonics && this._colorSpace === "srgb") ? 1 : 0;
+        out[2] = this._usesSphericalHarmonics ? 1 : 0;
+        out[3] = this._shDegree;
         return out;
     }
 
@@ -420,11 +531,13 @@ export class SplatField {
         this.destroyOwnedBuffer(this.rotationBuffer, this._rotationOwned);
         this.destroyOwnedBuffer(this.scaleBuffer, this._scaleOwned);
         this.destroyOwnedBuffer(this.colorBuffer, this._colorOwned);
+        this.destroyOwnedBuffer(this.shBuffer, this._shOwned);
         this.uniformBuffer?.destroy();
         this.centerOpacityBuffer = null;
         this.rotationBuffer = null;
         this.scaleBuffer = null;
         this.colorBuffer = null;
+        this.shBuffer = null;
         this.uniformBuffer = null;
         this.bindGroup = null;
         this.bindGroupKey = null;
@@ -432,8 +545,11 @@ export class SplatField {
         this._rotationCPU = null;
         this._scaleCPU = null;
         this._colorCPU = null;
+        this._shCPU = null;
         this._ndShape = null;
         this._splatCount = 0;
+        this._usesSphericalHarmonics = false;
+        this._shDegree = 0;
         this.transform.dispose();
     }
 }
