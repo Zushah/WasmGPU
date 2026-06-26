@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<!--
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+ -->
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title>WasmGPU | Lego Example</title>
+        <link rel="icon" type="image/png" href="../assets/favicon.png">
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { background: #000000; overflow: hidden; }
+            canvas { display: block; width: 100vw; height: 100vh; }
+            #status { position: fixed; left: 50%; top: 50%; width: min(520px, calc(100vw - 32px)); padding: 10px 12px; background: #000000; color: #d8e2ff; font: 20px sans-serif; text-align: center; transform: translate(-50%, -50%); pointer-events: none; }
+        </style>
+    </head>
+    <body>
+        <canvas></canvas>
+        <div id="status">Loading splatfield glTF asset...</div>
+        <script type="module">
+            import { WasmGPU } from "../dist/WasmGPU.min.js";
+
+            const ASSET_URL = "https://raw.githubusercontent.com/McNopper/OpenGL/85b3a2ddf9407d307017f49e8a1c178f14264102/Binaries/lego.gltf";
+            const ASSET_BASE_URL = "https://media.githubusercontent.com/media/McNopper/OpenGL/85b3a2ddf9407d307017f49e8a1c178f14264102/Binaries/";
+
+            const canvas = document.querySelector("canvas");
+            const status = document.querySelector("#status");
+            const formatMiB = (bytes) => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+            const setStatus = (text) => { status.textContent = text; };
+            const createProgressFetch = (label) => {
+                return async (input, init) => {
+                    const response = await fetch(input, init);
+                    const total = Number(response.headers.get("content-length") ?? 0);
+                    if (!response.body || !total) { setStatus(`${label}...`); return response; }
+                    let loaded = 0;
+                    const reader = response.body.getReader();
+                    const stream = new ReadableStream({
+                        async pull(controller) {
+                            const { done, value } = await reader.read();
+                            if (done) { controller.close(); return; }
+                            loaded += value.byteLength;
+                            const percent = Math.min(100, (loaded / total) * 100);
+                            setStatus(`${label}... ${formatMiB(loaded)} / ${formatMiB(total)} (${percent.toFixed(1)}%)`);
+                            controller.enqueue(value);
+                        },
+                        cancel(reason) { return reader.cancel(reason); }
+                    });
+                    return new Response(stream, { status: response.status, statusText: response.statusText, headers: response.headers });
+                };
+            };
+
+            const wgpu = await WasmGPU.create(canvas, { antialias: true, frustumCulling: true, canvasFormat: "rgba8unorm" });
+            const scene = wgpu.createScene([0.02, 0.025, 0.035]);
+            const camera = wgpu.createCamera.perspective({ fov: 45, near: 0.01, far: 100 });
+            camera.transform.setPosition(0, 0.35, 3.5);
+            camera.lookAt(0, 0.25, 0);
+            const controls = wgpu.createControls.orbit(camera, canvas, { target: [0, 0.25, 0] });
+
+            try {
+                const gltf = await wgpu.gltf.loadAndImport(ASSET_URL, {
+                    load: {
+                        baseUrl: ASSET_BASE_URL,
+                        fetch: createProgressFetch("Loading splatfield glTF asset"),
+                        onWarning: console.warn
+                    },
+                    import: {
+                        targetScene: scene,
+                        onWarning: console.warn
+                    }
+                });
+                const splatCount = gltf.splatFields.reduce((sum, field) => sum + field.splatCount, 0);
+                setStatus(`Imported ${gltf.splatFields.length} splatfield glTF asset with ${splatCount.toLocaleString()} splats. Drag to orbit.`);
+                setTimeout(() => { status.style.display = "none"; }, 5000);
+            } catch (error) { console.error(error); setStatus(`Failed to load splatfield glTF asset: ${error instanceof Error ? error.message : String(error)}`); throw error; }
+
+            wgpu.run((dt) => {
+                controls.update(dt);
+                wgpu.render(scene, camera);
+            });
+        </script>
+    </body>
+</html>
