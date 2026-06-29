@@ -1,0 +1,74 @@
+name: Test
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - src/**
+      - rust/**
+      - test/**
+      - scripts/build-rust-wasm.js
+      - build/**
+      - dist/**
+      - .cargo/**
+      - .github/workflows/test.yaml
+      - esbuild.config.js
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - ARCHITECTURE.md
+
+  pull_request:
+    branches:
+      - main
+    paths:
+      - src/**
+      - rust/**
+      - test/**
+      - scripts/build-rust-wasm.js
+      - build/**
+      - dist/**
+      - .cargo/**
+      - .github/workflows/test.yaml
+      - esbuild.config.js
+      - package.json
+      - package-lock.json
+      - tsconfig.json
+      - ARCHITECTURE.md
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      -
+        name: Checkout
+        uses: actions/checkout@v4
+
+      -
+        name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      -
+        name: Install dependencies
+        run: npm ci
+
+      -
+        name: Install Rust target
+        run: rustup target add wasm32-unknown-unknown
+
+      -
+        name: Build and test
+        run: npm run dev
