@@ -30,11 +30,12 @@ device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured 
 
 await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
-const { NodeLink, Compute, Scene, WasmGPU: Engine } = WasmGPU;
+const { NodeLink, Compute, Scene, WasmGPU: Engine, WasmMemoryView } = WasmGPU;
 assert.ok(NodeLink, "Missing export: NodeLink");
 assert.ok(Compute, "Missing export: Compute");
 assert.ok(Scene, "Missing export: Scene");
 assert.ok(Engine, "Missing export: WasmGPU");
+assert.ok(WasmMemoryView, "Missing export: WasmMemoryView");
 assert.strictEqual(typeof Engine.prototype.createNodeLink, "function", "Missing API: WasmGPU.createNodeLink(descriptor)");
 
 const compute = new Compute(device, device.queue);
@@ -145,6 +146,146 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     assert.strictEqual(edgeScaleSource.count, 2, "Edge scale source count mismatch");
 
     link.destroy();
+}
+
+// External WebAssembly memory views: per-channel refresh, source-kind mixing, CPU snapshots, validation, and grow-only capacity.
+{
+    const makeView = (length, dtype = "f32", name = "nodelink-wasm-view", capacity = 64) => {
+        const memory = new WebAssembly.Memory({ initial: 1 });
+        const lengthGlobal = new WebAssembly.Global({ value: "i32", mutable: true }, length);
+        const moduleRef = WasmGPU.webassemblyInterop.fromMemory(memory, { name });
+        const data = dtype === "u32" ? new Uint32Array(memory.buffer, 0, capacity) : new Float32Array(memory.buffer, 0, capacity);
+        const view = moduleRef.view({ ptr: 0, length: { global: lengthGlobal }, dtype, name });
+        assert.ok(view instanceof WasmMemoryView, "Expected fromMemory().view() to return a WasmMemoryView");
+        return { memory, moduleRef, lengthGlobal, data, view };
+    };
+
+    const nodePositions = makeView(8, "f32", "nl:wasm:nodePositions");
+    const nodeScalars = makeView(2, "f32", "nl:wasm:nodeScalars");
+    const nodeColors = makeView(8, "f32", "nl:wasm:nodeColors");
+    const nodeRadii = makeView(8, "f32", "nl:wasm:nodeRadii");
+    const edges = makeView(4, "u32", "nl:wasm:edges");
+    const edgeScalars = makeView(2, "f32", "nl:wasm:edgeScalars");
+    const edgeColors = makeView(8, "f32", "nl:wasm:edgeColors");
+    nodePositions.data.set([0, 0, 0, 0, 1, 2, 3, 0]);
+    nodeScalars.data.set([0.25, 0.75]);
+    nodeColors.data.set([1, 0, 0, 1, 0, 1, 0, 1]);
+    nodeRadii.data.set([0.5, 0.5, 0.5, 0, 1, 1, 1, 0]);
+    edges.data.set([0, 1, 1, 0]);
+    edgeScalars.data.set([0.4, 0.8]);
+    edgeColors.data.set([1, 1, 1, 1, 0.3, 0.4, 0.5, 1]);
+
+    const link = new NodeLink({
+        wasmNodePositions: nodePositions.view,
+        wasmNodeScalars: nodeScalars.view,
+        wasmNodeColors: nodeColors.view,
+        wasmNodeRadii: nodeRadii.view,
+        wasmEdges: edges.view,
+        wasmEdgeScalars: edgeScalars.view,
+        wasmEdgeColors: edgeColors.view,
+        nodeScaleTransform: { componentCount: 1, componentIndex: 0, stride: 1, offset: 0 },
+        edgeScaleTransform: { componentCount: 1, componentIndex: 0, stride: 1, offset: 0 }
+    });
+    assert.strictEqual(link.nodeCount, 2, "NodeLink should derive nodeCount from wasmNodePositions");
+    assert.strictEqual(link.edgeCount, 2, "NodeLink should derive edgeCount from wasmEdges");
+    assert.strictEqual(link.getNodeRecord(0), null, "Default wasm node path should not retain CPU node records");
+    assert.strictEqual(link.getEdgeRecord(0), null, "Default wasm edge path should not retain CPU edge records");
+    link.upload(device, device.queue);
+    arraysApproxEqual(await readBufferAsF32(link.nodePositionsBuffer, 8), nodePositions.data.subarray(0, 8), 0, "wasmNodePositions upload mismatch");
+    arraysApproxEqual(await readBufferAsF32(link.nodeScalarsBuffer, 2), nodeScalars.data.subarray(0, 2), 0, "wasmNodeScalars upload mismatch");
+    arraysApproxEqual(await readBufferAsF32(link.nodeColorsBuffer, 8), nodeColors.data.subarray(0, 8), 0, "wasmNodeColors upload mismatch");
+    arraysApproxEqual(await readBufferAsF32(link.nodeRadiiBuffer, 8), nodeRadii.data.subarray(0, 8), 0, "wasmNodeRadii upload mismatch");
+    assert.deepStrictEqual(Array.from(await readBufferAsU32(link.edgesBuffer, 4)), [0, 1, 1, 0], "wasmEdges upload mismatch");
+    arraysApproxEqual(await readBufferAsF32(link.edgeColorsBuffer, 8), edgeColors.data.subarray(0, 8), 0, "wasmEdgeColors upload mismatch");
+
+    const nodeRevision0 = link.getNodeScaleSourceDescriptor()?.revision ?? -1;
+    const edgeRevision0 = link.getEdgeScaleSourceDescriptor()?.revision ?? -1;
+    link.bindGroupKey = "nl:stable-wasm";
+    nodeScalars.data[1] = 0.9;
+    edgeScalars.data[0] = 0.55;
+    link.refreshWasmNodeScalars();
+    link.refreshWasmEdgeScalars();
+    assert.ok((link.getNodeScaleSourceDescriptor()?.revision ?? -1) > nodeRevision0, "refreshWasmNodeScalars() should bump node scale revision");
+    assert.ok((link.getEdgeScaleSourceDescriptor()?.revision ?? -1) > edgeRevision0, "refreshWasmEdgeScalars() should bump edge scale revision");
+    assert.strictEqual(link.bindGroupKey, "nl:stable-wasm", "wasm scalar refresh should not invalidate a reused bind group");
+    link.upload(device, device.queue);
+    assert.strictEqual(link.bindGroupKey, "nl:stable-wasm", "same-buffer wasm uploads should not invalidate a reused bind group");
+    arraysApproxEqual(await readBufferAsF32(link.nodeScalarsBuffer, 2), nodeScalars.data.subarray(0, 2), 0, "Refreshed wasmNodeScalars upload mismatch");
+    arraysApproxEqual(await readBufferAsF32(link.edgeScalarsBuffer, 2), edgeScalars.data.subarray(0, 2), 0, "Refreshed wasmEdgeScalars upload mismatch");
+    link.destroy();
+
+    const mixedNodeScalars = makeView(2, "f32", "nl:wasm:mixed:nodeScalars");
+    const mixedEdgeColors = makeView(4, "f32", "nl:wasm:mixed:edgeColors");
+    mixedNodeScalars.data.set([0.1, 0.2]);
+    mixedEdgeColors.data.set([0.7, 0.6, 0.5, 1]);
+    const mixedEdges = compute.createStorageBuffer({ label: "nl:wasm:mixed:edges", data: new Uint32Array([0, 1]), copySrc: false });
+    const mixed = new NodeLink({
+        nodePositions: new Float32Array([0, 0, 0, 1, 0, 0]),
+        wasmNodeScalars: mixedNodeScalars.view,
+        edgesBuffer: mixedEdges.buffer,
+        edgeCount: 1,
+        wasmEdgeColors: mixedEdgeColors.view
+    });
+    mixed.upload(device, device.queue);
+    arraysApproxEqual(await readBufferAsF32(mixed.nodeScalarsBuffer, 2), mixedNodeScalars.data.subarray(0, 2), 0, "Mixed CPU nodes + wasmNodeScalars upload mismatch");
+    arraysApproxEqual(await readBufferAsF32(mixed.edgeColorsBuffer, 4), mixedEdgeColors.data.subarray(0, 4), 0, "Mixed external edges + wasmEdgeColors upload mismatch");
+    mixed.destroy();
+    mixedEdges.destroy();
+
+    const capacityPositions = makeView(20, "f32", "nl:wasm:capacity:positions");
+    capacityPositions.data.set([0, 0, 0, 0, 1, 1, 1, 0, 2, 2, 2, 0, 3, 3, 3, 0, 4, 4, 4, 0]);
+    const capacity = new NodeLink({ wasmNodePositions: capacityPositions.view, nodeCount: 2, wasmNodeCapacity: 4 });
+    capacity.upload(device, device.queue);
+    const firstPositionsBuffer = capacity.nodePositionsBuffer;
+    assert.ok(firstPositionsBuffer, "NodeLink wasmNodePositions upload should allocate a nodePositionsBuffer");
+    assert.ok(firstPositionsBuffer.size >= 4 * 16, "wasmNodeCapacity should be measured in node records");
+    capacity.bindGroupKey = "nl:stable-capacity";
+    capacity.refreshWasmNodePositions({ nodeCount: 3 });
+    capacity.upload(device, device.queue);
+    assert.strictEqual(capacity.nodePositionsBuffer, firstPositionsBuffer, "NodeLink should reuse wasm node capacity when active count fits");
+    assert.strictEqual(capacity.bindGroupKey, "nl:stable-capacity", "Reused wasm node capacity should not invalidate the bind group");
+    capacity.refreshWasmNodePositions({ nodeCount: 5 });
+    capacity.upload(device, device.queue);
+    assert.notStrictEqual(capacity.nodePositionsBuffer, firstPositionsBuffer, "NodeLink should grow wasm node capacity when active count exceeds capacity");
+    assert.strictEqual(capacity.bindGroupKey, null, "Growing wasm node capacity should invalidate the bind group");
+    capacity.destroy();
+
+    const keepPositions = makeView(8, "f32", "nl:wasm:keep:positions");
+    const keepScalars = makeView(2, "f32", "nl:wasm:keep:scalars");
+    const keepEdges = makeView(2, "u32", "nl:wasm:keep:edges");
+    const keepEdgeColors = makeView(4, "f32", "nl:wasm:keep:edgeColors");
+    keepPositions.data.set([4, 5, 6, 0, 7, 8, 9, 0]);
+    keepScalars.data.set([0.4, 0.8]);
+    keepEdges.data.set([0, 1]);
+    keepEdgeColors.data.set([0.2, 0.3, 0.4, 1]);
+    const keep = new NodeLink({ wasmNodePositions: keepPositions.view, wasmNodeScalars: keepScalars.view, wasmEdges: keepEdges.view, wasmEdgeColors: keepEdgeColors.view, keepCPUData: true });
+    assert.deepStrictEqual(keep.getNodeRecord(1), { position: [7, 8, 9], scalar: 0.800000011920929, color: null }, "keepCPUData should snapshot wasm node records");
+    const edgeRecord = keep.getEdgeRecord(0);
+    assert.ok(edgeRecord, "keepCPUData should snapshot wasm edge records");
+    assert.deepStrictEqual([edgeRecord.src, edgeRecord.dst, edgeRecord.srcPosition, edgeRecord.dstPosition], [0, 1, [4, 5, 6], [7, 8, 9]], "Wasm edge CPU snapshot mismatch");
+    keepPositions.data.set([70, 80, 90, 0], 4);
+    assert.deepStrictEqual(keep.getNodeRecord(1).position, [7, 8, 9], "Wasm CPU records should be retained as copies");
+    keep.refreshFromWasm({ keepCPUData: true });
+    assert.deepStrictEqual(keep.getNodeRecord(1).position, [70, 80, 90], "refreshFromWasm() should refresh retained CPU node data");
+    keep.destroy();
+
+    const shrinkPositions = makeView(8, "f32", "nl:wasm:shrink:positions");
+    shrinkPositions.data.set([0, 0, 0, 0, 1, 1, 1, 0]);
+    const shrink = new NodeLink({ wasmNodePositions: shrinkPositions.view, nodeCount: 2 });
+    shrink.upload(device, device.queue);
+    shrink.refreshWasmNodePositions({ nodeCount: 2 });
+    shrinkPositions.lengthGlobal.value = 4;
+    assert.throws(() => shrink.upload(device, device.queue), /wasmNodePositions length must be at least nodeCount\*4/i, "upload() should validate refreshed wasmNodePositions length before reading");
+    shrink.destroy();
+
+    const invalidCases = [
+        { message: "Invalid derived wasmNodePositions nodeCount should throw", error: /wasmNodePositions length must be a multiple of 4/i, create: () => new NodeLink({ wasmNodePositions: makeView(5, "f32", "nl:wasm:bad:nodePositions").view }) },
+        { message: "Short wasmEdgeColors should throw", error: /wasmEdgeColors length must be at least edgeCount\*4/i, create: () => new NodeLink({ wasmEdgeColors: makeView(4, "f32", "nl:wasm:bad:edgeColors").view, edgeCount: 2 }) },
+        { message: "Non-WasmMemoryView wasmNodeScalars should throw", error: /wasmNodeScalars must be a WasmMemoryView/i, create: () => new NodeLink({ wasmNodeScalars: makeView(2, "f32", "nl:wasm:bad:source-type").data, nodeCount: 2 }) },
+        { message: "Non-f32 wasmNodePositions should throw", error: /wasmNodePositions dtype must be 'f32'/i, create: () => new NodeLink({ wasmNodePositions: makeView(8, "u32", "nl:wasm:bad:node-dtype").view }) },
+        { message: "Non-u32 wasmEdges should throw", error: /wasmEdges dtype must be 'u32'/i, create: () => new NodeLink({ wasmEdges: makeView(2, "f32", "nl:wasm:bad:edge-dtype").view }) }
+    ];
+    for (const testCase of invalidCases) assert.throws(testCase.create, testCase.error, testCase.message);
 }
 
 // External buffers are borrowed by default, owned when requested, and owned replacements are destroyed exactly once.

@@ -44,7 +44,7 @@ export { Light, AmbientLight, DirectionalLight, PointLight, SpotLight } from "./
 export type { LightType, AmbientLightDescriptor, DirectionalLightDescriptor, PointLightDescriptor, SpotLightDescriptor } from "./world/light";
 export { Mesh } from "./world/mesh";
 export { NodeLink } from "./world/nodelink";
-export type { NodeLinkDescriptor, NodeLinkNodeGeometryMode, NodeLinkEdgeGeometryMode, NodeLinkColorMode, NodeLinkColormap, NodeLinkComponentKind, NodeLinkVisualChangeKind } from "./world/nodelink";
+export type { NodeLinkDescriptor, NodeLinkNodeGeometryMode, NodeLinkEdgeGeometryMode, NodeLinkColorMode, NodeLinkColormap, NodeLinkComponentKind, NodeLinkVisualChangeKind, NodeLinkWasmNodeRefreshOptions, NodeLinkWasmEdgeRefreshOptions, NodeLinkWasmNodeChannelOptions, NodeLinkWasmEdgeChannelOptions, NodeLinkWasmRefreshOptions, NodeLinkWasmSources } from "./world/nodelink";
 export { SelectionStore } from "./world/picking";
 export type { PickAttributes, PickHit, PickKind, PickLassoPoint, PickQuery, PickRegionMode, PickRegionQuery, PickRegionResult, PickResult, SelectionEntry, SelectionMode } from "./world/picking";
 export { PointCloud } from "./world/pointcloud";
