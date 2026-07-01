@@ -86,7 +86,7 @@ const device = await adapter.requestDevice();
 assert.ok(device, "Failed to acquire a WebGPU device");
 device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
 
-const { SplatField, WasmGPU: Engine, Compute, Scene, Renderer, PerspectiveCamera, OrthographicCamera } = WasmGPU;
+const { SplatField, WasmGPU: Engine, Compute, Scene, Renderer, PerspectiveCamera, OrthographicCamera, WasmMemoryView } = WasmGPU;
 
 assert.ok(SplatField, "Missing export: SplatField");
 assert.ok(Engine, "Missing export: WasmGPU");
@@ -94,6 +94,7 @@ assert.strictEqual(typeof Engine.prototype.createSplatField, "function", "Missin
 assert.ok(Compute, "Missing export: Compute");
 assert.ok(Scene, "Missing export: Scene");
 assert.ok(Renderer, "Missing export: Renderer");
+assert.ok(WasmMemoryView, "Missing export: WasmMemoryView");
 
 const compute = new Compute(device, device.queue);
 
@@ -518,6 +519,151 @@ const makeRenderableField = (count = 3, zValues = null) => {
     const ownedShField = new SplatField({ ...ownedShBuffers, shBuffer: ownedSh, shDegree: 0, splatCount: 1, ownBuffers: true });
     ownedShField.destroy();
     assert.strictEqual(ownedShDestroyed(), 1, "Expected ownBuffers shBuffer to be destroyed");
+}
+
+// External WebAssembly memory views: strict packed source family, explicit refresh, SH/direct-color exclusivity, CPU snapshots, validation, and grow-only capacity.
+{
+    const makeView = (length, dtype = "f32", name = "splatfield-wasm-view", capacity = 128) => {
+        const memory = new WebAssembly.Memory({ initial: 1 });
+        const lengthGlobal = new WebAssembly.Global({ value: "i32", mutable: true }, length);
+        const moduleRef = WasmGPU.webassemblyInterop.fromMemory(memory, { name });
+        const data = dtype === "u32" ? new Uint32Array(memory.buffer, 0, capacity) : new Float32Array(memory.buffer, 0, capacity);
+        const view = moduleRef.view({ ptr: 0, length: { global: lengthGlobal }, dtype, name });
+        assert.ok(view instanceof WasmMemoryView, "Expected fromMemory().view() to return a WasmMemoryView");
+        return { memory, moduleRef, lengthGlobal, data, view };
+    };
+    const fillCore = (prefix, count = 2, activeFloats = count * 4) => {
+        const centerOpacity = makeView(activeFloats, "f32", `${prefix}:centerOpacity`);
+        const rotation = makeView(activeFloats, "f32", `${prefix}:rotation`);
+        const scale = makeView(activeFloats, "f32", `${prefix}:scale`);
+        for (let i = 0; i < count; i++) {
+            const base = i * 4;
+            centerOpacity.data.set([i + 1, i + 2, i + 3, 0.5 + i * 0.1], base);
+            rotation.data.set([0, 0, 0, 1], base);
+            scale.data.set([0.1 + i, 0.2 + i, 0.3 + i, 0], base);
+        }
+        return { centerOpacity, rotation, scale };
+    };
+
+    const directCore = fillCore("sf:wasm:direct");
+    const directColor = makeView(8, "f32", "sf:wasm:direct:color");
+    directColor.data.set([0.25, 0.5, 0.75, 0.8, 0.1, 0.2, 0.3, 0.4]);
+    const directField = new SplatField({
+        wasmCenterOpacity: directCore.centerOpacity.view,
+        wasmRotation: directCore.rotation.view,
+        wasmScale: directCore.scale.view,
+        wasmColor: directColor.view,
+        colorSpace: "srgb"
+    });
+    assert.strictEqual(directField.splatCount, 2, "Expected wasmCenterOpacity to derive splatCount");
+    assert.strictEqual(directField.getSplatRecord(0), null, "Default wasm path should not retain CPU splat records");
+    directField.upload(device, device.queue);
+    arraysApproxEqual(await readBufferAsF32(directField.centerOpacityBuffer, 8), directCore.centerOpacity.data.subarray(0, 8), 0, "wasmCenterOpacity upload mismatch");
+    arraysApproxEqual(await readBufferAsF32(directField.rotationBuffer, 8), directCore.rotation.data.subarray(0, 8), 0, "wasmRotation upload mismatch");
+    arraysApproxEqual(await readBufferAsF32(directField.scaleBuffer, 8), directCore.scale.data.subarray(0, 8), 0, "wasmScale upload mismatch");
+    arraysApproxEqual(await readBufferAsF32(directField.colorBuffer, 8), directColor.data.subarray(0, 8), 0, "wasmColor upload mismatch");
+    assert.strictEqual(directField.getUniformData()[1], 1, "Expected wasm sRGB color data to decode in the shader");
+    assert.strictEqual(directField.getUniformData()[2], 0, "Expected wasm direct color to keep SH mode disabled");
+    directField.bindGroupKey = "sf:stable-wasm";
+    directCore.centerOpacity.data[0] = 9;
+    directField.refreshWasmCenterOpacity();
+    directField.upload(device, device.queue);
+    assert.strictEqual(directField.bindGroupKey, "sf:stable-wasm", "same-buffer wasm uploads should not invalidate a reused bind group");
+    arraysApproxEqual(await readBufferAsF32(directField.centerOpacityBuffer, 8), directCore.centerOpacity.data.subarray(0, 8), 0, "refreshed wasmCenterOpacity upload mismatch");
+    directField.setWasmColor(null);
+    directField.upload(device, device.queue);
+    assert.strictEqual(directField.getUniformData()[1], 0, "Clearing wasmColor should clear external sRGB decode state");
+    arraysApproxEqual(await readBufferAsF32(directField.colorBuffer, 8), new Float32Array([1, 1, 1, 1, 1, 1, 1, 1]), 0, "Clearing wasmColor should schedule fallback white colors");
+    directField.destroy();
+
+    const cpuGuard = new SplatField({ positions: new Float32Array([1, 2, 3]), scales: new Float32Array([0.5, 0.5, 0.5]), colors: new Float32Array([0.2, 0.3, 0.4]), keepCPUData: true });
+    assert.throws(() => cpuGuard.setWasmCenterOpacity(directCore.centerOpacity.view), /setWasmPackedData\(\).*initial wasm source-family replacement/i, "Single wasm core setters should not destructively start wasm conversion");
+    assert.deepStrictEqual(cpuGuard.getSplatRecord(0).position, [1, 2, 3], "Rejected single-channel wasm conversion should preserve CPU data");
+    cpuGuard.destroy();
+
+    const shCore = fillCore("sf:wasm:sh");
+    const sh = makeView(24, "f32", "sf:wasm:sh:coefficients");
+    sh.data.set(makeSequence(24, 10));
+    const shField = new SplatField({
+        wasmCenterOpacity: shCore.centerOpacity.view,
+        wasmRotation: shCore.rotation.view,
+        wasmScale: shCore.scale.view,
+        wasmSphericalHarmonics: sh.view,
+        shDegree: 1,
+        colorSpace: "srgb",
+        keepCPUData: true
+    });
+    assert.strictEqual(shField.usesSphericalHarmonics, true, "Expected wasmSphericalHarmonics to enable SH mode");
+    assert.strictEqual(shField.shDegree, 1, "Expected wasm SH degree to round-trip");
+    assert.strictEqual(shField.getUniformData()[1], 1, "Expected sRGB wasm SH fields to decode evaluated color in shader");
+    const shRecord = shField.getSplatRecord(1);
+    assert.ok(shRecord, "keepCPUData should snapshot wasm splat records");
+    arraysApproxEqual(shRecord.sphericalHarmonics, Array.from(sh.data.subarray(12, 24)), 0, "Expected retained wasm SH record values");
+    shCore.centerOpacity.data.set([40, 41, 42, 0.9], 4);
+    assert.deepStrictEqual(shField.getSplatRecord(1).position, [2, 3, 4], "Wasm CPU records should be retained as copies");
+    shField.refreshFromWasm({ keepCPUData: true });
+    assert.deepStrictEqual(shField.getSplatRecord(1).position, [40, 41, 42], "refreshFromWasm() should refresh retained wasm CPU records");
+    shField.upload(device, device.queue);
+    arraysApproxEqual(await readBufferAsF32(shField.shBuffer, 24), sh.data.subarray(0, 24), 0, "wasmSphericalHarmonics upload mismatch");
+    arraysApproxEqual(await readBufferAsF32(shField.colorBuffer, 8), new Float32Array([1, 1, 1, 1, 1, 1, 1, 1]), 0, "Expected wasm SH mode to synthesize white color data");
+    shField.setWasmSphericalHarmonics(null);
+    shField.upload(device, device.queue);
+    assert.strictEqual(shField.usesSphericalHarmonics, false, "Clearing wasmSphericalHarmonics should clear SH mode");
+    assert.strictEqual(shField.shBuffer, null, "Clearing wasmSphericalHarmonics should clear the managed SH buffer");
+    arraysApproxEqual(await readBufferAsF32(shField.colorBuffer, 8), new Float32Array([1, 1, 1, 1, 1, 1, 1, 1]), 0, "Clearing wasmSphericalHarmonics should preserve fallback white colors");
+    shField.destroy();
+
+    const capacityCore = fillCore("sf:wasm:capacity", 5, 20);
+    const capacityColor = makeView(20, "f32", "sf:wasm:capacity:color");
+    capacityColor.data.set(makeSequence(20, 0.1));
+    const capacityField = new SplatField({
+        wasmCenterOpacity: capacityCore.centerOpacity.view,
+        wasmRotation: capacityCore.rotation.view,
+        wasmScale: capacityCore.scale.view,
+        wasmColor: capacityColor.view,
+        splatCount: 2,
+        wasmCapacity: 4
+    });
+    capacityField.upload(device, device.queue);
+    const firstCenterOpacityBuffer = capacityField.centerOpacityBuffer;
+    assert.ok(firstCenterOpacityBuffer, "Expected wasmCenterOpacity upload to allocate a buffer");
+    assert.ok(firstCenterOpacityBuffer.size >= 4 * 16, "wasmCapacity should be measured in splat records");
+    capacityField.bindGroupKey = "sf:stable-capacity";
+    capacityField.refreshFromWasm({ splatCount: 3 });
+    capacityField.upload(device, device.queue);
+    assert.strictEqual(capacityField.centerOpacityBuffer, firstCenterOpacityBuffer, "Expected wasm capacity to be reused when active count fits");
+    assert.strictEqual(capacityField.bindGroupKey, "sf:stable-capacity", "Reused wasm capacity should not invalidate the bind group");
+    capacityField.refreshFromWasm({ splatCount: 5 });
+    capacityField.upload(device, device.queue);
+    assert.notStrictEqual(capacityField.centerOpacityBuffer, firstCenterOpacityBuffer, "Expected wasm capacity to grow when active count exceeds capacity");
+    assert.strictEqual(capacityField.bindGroupKey, null, "Growing wasm capacity should invalidate the bind group");
+    capacityField.destroy();
+
+    const shrinkCore = fillCore("sf:wasm:shrink");
+    const shrinkField = new SplatField({ wasmCenterOpacity: shrinkCore.centerOpacity.view, wasmRotation: shrinkCore.rotation.view, wasmScale: shrinkCore.scale.view, splatCount: 2 });
+    shrinkField.upload(device, device.queue);
+    shrinkField.refreshWasmCenterOpacity({ splatCount: 2 });
+    shrinkCore.centerOpacity.lengthGlobal.value = 4;
+    assert.throws(() => shrinkField.upload(device, device.queue), /wasmCenterOpacity length must be at least splatCount\*4/i, "upload() should validate refreshed wasmCenterOpacity length before reading");
+    shrinkField.destroy();
+
+    const mixColorBuffer = createStorageBuffer(device, 16);
+    try {
+        const invalidCore = fillCore("sf:wasm:invalid");
+        const invalidColor = makeView(4, "f32", "sf:wasm:invalid:color");
+        const invalidSH = makeView(12, "f32", "sf:wasm:invalid:sh");
+        const invalidCases = [
+            { message: "CPU and external-wasm descriptors should not mix", error: /CPU-array, external-buffer, and external-WebAssembly descriptors cannot be mixed/i, create: () => new SplatField({ positions: new Float32Array([0, 0, 0]), wasmCenterOpacity: invalidCore.centerOpacity.view }) },
+            { message: "wasmColor should not mix with CPU SH arrays", error: /direct colors and spherical harmonic coefficients cannot be mixed/i, create: () => new SplatField({ wasmColor: invalidColor.view, sh0: new Float32Array([0, 0, 0]) }) },
+            { message: "wasmSphericalHarmonics should not mix with external color buffers", error: /direct colors and spherical harmonic coefficients cannot be mixed/i, create: () => new SplatField({ wasmSphericalHarmonics: invalidSH.view, shDegree: 1, colorBuffer: mixColorBuffer, splatCount: 1 }) },
+            { message: "wasmSphericalHarmonics should require shDegree", error: /shDegree is required when using wasmSphericalHarmonics/i, create: () => new SplatField({ ...invalidCore, wasmSphericalHarmonics: invalidSH.view }) },
+            { message: "Invalid derived wasmCenterOpacity splatCount should throw", error: /wasmCenterOpacity length must be a multiple of 4/i, create: () => new SplatField({ wasmCenterOpacity: makeView(5, "f32", "sf:wasm:bad:center").view, wasmRotation: invalidCore.rotation.view, wasmScale: invalidCore.scale.view }) },
+            { message: "Short wasmColor should throw", error: /wasmColor length must be at least splatCount\*4/i, create: () => new SplatField({ wasmCenterOpacity: invalidCore.centerOpacity.view, wasmRotation: invalidCore.rotation.view, wasmScale: invalidCore.scale.view, wasmColor: invalidColor.view, splatCount: 2 }) },
+            { message: "Non-WasmMemoryView wasmCenterOpacity should throw", error: /wasmCenterOpacity must be a WasmMemoryView/i, create: () => new SplatField({ wasmCenterOpacity: invalidCore.centerOpacity.data, wasmRotation: invalidCore.rotation.view, wasmScale: invalidCore.scale.view }) },
+            { message: "Non-f32 wasmCenterOpacity should throw", error: /wasmCenterOpacity dtype must be 'f32'/i, create: () => new SplatField({ wasmCenterOpacity: makeView(8, "u32", "sf:wasm:bad:dtype").view, wasmRotation: invalidCore.rotation.view, wasmScale: invalidCore.scale.view }) }
+        ];
+        for (const testCase of invalidCases) assert.throws(testCase.create, testCase.error, testCase.message);
+    } finally { mixColorBuffer.destroy(); }
 }
 
 // Bounds and scene APIs expose splatfields as first-class scene objects with explicit and computed spatial state.

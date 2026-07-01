@@ -52,5 +52,5 @@ export type { PointCloudDescriptor, PointCloudColormap, PointCloudVisualChangeKi
 export { Scene } from "./world/scene";
 export type { SceneDescriptor, SceneBoundsOptions } from "./world/scene";
 export { SplatField } from "./world/splatfield";
-export type { SplatFieldDescriptor, SplatFieldColorSpace, SplatFieldSHDegree } from "./world/splatfield";
+export type { SplatFieldDescriptor, SplatFieldColorSpace, SplatFieldSHDegree, SplatFieldWasmRefreshOptions, SplatFieldWasmChannelOptions, SplatFieldWasmSources, SplatFieldWasmPackedDataOptions } from "./world/splatfield";
 export { WasmGPU as default } from "./core/engine";
