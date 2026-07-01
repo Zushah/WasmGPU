@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: Tuesday, June 23, 2026.
+Last updated: Wednesday, July 1, 2026.
 
-Last commit: Sunday, June 21, 2026, [**`d62bb1e`**](https://www.github.com/Zushah/WasmGPU/commit/d62bb1e).
+Last commit: Sunday, June 29, 2026, [**`ff6a097`**](https://www.github.com/Zushah/WasmGPU/commit/ff6a097).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -272,7 +272,7 @@ The renderer reads visible scene objects through scene getters. It also reads sc
 Objects in the scene own different data:
 
 - `./src/world/mesh.ts`: geometry, material references, transform, optional skin, optional morph runtime state, visibility flags, and scene owner references.
-- `./src/world/pointcloud.ts`: point data, bounds, scale source metadata, colormap state, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external point and color buffers.
+- `./src/world/pointcloud.ts`: point data, optional borrowed external WebAssembly memory views, bounds, scale source metadata, colormap state, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external point and color buffers.
 - `./src/world/glyphfield.ts`: glyph geometry, instance data, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external instance buffers.
 - `./src/world/nodelink.ts`: node data, edge data, node and edge rendering modes, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external node and edge buffers.
 - `./src/world/splatfield.ts`: Gaussian splat instance data, packed GPU buffers, transform, bounds, optional CPU records for upload and bounds computation, and per-object ownership flags for external buffers.
@@ -311,7 +311,7 @@ Graphics data is implemented under `./src/graphics/`.
 
 Pointclouds, glyphfields, nodelinks, and splatfields are separate scene object types. They share several patterns: a transform, visibility flags, GPU buffer references, uniform buffers, bind groups, bounds, and renderer-owned draw-list state. Pointclouds, glyphfields, and nodelinks also carry scale transform state plus optional CPU records for picking, while splatfields carry packed Gaussian attributes, optional CPU records for picking, and private renderer-side GPU sort state for transparent rendering.
 
-`./src/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available. It owns GPU buffers it creates from CPU data and destroys caller-supplied external point and color buffers only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer.
+`./src/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays, borrowed external `WasmMemoryView<Float32Array>` sources, or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available or external WebAssembly data is explicitly refreshed with bounds recomputation. Pointcloud WebAssembly sources are borrowed, refresh is explicit, and upload copies the active packed f32 vec4 ranges into pointcloud-owned GPU buffers without freeing or owning the external WebAssembly memory. It owns GPU buffers it creates from CPU data or external WebAssembly sources and destroys caller-supplied external point and color buffers only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer.
 
 `./src/world/glyphfield.ts` handles instanced glyph geometry. It can read CPU arrays, WebAssembly structure-of-arrays pointers, or external GPU buffers. It writes instance buffers and uniform buffers. It owns GPU buffers it creates from CPU arrays or WebAssembly pointers and borrows caller-supplied external instance buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffers: true` is used. Glyph geometry is a `Geometry` reference used by the renderer; `GlyphField.destroy()` currently destroys the stored uniform buffer plus only the instance buffers it owns, and it disposes its transform. It does not release the geometry reference. Glyphfield bounds use Rust bounds helpers when CPU arrays or WebAssembly pointers are available.
 
@@ -569,7 +569,7 @@ Important files:
 
 - `./src/world/scene.ts`: scene object arrays, add/remove helpers, light packing, bounds collection, and traversal.
 - `./src/world/mesh.ts`: mesh lifetime, transform ownership, material and geometry references, scene owner references, skin attachment, and morph runtime state.
-- `./src/world/pointcloud.ts`: point data, GPU upload, scale source metadata, bounds, and picking records.
+- `./src/world/pointcloud.ts`: point data, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
 - `./src/world/glyphfield.ts`: glyph instance data, geometry modes, GPU upload, scale source metadata, bounds, and picking records.
 - `./src/world/nodelink.ts`: node and edge data, rendering modes, GPU upload, scale source metadata, bounds, and picking records.
 - `./src/world/splatfield.ts`: Gaussian splat data, direct colors, spherical harmonic coefficient data, packed GPU upload, bounds, color-space handling, and picking records.
@@ -789,7 +789,7 @@ Important files:
 - `./examples/overlay.html`: overlay layers.
 - `./examples/picking.html`: picking and selection.
 - `./examples/scaling.html`: scaling and colormap behavior.
-- `./examples/fluid.html`, `./examples/galaxy.html`, `./examples/graphing.html`, `./examples/mandelbulb.html`, `./examples/protein.html`, and `./examples/terrain.html`: larger rendering and compute examples.
+- `./examples/fluid.html`, `./examples/galaxy.html`, `./examples/graphing.html`, `./examples/mandelbulb.html`, `./examples/protein.html`, `./examples/terrain.html`, and `./examples/lego.html`: larger rendering and compute examples.
 
 Examples import built bundles from `./dist/`. When source changes public behavior, update examples when preparing a release or when a specific example fix is needed.
 
@@ -803,6 +803,7 @@ Architectural role:
 Important files:
 
 - `./test/*.test.js`: Node test files run by `npm run test`.
+- `./.github/workflows/test.yaml`: GitHub Actions workflow for automatically running tests on every push and pull request.
 
 Tests use generated or bundled files when needed. If a change modifies Rust exports, generated WebAssembly bindings, renderer behavior, glTF import, shader layouts, or public descriptors, add or update focused tests where the current test setup can exercise the behavior.
 

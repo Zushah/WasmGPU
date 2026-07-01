@@ -4,13 +4,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { assert, clamp01, createBuffer, linearIndexToNdIndex, normalizeColorStops, normalizePositiveIntShape, resolveGPUBuffer } from "../utils";
+import { assert, clamp01, createBuffer, linearIndexToNdIndex, nextPow2, normalizeColorStops, normalizePositiveIntShape, resolveGPUBuffer } from "../utils";
 import { Transform } from "../core/transform";
 import { BlendMode, type Color4 } from "../graphics/material";
 import { Colormap, type BuiltinColormapName } from "../graphics/colormap";
 import { cloneScaleTransform, normalizeScaleTransform, packScaleTransform, SCALE_UNIFORM_FLOAT_COUNT } from "../scaling";
 import type { ScaleSourceDescriptor, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor } from "../scaling";
-import { boundsf, wasm } from "../wasm";
+import { boundsf, wasm, WasmMemoryView } from "../wasm";
 import { Bounds3, boundsFromBox, boundsFromBoxAndSphere, boundsFromSphere, emptyBounds, transformBounds } from "./bounds";
 
 export type PointCloudColormap = BuiltinColormapName | "custom";
@@ -19,9 +19,28 @@ export type PointCloudColorMode = "rgba" | "scalar";
 
 export type PointCloudVisualChangeKind = "scale" | "colormap" | "visual";
 
+export type PointCloudWasmRefreshOptions = {
+    pointCount?: number;
+    keepCPUData?: boolean;
+    recomputeBounds?: boolean;
+};
+
+export type PointCloudWasmDataOptions = PointCloudWasmRefreshOptions & {
+    capacity?: number;
+};
+
+export type PointCloudWasmColorsOptions = {
+    pointCount?: number;
+    keepCPUData?: boolean;
+    capacity?: number;
+};
+
 export type PointCloudDescriptor = {
     data?: Float32Array;
     colors?: Float32Array;
+    wasmData?: WasmMemoryView<Float32Array>;
+    wasmColors?: WasmMemoryView<Float32Array>;
+    wasmCapacity?: number;
     pointsBuffer?: GPUBuffer | { buffer: GPUBuffer };
     colorsBuffer?: GPUBuffer | { buffer: GPUBuffer };
     pointCount?: number;
@@ -51,6 +70,8 @@ export type PointCloudDescriptor = {
 
 const UNIFORM_FLOAT_COUNT = 4 + SCALE_UNIFORM_FLOAT_COUNT + 4 + (8 * 4);
 const UNIFORM_BYTE_SIZE = UNIFORM_FLOAT_COUNT * 4;
+const POINT_RECORD_FLOATS = 4;
+const POINT_RECORD_BYTES = POINT_RECORD_FLOATS * 4;
 
 type BoundsSourceMode = "none" | "explicit" | "computed";
 
@@ -63,6 +84,18 @@ const pointCloudRevisionF32 = new Float32Array(pointCloudRevisionScratch);
 const pointCloudRevisionU32 = new Uint32Array(pointCloudRevisionScratch);
 const mixPointCloudRevision = (hash: number, value: number): number => Math.imul((hash ^ (value >>> 0)) >>> 0, 16777619) >>> 0;
 const mixPointCloudRevisionF32 = (hash: number, value: number): number => { pointCloudRevisionF32[0] = Number.isFinite(value) ? value : 0; return mixPointCloudRevision(hash, pointCloudRevisionU32[0] >>> 0); };
+
+const assertWasmF32View = (source: unknown, label: "wasmData" | "wasmColors"): WasmMemoryView<Float32Array> => { assert(source instanceof WasmMemoryView, `PointCloud: ${label} must be a WasmMemoryView<Float32Array>.`); assert(source.dtype === "f32", `PointCloud: ${label} dtype must be 'f32'.`); return source as WasmMemoryView<Float32Array>; };
+
+const assertWasmPointCount = (value: number, label: string = "pointCount"): number => { assert(Number.isInteger(value) && value >= 0, `PointCloud: ${label} must be an integer >= 0.`); return value | 0; };
+
+const assertWasmCapacity = (value: number | undefined, label: string = "wasmCapacity"): number => { if (value === undefined) return 0; assert(Number.isInteger(value) && value >= 0, `PointCloud: ${label} must be an integer >= 0.`); return value | 0; };
+
+const resolveWasmDataPointCount = (source: WasmMemoryView<Float32Array>, explicitPointCount: number | undefined): number => { if (explicitPointCount !== undefined) { const count = assertWasmPointCount(explicitPointCount); assert(source.length >= count * POINT_RECORD_FLOATS, "PointCloud: wasmData length must be at least pointCount*4."); return count; } assert((source.length % POINT_RECORD_FLOATS) === 0, "PointCloud: wasmData length must be a multiple of 4 when pointCount is not provided."); return source.length / POINT_RECORD_FLOATS; };
+
+const validateWasmDataRange = (source: WasmMemoryView<Float32Array>, pointCount: number): void => { assert(source.length >= pointCount * POINT_RECORD_FLOATS, "PointCloud: wasmData length must be at least pointCount*4."); };
+
+const validateWasmColorsRange = (source: WasmMemoryView<Float32Array>, pointCount: number): void => { assert(source.length >= pointCount * POINT_RECORD_FLOATS, "PointCloud: wasmColors length must be at least pointCount*4."); };
 
 export class PointCloud {
     readonly transform: Transform = new Transform();
@@ -87,6 +120,8 @@ export class PointCloud {
     private _scaleTransform: ScaleTransform;
     private _CPUData: Float32Array | null = null;
     private _colorsCPU: Float32Array | null = null;
+    private _wasmDataSource: WasmMemoryView<Float32Array> | null = null;
+    private _wasmColorsSource: WasmMemoryView<Float32Array> | null = null;
     private _keepCPUData: boolean = false;
     private _ndShape: number[] | null = null;
     private _boundsSource: BoundsSourceMode = "none";
@@ -105,6 +140,14 @@ export class PointCloud {
     private _colorsOwned: boolean = false;
     private _ownExternalBuffers: boolean = false;
     private _colorsExternal: boolean = false;
+    private _wasmDataDirty: boolean = false;
+    private _wasmColorsDirty: boolean = false;
+    private _pointsWasmManaged: boolean = false;
+    private _colorsWasmManaged: boolean = false;
+    private _wasmPointCapacity: number = 0;
+    private _wasmColorCapacity: number = 0;
+    private _wasmPointCapacityHint: number = 0;
+    private _wasmColorCapacityHint: number = 0;
 
     constructor(desc: PointCloudDescriptor) {
         assert(!!desc && !!desc.scaleTransform, "PointCloud: scaleTransform is required.");
@@ -122,16 +165,19 @@ export class PointCloud {
         if (desc.colormap !== undefined) this._colormap = desc.colormap;
         if (desc.colormapStops !== undefined) this._colormapStops = normalizeColorStops(desc.colormapStops);
         if (desc.colorMode !== undefined) this._colorMode = desc.colorMode;
-        else if (desc.colors || desc.colorsBuffer) this._colorMode = "rgba";
+        else if (desc.colors || desc.colorsBuffer || desc.wasmColors) this._colorMode = "rgba";
         if (desc.softness !== undefined) this._softness = desc.softness;
         if (desc.keepCPUData !== undefined) this._keepCPUData = !!desc.keepCPUData;
         this._ownExternalBuffers = !!desc.ownBuffers;
         if (desc.ndShape !== undefined) this.ndShape = desc.ndShape;
         this.applyExplicitBounds(desc);
+        const wasmCapacity = assertWasmCapacity(desc.wasmCapacity);
         if (desc.data) this.setData(desc.data, { keepCPUData: this._keepCPUData });
+        else if (desc.wasmData) this.setWasmData(desc.wasmData, { pointCount: desc.pointCount, capacity: wasmCapacity, keepCPUData: this._keepCPUData });
         else if (desc.pointsBuffer) { const buf = resolveGPUBuffer(desc.pointsBuffer); const count = desc.pointCount ?? 0; assert(count > 0, "PointCloud: pointCount is required when using pointsBuffer."); this.setPointsBuffer(buf, count, { ownBuffer: this._ownExternalBuffers }); }
         else if (desc.pointCount !== undefined) { this._pointCount = desc.pointCount; this._pointsDirty = false; }
         if (desc.colors) this.setColors(desc.colors, { keepCPUData: this._keepCPUData });
+        else if (desc.wasmColors) this.setWasmColors(desc.wasmColors, { pointCount: desc.pointCount, capacity: wasmCapacity, keepCPUData: this._keepCPUData });
         else if (desc.colorsBuffer) this.setColorsBuffer(resolveGPUBuffer(desc.colorsBuffer), { ownBuffer: this._ownExternalBuffers });
     }
 
@@ -185,6 +231,102 @@ export class PointCloud {
         if (this.colorsBuffer && this.colorsBuffer !== buffer && this._colorsOwned) this.colorsBuffer.destroy();
         this.colorsBuffer = buffer;
         this._colorsOwned = !!buffer && owned;
+    }
+
+    private clearWasmDataState(destroyManagedBuffer: boolean): void {
+        this._wasmDataSource = null;
+        this._wasmDataDirty = false;
+        this._wasmPointCapacityHint = 0;
+        if (destroyManagedBuffer && this._pointsWasmManaged) {
+            this.replacePointsBuffer(null, false);
+            this.bindGroupKey = null;
+        }
+        this._pointsWasmManaged = false;
+        this._wasmPointCapacity = 0;
+    }
+
+    private clearWasmColorsState(destroyManagedBuffer: boolean): void {
+        this._wasmColorsSource = null;
+        this._wasmColorsDirty = false;
+        this._wasmColorCapacityHint = 0;
+        if (destroyManagedBuffer && this._colorsWasmManaged) {
+            this.replaceColorsBuffer(null, false);
+            this.bindGroupKey = null;
+        }
+        this._colorsWasmManaged = false;
+        this._wasmColorCapacity = 0;
+    }
+
+    private setPointCountFromWasm(pointCount: number, bumpScaleRevision: boolean): void {
+        const count = assertWasmPointCount(pointCount);
+        const changed = count !== this._pointCount;
+        this._pointCount = count;
+        if (changed) {
+            this.clearColorsIfCountMismatch();
+            if (this._wasmColorsSource) {
+                this._wasmColorsDirty = true;
+                this._colorsDirty = true;
+            }
+        }
+        if (bumpScaleRevision) this._scaleRevision++;
+    }
+
+    private copyWasmActiveRange(source: WasmMemoryView<Float32Array>, pointCount: number): Float32Array {
+        const view = source.array();
+        return new Float32Array(view.subarray(0, pointCount * POINT_RECORD_FLOATS));
+    }
+
+    private computeBoundsFromPackedData(data: Float32Array, pointCount: number): void {
+        if (pointCount <= 0) return;
+        const activeLength = pointCount * POINT_RECORD_FLOATS;
+        const pointsPtr = wasm.allocF32(activeLength);
+        const boxMinPtr = wasm.allocF32(3);
+        const boxMaxPtr = wasm.allocF32(3);
+        const sphereCenterPtr = wasm.allocF32(3);
+        const sphereRadiusPtr = wasm.allocF32(1);
+        try {
+            wasm.f32view(pointsPtr, activeLength).set(data.subarray(0, activeLength));
+            boundsf.pointcloudXYZS(boxMinPtr, boxMaxPtr, sphereCenterPtr, sphereRadiusPtr, pointsPtr, pointCount, POINT_RECORD_FLOATS);
+            const boxMin = wasm.f32view(boxMinPtr, 3);
+            const boxMax = wasm.f32view(boxMaxPtr, 3);
+            const sphereCenter = wasm.f32view(sphereCenterPtr, 3);
+            const sphereRadius = wasm.f32view(sphereRadiusPtr, 1)[0];
+            this.setBounds(boundsFromBoxAndSphere([boxMin[0], boxMin[1], boxMin[2]], [boxMax[0], boxMax[1], boxMax[2]], [sphereCenter[0], sphereCenter[1], sphereCenter[2]], sphereRadius), "computed");
+        } finally {
+            wasm.freeF32(sphereRadiusPtr, 1);
+            wasm.freeF32(sphereCenterPtr, 3);
+            wasm.freeF32(boxMaxPtr, 3);
+            wasm.freeF32(boxMinPtr, 3);
+            wasm.freeF32(pointsPtr, activeLength);
+        }
+    }
+
+    private ensureWasmPointBuffer(device: GPUDevice, pointCount: number): void {
+        const required = Math.max(pointCount, this._wasmPointCapacityHint);
+        if (required <= 0) return;
+        if (this.pointsBuffer && this._pointsWasmManaged && this._wasmPointCapacity >= required) return;
+        const capacity = nextPow2(required);
+        const buffer = device.createBuffer({
+            label: "PointCloud.wasmData",
+            size: capacity * POINT_RECORD_BYTES,
+            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST
+        });
+        this.replacePointsBuffer(buffer, true);
+        this._pointsWasmManaged = true;
+        this._wasmPointCapacity = capacity;
+        this.bindGroupKey = null;
+    }
+
+    private ensureWasmColorsBuffer(device: GPUDevice, pointCount: number): void {
+        const required = Math.max(pointCount, this._wasmColorCapacityHint);
+        if (required <= 0) return;
+        if (this.colorsBuffer && this._colorsWasmManaged && this._wasmColorCapacity >= required) return;
+        const capacity = nextPow2(required);
+        const buffer = device.createBuffer({ label: "PointCloud.wasmColors", size: capacity * POINT_RECORD_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+        this.replaceColorsBuffer(buffer, true);
+        this._colorsWasmManaged = true;
+        this._wasmColorCapacity = capacity;
+        this.bindGroupKey = null;
     }
 
     get pointCount(): number {
@@ -366,6 +508,7 @@ export class PointCloud {
 
     setData(data: Float32Array, opts: { keepCPUData?: boolean } = {}): void {
         assert((data.length % 4) === 0, "PointCloud: data length must be a multiple of 4 (x,y,z,scalar per point).");
+        this.clearWasmDataState(true);
         this._CPUData = data;
         this._pointCount = data.length / 4;
         this.clearColorsIfCountMismatch();
@@ -379,6 +522,7 @@ export class PointCloud {
 
     setPointsBuffer(buffer: GPUBuffer, pointCount: number, opts: { ownBuffer?: boolean } = {}): void {
         assert(pointCount > 0, "PointCloud: pointCount must be > 0.");
+        this.clearWasmDataState(true);
         this._CPUData = null;
         this._pointCount = pointCount;
         this.clearColorsIfCountMismatch();
@@ -392,6 +536,7 @@ export class PointCloud {
     setColors(data: Float32Array, opts: { keepCPUData?: boolean } = {}): void {
         assert((data.length % 4) === 0, "PointCloud: colors length must be a multiple of 4 (r,g,b,a per point).");
         assert((data.length / 4) === this._pointCount, "PointCloud: colors length must equal pointCount*4.");
+        this.clearWasmColorsState(true);
         this._colorsCPU = new Float32Array(data);
         if (this.colorsBuffer && !this._colorsOwned) this.colorsBuffer = null;
         this._colorsExternal = false;
@@ -402,11 +547,84 @@ export class PointCloud {
 
     setColorsBuffer(buffer: GPUBuffer | null, opts: { ownBuffer?: boolean } = {}): void {
         if (buffer) assert(this._pointCount > 0, "PointCloud: pointCount must be > 0 when using colorsBuffer.");
+        this.clearWasmColorsState(true);
         this.replaceColorsBuffer(buffer, !!buffer && !!opts.ownBuffer);
         this._colorsCPU = null;
         this._colorsExternal = !!buffer;
         this._colorsDirty = false;
         this.bindGroupKey = null;
+    }
+
+    setWasmData(source: WasmMemoryView<Float32Array> | null, options: PointCloudWasmDataOptions = {}): void {
+        if (source === null) { this.clearWasmDataState(true); return; }
+        const wasmSource = assertWasmF32View(source, "wasmData");
+        this._wasmPointCapacityHint = assertWasmCapacity(options.capacity, "wasmData capacity");
+        if (!this._pointsWasmManaged) { this.replacePointsBuffer(null, false); this._wasmPointCapacity = 0; this.bindGroupKey = null; }
+        this._wasmDataSource = wasmSource;
+        this._CPUData = null;
+        this.refreshWasmData(options);
+    }
+
+    setWasmColors(source: WasmMemoryView<Float32Array> | null, options: PointCloudWasmColorsOptions = {}): void {
+        if (source === null) { this.clearWasmColorsState(true); return; }
+        const wasmSource = assertWasmF32View(source, "wasmColors");
+        this._wasmColorCapacityHint = assertWasmCapacity(options.capacity, "wasmColors capacity");
+        if (!this._colorsWasmManaged) { this.replaceColorsBuffer(null, false); this._wasmColorCapacity = 0; this.bindGroupKey = null; }
+        this._wasmColorsSource = wasmSource;
+        this._colorsCPU = null;
+        this._colorsExternal = false;
+        this.refreshWasmColors(options);
+    }
+
+    refreshWasmData(options: PointCloudWasmRefreshOptions = {}): void {
+        const source = this._wasmDataSource;
+        if (!source) return;
+        source.refresh();
+        assertWasmF32View(source, "wasmData");
+        const count = resolveWasmDataPointCount(source, options.pointCount);
+        this.setPointCountFromWasm(count, true);
+        this._keepCPUData = options.keepCPUData ?? this._keepCPUData;
+        if (this._keepCPUData) this._CPUData = this.copyWasmActiveRange(source, count);
+        else this._CPUData = null;
+        if (options.recomputeBounds && this._boundsSource !== "explicit") this.computeBoundsFromPackedData(source.array(), count);
+        else this.clearComputedBoundsIfNeeded();
+        this._wasmDataDirty = true;
+        this._pointsDirty = true;
+    }
+
+    refreshWasmColors(options: { pointCount?: number; keepCPUData?: boolean } = {}): void {
+        const source = this._wasmColorsSource;
+        if (!source) return;
+        source.refresh();
+        assertWasmF32View(source, "wasmColors");
+        let count = this._pointCount;
+        if (options.pointCount !== undefined) {
+            const nextCount = assertWasmPointCount(options.pointCount);
+            assert(!this._wasmDataSource || nextCount === this._pointCount, "PointCloud: refreshWasmColors pointCount must match the current pointCount when wasmData is active; call refreshWasmData() or refreshFromWasm() to update point count.");
+            if (nextCount !== this._pointCount) {
+                this._pointCount = nextCount;
+                this.clearColorsIfCountMismatch();
+                this._scaleRevision++;
+            }
+            count = nextCount;
+        } else assert(count > 0 || source.length === 0, "PointCloud: pointCount is required when using wasmColors without wasmData.");
+        validateWasmColorsRange(source, count);
+        this._keepCPUData = options.keepCPUData ?? this._keepCPUData;
+        if (this._keepCPUData) this._colorsCPU = this.copyWasmActiveRange(source, count);
+        else this._colorsCPU = null;
+        this._colorsExternal = false;
+        this._wasmColorsDirty = true;
+        this._colorsDirty = true;
+    }
+
+    refreshFromWasm(options: PointCloudWasmRefreshOptions = {}): void {
+        if (this._wasmDataSource) this.refreshWasmData(options);
+        if (this._wasmColorsSource) this.refreshWasmColors(options);
+    }
+
+    clearWasmSources(): void {
+        this.clearWasmDataState(true);
+        this.clearWasmColorsState(true);
     }
 
     dropCPUData(): void {
@@ -472,8 +690,68 @@ export class PointCloud {
         return this.getWorldBounds();
     }
 
+    private uploadWasmData(device: GPUDevice, queue: GPUQueue): void {
+        const source = this._wasmDataSource;
+        if (!source || !this._wasmDataDirty) return;
+        source.refresh();
+        assertWasmF32View(source, "wasmData");
+        const count = this._pointCount;
+        validateWasmDataRange(source, count);
+        if (count <= 0) { this._wasmDataDirty = false; this._pointsDirty = false; return; }
+        const data = source.array();
+        const byteLength = count * POINT_RECORD_BYTES;
+        this.ensureWasmPointBuffer(device, count);
+        const write = (): void => {
+            assert(!!this.pointsBuffer, "PointCloud: wasmData upload requires a pointsBuffer.");
+            queue.writeBuffer(this.pointsBuffer, 0, data.buffer, data.byteOffset, byteLength);
+        };
+        try { write(); }
+        catch {
+            this.replacePointsBuffer(null, false);
+            this._pointsWasmManaged = false;
+            this._wasmPointCapacity = 0;
+            this.ensureWasmPointBuffer(device, count);
+            write();
+        }
+        if (this._keepCPUData) this._CPUData = new Float32Array(data.subarray(0, count * POINT_RECORD_FLOATS));
+        else this._CPUData = null;
+        this._wasmDataDirty = false;
+        this._pointsDirty = false;
+    }
+
+    private uploadWasmColors(device: GPUDevice, queue: GPUQueue): void {
+        const source = this._wasmColorsSource;
+        if (!source || !this._wasmColorsDirty) return;
+        source.refresh();
+        assertWasmF32View(source, "wasmColors");
+        const count = this._pointCount;
+        validateWasmColorsRange(source, count);
+        if (count <= 0) { this._wasmColorsDirty = false; this._colorsDirty = false; return; }
+        const colors = source.array();
+        const byteLength = count * POINT_RECORD_BYTES;
+        this.ensureWasmColorsBuffer(device, count);
+        const write = (): void => {
+            assert(!!this.colorsBuffer, "PointCloud: wasmColors upload requires a colorsBuffer.");
+            queue.writeBuffer(this.colorsBuffer, 0, colors.buffer, colors.byteOffset, byteLength);
+        };
+        try { write(); }
+        catch {
+            this.replaceColorsBuffer(null, false);
+            this._colorsWasmManaged = false;
+            this._wasmColorCapacity = 0;
+            this.ensureWasmColorsBuffer(device, count);
+            write();
+        }
+        if (this._keepCPUData) this._colorsCPU = new Float32Array(colors.subarray(0, count * POINT_RECORD_FLOATS));
+        else this._colorsCPU = null;
+        this._colorsExternal = false;
+        this._wasmColorsDirty = false;
+        this._colorsDirty = false;
+    }
+
     upload(device: GPUDevice, queue: GPUQueue): void {
-        if (this._pointsDirty) {
+        if (this._wasmDataSource && this._wasmDataDirty) this.uploadWasmData(device, queue);
+        else if (this._pointsDirty) {
             if (this.pointsBuffer && !this._CPUData) this._pointsDirty = false;
             else {
                 const data = this._CPUData;
@@ -482,18 +760,23 @@ export class PointCloud {
                     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
                     if (!this.pointsBuffer || !this._pointsOwned) this.replacePointsBuffer(createBuffer(device, data, usage), true);
                     else try { queue.writeBuffer(this.pointsBuffer, 0, data.buffer, data.byteOffset, data.byteLength); } catch { this.replacePointsBuffer(createBuffer(device, data, usage), true); }
+                    this._pointsWasmManaged = false;
+                    this._wasmPointCapacity = 0;
                     if (!this._keepCPUData) this._CPUData = null;
                     this._pointsDirty = false;
                     this.bindGroupKey = null;
                 }
             }
         }
-        if (!this._colorsExternal && this._colorsDirty) {
+        if (this._wasmColorsSource && this._wasmColorsDirty) this.uploadWasmColors(device, queue);
+        else if (!this._colorsExternal && this._colorsDirty) {
             const colors = this._colorsCPU;
             if (!colors) { this._colorsDirty = false; return; }
             const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST;
             if (!this.colorsBuffer || !this._colorsOwned) this.replaceColorsBuffer(createBuffer(device, colors, usage), true);
             else try { queue.writeBuffer(this.colorsBuffer, 0, colors.buffer, colors.byteOffset, colors.byteLength); } catch { this.replaceColorsBuffer(createBuffer(device, colors, usage), true); }
+            this._colorsWasmManaged = false;
+            this._wasmColorCapacity = 0;
             if (!this._keepCPUData) this._colorsCPU = null;
             this._colorsDirty = false;
             this.bindGroupKey = null;
@@ -560,12 +843,22 @@ export class PointCloud {
         this.bindGroupKey = null;
         this._CPUData = null;
         this._colorsCPU = null;
+        this._wasmDataSource = null;
+        this._wasmColorsSource = null;
         this._ndShape = null;
         this._pointCount = 0;
         this._pointsOwned = false;
         this._colorsOwned = false;
         this._ownExternalBuffers = false;
         this._colorsExternal = false;
+        this._wasmDataDirty = false;
+        this._wasmColorsDirty = false;
+        this._pointsWasmManaged = false;
+        this._colorsWasmManaged = false;
+        this._wasmPointCapacity = 0;
+        this._wasmColorCapacity = 0;
+        this._wasmPointCapacityHint = 0;
+        this._wasmColorCapacityHint = 0;
         this._visualChangeListeners.clear();
         this.transform.dispose();
     }

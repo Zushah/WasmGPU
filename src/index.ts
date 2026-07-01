@@ -48,7 +48,7 @@ export type { NodeLinkDescriptor, NodeLinkNodeGeometryMode, NodeLinkEdgeGeometry
 export { SelectionStore } from "./world/picking";
 export type { PickAttributes, PickHit, PickKind, PickLassoPoint, PickQuery, PickRegionMode, PickRegionQuery, PickRegionResult, PickResult, SelectionEntry, SelectionMode } from "./world/picking";
 export { PointCloud } from "./world/pointcloud";
-export type { PointCloudDescriptor, PointCloudColormap, PointCloudVisualChangeKind } from "./world/pointcloud";
+export type { PointCloudDescriptor, PointCloudColormap, PointCloudVisualChangeKind, PointCloudWasmDataOptions, PointCloudWasmColorsOptions, PointCloudWasmRefreshOptions } from "./world/pointcloud";
 export { Scene } from "./world/scene";
 export type { SceneDescriptor, SceneBoundsOptions } from "./world/scene";
 export { SplatField } from "./world/splatfield";

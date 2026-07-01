@@ -29,9 +29,10 @@ assert.ok(device, "Failed to acquire a WebGPU device");
 device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
 
 await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
-const { PointCloud, Compute } = WasmGPU;
+const { PointCloud, Compute, WasmMemoryView } = WasmGPU;
 assert.ok(PointCloud, "Missing export: PointCloud");
 assert.ok(Compute, "Missing export: Compute");
+assert.ok(WasmMemoryView, "Missing export: WasmMemoryView");
 const compute = new Compute(device, device.queue);
 assert.ok(compute.kernels && typeof compute.kernels.copyF32 === "function", "Missing kernel: compute.kernels.copyF32");
 
@@ -47,6 +48,10 @@ const readBufferAsF32 = async (buffer, count) => {
 const createRawStorageBuffer = (label, data) => device.createBuffer({ label, size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
 
 const baseScaleTransform = { componentCount: 4, componentIndex: 3, stride: 4, offset: 0 };
+
+const makeWasmF32View = (length, ptr = 0, name = "pointcloud-wasm-f32") => { const memory = new WebAssembly.Memory({ initial: 1 }), moduleRef = WasmGPU.webassemblyInterop.fromMemory(memory, { name }), data = new Float32Array(memory.buffer, ptr, length), view = moduleRef.view({ ptr, length, dtype: "f32", name }); assert.ok(view instanceof WasmMemoryView, "Expected fromMemory().view() to return a WasmMemoryView"); return { memory, moduleRef, data, view }; };
+
+const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-wasm-f32-global") => { const memory = new WebAssembly.Memory({ initial: 1 }), lengthGlobal = new WebAssembly.Global({ value: "i32", mutable: true }, length), moduleRef = WasmGPU.webassemblyInterop.fromMemory(memory, { name }), data = new Float32Array(memory.buffer, ptr, 64), view = moduleRef.view({ ptr, length: { global: lengthGlobal }, dtype: "f32", name }); assert.ok(view instanceof WasmMemoryView, "Expected fromMemory().view() to return a WasmMemoryView"); return { memory, moduleRef, lengthGlobal, data, view }; };
 
 // CPU data path: setData() -> upload() -> pointsBuffer readable by GPU
 {
@@ -67,6 +72,90 @@ const baseScaleTransform = { componentCount: 4, componentIndex: 3, stride: 4, of
     arraysApproxEqual(got, data, 0, "CPU-uploaded pointsBuffer contents mismatch");
 
     pc.destroy?.();
+}
+
+// External WebAssembly memory views: constructors, explicit refresh, CPU snapshots, validation, and grow-only GPU capacity.
+{
+    const colorPoints = makeWasmF32View(8, 0, "pc:wasm:data:ctor-colors");
+    const colorData = makeWasmF32View(8, 0, "pc:wasm:colors:ctor");
+    colorPoints.data.set([1, 2, 3, 0.5, 4, 6, 8, 0.25]);
+    colorData.data.set([1, 0, 0, 1, 0, 1, 0, 1]);
+    const colorCloud = new PointCloud({ wasmData: colorPoints.view, wasmColors: colorData.view, scaleTransform: baseScaleTransform });
+    assert.strictEqual(colorCloud.pointCount, 2, "PointCloud should derive pointCount from wasmData length");
+    assert.strictEqual(colorCloud.getPointRecord(0), null, "Default wasmData path should not retain CPU point records");
+    colorCloud.upload(device, device.queue);
+    assert.ok(colorCloud.pointsBuffer, "PointCloud.pointsBuffer not created after wasmData upload");
+    assert.ok(colorCloud.colorsBuffer, "PointCloud.colorsBuffer not created after wasmColors upload");
+    arraysApproxEqual(await readBufferAsF32(colorCloud.pointsBuffer, 8), colorPoints.data, 0, "wasmData-uploaded pointsBuffer contents mismatch");
+    arraysApproxEqual(await readBufferAsF32(colorCloud.colorsBuffer, 8), colorData.data, 0, "wasmColors-uploaded colorsBuffer contents mismatch");
+    const colorRevision0 = colorCloud.getScaleSourceDescriptor()?.revision ?? -1;
+    colorCloud.bindGroupKey = "pc:stable-wasm-colors";
+    colorData.data.set([0, 0, 1, 1], 4);
+    colorCloud.refreshWasmColors();
+    assert.strictEqual(colorCloud.bindGroupKey, "pc:stable-wasm-colors", "refreshWasmColors() should not invalidate a reused bind group");
+    colorCloud.upload(device, device.queue);
+    assert.strictEqual(colorCloud.getScaleSourceDescriptor()?.revision ?? -1, colorRevision0, "refreshWasmColors() should not bump scale revision for color-only refreshes");
+    assert.strictEqual(colorCloud.bindGroupKey, "pc:stable-wasm-colors", "wasmColors upload should not invalidate a reused bind group");
+    arraysApproxEqual(await readBufferAsF32(colorCloud.colorsBuffer, 8), colorData.data, 0, "refreshWasmColors() should upload refreshed colors");
+    assert.throws(() => colorCloud.refreshWasmColors({ pointCount: 3 }), /refreshWasmData\(\) or refreshFromWasm\(\)/i, "wasmColors should not change pointCount while wasmData is active");
+    colorCloud.destroy?.();
+
+    const capacityData = makeWasmF32ViewWithLengthGlobal(20, 0, "pc:wasm:data:capacity");
+    capacityData.data.set([1, 2, 3, 0.1, 4, 5, 6, 0.2, 7, 8, 9, 0.3, 10, 11, 12, 0.4, 13, 14, 15, 0.5]);
+    const capacityCloud = new PointCloud({ wasmData: capacityData.view, pointCount: 2, wasmCapacity: 4, scaleTransform: baseScaleTransform });
+    assert.strictEqual(capacityCloud.pointCount, 2, "Explicit pointCount should override extra wasmData capacity");
+    capacityCloud.upload(device, device.queue);
+    const firstBuffer = capacityCloud.pointsBuffer;
+    assert.ok(firstBuffer, "PointCloud wasmData upload should allocate a pointsBuffer");
+    assert.ok(firstBuffer.size >= 4 * 16, "wasmCapacity should be measured in point records");
+    arraysApproxEqual(await readBufferAsF32(firstBuffer, 8), capacityData.data.subarray(0, 8), 0, "Explicit pointCount upload should use only the active range");
+    capacityCloud.bindGroupKey = "pc:stable-wasm-data";
+    capacityCloud.refreshWasmData({ pointCount: 3 });
+    assert.strictEqual(capacityCloud.bindGroupKey, "pc:stable-wasm-data", "refreshWasmData() should not invalidate a reused bind group");
+    capacityCloud.upload(device, device.queue);
+    assert.strictEqual(capacityCloud.pointsBuffer, firstBuffer, "PointCloud should reuse wasmData GPU capacity when active count fits");
+    assert.strictEqual(capacityCloud.bindGroupKey, "pc:stable-wasm-data", "wasmData upload should not invalidate a reused bind group");
+    capacityCloud.refreshWasmData({ pointCount: 5 });
+    capacityCloud.upload(device, device.queue);
+    assert.notStrictEqual(capacityCloud.pointsBuffer, firstBuffer, "PointCloud should grow wasmData GPU capacity when active count exceeds capacity");
+    assert.ok(capacityCloud.pointsBuffer.size >= 5 * 16, "Grown wasmData buffer should fit the active point count");
+    assert.strictEqual(capacityCloud.bindGroupKey, null, "Growing wasmData GPU capacity should invalidate the bind group");
+
+    const revision0 = capacityCloud.getScaleSourceDescriptor()?.revision ?? -1;
+    capacityData.lengthGlobal.value = 12;
+    capacityCloud.refreshWasmData();
+    assert.strictEqual(capacityCloud.pointCount, 3, "refreshWasmData() should derive an updated pointCount from wasmData length");
+    capacityCloud.upload(device, device.queue);
+    assert.ok((capacityCloud.getScaleSourceDescriptor()?.revision ?? -1) > revision0, "refreshWasmData() should bump the scale revision");
+    capacityCloud.refreshWasmData({ pointCount: 3 });
+    capacityData.lengthGlobal.value = 4;
+    assert.throws(() => capacityCloud.upload(device, device.queue), /wasmData length must be at least pointCount\*4/i, "upload() should validate refreshed wasmData length before reading");
+    capacityCloud.destroy?.();
+
+    const keepPoints = makeWasmF32View(8, 0, "pc:wasm:keepcpu:points");
+    const keepColors = makeWasmF32View(8, 0, "pc:wasm:keepcpu:colors");
+    keepPoints.data.set([1, 2, 3, 0.1, 4, 5, 6, 0.2]);
+    keepColors.data.set([1, 0, 0, 1, 0, 1, 0, 1]);
+    const keepCloud = new PointCloud({ wasmData: keepPoints.view, wasmColors: keepColors.view, keepCPUData: true, scaleTransform: baseScaleTransform });
+    let rec = keepCloud.getPointRecord(1);
+    assert.ok(rec, "keepCPUData=true should snapshot wasmData for point records");
+    arraysApproxEqual(rec.packed, [4, 5, 6, 0.2], 1e-6, "Wasm point CPU snapshot mismatch");
+    arraysApproxEqual(rec.color, [0, 1, 0, 1], 1e-6, "Wasm color CPU snapshot mismatch");
+    keepPoints.data.set([40, 50, 60, 0.8], 4);
+    arraysApproxEqual(keepCloud.getPointRecord(1).packed, [4, 5, 6, 0.2], 1e-6, "Wasm CPU records should be retained as copies");
+    keepCloud.refreshFromWasm({ pointCount: 2, keepCPUData: true });
+    rec = keepCloud.getPointRecord(1);
+    arraysApproxEqual(rec.packed, [40, 50, 60, 0.8], 1e-6, "refreshFromWasm() should refresh retained CPU point data");
+    keepCloud.destroy?.();
+
+    const invalidCases = [
+        { message: "Invalid derived wasmData pointCount should throw", error: /wasmData length must be a multiple of 4/i, create: () => new PointCloud({ wasmData: makeWasmF32View(5, 0, "pc:wasm:bad:data:multiple").view, scaleTransform: baseScaleTransform }) },
+        { message: "Short explicit-count wasmData should throw", error: /wasmData length must be at least pointCount\*4/i, create: () => new PointCloud({ wasmData: makeWasmF32View(7, 0, "pc:wasm:bad:data:count").view, pointCount: 2, scaleTransform: baseScaleTransform }) },
+        { message: "Short wasmColors should throw", error: /wasmColors length must be at least pointCount\*4/i, create: () => new PointCloud({ wasmColors: makeWasmF32View(4, 0, "pc:wasm:bad:colors").view, pointCount: 2, scaleTransform: baseScaleTransform }) },
+        { message: "Non-WasmMemoryView wasmData should throw", error: /wasmData must be a WasmMemoryView/i, create: () => new PointCloud({ wasmData: makeWasmF32View(8, 0, "pc:wasm:bad:source-type").data, scaleTransform: baseScaleTransform }) },
+        { message: "Non-f32 wasmData should throw", error: /wasmData dtype must be 'f32'/i, create: () => { const memory = new WebAssembly.Memory({ initial: 1 }), moduleRef = WasmGPU.webassemblyInterop.fromMemory(memory, { name: "pc:wasm:bad:dtype" }); return new PointCloud({ wasmData: moduleRef.view({ ptr: 0, length: 8, dtype: "u32", name: "u32-points" }), scaleTransform: baseScaleTransform }); } }
+    ];
+    for (const testCase of invalidCases) assert.throws(testCase.create, testCase.error, testCase.message);
 }
 
 // External buffers are borrowed by default, owned when requested, and owned replacements are destroyed exactly once.
