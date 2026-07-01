@@ -39,7 +39,7 @@ export type { CameraType, PerspectiveCameraDescriptor, OrthographicCameraDescrip
 export { NavigationControls, OrbitControls, TrackballControls, AxisConventions } from "./world/controls";
 export type { NavigationMode, InspectionView, NavigationControlsMouseButtons, OrbitControlsMouseButtons, TrackballControlsMouseButtons, NavigationControlsChangeListener, NavigationControlsInteractionListener, NavigationControlsDescriptor, OrbitControlsDescriptor, TrackballControlsDescriptor, AxisConventionDescriptor, AxisConventionPreset, AxisConventionInput, FitToBoundsOptions, SetViewOptions } from "./world/controls";
 export { GlyphField } from "./world/glyphfield";
-export type { GlyphFieldDescriptor, GlyphShape, GlyphColorMode, GlyphColormap, GlyphFieldVisualChangeKind } from "./world/glyphfield";
+export type { GlyphFieldDescriptor, GlyphShape, GlyphColorMode, GlyphColormap, GlyphFieldVisualChangeKind, GlyphFieldWasmRefreshOptions, GlyphFieldWasmChannelOptions, GlyphFieldWasmInstancesOptions, GlyphFieldWasmSources } from "./world/glyphfield";
 export { Light, AmbientLight, DirectionalLight, PointLight, SpotLight } from "./world/light";
 export type { LightType, AmbientLightDescriptor, DirectionalLightDescriptor, PointLightDescriptor, SpotLightDescriptor } from "./world/light";
 export { Mesh } from "./world/mesh";

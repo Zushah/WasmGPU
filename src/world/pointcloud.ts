@@ -4,13 +4,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { assert, clamp01, createBuffer, linearIndexToNdIndex, nextPow2, normalizeColorStops, normalizePositiveIntShape, resolveGPUBuffer } from "../utils";
+import { assert, clamp01, createBuffer, linearIndexToNdIndex, normalizeColorStops, normalizePositiveIntShape, resolveGPUBuffer } from "../utils";
 import { Transform } from "../core/transform";
 import { BlendMode, type Color4 } from "../graphics/material";
 import { Colormap, type BuiltinColormapName } from "../graphics/colormap";
 import { cloneScaleTransform, normalizeScaleTransform, packScaleTransform, SCALE_UNIFORM_FLOAT_COUNT } from "../scaling";
 import type { ScaleSourceDescriptor, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor } from "../scaling";
-import { boundsf, wasm, WasmMemoryView } from "../wasm";
+import { WasmMemoryView, assertWasmF32View, assertWasmRecordCount, assertWasmCapacity, resolveWasmRecordCount, validateWasmRecordRange, growWasmCapacity } from "../wasm";
 import { Bounds3, boundsFromBox, boundsFromBoxAndSphere, boundsFromSphere, emptyBounds, transformBounds } from "./bounds";
 
 export type PointCloudColormap = BuiltinColormapName | "custom";
@@ -85,17 +85,11 @@ const pointCloudRevisionU32 = new Uint32Array(pointCloudRevisionScratch);
 const mixPointCloudRevision = (hash: number, value: number): number => Math.imul((hash ^ (value >>> 0)) >>> 0, 16777619) >>> 0;
 const mixPointCloudRevisionF32 = (hash: number, value: number): number => { pointCloudRevisionF32[0] = Number.isFinite(value) ? value : 0; return mixPointCloudRevision(hash, pointCloudRevisionU32[0] >>> 0); };
 
-const assertWasmF32View = (source: unknown, label: "wasmData" | "wasmColors"): WasmMemoryView<Float32Array> => { assert(source instanceof WasmMemoryView, `PointCloud: ${label} must be a WasmMemoryView<Float32Array>.`); assert(source.dtype === "f32", `PointCloud: ${label} dtype must be 'f32'.`); return source as WasmMemoryView<Float32Array>; };
+const resolveWasmDataPointCount = (source: WasmMemoryView<Float32Array>, explicitPointCount: number | undefined): number => resolveWasmRecordCount(source, explicitPointCount, POINT_RECORD_FLOATS, "PointCloud: wasmData", "PointCloud: pointCount", "pointCount");
 
-const assertWasmPointCount = (value: number, label: string = "pointCount"): number => { assert(Number.isInteger(value) && value >= 0, `PointCloud: ${label} must be an integer >= 0.`); return value | 0; };
+const validateWasmDataRange = (source: WasmMemoryView<Float32Array>, pointCount: number): void => validateWasmRecordRange(source, pointCount, POINT_RECORD_FLOATS, "PointCloud: wasmData", "pointCount");
 
-const assertWasmCapacity = (value: number | undefined, label: string = "wasmCapacity"): number => { if (value === undefined) return 0; assert(Number.isInteger(value) && value >= 0, `PointCloud: ${label} must be an integer >= 0.`); return value | 0; };
-
-const resolveWasmDataPointCount = (source: WasmMemoryView<Float32Array>, explicitPointCount: number | undefined): number => { if (explicitPointCount !== undefined) { const count = assertWasmPointCount(explicitPointCount); assert(source.length >= count * POINT_RECORD_FLOATS, "PointCloud: wasmData length must be at least pointCount*4."); return count; } assert((source.length % POINT_RECORD_FLOATS) === 0, "PointCloud: wasmData length must be a multiple of 4 when pointCount is not provided."); return source.length / POINT_RECORD_FLOATS; };
-
-const validateWasmDataRange = (source: WasmMemoryView<Float32Array>, pointCount: number): void => { assert(source.length >= pointCount * POINT_RECORD_FLOATS, "PointCloud: wasmData length must be at least pointCount*4."); };
-
-const validateWasmColorsRange = (source: WasmMemoryView<Float32Array>, pointCount: number): void => { assert(source.length >= pointCount * POINT_RECORD_FLOATS, "PointCloud: wasmColors length must be at least pointCount*4."); };
+const validateWasmColorsRange = (source: WasmMemoryView<Float32Array>, pointCount: number): void => validateWasmRecordRange(source, pointCount, POINT_RECORD_FLOATS, "PointCloud: wasmColors", "pointCount");
 
 export class PointCloud {
     readonly transform: Transform = new Transform();
@@ -171,7 +165,7 @@ export class PointCloud {
         this._ownExternalBuffers = !!desc.ownBuffers;
         if (desc.ndShape !== undefined) this.ndShape = desc.ndShape;
         this.applyExplicitBounds(desc);
-        const wasmCapacity = assertWasmCapacity(desc.wasmCapacity);
+        const wasmCapacity = assertWasmCapacity(desc.wasmCapacity, "PointCloud: wasmCapacity");
         if (desc.data) this.setData(desc.data, { keepCPUData: this._keepCPUData });
         else if (desc.wasmData) this.setWasmData(desc.wasmData, { pointCount: desc.pointCount, capacity: wasmCapacity, keepCPUData: this._keepCPUData });
         else if (desc.pointsBuffer) { const buf = resolveGPUBuffer(desc.pointsBuffer); const count = desc.pointCount ?? 0; assert(count > 0, "PointCloud: pointCount is required when using pointsBuffer."); this.setPointsBuffer(buf, count, { ownBuffer: this._ownExternalBuffers }); }
@@ -258,7 +252,7 @@ export class PointCloud {
     }
 
     private setPointCountFromWasm(pointCount: number, bumpScaleRevision: boolean): void {
-        const count = assertWasmPointCount(pointCount);
+        const count = assertWasmRecordCount(pointCount, "PointCloud: pointCount");
         const changed = count !== this._pointCount;
         this._pointCount = count;
         if (changed) {
@@ -278,34 +272,32 @@ export class PointCloud {
 
     private computeBoundsFromPackedData(data: Float32Array, pointCount: number): void {
         if (pointCount <= 0) return;
-        const activeLength = pointCount * POINT_RECORD_FLOATS;
-        const pointsPtr = wasm.allocF32(activeLength);
-        const boxMinPtr = wasm.allocF32(3);
-        const boxMaxPtr = wasm.allocF32(3);
-        const sphereCenterPtr = wasm.allocF32(3);
-        const sphereRadiusPtr = wasm.allocF32(1);
-        try {
-            wasm.f32view(pointsPtr, activeLength).set(data.subarray(0, activeLength));
-            boundsf.pointcloudXYZS(boxMinPtr, boxMaxPtr, sphereCenterPtr, sphereRadiusPtr, pointsPtr, pointCount, POINT_RECORD_FLOATS);
-            const boxMin = wasm.f32view(boxMinPtr, 3);
-            const boxMax = wasm.f32view(boxMaxPtr, 3);
-            const sphereCenter = wasm.f32view(sphereCenterPtr, 3);
-            const sphereRadius = wasm.f32view(sphereRadiusPtr, 1)[0];
-            this.setBounds(boundsFromBoxAndSphere([boxMin[0], boxMin[1], boxMin[2]], [boxMax[0], boxMax[1], boxMax[2]], [sphereCenter[0], sphereCenter[1], sphereCenter[2]], sphereRadius), "computed");
-        } finally {
-            wasm.freeF32(sphereRadiusPtr, 1);
-            wasm.freeF32(sphereCenterPtr, 3);
-            wasm.freeF32(boxMaxPtr, 3);
-            wasm.freeF32(boxMinPtr, 3);
-            wasm.freeF32(pointsPtr, activeLength);
+        let minX = data[0], minY = data[1], minZ = data[2];
+        let maxX = data[0], maxY = data[1], maxZ = data[2];
+        for (let i = 1; i < pointCount; i++) {
+            const base = i * POINT_RECORD_FLOATS;
+            const x = data[base + 0], y = data[base + 1], z = data[base + 2];
+            if (x < minX) minX = x; if (y < minY) minY = y; if (z < minZ) minZ = z;
+            if (x > maxX) maxX = x; if (y > maxY) maxY = y; if (z > maxZ) maxZ = z;
         }
+        const cx = 0.5 * (minX + maxX);
+        const cy = 0.5 * (minY + maxY);
+        const cz = 0.5 * (minZ + maxZ);
+        let maxR2 = 0;
+        for (let i = 0; i < pointCount; i++) {
+            const base = i * POINT_RECORD_FLOATS;
+            const dx = data[base + 0] - cx, dy = data[base + 1] - cy, dz = data[base + 2] - cz;
+            const r2 = (dx * dx) + (dy * dy) + (dz * dz);
+            if (r2 > maxR2) maxR2 = r2;
+        }
+        this.setBounds(boundsFromBoxAndSphere([minX, minY, minZ], [maxX, maxY, maxZ], [cx, cy, cz], Math.sqrt(maxR2)), "computed");
     }
 
     private ensureWasmPointBuffer(device: GPUDevice, pointCount: number): void {
         const required = Math.max(pointCount, this._wasmPointCapacityHint);
         if (required <= 0) return;
         if (this.pointsBuffer && this._pointsWasmManaged && this._wasmPointCapacity >= required) return;
-        const capacity = nextPow2(required);
+        const capacity = growWasmCapacity(required, this._wasmPointCapacity);
         const buffer = device.createBuffer({
             label: "PointCloud.wasmData",
             size: capacity * POINT_RECORD_BYTES,
@@ -321,7 +313,7 @@ export class PointCloud {
         const required = Math.max(pointCount, this._wasmColorCapacityHint);
         if (required <= 0) return;
         if (this.colorsBuffer && this._colorsWasmManaged && this._wasmColorCapacity >= required) return;
-        const capacity = nextPow2(required);
+        const capacity = growWasmCapacity(required, this._wasmColorCapacity);
         const buffer = device.createBuffer({ label: "PointCloud.wasmColors", size: capacity * POINT_RECORD_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
         this.replaceColorsBuffer(buffer, true);
         this._colorsWasmManaged = true;
@@ -557,8 +549,8 @@ export class PointCloud {
 
     setWasmData(source: WasmMemoryView<Float32Array> | null, options: PointCloudWasmDataOptions = {}): void {
         if (source === null) { this.clearWasmDataState(true); return; }
-        const wasmSource = assertWasmF32View(source, "wasmData");
-        this._wasmPointCapacityHint = assertWasmCapacity(options.capacity, "wasmData capacity");
+        const wasmSource = assertWasmF32View(source, "PointCloud: wasmData");
+        this._wasmPointCapacityHint = assertWasmCapacity(options.capacity, "PointCloud: wasmData capacity");
         if (!this._pointsWasmManaged) { this.replacePointsBuffer(null, false); this._wasmPointCapacity = 0; this.bindGroupKey = null; }
         this._wasmDataSource = wasmSource;
         this._CPUData = null;
@@ -567,8 +559,8 @@ export class PointCloud {
 
     setWasmColors(source: WasmMemoryView<Float32Array> | null, options: PointCloudWasmColorsOptions = {}): void {
         if (source === null) { this.clearWasmColorsState(true); return; }
-        const wasmSource = assertWasmF32View(source, "wasmColors");
-        this._wasmColorCapacityHint = assertWasmCapacity(options.capacity, "wasmColors capacity");
+        const wasmSource = assertWasmF32View(source, "PointCloud: wasmColors");
+        this._wasmColorCapacityHint = assertWasmCapacity(options.capacity, "PointCloud: wasmColors capacity");
         if (!this._colorsWasmManaged) { this.replaceColorsBuffer(null, false); this._wasmColorCapacity = 0; this.bindGroupKey = null; }
         this._wasmColorsSource = wasmSource;
         this._colorsCPU = null;
@@ -580,7 +572,7 @@ export class PointCloud {
         const source = this._wasmDataSource;
         if (!source) return;
         source.refresh();
-        assertWasmF32View(source, "wasmData");
+        assertWasmF32View(source, "PointCloud: wasmData");
         const count = resolveWasmDataPointCount(source, options.pointCount);
         this.setPointCountFromWasm(count, true);
         this._keepCPUData = options.keepCPUData ?? this._keepCPUData;
@@ -596,10 +588,10 @@ export class PointCloud {
         const source = this._wasmColorsSource;
         if (!source) return;
         source.refresh();
-        assertWasmF32View(source, "wasmColors");
+        assertWasmF32View(source, "PointCloud: wasmColors");
         let count = this._pointCount;
         if (options.pointCount !== undefined) {
-            const nextCount = assertWasmPointCount(options.pointCount);
+            const nextCount = assertWasmRecordCount(options.pointCount, "PointCloud: pointCount");
             assert(!this._wasmDataSource || nextCount === this._pointCount, "PointCloud: refreshWasmColors pointCount must match the current pointCount when wasmData is active; call refreshWasmData() or refreshFromWasm() to update point count.");
             if (nextCount !== this._pointCount) {
                 this._pointCount = nextCount;
@@ -652,28 +644,9 @@ export class PointCloud {
     computeBoundsFromCPUData(): void {
         const data = this._CPUData;
         if (!data || data.length < 4) return;
-        const pointCount = this._pointCount | 0;
+        const pointCount = this._pointCount;
         if (pointCount <= 0) return;
-        const pointsPtr = wasm.allocF32(data.length);
-        const boxMinPtr = wasm.allocF32(3);
-        const boxMaxPtr = wasm.allocF32(3);
-        const sphereCenterPtr = wasm.allocF32(3);
-        const sphereRadiusPtr = wasm.allocF32(1);
-        try {
-            wasm.f32view(pointsPtr, data.length).set(data);
-            boundsf.pointcloudXYZS(boxMinPtr, boxMaxPtr, sphereCenterPtr, sphereRadiusPtr, pointsPtr, pointCount, 4);
-            const boxMin = wasm.f32view(boxMinPtr, 3);
-            const boxMax = wasm.f32view(boxMaxPtr, 3);
-            const sphereCenter = wasm.f32view(sphereCenterPtr, 3);
-            const sphereRadius = wasm.f32view(sphereRadiusPtr, 1)[0];
-            this.setBounds(boundsFromBoxAndSphere([boxMin[0], boxMin[1], boxMin[2]], [boxMax[0], boxMax[1], boxMax[2]], [sphereCenter[0], sphereCenter[1], sphereCenter[2]], sphereRadius), "computed");
-        } finally {
-            wasm.freeF32(sphereRadiusPtr, 1);
-            wasm.freeF32(sphereCenterPtr, 3);
-            wasm.freeF32(boxMaxPtr, 3);
-            wasm.freeF32(boxMinPtr, 3);
-            wasm.freeF32(pointsPtr, data.length);
-        }
+        this.computeBoundsFromPackedData(data, pointCount);
     }
 
     getLocalBounds(): Bounds3 {
@@ -694,7 +667,7 @@ export class PointCloud {
         const source = this._wasmDataSource;
         if (!source || !this._wasmDataDirty) return;
         source.refresh();
-        assertWasmF32View(source, "wasmData");
+        assertWasmF32View(source, "PointCloud: wasmData");
         const count = this._pointCount;
         validateWasmDataRange(source, count);
         if (count <= 0) { this._wasmDataDirty = false; this._pointsDirty = false; return; }
@@ -723,7 +696,7 @@ export class PointCloud {
         const source = this._wasmColorsSource;
         if (!source || !this._wasmColorsDirty) return;
         source.refresh();
-        assertWasmF32View(source, "wasmColors");
+        assertWasmF32View(source, "PointCloud: wasmColors");
         const count = this._pointCount;
         validateWasmColorsRange(source, count);
         if (count <= 0) { this._wasmColorsDirty = false; this._colorsDirty = false; return; }

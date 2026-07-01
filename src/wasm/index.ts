@@ -6,5 +6,5 @@
 
 export { initWebAssembly, WasmHeapArena, WasmSlice, driver, wasm, frameArena, accessorf, animf, boundsf, cullf, frustumf, mat4f, meshf, ndarrayf, quatf, transformf, vec3f, mat4, quat, vec3 } from "./driver";
 export type { WasmPtr, WasmTypedArrayConstructor, WasmSliceDType, WasmSliceHandle, WasmSliceKind } from "./driver";
-export { webassemblyInterop, WasmModule, WasmMemoryView } from "./interop";
+export { webassemblyInterop, WasmModule, WasmMemoryView, assertWasmMemoryView, assertWasmViewDType, assertWasmF32View, assertWasmU32View, assertWasmRecordCount, assertWasmCapacity, resolveWasmRecordCount, validateWasmRecordRange, growWasmCapacity } from "./interop";
 export type { WasmBytesDescriptor, WasmCallArg, WasmDataViewDescriptor, WasmExportsLike, WasmInstanceLike, WasmMemorySource, WasmModuleOptions, WasmUtf8Descriptor, WasmValueDescriptor, WasmViewDescriptor } from "./interop";

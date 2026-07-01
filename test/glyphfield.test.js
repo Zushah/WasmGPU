@@ -26,10 +26,11 @@ assert.ok(device, "Failed to acquire a WebGPU device");
 device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
 
 await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
-const { GlyphField, Compute, wasm } = WasmGPU;
+const { GlyphField, Compute, wasm, WasmMemoryView } = WasmGPU;
 assert.ok(GlyphField, "Missing export: GlyphField");
 assert.ok(Compute, "Missing export: Compute");
 assert.ok(wasm, "Missing export: wasm");
+assert.ok(WasmMemoryView, "Missing export: WasmMemoryView");
 const compute = new Compute(device, device.queue);
 assert.ok(compute.kernels && typeof compute.kernels.copyF32 === "function", "Missing kernel: compute.kernels.copyF32");
 
@@ -104,6 +105,106 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
     outScl.destroy();
     outAttr.destroy();
     gf.destroy?.();
+}
+
+// External WebAssembly memory views: constructors, explicit refresh, CPU snapshots, validation, and grow-only GPU capacity.
+{
+    const readF32 = async (buffer, count, label = "glyphfield:wasm:read") => { const out = compute.createStorageBuffer({ label, byteLength: count * 4, copySrc: true }); try { compute.kernels.copyF32(buffer, { out, count }); await device.queue.onSubmittedWorkDone(); return await out.readAs(Float32Array); } finally { out.destroy(); } };
+    const makeView = (length, name, dynamicLength = false) => { const memory = new WebAssembly.Memory({ initial: 1 }), moduleRef = WasmGPU.webassemblyInterop.fromMemory(memory, { name }), data = new Float32Array(memory.buffer, 0, Math.max(length, 64)), lengthGlobal = dynamicLength ? new WebAssembly.Global({ value: "i32", mutable: true }, length) : null, view = moduleRef.view({ ptr: 0, length: lengthGlobal ? { global: lengthGlobal } : length, dtype: "f32", name }); assert.ok(view instanceof WasmMemoryView, "Expected fromMemory().view() to return a WasmMemoryView"); return { memory, moduleRef, data, lengthGlobal, view }; };
+
+    const positions = makeView(8, "gf:wasm:positions");
+    const rotations = makeView(8, "gf:wasm:rotations");
+    const scales = makeView(8, "gf:wasm:scales");
+    const attributes = makeView(8, "gf:wasm:attributes");
+    positions.data.set([1, 2, 3, 0, 4, 5, 6, 0]);
+    rotations.data.set([0, 0, 0, 1, 0, 0, 0.70710677, 0.70710677]);
+    scales.data.set([1, 1, 1, 0, 2, 1, 0.5, 0]);
+    attributes.data.set([0.25, 0.5, 0.75, 1, 0.1, 0.2, 0.3, 0.4]);
+    const gf = new GlyphField({ wasmPositions: positions.view, wasmRotations: rotations.view, wasmScales: scales.view, wasmAttributes: attributes.view, scaleTransform: baseScaleTransform });
+
+    assert.strictEqual(gf.instanceCount, 2, "GlyphField should derive instanceCount from wasmPositions length");
+    assert.strictEqual(gf.getAttributeRecord(0), null, "Default wasmAttributes path should not retain CPU records");
+    gf.upload(device, device.queue);
+    assert.ok(gf.positionsBuffer, "GlyphField.positionsBuffer not created after wasmPositions upload");
+    assert.ok(gf.rotationsBuffer, "GlyphField.rotationsBuffer not created after wasmRotations upload");
+    assert.ok(gf.scalesBuffer, "GlyphField.scalesBuffer not created after wasmScales upload");
+    assert.ok(gf.attributesBuffer, "GlyphField.attributesBuffer not created after wasmAttributes upload");
+    arraysApproxEqual(await readF32(gf.positionsBuffer, 8, "gf:wasm:positions:read"), positions.data.subarray(0, 8), 0, "wasmPositions-uploaded buffer mismatch");
+    arraysApproxEqual(await readF32(gf.attributesBuffer, 8, "gf:wasm:attributes:read"), attributes.data.subarray(0, 8), 0, "wasmAttributes-uploaded buffer mismatch");
+
+    const attrRevision0 = gf.getScaleSourceDescriptor()?.revision ?? -1;
+    gf.bindGroupKey = "gf:stable-wasm";
+    attributes.data.set([0.8, 0.7, 0.6, 0.5], 4);
+    gf.refreshWasmAttributes();
+    assert.ok((gf.getScaleSourceDescriptor()?.revision ?? -1) > attrRevision0, "refreshWasmAttributes() should bump scale revision");
+    assert.strictEqual(gf.bindGroupKey, "gf:stable-wasm", "refreshWasmAttributes() should not invalidate a reused bind group");
+    gf.upload(device, device.queue);
+    assert.strictEqual(gf.bindGroupKey, "gf:stable-wasm", "wasmAttributes upload should not invalidate a reused bind group");
+    arraysApproxEqual(await readF32(gf.attributesBuffer, 8, "gf:wasm:attributes:refresh:read"), attributes.data.subarray(0, 8), 0, "refreshWasmAttributes() upload mismatch");
+
+    const coreRevision = gf.getScaleSourceDescriptor()?.revision ?? -1;
+    positions.data.set([9, 8, 7, 0], 4);
+    rotations.data.set([0, 0, 0, 1], 4);
+    scales.data.set([3, 3, 3, 0], 4);
+    gf.refreshWasmPositions();
+    gf.refreshWasmRotations();
+    gf.refreshWasmScales();
+    gf.upload(device, device.queue);
+    assert.strictEqual(gf.getScaleSourceDescriptor()?.revision ?? -1, coreRevision, "Core wasm channel refreshes should not bump scale revision");
+    assert.strictEqual(gf.bindGroupKey, "gf:stable-wasm", "Core same-buffer wasm uploads should not invalidate a reused bind group");
+    gf.destroy?.();
+
+    const capacityPositions = makeView(20, "gf:wasm:capacity:positions", true);
+    const capacityRotations = makeView(20, "gf:wasm:capacity:rotations");
+    const capacityScales = makeView(20, "gf:wasm:capacity:scales");
+    capacityPositions.data.set([1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0, 10, 11, 12, 0, 13, 14, 15, 0]);
+    capacityRotations.data.set([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    capacityScales.data.set([1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0, 1, 1, 1, 0]);
+    const capacityField = new GlyphField({ wasmPositions: capacityPositions.view, wasmRotations: capacityRotations.view, wasmScales: capacityScales.view, instanceCount: 2, wasmCapacity: 4, scaleTransform: baseScaleTransform });
+    assert.strictEqual(capacityField.instanceCount, 2, "Explicit instanceCount should override extra wasmPositions capacity");
+    capacityField.upload(device, device.queue);
+    const firstPositionsBuffer = capacityField.positionsBuffer;
+    assert.ok(firstPositionsBuffer, "GlyphField wasm upload should allocate a positionsBuffer");
+    assert.ok(firstPositionsBuffer.size >= 4 * 16, "wasmCapacity should be measured in glyph instances");
+    arraysApproxEqual(await readF32(firstPositionsBuffer, 8, "gf:wasm:capacity:read"), capacityPositions.data.subarray(0, 8), 0, "Explicit instanceCount upload should use only the active range");
+    capacityField.bindGroupKey = "gf:stable-capacity";
+    capacityField.refreshWasmPositions({ instanceCount: 3 });
+    capacityField.upload(device, device.queue);
+    assert.strictEqual(capacityField.positionsBuffer, firstPositionsBuffer, "GlyphField should reuse wasm GPU capacity when active count fits");
+    assert.strictEqual(capacityField.bindGroupKey, "gf:stable-capacity", "Reused wasm capacity should not invalidate the bind group");
+    capacityField.refreshWasmPositions({ instanceCount: 5 });
+    capacityField.upload(device, device.queue);
+    assert.notStrictEqual(capacityField.positionsBuffer, firstPositionsBuffer, "GlyphField should grow wasm GPU capacity when active count exceeds capacity");
+    assert.strictEqual(capacityField.bindGroupKey, null, "Growing wasm GPU capacity should invalidate the bind group");
+    capacityField.refreshWasmPositions({ instanceCount: 5 });
+    capacityPositions.lengthGlobal.value = 4;
+    assert.throws(() => capacityField.upload(device, device.queue), /wasmPositions length must be at least instanceCount\*4/i, "upload() should validate refreshed wasmPositions length before reading");
+    capacityField.destroy?.();
+
+    const keepPositions = makeView(8, "gf:wasm:keepcpu:positions");
+    const keepRotations = makeView(8, "gf:wasm:keepcpu:rotations");
+    const keepScales = makeView(8, "gf:wasm:keepcpu:scales");
+    const keepAttributes = makeView(8, "gf:wasm:keepcpu:attributes");
+    keepPositions.data.set([1, 2, 3, 0, 4, 5, 6, 0]);
+    keepRotations.data.set([0, 0, 0, 1, 0, 0, 0, 1]);
+    keepScales.data.set([1, 1, 1, 0, 1, 1, 1, 0]);
+    keepAttributes.data.set([1, 0, 0, 1, 0, 1, 0, 1]);
+    const keepField = new GlyphField({ wasmPositions: keepPositions.view, wasmRotations: keepRotations.view, wasmScales: keepScales.view, wasmAttributes: keepAttributes.view, keepCPUData: true, scaleTransform: baseScaleTransform });
+    arraysApproxEqual(keepField.getAttributeRecord(1), [0, 1, 0, 1], 1e-6, "keepCPUData=true should snapshot wasmAttributes");
+    keepAttributes.data.set([0.3, 0.4, 0.5, 0.6], 4);
+    arraysApproxEqual(keepField.getAttributeRecord(1), [0, 1, 0, 1], 1e-6, "Wasm attribute CPU records should be retained as copies");
+    keepField.refreshFromWasm({ keepCPUData: true });
+    arraysApproxEqual(keepField.getAttributeRecord(1), [0.3, 0.4, 0.5, 0.6], 1e-6, "refreshFromWasm() should refresh retained wasmAttributes");
+    keepField.destroy?.();
+
+    const invalidCases = [
+        { message: "Invalid derived wasmPositions instanceCount should throw", error: /wasmPositions length must be a multiple of 4/i, create: () => new GlyphField({ wasmPositions: makeView(5, "gf:wasm:bad:positions:multiple").view, scaleTransform: baseScaleTransform }) },
+        { message: "Short explicit-count wasmRotations should throw", error: /wasmRotations length must be at least instanceCount\*4/i, create: () => new GlyphField({ wasmPositions: makeView(8, "gf:wasm:bad:positions").view, wasmRotations: makeView(4, "gf:wasm:bad:rotations").view, wasmScales: makeView(8, "gf:wasm:bad:scales").view, instanceCount: 2, scaleTransform: baseScaleTransform }) },
+        { message: "Short wasmAttributes should throw", error: /wasmAttributes length must be at least instanceCount\*4/i, create: () => new GlyphField({ wasmPositions: makeView(8, "gf:wasm:bad:attr:positions").view, wasmRotations: makeView(8, "gf:wasm:bad:attr:rotations").view, wasmScales: makeView(8, "gf:wasm:bad:attr:scales").view, wasmAttributes: makeView(4, "gf:wasm:bad:attributes").view, instanceCount: 2, scaleTransform: baseScaleTransform }) },
+        { message: "Non-WasmMemoryView wasmPositions should throw", error: /wasmPositions must be a WasmMemoryView/i, create: () => new GlyphField({ wasmPositions: makeView(8, "gf:wasm:bad:source-type").data, scaleTransform: baseScaleTransform }) },
+        { message: "Non-f32 wasmPositions should throw", error: /wasmPositions dtype must be 'f32'/i, create: () => { const memory = new WebAssembly.Memory({ initial: 1 }), moduleRef = WasmGPU.webassemblyInterop.fromMemory(memory, { name: "gf:wasm:bad:dtype" }); return new GlyphField({ wasmPositions: moduleRef.view({ ptr: 0, length: 8, dtype: "u32", name: "u32-positions" }), scaleTransform: baseScaleTransform }); } }
+    ];
+    for (const testCase of invalidCases) assert.throws(testCase.create, testCase.error, testCase.message);
 }
 
 // External buffers are borrowed by default, owned when requested, and owned replacements are destroyed exactly once.

@@ -2,7 +2,7 @@
 
 Last updated: Wednesday, July 1, 2026.
 
-Last commit: Sunday, June 29, 2026, [**`ff6a097`**](https://www.github.com/Zushah/WasmGPU/commit/ff6a097).
+Last commit: Wednesday, July 1, 2026, [**`6a5d3d4`**](https://www.github.com/Zushah/WasmGPU/commit/6a5d3d4).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -273,7 +273,7 @@ Objects in the scene own different data:
 
 - `./src/world/mesh.ts`: geometry, material references, transform, optional skin, optional morph runtime state, visibility flags, and scene owner references.
 - `./src/world/pointcloud.ts`: point data, optional borrowed external WebAssembly memory views, bounds, scale source metadata, colormap state, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external point and color buffers.
-- `./src/world/glyphfield.ts`: glyph geometry, instance data, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external instance buffers.
+- `./src/world/glyphfield.ts`: glyph geometry, instance data, optional borrowed external WebAssembly memory views, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external instance buffers.
 - `./src/world/nodelink.ts`: node data, edge data, node and edge rendering modes, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external node and edge buffers.
 - `./src/world/splatfield.ts`: Gaussian splat instance data, packed GPU buffers, transform, bounds, optional CPU records for upload and bounds computation, and per-object ownership flags for external buffers.
 
@@ -313,7 +313,7 @@ Pointclouds, glyphfields, nodelinks, and splatfields are separate scene object t
 
 `./src/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays, borrowed external `WasmMemoryView<Float32Array>` sources, or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available or external WebAssembly data is explicitly refreshed with bounds recomputation. Pointcloud WebAssembly sources are borrowed, refresh is explicit, and upload copies the active packed f32 vec4 ranges into pointcloud-owned GPU buffers without freeing or owning the external WebAssembly memory. It owns GPU buffers it creates from CPU data or external WebAssembly sources and destroys caller-supplied external point and color buffers only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer.
 
-`./src/world/glyphfield.ts` handles instanced glyph geometry. It can read CPU arrays, WebAssembly structure-of-arrays pointers, or external GPU buffers. It writes instance buffers and uniform buffers. It owns GPU buffers it creates from CPU arrays or WebAssembly pointers and borrows caller-supplied external instance buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffers: true` is used. Glyph geometry is a `Geometry` reference used by the renderer; `GlyphField.destroy()` currently destroys the stored uniform buffer plus only the instance buffers it owns, and it disposes its transform. It does not release the geometry reference. Glyphfield bounds use Rust bounds helpers when CPU arrays or WebAssembly pointers are available.
+`./src/world/glyphfield.ts` handles instanced glyph geometry. It can read CPU arrays, internal WebAssembly structure-of-arrays pointers, borrowed external `WasmMemoryView<Float32Array>` sources, or external GPU buffers. It writes instance buffers and uniform buffers. Glyphfield external WebAssembly sources are borrowed, refresh is explicit, and upload copies active packed f32 vec4 channel ranges into glyphfield-owned GPU buffers without freeing or owning the external WebAssembly memory. It owns GPU buffers it creates from CPU arrays, internal WebAssembly pointers, or external WebAssembly sources and borrows caller-supplied external instance buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffers: true` is used. Glyph geometry is a `Geometry` reference used by the renderer; `GlyphField.destroy()` currently destroys the stored uniform buffer plus only the instance buffers it owns, and it disposes its transform. It does not release the geometry reference. Glyphfield bounds use Rust bounds helpers when CPU arrays, internal WebAssembly pointers, or explicitly refreshed external WebAssembly position/scale data are available.
 
 `./src/world/nodelink.ts` handles node positions, node scalar or color data, node radii, edges, node geometry modes, edge geometry modes, separate node and edge scale transforms, separate colormaps, uniform data, and picking records. It computes bounds from retained CPU node positions in TypeScript. Its update methods can queue or write GPU-buffer changes for node positions, edges, scalars, radii, and colors. It owns GPU buffers it creates from CPU data and borrows caller-supplied external node and edge buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer. The renderer has nodelink draw and pick paths, and overlay legends can read nodelink scale and colormap state.
 
@@ -445,7 +445,7 @@ WebAssembly driver initialization is implemented in `./src/wasm/driver.ts` and e
 
 `WasmSlice`, `WasmHeapArena`, `frameArena`, `wasm`, and the `driver` namespace are part of the WebAssembly driver. `WasmSlice` records pointer, length, dtype, allocation kind, and epoch. Frame arena and heap arena slices check epochs so callers do not reuse memory after a reset or destroyed arena. `WasmHeapArena` allocates a WebAssembly heap block and provides bump allocation within that block.
 
-WebAssembly interop with external modules lives in `./src/wasm/interop.ts`. It wraps foreign `WebAssembly.Instance` or exports objects, resolves explicit memory and export descriptors, validates byte ranges and alignment, and constructs typed views or raw byte/DataView accessors over external linear memory.
+WebAssembly interop with external modules lives in `./src/wasm/interop.ts`. It wraps foreign `WebAssembly.Instance` or exports objects, resolves explicit memory and export descriptors, validates byte ranges and alignment, constructs typed views or raw byte/DataView accessors over external linear memory, and provides small shared validation helpers for object-owned uploads from borrowed `WasmMemoryView` sources.
 
 Rust memory allocation is implemented in `./rust/src/heap.rs`. The heap allocator is a bump allocator. The exported free functions currently do not reclaim memory. Contributors should treat heap allocations as persistent within the current WebAssembly instance unless an arena reset pattern is used.
 
@@ -570,7 +570,7 @@ Important files:
 - `./src/world/scene.ts`: scene object arrays, add/remove helpers, light packing, bounds collection, and traversal.
 - `./src/world/mesh.ts`: mesh lifetime, transform ownership, material and geometry references, scene owner references, skin attachment, and morph runtime state.
 - `./src/world/pointcloud.ts`: point data, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
-- `./src/world/glyphfield.ts`: glyph instance data, geometry modes, GPU upload, scale source metadata, bounds, and picking records.
+- `./src/world/glyphfield.ts`: glyph instance data, geometry modes, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
 - `./src/world/nodelink.ts`: node and edge data, rendering modes, GPU upload, scale source metadata, bounds, and picking records.
 - `./src/world/splatfield.ts`: Gaussian splat data, direct colors, spherical harmonic coefficient data, packed GPU upload, bounds, color-space handling, and picking records.
 - `./src/world/camera.ts`: base, perspective, and orthographic cameras.
@@ -712,7 +712,7 @@ Important files:
 - `./src/python/index.ts`: TypeScript interop API for sending and receiving ndarrays, viewing handles, copying data, and freeing owned memory.
 - `./src/python/interop.py`: Python-side helper classes for handles, arenas, and array wrappers.
 - `./src/wasm/index.ts`: exports for the WebAssembly driver and the WebAssembly interop.
-- `./src/wasm/interop.ts`: external WebAssembly module wrappers, descriptor resolution, typed memory views, raw byte reads, and UTF-8/DataView helpers.
+- `./src/wasm/interop.ts`: external WebAssembly module wrappers, descriptor resolution, typed memory views, raw byte reads, UTF-8/DataView helpers, and shared external memory validation/count helpers used by pointcloud, glyphfield, and nodelink upload paths.
 
 Common interactions:
 

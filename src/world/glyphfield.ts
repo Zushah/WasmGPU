@@ -11,7 +11,7 @@ import { Colormap, type BuiltinColormapName } from "../graphics/colormap";
 import { cloneScaleTransform, normalizeScaleTransform, packScaleTransform } from "../scaling";
 import type { ScaleSourceDescriptor, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor } from "../scaling";
 import { Geometry } from "../graphics/geometry";
-import { boundsf, driver, wasm, type WasmPtr } from "../wasm";
+import { boundsf, driver, wasm, WasmMemoryView, assertWasmF32View, assertWasmRecordCount, assertWasmCapacity, resolveWasmRecordCount, validateWasmRecordRange, growWasmCapacity, type WasmPtr } from "../wasm";
 import { Bounds3, boundsFromBox, boundsFromSphere, emptyBounds, transformBounds } from "./bounds";
 
 export type GlyphColormap = BuiltinColormapName | "custom";
@@ -22,6 +22,20 @@ export type GlyphColorMode = "rgba" | "scalar" | "solid";
 
 export type GlyphShape = "ellipsoid" | "arrow" | "custom";
 
+export type GlyphFieldWasmRefreshOptions = {
+    instanceCount?: number;
+    keepCPUData?: boolean;
+    recomputeBounds?: boolean;
+};
+
+export type GlyphFieldWasmChannelOptions = GlyphFieldWasmRefreshOptions & {
+    capacity?: number;
+};
+
+export type GlyphFieldWasmInstancesOptions = GlyphFieldWasmRefreshOptions & {
+    capacity?: number;
+};
+
 export type GlyphFieldDescriptor = {
     shape?: GlyphShape;
     geometry?: Geometry;
@@ -30,6 +44,11 @@ export type GlyphFieldDescriptor = {
     rotations?: Float32Array;
     scales?: Float32Array;
     attributes?: Float32Array;
+    wasmPositions?: WasmMemoryView<Float32Array>;
+    wasmRotations?: WasmMemoryView<Float32Array>;
+    wasmScales?: WasmMemoryView<Float32Array>;
+    wasmAttributes?: WasmMemoryView<Float32Array> | null;
+    wasmCapacity?: number;
     positionsPtr?: WasmPtr;
     rotationsPtr?: WasmPtr;
     scalesPtr?: WasmPtr;
@@ -62,6 +81,21 @@ export type GlyphFieldDescriptor = {
 
 const UNIFORM_FLOAT_COUNT = (5 * 4) + 4 + 4 + (8 * 4);
 const UNIFORM_BYTE_SIZE = UNIFORM_FLOAT_COUNT * 4;
+const GLYPH_RECORD_FLOATS = 4;
+const GLYPH_RECORD_BYTES = GLYPH_RECORD_FLOATS * 4;
+
+type GlyphWasmChannel = "positions" | "rotations" | "scales" | "attributes";
+
+export type GlyphFieldWasmSources = {
+    positions?: WasmMemoryView<Float32Array> | null;
+    rotations?: WasmMemoryView<Float32Array> | null;
+    scales?: WasmMemoryView<Float32Array> | null;
+    attributes?: WasmMemoryView<Float32Array> | null;
+};
+
+const resolveGlyphWasmRecordCount = (source: WasmMemoryView<Float32Array>, explicitInstanceCount: number | undefined, field: string): number => resolveWasmRecordCount(source, explicitInstanceCount, GLYPH_RECORD_FLOATS, `GlyphField: ${field}`, "GlyphField: instanceCount", "instanceCount");
+
+const validateGlyphWasmRecordRange = (source: WasmMemoryView<Float32Array>, instanceCount: number, field: string): void => validateWasmRecordRange(source, instanceCount, GLYPH_RECORD_FLOATS, `GlyphField: ${field}`, "instanceCount");
 
 const normalizeGlyphScaleTransform = (transform: ScaleTransformDescriptor | ScaleTransform): ScaleTransform => {
     return normalizeScaleTransform({
@@ -299,6 +333,10 @@ export class GlyphField {
     private _rotationsCPU: Float32Array | null = null;
     private _scalesCPU: Float32Array | null = null;
     private _attributesCPU: Float32Array | null = null;
+    private _wasmPositionsSource: WasmMemoryView<Float32Array> | null = null;
+    private _wasmRotationsSource: WasmMemoryView<Float32Array> | null = null;
+    private _wasmScalesSource: WasmMemoryView<Float32Array> | null = null;
+    private _wasmAttributesSource: WasmMemoryView<Float32Array> | null = null;
     private _positionsPtr: WasmPtr = 0;
     private _rotationsPtr: WasmPtr = 0;
     private _scalesPtr: WasmPtr = 0;
@@ -324,6 +362,22 @@ export class GlyphField {
     private _scalesOwned: boolean = false;
     private _attributesOwned: boolean = false;
     private _ownExternalBuffers: boolean = false;
+    private _wasmPositionsDirty: boolean = false;
+    private _wasmRotationsDirty: boolean = false;
+    private _wasmScalesDirty: boolean = false;
+    private _wasmAttributesDirty: boolean = false;
+    private _positionsWasmManaged: boolean = false;
+    private _rotationsWasmManaged: boolean = false;
+    private _scalesWasmManaged: boolean = false;
+    private _attributesWasmManaged: boolean = false;
+    private _wasmPositionsCapacity: number = 0;
+    private _wasmRotationsCapacity: number = 0;
+    private _wasmScalesCapacity: number = 0;
+    private _wasmAttributesCapacity: number = 0;
+    private _wasmPositionsCapacityHint: number = 0;
+    private _wasmRotationsCapacityHint: number = 0;
+    private _wasmScalesCapacityHint: number = 0;
+    private _wasmAttributesCapacityHint: number = 0;
 
     constructor(desc: GlyphFieldDescriptor) {
         assert(!!desc && !!desc.scaleTransform, "GlyphField: scaleTransform is required.");
@@ -350,21 +404,36 @@ export class GlyphField {
         const rotationsBuffer = desc.rotationsBuffer ? resolveGPUBuffer(desc.rotationsBuffer) : null;
         const scalesBuffer = desc.scalesBuffer ? resolveGPUBuffer(desc.scalesBuffer) : null;
         const attributesBuffer = desc.attributesBuffer ? resolveGPUBuffer(desc.attributesBuffer) : null;
-        if (positionsBuffer || rotationsBuffer || scalesBuffer || attributesBuffer) {
+        const hasWasmSources = !!desc.wasmPositions || !!desc.wasmRotations || !!desc.wasmScales || !!desc.wasmAttributes;
+        const wasmCapacity = assertWasmCapacity(desc.wasmCapacity, "GlyphField: wasmCapacity");
+        const hasCoreWasmSources = !!desc.wasmPositions || !!desc.wasmRotations || !!desc.wasmScales;
+        if (hasWasmSources && hasCoreWasmSources) {
+            this.initializeMixedDescriptorSources(desc, positionsBuffer, rotationsBuffer, scalesBuffer, attributesBuffer);
+            this.setWasmInstances({
+                positions: desc.wasmPositions,
+                rotations: desc.wasmRotations,
+                scales: desc.wasmScales,
+                attributes: desc.wasmAttributes
+            }, { instanceCount: desc.instanceCount, capacity: wasmCapacity, keepCPUData: this._keepCPUData });
+        } else if (positionsBuffer || rotationsBuffer || scalesBuffer || attributesBuffer) {
             assert(!!positionsBuffer && !!rotationsBuffer && !!scalesBuffer, "GlyphField: positionsBuffer, rotationsBuffer, and scalesBuffer are required when using external buffers.");
             const count = desc.instanceCount ?? 0;
             assert(count > 0, "GlyphField: instanceCount is required when using external buffers.");
             this.setBuffers(positionsBuffer!, rotationsBuffer!, scalesBuffer!, attributesBuffer, count, { ownBuffers: this._ownExternalBuffers });
+            if (hasWasmSources) this.setWasmAttributes(desc.wasmAttributes ?? null, { instanceCount: desc.instanceCount, capacity: wasmCapacity, keepCPUData: this._keepCPUData });
         } else if (desc.positionsPtr || desc.rotationsPtr || desc.scalesPtr) {
             assert(!!desc.positionsPtr && !!desc.rotationsPtr && !!desc.scalesPtr, "GlyphField: positionsPtr, rotationsPtr, and scalesPtr are required when using wasm pointers.");
             const count = desc.instanceCount ?? 0;
             assert(count > 0, "GlyphField: instanceCount is required when using wasm pointers.");
             this.setWasmSoA(desc.positionsPtr!, desc.rotationsPtr!, desc.scalesPtr!, desc.attributesPtr ?? 0, count);
+            if (hasWasmSources) this.setWasmAttributes(desc.wasmAttributes ?? null, { instanceCount: desc.instanceCount, capacity: wasmCapacity, keepCPUData: this._keepCPUData });
         } else if (desc.positions || desc.rotations || desc.scales || desc.attributes) {
             this.setCPUData(desc.positions ?? null, desc.rotations ?? null, desc.scales ?? null, desc.attributes ?? null, { keepCPUData: this._keepCPUData, instanceCount: desc.instanceCount });
+            if (hasWasmSources) this.setWasmAttributes(desc.wasmAttributes ?? null, { instanceCount: desc.instanceCount, capacity: wasmCapacity, keepCPUData: this._keepCPUData });
         } else if (desc.instanceCount !== undefined) {
             this._instanceCount = desc.instanceCount | 0;
             this._dataDirty = false;
+            if (hasWasmSources) this.setWasmAttributes(desc.wasmAttributes ?? null, { instanceCount: desc.instanceCount, capacity: wasmCapacity, keepCPUData: this._keepCPUData });
         }
     }
 
@@ -429,6 +498,346 @@ export class GlyphField {
         this.replaceRotationsBuffer(null, false);
         this.replaceScalesBuffer(null, false);
         this.replaceAttributesBuffer(null, false);
+    }
+
+    private hasExternalWasmSources(): boolean {
+        return !!(this._wasmPositionsSource || this._wasmRotationsSource || this._wasmScalesSource || this._wasmAttributesSource);
+    }
+
+    private hasDirtyWasmSources(): boolean {
+        return this._wasmPositionsDirty || this._wasmRotationsDirty || this._wasmScalesDirty || this._wasmAttributesDirty;
+    }
+
+    private hasDirtyNonWasmSources(): boolean {
+        return !!((!this._wasmPositionsSource && (this._positionsCPU || this._positionsPtr)) || (!this._wasmRotationsSource && (this._rotationsCPU || this._rotationsPtr)) || (!this._wasmScalesSource && (this._scalesCPU || this._scalesPtr)) || (!this._wasmAttributesSource && (this._attributesCPU || this._attributesPtr)));
+    }
+
+    private hasCPUOrInternalPointerInputs(): boolean {
+        return !!(this._positionsCPU || this._rotationsCPU || this._scalesCPU || this._attributesCPU || this._positionsPtr || this._rotationsPtr || this._scalesPtr || this._attributesPtr);
+    }
+
+    private hasPositionsSource(): boolean {
+        return !!(this._wasmPositionsSource || this._positionsCPU || this._positionsPtr || this.positionsBuffer);
+    }
+
+    private hasRotationsSource(): boolean {
+        return !!(this._wasmRotationsSource || this._rotationsCPU || this._rotationsPtr || this.rotationsBuffer);
+    }
+
+    private hasScalesSource(): boolean {
+        return !!(this._wasmScalesSource || this._scalesCPU || this._scalesPtr || this.scalesBuffer);
+    }
+
+    private assertCoreSourcesAvailable(label: string): void {
+        if (this._instanceCount <= 0) return;
+        assert(this.hasPositionsSource() && this.hasRotationsSource() && this.hasScalesSource(), `GlyphField: ${label} requires positions, rotations, and scales sources.`);
+    }
+
+    private validateNonWasmCPUCount(count: number): void {
+        if (!this._wasmPositionsSource && this._positionsCPU) assert((this._positionsCPU.length / 4) === count, "GlyphField: positions length does not match instanceCount.");
+        if (!this._wasmRotationsSource && this._rotationsCPU) assert((this._rotationsCPU.length / 4) === count, "GlyphField: rotations length does not match instanceCount.");
+        if (!this._wasmScalesSource && this._scalesCPU) assert((this._scalesCPU.length / 4) === count, "GlyphField: scales length does not match instanceCount.");
+        if (!this._wasmAttributesSource && this._attributesCPU) assert((this._attributesCPU.length / 4) === count, "GlyphField: attributes length does not match instanceCount.");
+    }
+
+    private clearWasmPositionsState(destroyManagedBuffer: boolean): void {
+        this._wasmPositionsSource = null;
+        this._wasmPositionsDirty = false;
+        this._wasmPositionsCapacityHint = 0;
+        if (destroyManagedBuffer && this._positionsWasmManaged) { this.replacePositionsBuffer(null, false); this.bindGroupKey = null; }
+        this._positionsWasmManaged = false;
+        this._wasmPositionsCapacity = 0;
+    }
+
+    private clearWasmRotationsState(destroyManagedBuffer: boolean): void {
+        this._wasmRotationsSource = null;
+        this._wasmRotationsDirty = false;
+        this._wasmRotationsCapacityHint = 0;
+        if (destroyManagedBuffer && this._rotationsWasmManaged) { this.replaceRotationsBuffer(null, false); this.bindGroupKey = null; }
+        this._rotationsWasmManaged = false;
+        this._wasmRotationsCapacity = 0;
+    }
+
+    private clearWasmScalesState(destroyManagedBuffer: boolean): void {
+        this._wasmScalesSource = null;
+        this._wasmScalesDirty = false;
+        this._wasmScalesCapacityHint = 0;
+        if (destroyManagedBuffer && this._scalesWasmManaged) { this.replaceScalesBuffer(null, false); this.bindGroupKey = null; }
+        this._scalesWasmManaged = false;
+        this._wasmScalesCapacity = 0;
+    }
+
+    private clearWasmAttributesState(destroyManagedBuffer: boolean): void {
+        this._wasmAttributesSource = null;
+        this._wasmAttributesDirty = false;
+        this._wasmAttributesCapacityHint = 0;
+        if (destroyManagedBuffer && this._attributesWasmManaged) { this.replaceAttributesBuffer(null, false); this.bindGroupKey = null; }
+        this._attributesWasmManaged = false;
+        this._wasmAttributesCapacity = 0;
+    }
+
+    private clearAllWasmState(destroyManagedBuffers: boolean): void {
+        this.clearWasmPositionsState(destroyManagedBuffers);
+        this.clearWasmRotationsState(destroyManagedBuffers);
+        this.clearWasmScalesState(destroyManagedBuffers);
+        this.clearWasmAttributesState(destroyManagedBuffers);
+    }
+
+    private clearCPUAndPointerChannel(channel: GlyphWasmChannel): void {
+        if (channel === "positions") { this._positionsCPU = null; this._positionsPtr = 0; }
+        else if (channel === "rotations") { this._rotationsCPU = null; this._rotationsPtr = 0; }
+        else if (channel === "scales") { this._scalesCPU = null; this._scalesPtr = 0; }
+        else { this._attributesCPU = null; this._attributesPtr = 0; }
+        this._usingWasmPtrs = false;
+        this._usingExternalBuffers = false;
+    }
+
+    private initializeMixedDescriptorSources(desc: GlyphFieldDescriptor, positionsBuffer: GPUBuffer | null, rotationsBuffer: GPUBuffer | null, scalesBuffer: GPUBuffer | null, attributesBuffer: GPUBuffer | null): void {
+        let count = desc.instanceCount !== undefined ? assertWasmRecordCount(desc.instanceCount, "GlyphField: instanceCount") : 0;
+        let hasCount = desc.instanceCount !== undefined;
+        let dataDirty = false;
+        const acceptArrayCount = (data: Float32Array, label: string): void => {
+            assert((data.length % 4) === 0, `GlyphField: ${label} length must be a multiple of 4.`);
+            const nextCount = data.length / 4;
+            if (!hasCount) { count = nextCount; hasCount = true; return; }
+            assert(nextCount === count, `GlyphField: ${label} length does not match instanceCount.`);
+        };
+        const setCPUChannel = (channel: GlyphWasmChannel, data: Float32Array | undefined): void => {
+            if (!data) return;
+            acceptArrayCount(data, channel);
+            if (channel === "positions") this._positionsCPU = data;
+            else if (channel === "rotations") this._rotationsCPU = data;
+            else if (channel === "scales") this._scalesCPU = data;
+            else this._attributesCPU = data;
+            dataDirty = true;
+        };
+        const setPtrChannel = (channel: GlyphWasmChannel, ptr: WasmPtr | undefined): void => {
+            if (!ptr) return;
+            if (channel === "positions") this._positionsPtr = ptr >>> 0;
+            else if (channel === "rotations") this._rotationsPtr = ptr >>> 0;
+            else if (channel === "scales") this._scalesPtr = ptr >>> 0;
+            else this._attributesPtr = ptr >>> 0;
+            dataDirty = true;
+        };
+        const setBufferChannel = (channel: GlyphWasmChannel, buffer: GPUBuffer | null): void => {
+            if (!buffer) return;
+            if (channel === "positions") this.replacePositionsBuffer(buffer, this._ownExternalBuffers);
+            else if (channel === "rotations") this.replaceRotationsBuffer(buffer, this._ownExternalBuffers);
+            else if (channel === "scales") this.replaceScalesBuffer(buffer, this._ownExternalBuffers);
+            else this.replaceAttributesBuffer(buffer, this._ownExternalBuffers);
+            this.bindGroupKey = null;
+        };
+
+        if (!desc.wasmPositions) {
+            if (positionsBuffer) setBufferChannel("positions", positionsBuffer);
+            else if (desc.positionsPtr) setPtrChannel("positions", desc.positionsPtr);
+            else setCPUChannel("positions", desc.positions);
+        }
+        if (!desc.wasmRotations) {
+            if (rotationsBuffer) setBufferChannel("rotations", rotationsBuffer);
+            else if (desc.rotationsPtr) setPtrChannel("rotations", desc.rotationsPtr);
+            else setCPUChannel("rotations", desc.rotations);
+        }
+        if (!desc.wasmScales) {
+            if (scalesBuffer) setBufferChannel("scales", scalesBuffer);
+            else if (desc.scalesPtr) setPtrChannel("scales", desc.scalesPtr);
+            else setCPUChannel("scales", desc.scales);
+        }
+        if (!desc.wasmAttributes) {
+            if (attributesBuffer) setBufferChannel("attributes", attributesBuffer);
+            else if (desc.attributesPtr) setPtrChannel("attributes", desc.attributesPtr);
+            else setCPUChannel("attributes", desc.attributes);
+        }
+        if (hasCount) this._instanceCount = count;
+        this._usingWasmPtrs = false;
+        this._usingExternalBuffers = false;
+        this._keepCPUData = desc.keepCPUData ?? this._keepCPUData;
+        this.clearComputedBoundsIfNeeded();
+        if (dataDirty) {
+            this._dataDirty = true;
+            this._scaleRevision++;
+        }
+    }
+
+    private primaryWasmCoreChannel(): GlyphWasmChannel | null {
+        if (this._wasmPositionsSource) return "positions";
+        if (this._wasmRotationsSource) return "rotations";
+        if (this._wasmScalesSource) return "scales";
+        return null;
+    }
+
+    private setInstanceCountFromWasm(instanceCount: number): void {
+        const count = assertWasmRecordCount(instanceCount, "GlyphField: instanceCount");
+        const changed = count !== this._instanceCount;
+        if (changed) this.validateNonWasmCPUCount(count);
+        this._instanceCount = count;
+        if (!changed) return;
+        if (this._wasmPositionsSource && this._positionsCPU && (this._positionsCPU.length / 4) !== count) this._positionsCPU = null;
+        if (this._wasmRotationsSource && this._rotationsCPU && (this._rotationsCPU.length / 4) !== count) this._rotationsCPU = null;
+        if (this._wasmScalesSource && this._scalesCPU && (this._scalesCPU.length / 4) !== count) this._scalesCPU = null;
+        if (this._wasmAttributesSource && this._attributesCPU && (this._attributesCPU.length / 4) !== count) this._attributesCPU = null;
+        if (this._wasmPositionsSource) this._wasmPositionsDirty = true;
+        if (this._wasmRotationsSource) this._wasmRotationsDirty = true;
+        if (this._wasmScalesSource) this._wasmScalesDirty = true;
+        if (this._wasmAttributesSource) this._wasmAttributesDirty = true;
+        this._dataDirty = true;
+    }
+
+    private resolveWasmChannelCount(channel: GlyphWasmChannel, source: WasmMemoryView<Float32Array>, explicitInstanceCount: number | undefined): number {
+        const field = `wasm${channel[0].toUpperCase()}${channel.slice(1)}`;
+        const primary = this.primaryWasmCoreChannel();
+        if (explicitInstanceCount !== undefined) {
+            const count = assertWasmRecordCount(explicitInstanceCount, "GlyphField: instanceCount");
+            assert(!primary || channel === primary || count === this._instanceCount, `GlyphField: refreshWasm${channel[0].toUpperCase()}${channel.slice(1)} instanceCount must match the current instanceCount when another core wasm source is active; call refreshFromWasm() to update instance count.`);
+            validateGlyphWasmRecordRange(source, count, field);
+            return count;
+        }
+        if (channel === primary) return resolveGlyphWasmRecordCount(source, undefined, field);
+        assert(this._instanceCount > 0 || source.length === 0, `GlyphField: instanceCount is required when using ${field} without a core wasm source.`);
+        validateGlyphWasmRecordRange(source, this._instanceCount, field);
+        return this._instanceCount;
+    }
+
+    private setWasmChannelSource(channel: GlyphWasmChannel, source: WasmMemoryView<Float32Array> | null, capacity: number | undefined): boolean {
+        if (source === null) {
+            if (channel === "positions") this.clearWasmPositionsState(true);
+            else if (channel === "rotations") this.clearWasmRotationsState(true);
+            else if (channel === "scales") this.clearWasmScalesState(true);
+            else this.clearWasmAttributesState(true);
+            return false;
+        }
+        const field = `wasm${channel[0].toUpperCase()}${channel.slice(1)}`;
+        const wasmSource = assertWasmF32View(source, `GlyphField: ${field}`);
+        const capacityHint = assertWasmCapacity(capacity, `GlyphField: ${field} capacity`);
+        if (channel === "positions") {
+            this._wasmPositionsCapacityHint = capacityHint;
+            if (!this._positionsWasmManaged) { this.replacePositionsBuffer(null, false); this._wasmPositionsCapacity = 0; this.bindGroupKey = null; }
+            this._wasmPositionsSource = wasmSource;
+        } else if (channel === "rotations") {
+            this._wasmRotationsCapacityHint = capacityHint;
+            if (!this._rotationsWasmManaged) { this.replaceRotationsBuffer(null, false); this._wasmRotationsCapacity = 0; this.bindGroupKey = null; }
+            this._wasmRotationsSource = wasmSource;
+        } else if (channel === "scales") {
+            this._wasmScalesCapacityHint = capacityHint;
+            if (!this._scalesWasmManaged) { this.replaceScalesBuffer(null, false); this._wasmScalesCapacity = 0; this.bindGroupKey = null; }
+            this._wasmScalesSource = wasmSource;
+        } else {
+            this._wasmAttributesCapacityHint = capacityHint;
+            if (!this._attributesWasmManaged) { this.replaceAttributesBuffer(null, false); this._wasmAttributesCapacity = 0; this.bindGroupKey = null; }
+            this._wasmAttributesSource = wasmSource;
+        }
+        this.clearCPUAndPointerChannel(channel);
+        return true;
+    }
+
+    private copyWasmActiveRange(source: WasmMemoryView<Float32Array>, instanceCount: number): Float32Array {
+        const view = source.array();
+        return new Float32Array(view.subarray(0, instanceCount * GLYPH_RECORD_FLOATS));
+    }
+
+    private ensureWasmPositionsBuffer(device: GPUDevice, instanceCount: number): void {
+        const required = Math.max(instanceCount, this._wasmPositionsCapacityHint);
+        if (required <= 0) return;
+        if (this.positionsBuffer && this._positionsWasmManaged && this._wasmPositionsCapacity >= required) return;
+        const capacity = growWasmCapacity(required, this._wasmPositionsCapacity);
+        this.replacePositionsBuffer(device.createBuffer({ label: "GlyphField.wasmPositions", size: capacity * GLYPH_RECORD_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }), true);
+        this._positionsWasmManaged = true;
+        this._wasmPositionsCapacity = capacity;
+        this.bindGroupKey = null;
+    }
+
+    private ensureWasmRotationsBuffer(device: GPUDevice, instanceCount: number): void {
+        const required = Math.max(instanceCount, this._wasmRotationsCapacityHint);
+        if (required <= 0) return;
+        if (this.rotationsBuffer && this._rotationsWasmManaged && this._wasmRotationsCapacity >= required) return;
+        const capacity = growWasmCapacity(required, this._wasmRotationsCapacity);
+        this.replaceRotationsBuffer(device.createBuffer({ label: "GlyphField.wasmRotations", size: capacity * GLYPH_RECORD_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }), true);
+        this._rotationsWasmManaged = true;
+        this._wasmRotationsCapacity = capacity;
+        this.bindGroupKey = null;
+    }
+
+    private ensureWasmScalesBuffer(device: GPUDevice, instanceCount: number): void {
+        const required = Math.max(instanceCount, this._wasmScalesCapacityHint);
+        if (required <= 0) return;
+        if (this.scalesBuffer && this._scalesWasmManaged && this._wasmScalesCapacity >= required) return;
+        const capacity = growWasmCapacity(required, this._wasmScalesCapacity);
+        this.replaceScalesBuffer(device.createBuffer({ label: "GlyphField.wasmScales", size: capacity * GLYPH_RECORD_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }), true);
+        this._scalesWasmManaged = true;
+        this._wasmScalesCapacity = capacity;
+        this.bindGroupKey = null;
+    }
+
+    private ensureWasmAttributesBuffer(device: GPUDevice, instanceCount: number): void {
+        const required = Math.max(instanceCount, this._wasmAttributesCapacityHint);
+        if (required <= 0) return;
+        if (this.attributesBuffer && this._attributesWasmManaged && this._wasmAttributesCapacity >= required) return;
+        const capacity = growWasmCapacity(required, this._wasmAttributesCapacity);
+        this.replaceAttributesBuffer(device.createBuffer({ label: "GlyphField.wasmAttributes", size: capacity * GLYPH_RECORD_BYTES, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }), true);
+        this._attributesWasmManaged = true;
+        this._wasmAttributesCapacity = capacity;
+        this.bindGroupKey = null;
+    }
+
+    private computeBoundsFromPackedData(positions: Float32Array, scales: Float32Array, rotations: Float32Array | null, instanceCount: number): void {
+        if (instanceCount <= 0) return;
+        const activeLength = instanceCount * GLYPH_RECORD_FLOATS;
+        const positionsPtr = wasm.allocF32(activeLength);
+        const scalesPtr = wasm.allocF32(activeLength);
+        let rotationsPtr: WasmPtr = 0;
+        const glyphCenterPtr = wasm.allocF32(3);
+        const boxMinPtr = wasm.allocF32(3);
+        const boxMaxPtr = wasm.allocF32(3);
+        const sphereCenterPtr = wasm.allocF32(3);
+        const sphereRadiusPtr = wasm.allocF32(1);
+        try {
+            wasm.f32view(positionsPtr, activeLength).set(positions.subarray(0, activeLength));
+            wasm.f32view(scalesPtr, activeLength).set(scales.subarray(0, activeLength));
+            if (rotations) {
+                rotationsPtr = wasm.allocF32(activeLength);
+                wasm.f32view(rotationsPtr, activeLength).set(rotations.subarray(0, activeLength));
+            }
+            wasm.writeF32(glyphCenterPtr, 3, this.geometry.boundsCenter);
+            boundsf.glyphInstances(boxMinPtr, boxMaxPtr, sphereCenterPtr, sphereRadiusPtr, positionsPtr, scalesPtr, rotationsPtr, instanceCount, glyphCenterPtr, this.geometry.boundsRadius);
+            const boxMin = wasm.f32view(boxMinPtr, 3);
+            const boxMax = wasm.f32view(boxMaxPtr, 3);
+            this.setBounds(boundsFromBox([boxMin[0], boxMin[1], boxMin[2]], [boxMax[0], boxMax[1], boxMax[2]]), "computed");
+        } finally {
+            wasm.freeF32(sphereRadiusPtr, 1);
+            wasm.freeF32(sphereCenterPtr, 3);
+            wasm.freeF32(boxMaxPtr, 3);
+            wasm.freeF32(boxMinPtr, 3);
+            wasm.freeF32(glyphCenterPtr, 3);
+            if (rotationsPtr) wasm.freeF32(rotationsPtr, activeLength);
+            wasm.freeF32(scalesPtr, activeLength);
+            wasm.freeF32(positionsPtr, activeLength);
+        }
+    }
+
+    private computeBoundsFromWasmSources(instanceCount: number): boolean {
+        const positionsSource = this._wasmPositionsSource;
+        const scalesSource = this._wasmScalesSource;
+        if (!positionsSource || !scalesSource || instanceCount <= 0) return false;
+        positionsSource.refresh();
+        scalesSource.refresh();
+        assertWasmF32View(positionsSource, "GlyphField: wasmPositions");
+        assertWasmF32View(scalesSource, "GlyphField: wasmScales");
+        validateGlyphWasmRecordRange(positionsSource, instanceCount, "wasmPositions");
+        validateGlyphWasmRecordRange(scalesSource, instanceCount, "wasmScales");
+        let rotations: Float32Array | null = null;
+        if (this._wasmRotationsSource) {
+            this._wasmRotationsSource.refresh();
+            assertWasmF32View(this._wasmRotationsSource, "GlyphField: wasmRotations");
+            validateGlyphWasmRecordRange(this._wasmRotationsSource, instanceCount, "wasmRotations");
+            rotations = this._wasmRotationsSource.array();
+        }
+        this.computeBoundsFromPackedData(positionsSource.array(), scalesSource.array(), rotations, instanceCount);
+        return true;
+    }
+
+    private updateWasmBounds(options: GlyphFieldWasmRefreshOptions): void {
+        if (options.recomputeBounds && this._boundsSource !== "explicit" && this.computeBoundsFromWasmSources(this._instanceCount)) return;
+        this.clearComputedBoundsIfNeeded();
     }
 
     get instanceCount(): number {
@@ -615,6 +1024,7 @@ export class GlyphField {
         if (rotations) assert((rotations.length / 4) === count, "GlyphField: rotations length does not match instanceCount.");
         if (scales) assert((scales.length / 4) === count, "GlyphField: scales length does not match instanceCount.");
         if (attributes) assert((attributes.length / 4) === count, "GlyphField: attributes length does not match instanceCount.");
+        this.clearAllWasmState(true);
         if (this._usingExternalBuffers) this.releaseInstanceBuffers();
         else if (!attributes) this.replaceAttributesBuffer(null, false);
         this._instanceCount = count;
@@ -638,6 +1048,7 @@ export class GlyphField {
     setWasmSoA(positionsPtr: WasmPtr, rotationsPtr: WasmPtr, scalesPtr: WasmPtr, attributesPtr: WasmPtr, instanceCount: number): void {
         const count = instanceCount | 0;
         assert(count > 0, "GlyphField: instanceCount must be > 0.");
+        this.clearAllWasmState(true);
         if (this._usingExternalBuffers) this.releaseInstanceBuffers();
         else if (!attributesPtr) this.replaceAttributesBuffer(null, false);
         this._instanceCount = count;
@@ -661,6 +1072,7 @@ export class GlyphField {
         const count = instanceCount | 0;
         assert(count > 0, "GlyphField: instanceCount must be > 0.");
         const ownBuffers = !!opts.ownBuffers;
+        this.clearAllWasmState(true);
         this._instanceCount = count;
         this.replacePositionsBuffer(positions, ownBuffers);
         this.replaceRotationsBuffer(rotations, ownBuffers);
@@ -680,6 +1092,109 @@ export class GlyphField {
         this._dataDirty = false;
         this._scaleRevision++;
         this.bindGroupKey = null;
+    }
+
+    setWasmPositions(source: WasmMemoryView<Float32Array> | null, options: GlyphFieldWasmChannelOptions = {}): void {
+        if (!this.setWasmChannelSource("positions", source, options.capacity)) return;
+        this.refreshWasmPositions(options);
+    }
+
+    setWasmRotations(source: WasmMemoryView<Float32Array> | null, options: GlyphFieldWasmChannelOptions = {}): void {
+        if (!this.setWasmChannelSource("rotations", source, options.capacity)) return;
+        this.refreshWasmRotations(options);
+    }
+
+    setWasmScales(source: WasmMemoryView<Float32Array> | null, options: GlyphFieldWasmChannelOptions = {}): void {
+        if (!this.setWasmChannelSource("scales", source, options.capacity)) return;
+        this.refreshWasmScales(options);
+    }
+
+    setWasmAttributes(source: WasmMemoryView<Float32Array> | null, options: GlyphFieldWasmChannelOptions = {}): void {
+        if (!this.setWasmChannelSource("attributes", source, options.capacity)) return;
+        this.refreshWasmAttributes(options);
+    }
+
+    setWasmInstances(sources: GlyphFieldWasmSources, options: GlyphFieldWasmInstancesOptions = {}): void {
+        if (Object.prototype.hasOwnProperty.call(sources, "positions")) this.setWasmChannelSource("positions", sources.positions ?? null, options.capacity);
+        if (Object.prototype.hasOwnProperty.call(sources, "rotations")) this.setWasmChannelSource("rotations", sources.rotations ?? null, options.capacity);
+        if (Object.prototype.hasOwnProperty.call(sources, "scales")) this.setWasmChannelSource("scales", sources.scales ?? null, options.capacity);
+        if (Object.prototype.hasOwnProperty.call(sources, "attributes")) this.setWasmChannelSource("attributes", sources.attributes ?? null, options.capacity);
+        this.refreshFromWasm(options);
+    }
+
+    refreshWasmPositions(options: GlyphFieldWasmRefreshOptions = {}): void {
+        const source = this._wasmPositionsSource;
+        if (!source) return;
+        source.refresh();
+        assertWasmF32View(source, "GlyphField: wasmPositions");
+        const count = this.resolveWasmChannelCount("positions", source, options.instanceCount);
+        this.setInstanceCountFromWasm(count);
+        this._keepCPUData = options.keepCPUData ?? this._keepCPUData;
+        if (this._keepCPUData) this._positionsCPU = this.copyWasmActiveRange(source, count);
+        else this._positionsCPU = null;
+        this.assertCoreSourcesAvailable("refreshWasmPositions");
+        this.updateWasmBounds(options);
+        this._wasmPositionsDirty = true;
+        this._dataDirty = true;
+    }
+
+    refreshWasmRotations(options: GlyphFieldWasmRefreshOptions = {}): void {
+        const source = this._wasmRotationsSource;
+        if (!source) return;
+        source.refresh();
+        assertWasmF32View(source, "GlyphField: wasmRotations");
+        const count = this.resolveWasmChannelCount("rotations", source, options.instanceCount);
+        this.setInstanceCountFromWasm(count);
+        this._keepCPUData = options.keepCPUData ?? this._keepCPUData;
+        if (this._keepCPUData) this._rotationsCPU = this.copyWasmActiveRange(source, count);
+        else this._rotationsCPU = null;
+        this.assertCoreSourcesAvailable("refreshWasmRotations");
+        this.updateWasmBounds(options);
+        this._wasmRotationsDirty = true;
+        this._dataDirty = true;
+    }
+
+    refreshWasmScales(options: GlyphFieldWasmRefreshOptions = {}): void {
+        const source = this._wasmScalesSource;
+        if (!source) return;
+        source.refresh();
+        assertWasmF32View(source, "GlyphField: wasmScales");
+        const count = this.resolveWasmChannelCount("scales", source, options.instanceCount);
+        this.setInstanceCountFromWasm(count);
+        this._keepCPUData = options.keepCPUData ?? this._keepCPUData;
+        if (this._keepCPUData) this._scalesCPU = this.copyWasmActiveRange(source, count);
+        else this._scalesCPU = null;
+        this.assertCoreSourcesAvailable("refreshWasmScales");
+        this.updateWasmBounds(options);
+        this._wasmScalesDirty = true;
+        this._dataDirty = true;
+    }
+
+    refreshWasmAttributes(options: GlyphFieldWasmRefreshOptions = {}): void {
+        const source = this._wasmAttributesSource;
+        if (!source) return;
+        source.refresh();
+        assertWasmF32View(source, "GlyphField: wasmAttributes");
+        const count = this.resolveWasmChannelCount("attributes", source, options.instanceCount);
+        this.setInstanceCountFromWasm(count);
+        this._keepCPUData = options.keepCPUData ?? this._keepCPUData;
+        if (this._keepCPUData) this._attributesCPU = this.copyWasmActiveRange(source, count);
+        else this._attributesCPU = null;
+        this._wasmAttributesDirty = true;
+        this._dataDirty = true;
+        this._scaleRevision++;
+    }
+
+    refreshFromWasm(options: GlyphFieldWasmRefreshOptions = {}): void {
+        if (this._wasmPositionsSource) this.refreshWasmPositions(options);
+        if (this._wasmRotationsSource) this.refreshWasmRotations(options);
+        if (this._wasmScalesSource) this.refreshWasmScales(options);
+        if (this._wasmAttributesSource) this.refreshWasmAttributes(options);
+    }
+
+    clearWasmSources(): void {
+        this.clearAllWasmState(true);
+        if (!this.hasCPUOrInternalPointerInputs()) this._dataDirty = false;
     }
 
     computeBoundsFromCPUData(): void {
@@ -734,10 +1249,149 @@ export class GlyphField {
         return this.getWorldBounds();
     }
 
+    private uploadWasmPositions(device: GPUDevice, queue: GPUQueue): void {
+        const source = this._wasmPositionsSource;
+        if (!source || !this._wasmPositionsDirty) return;
+        source.refresh();
+        assertWasmF32View(source, "GlyphField: wasmPositions");
+        const count = this._instanceCount;
+        validateGlyphWasmRecordRange(source, count, "wasmPositions");
+        if (count <= 0) { this._wasmPositionsDirty = false; return; }
+        const data = source.array();
+        const byteLength = count * GLYPH_RECORD_BYTES;
+        this.ensureWasmPositionsBuffer(device, count);
+        const write = (): void => {
+            assert(!!this.positionsBuffer, "GlyphField: wasmPositions upload requires a positionsBuffer.");
+            queue.writeBuffer(this.positionsBuffer, 0, data.buffer, data.byteOffset, byteLength);
+        };
+        try { write(); }
+        catch {
+            this.replacePositionsBuffer(null, false);
+            this._positionsWasmManaged = false;
+            this._wasmPositionsCapacity = 0;
+            this.ensureWasmPositionsBuffer(device, count);
+            write();
+        }
+        if (this._keepCPUData) this._positionsCPU = new Float32Array(data.subarray(0, count * GLYPH_RECORD_FLOATS));
+        else this._positionsCPU = null;
+        this._wasmPositionsDirty = false;
+    }
+
+    private uploadWasmRotations(device: GPUDevice, queue: GPUQueue): void {
+        const source = this._wasmRotationsSource;
+        if (!source || !this._wasmRotationsDirty) return;
+        source.refresh();
+        assertWasmF32View(source, "GlyphField: wasmRotations");
+        const count = this._instanceCount;
+        validateGlyphWasmRecordRange(source, count, "wasmRotations");
+        if (count <= 0) { this._wasmRotationsDirty = false; return; }
+        const data = source.array();
+        const byteLength = count * GLYPH_RECORD_BYTES;
+        this.ensureWasmRotationsBuffer(device, count);
+        const write = (): void => {
+            assert(!!this.rotationsBuffer, "GlyphField: wasmRotations upload requires a rotationsBuffer.");
+            queue.writeBuffer(this.rotationsBuffer, 0, data.buffer, data.byteOffset, byteLength);
+        };
+        try { write(); }
+        catch {
+            this.replaceRotationsBuffer(null, false);
+            this._rotationsWasmManaged = false;
+            this._wasmRotationsCapacity = 0;
+            this.ensureWasmRotationsBuffer(device, count);
+            write();
+        }
+        if (this._keepCPUData) this._rotationsCPU = new Float32Array(data.subarray(0, count * GLYPH_RECORD_FLOATS));
+        else this._rotationsCPU = null;
+        this._wasmRotationsDirty = false;
+    }
+
+    private uploadWasmScales(device: GPUDevice, queue: GPUQueue): void {
+        const source = this._wasmScalesSource;
+        if (!source || !this._wasmScalesDirty) return;
+        source.refresh();
+        assertWasmF32View(source, "GlyphField: wasmScales");
+        const count = this._instanceCount;
+        validateGlyphWasmRecordRange(source, count, "wasmScales");
+        if (count <= 0) { this._wasmScalesDirty = false; return; }
+        const data = source.array();
+        const byteLength = count * GLYPH_RECORD_BYTES;
+        this.ensureWasmScalesBuffer(device, count);
+        const write = (): void => {
+            assert(!!this.scalesBuffer, "GlyphField: wasmScales upload requires a scalesBuffer.");
+            queue.writeBuffer(this.scalesBuffer, 0, data.buffer, data.byteOffset, byteLength);
+        };
+        try { write(); }
+        catch {
+            this.replaceScalesBuffer(null, false);
+            this._scalesWasmManaged = false;
+            this._wasmScalesCapacity = 0;
+            this.ensureWasmScalesBuffer(device, count);
+            write();
+        }
+        if (this._keepCPUData) this._scalesCPU = new Float32Array(data.subarray(0, count * GLYPH_RECORD_FLOATS));
+        else this._scalesCPU = null;
+        this._wasmScalesDirty = false;
+    }
+
+    private uploadWasmAttributes(device: GPUDevice, queue: GPUQueue): void {
+        const source = this._wasmAttributesSource;
+        if (!source || !this._wasmAttributesDirty) return;
+        source.refresh();
+        assertWasmF32View(source, "GlyphField: wasmAttributes");
+        const count = this._instanceCount;
+        validateGlyphWasmRecordRange(source, count, "wasmAttributes");
+        if (count <= 0) { this._wasmAttributesDirty = false; return; }
+        const data = source.array();
+        const byteLength = count * GLYPH_RECORD_BYTES;
+        this.ensureWasmAttributesBuffer(device, count);
+        const write = (): void => {
+            assert(!!this.attributesBuffer, "GlyphField: wasmAttributes upload requires an attributesBuffer.");
+            queue.writeBuffer(this.attributesBuffer, 0, data.buffer, data.byteOffset, byteLength);
+        };
+        try { write(); }
+        catch {
+            this.replaceAttributesBuffer(null, false);
+            this._attributesWasmManaged = false;
+            this._wasmAttributesCapacity = 0;
+            this.ensureWasmAttributesBuffer(device, count);
+            write();
+        }
+        if (this._keepCPUData) this._attributesCPU = new Float32Array(data.subarray(0, count * GLYPH_RECORD_FLOATS));
+        else this._attributesCPU = null;
+        this._wasmAttributesDirty = false;
+    }
+
+    private uploadWasmSources(device: GPUDevice, queue: GPUQueue): void {
+        if (this._instanceCount <= 0) {
+            this._wasmPositionsDirty = false;
+            this._wasmRotationsDirty = false;
+            this._wasmScalesDirty = false;
+            this._wasmAttributesDirty = false;
+            return;
+        }
+        this.uploadWasmPositions(device, queue);
+        this.uploadWasmRotations(device, queue);
+        this.uploadWasmScales(device, queue);
+        this.uploadWasmAttributes(device, queue);
+        if (!this._wasmAttributesSource && !this._attributesCPU && !this._attributesPtr && !this.attributesBuffer) {
+            this.replaceAttributesBuffer(device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: "GlyphField.attributesDummy" }), true);
+            this._attributesWasmManaged = false;
+            this._wasmAttributesCapacity = 0;
+            this.bindGroupKey = null;
+        }
+    }
+
     upload(device: GPUDevice, queue: GPUQueue): void {
-        if (this._usingExternalBuffers) return;
-        if (!this._dataDirty) return;
-        if (this._instanceCount <= 0) { this._dataDirty = false; return; }
+        const hadDataDirty = this._dataDirty;
+        if (this.hasDirtyWasmSources()) this.uploadWasmSources(device, queue);
+        if (this._usingExternalBuffers && !this.hasExternalWasmSources()) return;
+        const needsNonWasmUpload = hadDataDirty && this.hasDirtyNonWasmSources();
+        if (!needsNonWasmUpload) {
+            this._dataDirty = this.hasDirtyWasmSources();
+            return;
+        }
+        if (this._instanceCount <= 0) { this._dataDirty = this.hasDirtyWasmSources(); return; }
+        this.assertCoreSourcesAvailable("upload");
         const bytes = driver.bytes();
         const requiredBytes = this._instanceCount * 16;
         const uploadSoA = (buf: GPUBuffer | null, owned: boolean, cpu: Float32Array | null, ptr: WasmPtr, label: string): { buffer: GPUBuffer | null; owned: boolean; } => {
@@ -751,23 +1405,23 @@ export class GlyphField {
                 return { buffer: buf, owned: true };
             } catch { return { buffer: createBuffer(device, source, usage, label), owned: true }; }
         };
-        const positions = uploadSoA(this.positionsBuffer, this._positionsOwned, this._positionsCPU, this._positionsPtr, "GlyphField.positions");
-        const rotations = uploadSoA(this.rotationsBuffer, this._rotationsOwned, this._rotationsCPU, this._rotationsPtr, "GlyphField.rotations");
-        const scales = uploadSoA(this.scalesBuffer, this._scalesOwned, this._scalesCPU, this._scalesPtr, "GlyphField.scales");
+        const positions = this._wasmPositionsSource ? { buffer: this.positionsBuffer, owned: this._positionsOwned } : uploadSoA(this.positionsBuffer, this._positionsOwned, this._positionsCPU, this._positionsPtr, "GlyphField.positions");
+        const rotations = this._wasmRotationsSource ? { buffer: this.rotationsBuffer, owned: this._rotationsOwned } : uploadSoA(this.rotationsBuffer, this._rotationsOwned, this._rotationsCPU, this._rotationsPtr, "GlyphField.rotations");
+        const scales = this._wasmScalesSource ? { buffer: this.scalesBuffer, owned: this._scalesOwned } : uploadSoA(this.scalesBuffer, this._scalesOwned, this._scalesCPU, this._scalesPtr, "GlyphField.scales");
         this.replacePositionsBuffer(positions.buffer, positions.owned);
         this.replaceRotationsBuffer(rotations.buffer, rotations.owned);
         this.replaceScalesBuffer(scales.buffer, scales.owned);
-        if (this._attributesCPU || this._attributesPtr) {
+        if (!this._wasmAttributesSource && (this._attributesCPU || this._attributesPtr)) {
             const attributes = uploadSoA(this.attributesBuffer, this._attributesOwned, this._attributesCPU, this._attributesPtr, "GlyphField.attributes");
             this.replaceAttributesBuffer(attributes.buffer, attributes.owned);
-        } else if (!this.attributesBuffer || !this._attributesOwned) this.replaceAttributesBuffer(device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: "GlyphField.attributesDummy" }), true);
+        } else if (!this._wasmAttributesSource && (!this.attributesBuffer || !this._attributesOwned)) this.replaceAttributesBuffer(device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST, label: "GlyphField.attributesDummy" }), true);
         if (!this._keepCPUData) {
-            this._positionsCPU = null;
-            this._rotationsCPU = null;
-            this._scalesCPU = null;
-            this._attributesCPU = null;
+            if (!this._wasmPositionsSource) this._positionsCPU = null;
+            if (!this._wasmRotationsSource) this._rotationsCPU = null;
+            if (!this._wasmScalesSource) this._scalesCPU = null;
+            if (!this._wasmAttributesSource) this._attributesCPU = null;
         }
-        this._dataDirty = false;
+        this._dataDirty = this.hasDirtyWasmSources();
         this.bindGroupKey = null;
     }
 
@@ -838,6 +1492,10 @@ export class GlyphField {
         this._rotationsCPU = null;
         this._scalesCPU = null;
         this._attributesCPU = null;
+        this._wasmPositionsSource = null;
+        this._wasmRotationsSource = null;
+        this._wasmScalesSource = null;
+        this._wasmAttributesSource = null;
         this._ndShape = null;
         this._instanceCount = 0;
         this._positionsOwned = false;
@@ -845,6 +1503,22 @@ export class GlyphField {
         this._scalesOwned = false;
         this._attributesOwned = false;
         this._ownExternalBuffers = false;
+        this._wasmPositionsDirty = false;
+        this._wasmRotationsDirty = false;
+        this._wasmScalesDirty = false;
+        this._wasmAttributesDirty = false;
+        this._positionsWasmManaged = false;
+        this._rotationsWasmManaged = false;
+        this._scalesWasmManaged = false;
+        this._attributesWasmManaged = false;
+        this._wasmPositionsCapacity = 0;
+        this._wasmRotationsCapacity = 0;
+        this._wasmScalesCapacity = 0;
+        this._wasmAttributesCapacity = 0;
+        this._wasmPositionsCapacityHint = 0;
+        this._wasmRotationsCapacityHint = 0;
+        this._wasmScalesCapacityHint = 0;
+        this._wasmAttributesCapacityHint = 0;
         this._visualChangeListeners.clear();
         this.transform.dispose();
     }
