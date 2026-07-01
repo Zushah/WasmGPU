@@ -5,12 +5,24 @@
  */
 
 import assert from "assert";
-import { initWebAssembly, Geometry, Mesh, Scene, TransformStore, UnlitMaterial, StandardMaterial } from "../dist/WasmGPU.js";
+import { create, globals } from "webgpu";
+import { initWebAssembly, Geometry, Mesh, Scene, TransformStore, UnlitMaterial, StandardMaterial, webassemblyInterop, WasmMemoryView } from "../dist/WasmGPU.js";
+
+Object.assign(globalThis, globals);
+const navigator = { gpu: create([]) };
+Object.defineProperty(globalThis, "navigator", { value: navigator, configurable: true });
 
 const approxEqual = (actual, expected, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(actual) && Number.isFinite(expected), `${msg}: expected finite numbers`); assert.ok(Math.abs(actual - expected) <= tol, `${msg}: ${actual} vs ${expected}`); };
 const approxArray = (actual, expected, tol = 1e-6, msg = "Arrays differ") => { assert.equal(actual.length, expected.length, `${msg}: length ${actual.length} vs ${expected.length}`); for (let i = 0; i < actual.length; i++) approxEqual(actual[i], expected[i], tol, `${msg} at index ${i}`); };
 const captureWarnings = (run) => { const warnings = []; const originalWarn = console.warn; console.warn = (message) => { warnings.push(String(message)); }; try { const result = run(); return { result, warnings }; } finally { console.warn = originalWarn; } };
 await initWebAssembly(new URL("../dist/", import.meta.url).toString());
+const gpu = navigator.gpu;
+assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
+const adapter = await gpu.requestAdapter();
+assert.ok(adapter, "Failed to acquire a WebGPU adapter");
+const device = await adapter.requestDevice();
+assert.ok(device, "Failed to acquire a WebGPU device");
+device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
 
 // 1) Geometry descriptors preserve attributes, bounds, morph targets, and buffer access guards.
 {
@@ -107,7 +119,134 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     curve.destroy();
 }
 
-// 4) Mesh runtime state preserves transforms, hierarchy, visibility, flags, and bounds.
+// 4) External WebAssembly memory views: constructor counts, mixed source kinds, explicit refresh, bounds, validation, and grow-only GPU capacity.
+{
+    const makeView = (length, dtype = "f32", name = "geometry-wasm-view", capacity = Math.max(length, 32)) => {
+        const bytes = dtype === "u16" ? 2 : 4;
+        const memory = new WebAssembly.Memory({ initial: Math.max(1, Math.ceil((capacity * bytes) / 65536)) });
+        const moduleRef = webassemblyInterop.fromMemory(memory, { name });
+        const lengthGlobal = new WebAssembly.Global({ value: "i32", mutable: true }, length);
+        const Ctor = dtype === "u16" ? Uint16Array : dtype === "u32" ? Uint32Array : Float32Array;
+        const data = new Ctor(memory.buffer, 0, capacity);
+        const view = moduleRef.view({ ptr: 0, length: { global: lengthGlobal }, dtype, name });
+        assert.ok(view instanceof WasmMemoryView, "Expected fromMemory().view() to return a WasmMemoryView");
+        return { memory, moduleRef, lengthGlobal, data, view };
+    };
+    const setPositions = (target, count, base = 0) => { for (let i = 0; i < count; i++) target.set([base + i, base + i + 0.25, base + i + 0.5], i * 3); };
+
+    const positions = makeView(9, "f32", "geometry:wasm:positions", 18);
+    const indices = makeView(3, "u32", "geometry:wasm:indices", 6);
+    setPositions(positions.data, 3, 0);
+    indices.data.set([0, 1, 2]);
+    const geometry = new Geometry({ wasmPositions: positions.view, wasmIndices: indices.view });
+    assert.equal(geometry.vertexCount, 3, "Geometry should derive vertexCount from wasmPositions");
+    assert.equal(geometry.indexCount, 3, "Geometry should derive indexCount from wasmIndices");
+    assert.equal(geometry.positions.length, 0, "Default wasmPositions path should not retain CPU positions");
+    approxArray(Array.from(geometry.boundsMin), [0, 0.25, 0.5]);
+    geometry.upload(device);
+    assert.equal(geometry.isIndexed, true, "wasmIndices should create an index buffer after upload");
+    const firstPositionBuffer = geometry.positionBuffer;
+    const firstIndexBuffer = geometry.indexBuffer;
+    assert.ok(firstPositionBuffer.size >= 4 * 3 * 4, "wasmVertexCapacity should be measured in vertices");
+    assert.ok(firstIndexBuffer.size >= 3 * 4, "wasmIndexCapacity should be measured in indices");
+    positions.lengthGlobal.value = 12;
+    setPositions(positions.data, 4, 10);
+    geometry.refreshWasmVertices({ vertexCount: 4 });
+    geometry.upload(device);
+    assert.strictEqual(geometry.positionBuffer, firstPositionBuffer, "Geometry should reuse wasm vertex capacity when the active count fits");
+    positions.lengthGlobal.value = 15;
+    setPositions(positions.data, 5, 20);
+    geometry.refreshWasmVertices({ vertexCount: 5 });
+    geometry.upload(device);
+    assert.notStrictEqual(geometry.positionBuffer, firstPositionBuffer, "Geometry should grow wasm vertex capacity when active count exceeds capacity");
+    geometry.destroy();
+
+    const mixedIndices = makeView(6, "u32", "geometry:wasm:mixed:indices", 6);
+    mixedIndices.data.set([0, 1, 2, 0, 2, 1]);
+    const mixed = new Geometry({
+        positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+        normals: new Float32Array([0, 0, 1, 0, 0, 1, 0, 0, 1]),
+        wasmIndices: mixedIndices.view
+    });
+    assert.equal(mixed.vertexCount, 3, "CPU positions should mix with wasmIndices");
+    assert.equal(mixed.indexCount, 6, "wasmIndices should derive indexCount in a mixed-source geometry");
+    mixed.upload(device);
+    assert.equal(mixed.isIndexed, true, "Mixed CPU+wasm geometry should upload an index buffer");
+    mixed.destroy();
+
+    const fallbackPositions = makeView(9, "f32", "geometry:wasm:fallback:positions", 9);
+    const fallbackNormals = makeView(9, "f32", "geometry:wasm:fallback:normals", 9);
+    const fallbackTangents = makeView(12, "f32", "geometry:wasm:fallback:tangents", 12);
+    const fallbackUvs = makeView(6, "f32", "geometry:wasm:fallback:uvs", 6);
+    setPositions(fallbackPositions.data, 3, 0);
+    fallbackNormals.data.fill(0.5);
+    fallbackTangents.data.fill(0.25);
+    fallbackUvs.data.fill(0.75);
+    const fallback = new Geometry({ wasmPositions: fallbackPositions.view, wasmNormals: fallbackNormals.view, wasmTangents: fallbackTangents.view, wasmUvs: fallbackUvs.view });
+    fallback.upload(device);
+    fallback.setWasmNormals(null);
+    fallback.setWasmTangents(null);
+    fallback.setWasmUvs(null);
+    assert.equal(fallback.normals.length, 9, "Clearing wasmNormals should restore fallback normals for the active vertex count");
+    assert.equal(fallback.normals[1], 1, "Fallback normals should use the constructor's +Y default");
+    assert.equal(fallback.tangents.length, 12, "Clearing wasmTangents should restore derivative fallback tangents");
+    assert.equal(fallback.uvs.length, 6, "Clearing wasmUvs should restore zero UV fallback data");
+    fallback.upload(device);
+    assert.ok(fallback.normalBuffer.size >= 9 * 4, "Fallback normals should upload after clearing wasmNormals");
+    assert.ok(fallback.tangentBuffer.size >= 12 * 4, "Fallback tangents should upload after clearing wasmTangents");
+    assert.ok(fallback.uvBuffer.size >= 6 * 4, "Fallback UVs should upload after clearing wasmUvs");
+    const fallbackNormalBuffer = fallback.normalBuffer;
+    const tooShortFallbackNormals = makeView(6, "f32", "geometry:wasm:fallback:short:normals", 6);
+    assert.throws(() => fallback.setWasmNormals(tooShortFallbackNormals.view, { vertexCount: 3 }), /wasmNormals length must be at least vertexCount\*3/i, "Rejected wasmNormals should validate before clearing fallback state");
+    assert.strictEqual(fallback.normalBuffer, fallbackNormalBuffer, "Rejected wasmNormals should not destroy the existing fallback normal buffer");
+    fallback.destroy();
+
+    const keepPositions = makeView(12, "f32", "geometry:wasm:keep:positions", 18);
+    setPositions(keepPositions.data, 4, -2);
+    const keep = new Geometry({ wasmPositions: keepPositions.view, vertexCount: 2, wasmVertexCapacity: 4, keepCPUData: true });
+    assert.equal(keep.vertexCount, 2, "Explicit vertexCount should override extra wasmPositions capacity");
+    assert.equal(keep.positions.length, 6, "keepCPUData should snapshot only the active wasmPositions range");
+    keep.upload(device);
+    assert.ok(keep.positionBuffer.size >= 4 * 3 * 4, "wasmVertexCapacity should reserve logical vertex records");
+    keep.destroy();
+
+    const boundsPositions = makeView(9, "f32", "geometry:wasm:bounds", 9);
+    setPositions(boundsPositions.data, 3, 0);
+    const dynamicBounds = new Geometry({ wasmPositions: boundsPositions.view });
+    boundsPositions.data.set([100, 101, 102, 103, 104, 105, 106, 107, 108]);
+    dynamicBounds.refreshWasmVertices({ vertexCount: 3 });
+    approxArray(Array.from(dynamicBounds.boundsMax), [2, 2.25, 2.5], 1e-6, "Default refresh should preserve existing bounds");
+    dynamicBounds.refreshWasmVertices({ vertexCount: 3, recomputeBounds: true });
+    approxArray(Array.from(dynamicBounds.boundsMax), [106, 107, 108], 1e-6, "recomputeBounds should scan active wasmPositions");
+    dynamicBounds.destroy();
+
+    const explicitBounds = new Geometry({
+        wasmPositions: boundsPositions.view,
+        bounds: { boxMin: [-1, -1, -1], boxMax: [1, 1, 1], sphereCenter: [0, 0, 0], sphereRadius: 2 }
+    });
+    explicitBounds.refreshWasmVertices({ vertexCount: 3, recomputeBounds: true });
+    approxArray(Array.from(explicitBounds.boundsMin), [-1, -1, -1], 1e-6, "Explicit bounds should not be overwritten by wasm refresh");
+    explicitBounds.destroy();
+
+    const shrink = makeView(9, "f32", "geometry:wasm:shrink", 9);
+    setPositions(shrink.data, 3, 0);
+    const shrinkGeometry = new Geometry({ wasmPositions: shrink.view, vertexCount: 3 });
+    shrink.lengthGlobal.value = 6;
+    assert.throws(() => shrinkGeometry.upload(device), /wasmPositions length must be at least vertexCount\*3/i, "upload() should validate refreshed wasmPositions length before reading");
+    shrinkGeometry.destroy();
+
+    const invalidPositions = makeView(10, "f32", "geometry:wasm:bad:length", 10);
+    const shortNormals = makeView(6, "f32", "geometry:wasm:bad:normals", 6);
+    const wrongDType = makeView(9, "u32", "geometry:wasm:bad:dtype", 9);
+    for (const { message, error, create } of [
+        { message: "Non-WasmMemoryView wasmPositions should throw", error: /wasmPositions must be a WasmMemoryView/i, create: () => new Geometry({ wasmPositions: positions.data }) },
+        { message: "Non-f32 wasmPositions should throw", error: /wasmPositions dtype must be 'f32'/i, create: () => new Geometry({ wasmPositions: wrongDType.view }) },
+        { message: "Invalid derived wasmPositions vertexCount should throw", error: /wasmPositions length must be a multiple of 3/i, create: () => new Geometry({ wasmPositions: invalidPositions.view }) },
+        { message: "Short wasmNormals should throw", error: /wasmNormals length must be at least vertexCount\*3/i, create: () => new Geometry({ wasmPositions: positions.view, wasmNormals: shortNormals.view, vertexCount: 3 }) }
+    ]) assert.throws(create, error, message);
+}
+
+// 5) Mesh runtime state preserves transforms, hierarchy, visibility, flags, and bounds.
 {
     const baseTransformCount = TransformStore.global().count;
     const geometry = Geometry.box(2, 2, 2);
@@ -157,7 +296,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(TransformStore.global().count, baseTransformCount);
 }
 
-// 5) Scene ownership tracks meshes, names, visibility, traversal, and destroyed-mesh detachment.
+// 6) Scene ownership tracks meshes, names, visibility, traversal, and destroyed-mesh detachment.
 {
     const scene = new Scene({ background: [0.1, 0.2, 0.3] });
     const visible = new Mesh(Geometry.box(1, 1, 1), new UnlitMaterial());
@@ -193,7 +332,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(scene.meshes.length, 0);
 }
 
-// 6) Cloning and material replacement retain ownership while preserving mesh state.
+// 7) Cloning and material replacement retain ownership while preserving mesh state.
 {
     const geometry = Geometry.box();
     const material = new UnlitMaterial({ color: [0.8, 0.2, 0.1] });
@@ -228,7 +367,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     cloneWithMaterial.destroy();
 }
 
-// 7) Lifecycle edges protect shared resources and reject use after destruction.
+// 8) Lifecycle edges protect shared resources and reject use after destruction.
 {
     const sharedGeometry = Geometry.box();
     const sharedMaterial = new UnlitMaterial();
@@ -259,3 +398,5 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.throws(() => swappable.clone(), /already been destroyed/);
     assert.throws(() => swappable.worldMatrix, /already been destroyed/);
 }
+
+device.destroy();

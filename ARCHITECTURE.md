@@ -2,7 +2,7 @@
 
 Last updated: Wednesday, July 1, 2026.
 
-Last commit: Wednesday, July 1, 2026, [**`9cfe59d`**](https://www.github.com/Zushah/WasmGPU/commit/9cfe59d).
+Last commit: Wednesday, July 1, 2026, [**`1b1f52f`**](https://www.github.com/Zushah/WasmGPU/commit/1b1f52f).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -271,7 +271,7 @@ The renderer reads visible scene objects through scene getters. It also reads sc
 
 Objects in the scene own different data:
 
-- `./src/world/mesh.ts`: geometry, material references, transform, optional skin, optional morph runtime state, visibility flags, and scene owner references.
+- `./src/world/mesh.ts`: geometry, material references, transform, optional skin, optional morph runtime state, visibility flags, and scene owner references. Mesh vertex and index data enters the renderer through `Geometry`.
 - `./src/world/pointcloud.ts`: point data, optional borrowed external WebAssembly memory views, bounds, scale source metadata, colormap state, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external point and color buffers.
 - `./src/world/glyphfield.ts`: glyph geometry, instance data, optional borrowed external WebAssembly memory views, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external instance buffers.
 - `./src/world/nodelink.ts`: node data, edge data, optional borrowed external WebAssembly memory views, node and edge rendering modes, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external node and edge buffers.
@@ -297,7 +297,7 @@ The renderer calls `Transform.updateAll()` before gathering draw lists. Cameras,
 
 Graphics data is implemented under `./src/graphics/`.
 
-`./src/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It calls Rust bounds and normal-generation functions through `./src/wasm/index.ts`. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry.
+`./src/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It can also borrow external `WasmMemoryView` sources for mesh vertex attributes and indices, explicitly refresh them, and upload active ranges into geometry-owned GPU buffers without owning or freeing the external WebAssembly memory. It calls Rust bounds and normal-generation functions through `./src/wasm/index.ts`. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry.
 
 `./src/graphics/material.ts` implements `Material`, `UnlitMaterial`, `StandardMaterial`, `DataMaterial`, and `CustomMaterial`. Materials own uniform buffers, bind groups, texture references, WebGPU state flags, and dirty state. `StandardMaterial` currently includes glTF-style properties for base color, metallic roughness, normal maps, occlusion, emissive maps, clearcoat, transmission, volume, diffuse transmission, dispersion, specular, sheen, iridescence, anisotropy, index of refraction, and emissive strength.
 
@@ -596,7 +596,7 @@ Architectural role:
 
 Important files:
 
-- `./src/graphics/geometry.ts`: vertex data, index data, tangent generation, normal generation, bounds, morph target arrays, GPU buffers, reference counting, and primitive geometry factories.
+- `./src/graphics/geometry.ts`: vertex data, index data, WASM-memory upload, tangent generation, normal generation, bounds, morph target arrays, GPU buffers, reference counting, and primitive geometry factories.
 - `./src/graphics/material.ts`: material base class, unlit material, standard material, data material, custom material, uniform packing, texture references, bind groups, and reference counting.
 - `./src/graphics/texture.ts`: texture descriptors, image loading, GPU texture upload, mipmap generation, sampler setup, fallback behavior, and destruction.
 - `./src/graphics/colormap.ts`: built-in and caller-provided color stops, CPU lookup tables, optional external GPU texture views, GPU resource caching, and CPU sampling helpers.
@@ -712,7 +712,7 @@ Important files:
 - `./src/python/index.ts`: TypeScript interop API for sending and receiving ndarrays, viewing handles, copying data, and freeing owned memory.
 - `./src/python/interop.py`: Python-side helper classes for handles, arenas, and array wrappers.
 - `./src/wasm/index.ts`: exports for the WebAssembly driver and the WebAssembly interop.
-- `./src/wasm/interop.ts`: external WebAssembly module wrappers, descriptor resolution, typed memory views, raw byte reads, UTF-8/DataView helpers, and shared external memory validation/count helpers used by pointcloud, glyphfield, nodelink, and splatfield upload paths.
+- `./src/wasm/interop.ts`: external WebAssembly module wrappers, descriptor resolution, typed memory views, raw byte reads, UTF-8/DataView helpers, and shared external memory validation/count helpers used by geometry, pointcloud, glyphfield, nodelink, and splatfield upload paths.
 
 Common interactions:
 

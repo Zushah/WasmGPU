@@ -152,8 +152,8 @@ export const buildDrawLists = (ctx: RendererContext, scene: Scene, camera: Camer
     const pushMesh = (mesh: Mesh): void => {
         const geometry = mesh.geometry;
         const material = mesh.material;
-        const skinned = mesh.skin !== null && geometry.joints !== null && geometry.weights !== null && materialSupportsSkinning(ctx, material);
-        const skinned8 = skinned && geometry.joints1 !== null && geometry.weights1 !== null;
+        const skinned = mesh.skin !== null && geometry.hasSkinAttributes && materialSupportsSkinning(ctx, material);
+        const skinned8 = skinned && geometry.hasSkin8Attributes;
         const wb = mesh.transform.worldMatrixPtr >>> 2;
         const mirrored = isMirroredWorldMatrix(ctx, storeF32, wb);
         const opticalTransmission = isOpticallyTransmissiveMaterial(material);

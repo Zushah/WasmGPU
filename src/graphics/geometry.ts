@@ -4,8 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { createBuffer, nextPow2 } from "../utils";
-import { boundsf, meshf, wasm } from "../wasm";
+import { assert, createBuffer, nextPow2 } from "../utils";
+import { boundsf, meshf, wasm, WasmMemoryView, assertWasmF32View, assertWasmU16View, assertWasmU32View, assertWasmRecordCount, assertWasmCapacity, resolveWasmRecordCount, validateWasmRecordRange, growWasmCapacity } from "../wasm";
 
 export type GeometryAttribute = {
     data: Float32Array;
@@ -18,7 +18,7 @@ export type GeometryMorphTargetDescriptor = {
 };
 
 export type GeometryDescriptor = {
-    positions: Float32Array;
+    positions?: Float32Array;
     normals?: Float32Array;
     tangents?: Float32Array;
     uvs?: Float32Array;
@@ -28,8 +28,56 @@ export type GeometryDescriptor = {
     joints1?: Uint16Array;
     weights1?: Float32Array;
     indices?: Uint32Array;
+    wasmPositions?: WasmMemoryView<Float32Array>;
+    wasmNormals?: WasmMemoryView<Float32Array>;
+    wasmTangents?: WasmMemoryView<Float32Array>;
+    wasmUvs?: WasmMemoryView<Float32Array>;
+    wasmUvs1?: WasmMemoryView<Float32Array>;
+    wasmJoints?: WasmMemoryView<Uint16Array>;
+    wasmWeights?: WasmMemoryView<Float32Array>;
+    wasmJoints1?: WasmMemoryView<Uint16Array>;
+    wasmWeights1?: WasmMemoryView<Float32Array>;
+    wasmIndices?: WasmMemoryView<Uint32Array>;
+    vertexCount?: number;
+    indexCount?: number;
+    wasmVertexCapacity?: number;
+    wasmIndexCapacity?: number;
+    bounds?: GeometryBoundsDescriptor;
+    keepCPUData?: boolean;
     morphTargets?: ReadonlyArray<GeometryMorphTargetDescriptor>;
     authoredNormals?: boolean;
+};
+
+export type GeometryWasmVertexRefreshOptions = {
+    vertexCount?: number;
+    keepCPUData?: boolean;
+    recomputeBounds?: boolean;
+};
+
+export type GeometryWasmIndexRefreshOptions = {
+    indexCount?: number;
+    keepCPUData?: boolean;
+};
+
+export type GeometryWasmAttributeOptions = GeometryWasmVertexRefreshOptions & {
+    capacity?: number;
+};
+
+export type GeometryWasmIndexOptions = GeometryWasmIndexRefreshOptions & {
+    capacity?: number;
+};
+
+export type GeometryWasmSources = {
+    positions?: WasmMemoryView<Float32Array> | null;
+    normals?: WasmMemoryView<Float32Array> | null;
+    tangents?: WasmMemoryView<Float32Array> | null;
+    uvs?: WasmMemoryView<Float32Array> | null;
+    uvs1?: WasmMemoryView<Float32Array> | null;
+    joints?: WasmMemoryView<Uint16Array> | null;
+    weights?: WasmMemoryView<Float32Array> | null;
+    joints1?: WasmMemoryView<Uint16Array> | null;
+    weights1?: WasmMemoryView<Float32Array> | null;
+    indices?: WasmMemoryView<Uint32Array> | null;
 };
 
 export type CartesianCurveDescriptor = {
@@ -230,30 +278,107 @@ const packSkinInfluences = (joints: Uint16Array, weights: Float32Array, joints1:
     return out;
 };
 
+type GeometryBoundsSourceMode = "none" | "explicit" | "computed";
+
+type GeometryWasmVertexChannel = "positions" | "normals" | "tangents" | "uvs" | "uvs1" | "joints" | "weights" | "joints1" | "weights1";
+
+type GeometryWasmChannel = GeometryWasmVertexChannel | "indices";
+
+type GeometryWasmTypedArray = Float32Array | Uint16Array | Uint32Array;
+
+type GeometryWasmState<T extends GeometryWasmTypedArray> = {
+    source: WasmMemoryView<T> | null;
+    dirty: boolean;
+    managed: boolean;
+    capacity: number;
+    capacityHint: number;
+};
+
+const GEOMETRY_WASM_VERTEX_CHANNELS: GeometryWasmVertexChannel[] = ["positions", "normals", "tangents", "uvs", "uvs1", "joints", "weights", "joints1", "weights1"];
+
+const makeGeometryWasmState = <T extends GeometryWasmTypedArray>(): GeometryWasmState<T> => ({ source: null, dirty: false, managed: false, capacity: 0, capacityHint: 0 });
+
+const geometryWasmFieldName = (channel: GeometryWasmChannel): string => {
+    switch (channel) {
+        case "positions": return "wasmPositions";
+        case "normals": return "wasmNormals";
+        case "tangents": return "wasmTangents";
+        case "uvs": return "wasmUvs";
+        case "uvs1": return "wasmUvs1";
+        case "joints": return "wasmJoints";
+        case "weights": return "wasmWeights";
+        case "joints1": return "wasmJoints1";
+        case "weights1": return "wasmWeights1";
+        case "indices": return "wasmIndices";
+    }
+};
+
+const geometryWasmComponents = (channel: GeometryWasmChannel): number => {
+    switch (channel) {
+        case "positions":
+        case "normals":
+            return 3;
+        case "tangents":
+        case "joints":
+        case "weights":
+        case "joints1":
+        case "weights1":
+            return 4;
+        case "uvs":
+        case "uvs1":
+            return 2;
+        case "indices":
+            return 1;
+    }
+};
+
+const geometryWasmBytesPerElement = (channel: GeometryWasmChannel): number => (channel === "joints" || channel === "joints1") ? 2 : 4;
+
+const isGeometryWasmVertexChannel = (channel: GeometryWasmChannel): channel is GeometryWasmVertexChannel => channel !== "indices";
+
+const hasGeometryWasmInputs = (desc: GeometryDescriptor): boolean => !!(desc.wasmPositions || desc.wasmNormals || desc.wasmTangents || desc.wasmUvs || desc.wasmUvs1 || desc.wasmJoints || desc.wasmWeights || desc.wasmJoints1 || desc.wasmWeights1 || desc.wasmIndices);
+
+const assertNoDuplicateGeometrySource = (cpuSource: unknown, wasmSource: unknown, cpuLabel: string, wasmLabel: string): void => {
+    assert(!(cpuSource && wasmSource), `Geometry: ${cpuLabel} and ${wasmLabel} cannot both be provided for the same attribute.`);
+};
+
+const createFallbackNormals = (vertexCount: number): Float32Array => {
+    const out = new Float32Array(vertexCount * 3);
+    for (let i = 1; i < out.length; i += 3) out[i] = 1;
+    return out;
+};
+
+type GeometryWasmAttributeSetOptions = GeometryWasmVertexRefreshOptions & GeometryWasmIndexRefreshOptions & {
+    capacity?: number;
+    vertexCapacity?: number;
+    indexCapacity?: number;
+};
+
 export class Geometry {
-    readonly positions: Float32Array;
-    readonly normals: Float32Array;
-    readonly tangents: Float32Array;
-    readonly uvs: Float32Array;
-    readonly uvs1: Float32Array;
-    readonly joints: Uint16Array | null;
-    readonly weights: Float32Array | null;
-    readonly joints1: Uint16Array | null;
-    readonly weights1: Float32Array | null;
+    positions!: Float32Array;
+    normals!: Float32Array;
+    tangents!: Float32Array;
+    uvs!: Float32Array;
+    uvs1!: Float32Array;
+    joints: Uint16Array | null = null;
+    weights: Float32Array | null = null;
+    joints1: Uint16Array | null = null;
+    weights1: Float32Array | null = null;
     private _jointsBuffer: GPUBuffer | null = null;
     private _weightsBuffer: GPUBuffer | null = null;
     private _joints1Buffer: GPUBuffer | null = null;
     private _weights1Buffer: GPUBuffer | null = null;
     private _skinInfluenceBuffer: GPUBuffer | null = null;
-    readonly indices: Uint32Array | null;
+    indices: Uint32Array | null = null;
     readonly morphTargets: ReadonlyArray<GeometryMorphTargetDescriptor>;
-    readonly authoredNormals: boolean;
-    readonly vertexCount: number;
-    readonly indexCount: number;
-    private _boundsMin: [number, number, number];
-    private _boundsMax: [number, number, number];
-    private _boundsCenter: [number, number, number];
-    private _boundsRadius: number;
+    authoredNormals: boolean = false;
+    vertexCount: number = 0;
+    indexCount: number = 0;
+    private _boundsMin: [number, number, number] = [0, 0, 0];
+    private _boundsMax: [number, number, number] = [0, 0, 0];
+    private _boundsCenter: [number, number, number] = [0, 0, 0];
+    private _boundsRadius: number = 0;
+    private _boundsSource: GeometryBoundsSourceMode = "none";
     private _positionBuffer: GPUBuffer | null = null;
     private _normalBuffer: GPUBuffer | null = null;
     private _tangentBuffer: GPUBuffer | null = null;
@@ -263,93 +388,611 @@ export class Geometry {
     private _device: GPUDevice | null = null;
     private _refCount: number = 1;
     private _destroyed: boolean = false;
+    private _keepCPUData: boolean = false;
+    private _skinInfluenceDirty: boolean = true;
+    private readonly _wasm = {
+        positions: makeGeometryWasmState<Float32Array>(),
+        normals: makeGeometryWasmState<Float32Array>(),
+        tangents: makeGeometryWasmState<Float32Array>(),
+        uvs: makeGeometryWasmState<Float32Array>(),
+        uvs1: makeGeometryWasmState<Float32Array>(),
+        joints: makeGeometryWasmState<Uint16Array>(),
+        weights: makeGeometryWasmState<Float32Array>(),
+        joints1: makeGeometryWasmState<Uint16Array>(),
+        weights1: makeGeometryWasmState<Float32Array>(),
+        indices: makeGeometryWasmState<Uint32Array>()
+    };
+    private readonly _cpuProvided: Record<GeometryWasmChannel, boolean> = {
+        positions: false,
+        normals: false,
+        tangents: false,
+        uvs: false,
+        uvs1: false,
+        joints: false,
+        weights: false,
+        joints1: false,
+        weights1: false,
+        indices: false
+    };
+    private readonly _cpuDirty: Record<GeometryWasmChannel, boolean> = {
+        positions: true,
+        normals: true,
+        tangents: true,
+        uvs: true,
+        uvs1: true,
+        joints: true,
+        weights: true,
+        joints1: true,
+        weights1: true,
+        indices: true
+    };
 
     constructor(descriptor: GeometryDescriptor) {
-        this.positions = descriptor.positions;
-        this.vertexCount = Math.floor(this.positions.length / 3);
-        if (this.positions.length !== this.vertexCount * 3) console.warn(`[Geometry] positions length ${this.positions.length} is not divisible by 3; trailing components ignored.`);
+        assertNoDuplicateGeometrySource(descriptor.positions, descriptor.wasmPositions, "positions", "wasmPositions");
+        assertNoDuplicateGeometrySource(descriptor.normals, descriptor.wasmNormals, "normals", "wasmNormals");
+        assertNoDuplicateGeometrySource(descriptor.tangents, descriptor.wasmTangents, "tangents", "wasmTangents");
+        assertNoDuplicateGeometrySource(descriptor.uvs, descriptor.wasmUvs, "uvs", "wasmUvs");
+        assertNoDuplicateGeometrySource(descriptor.uvs1, descriptor.wasmUvs1, "uvs1", "wasmUvs1");
+        assertNoDuplicateGeometrySource(descriptor.joints, descriptor.wasmJoints, "joints", "wasmJoints");
+        assertNoDuplicateGeometrySource(descriptor.weights, descriptor.wasmWeights, "weights", "wasmWeights");
+        assertNoDuplicateGeometrySource(descriptor.joints1, descriptor.wasmJoints1, "joints1", "wasmJoints1");
+        assertNoDuplicateGeometrySource(descriptor.weights1, descriptor.wasmWeights1, "weights1", "wasmWeights1");
+        assertNoDuplicateGeometrySource(descriptor.indices, descriptor.wasmIndices, "indices", "wasmIndices");
+        assert(!!descriptor.positions || !!descriptor.wasmPositions, "Geometry: positions or wasmPositions are required.");
+        this._keepCPUData = !!descriptor.keepCPUData;
+        this.morphTargets = descriptor.morphTargets ?? [];
+        assert(!(this.morphTargets.length > 0 && descriptor.wasmPositions), "Geometry: wasmPositions with morphTargets are not supported yet; provide CPU positions for morph-target geometry.");
+        const wasmPositions = descriptor.wasmPositions ? assertWasmF32View(descriptor.wasmPositions, "Geometry: wasmPositions").refresh() : null;
+        if (descriptor.vertexCount !== undefined) this.vertexCount = assertWasmRecordCount(descriptor.vertexCount, "Geometry: vertexCount");
+        else if (descriptor.positions) this.vertexCount = Math.floor(descriptor.positions.length / 3);
+        else this.vertexCount = resolveWasmRecordCount(wasmPositions!, undefined, 3, "Geometry: wasmPositions", "Geometry: vertexCount", "vertexCount");
+        if (descriptor.positions) {
+            this.positions = descriptor.positions;
+            this._cpuProvided.positions = true;
+            if (this.positions.length !== Math.floor(this.positions.length / 3) * 3) console.warn(`[Geometry] positions length ${this.positions.length} is not divisible by 3; trailing components ignored.`);
+            this.validateCPUVertexChannel("positions", this.vertexCount);
+        } else {
+            validateWasmRecordRange(wasmPositions!, this.vertexCount, 3, "Geometry: wasmPositions", "vertexCount");
+            this.positions = this._keepCPUData ? this.copyWasmActiveRange(wasmPositions!, this.vertexCount * 3) as Float32Array : new Float32Array(0);
+        }
         const expectedNormalLength = this.vertexCount * 3;
         let authoredNormals = descriptor.normals ? (descriptor.authoredNormals ?? true) : false;
-        let normals = descriptor.normals ?? new Float32Array(expectedNormalLength);
-        let fallbackNormals = !descriptor.normals;
-        if (normals.length !== expectedNormalLength) {
+        let normals = descriptor.normals ?? (descriptor.wasmNormals ? new Float32Array(0) : createFallbackNormals(this.vertexCount));
+        if (descriptor.normals && normals.length !== expectedNormalLength) {
             console.warn(`[Geometry] normals length mismatch (got ${normals.length}, expected ${expectedNormalLength}). Using fallback normals.`);
-            normals = new Float32Array(expectedNormalLength);
+            normals = createFallbackNormals(this.vertexCount);
             authoredNormals = false;
-            fallbackNormals = true;
+        } else if (descriptor.normals) this._cpuProvided.normals = true;
+        if (!descriptor.normals && !descriptor.wasmNormals) {
+            normals = createFallbackNormals(this.vertexCount);
+            authoredNormals = false;
         }
-        if (fallbackNormals) for (let i = 1; i < normals.length; i += 3) normals[i] = 1;
         this.authoredNormals = authoredNormals;
         this.normals = normals;
         const expectedTangentLength = this.vertexCount * 4;
-        let tangents = descriptor.tangents ?? null;
+        let tangents = descriptor.tangents ?? (descriptor.wasmTangents ? new Float32Array(0) : null);
         if (tangents && tangents.length !== expectedTangentLength) {
             console.warn(`[Geometry] tangents length mismatch (got ${tangents.length}, expected ${expectedTangentLength}). Using fallback tangents.`);
             tangents = null;
-        }
+        } else if (descriptor.tangents) this._cpuProvided.tangents = true;
         const expectedUvLength = this.vertexCount * 2;
-        let uvs = descriptor.uvs ?? new Float32Array(expectedUvLength);
-        if (uvs.length !== expectedUvLength) {
+        let uvs = descriptor.uvs ?? (descriptor.wasmUvs ? new Float32Array(0) : new Float32Array(expectedUvLength));
+        if (descriptor.uvs && uvs.length !== expectedUvLength) {
             console.warn(`[Geometry] uvs length mismatch (got ${uvs.length}, expected ${expectedUvLength}). TEXCOORD_0 disabled.`);
             uvs = new Float32Array(expectedUvLength);
-        }
+        } else if (descriptor.uvs) this._cpuProvided.uvs = true;
         this.uvs = uvs;
-        this.tangents = tangents ?? createDerivativeFallbackTangents(this.vertexCount);
-        let uvs1 = descriptor.uvs1 ?? new Float32Array(expectedUvLength);
-        if (uvs1.length !== expectedUvLength) {
+        this.tangents = tangents ?? (descriptor.wasmTangents ? new Float32Array(0) : createDerivativeFallbackTangents(this.vertexCount));
+        let uvs1 = descriptor.uvs1 ?? (descriptor.wasmUvs1 ? new Float32Array(0) : new Float32Array(expectedUvLength));
+        if (descriptor.uvs1 && uvs1.length !== expectedUvLength) {
             console.warn(`[Geometry] uvs1 length mismatch (got ${uvs1.length}, expected ${expectedUvLength}). TEXCOORD_1 disabled.`);
             uvs1 = new Float32Array(expectedUvLength);
-        }
+        } else if (descriptor.uvs1) this._cpuProvided.uvs1 = true;
         this.uvs1 = uvs1;
-        this.morphTargets = descriptor.morphTargets ?? [];
         let joints = descriptor.joints ?? null;
         let weights = descriptor.weights ?? null;
         const expected = this.vertexCount * 4;
-        if ((joints && !weights) || (!joints && weights)) {
+        if ((joints && !weights && !descriptor.wasmWeights) || (!joints && weights && !descriptor.wasmJoints)) {
             console.warn(`[Geometry] JOINTS_0/WEIGHTS_0 must be provided together. Skinning disabled for this geometry.`);
             joints = null; weights = null;
         }
         if (joints && joints.length !== expected) {
             console.warn(`[Geometry] joints length mismatch (got ${joints.length}, expected ${expected}). Skinning disabled.`);
-            joints = null; weights = null;
+            joints = null;
+            if (!descriptor.wasmJoints) weights = null;
         }
         if (weights && weights.length !== expected) {
             console.warn(`[Geometry] weights length mismatch (got ${weights.length}, expected ${expected}). Skinning disabled.`);
-            joints = null; weights = null;
+            weights = null;
+            if (!descriptor.wasmWeights) joints = null;
         }
         this.joints = joints;
         this.weights = weights;
+        if (joints) this._cpuProvided.joints = true;
+        if (weights) this._cpuProvided.weights = true;
         let joints1 = descriptor.joints1 ?? null;
         let weights1 = descriptor.weights1 ?? null;
-        if ((joints1 && !weights1) || (!joints1 && weights1)) {
+        const hasBaseSkin = !!(joints || descriptor.wasmJoints) && !!(weights || descriptor.wasmWeights);
+        if ((joints1 && !weights1 && !descriptor.wasmWeights1) || (!joints1 && weights1 && !descriptor.wasmJoints1)) {
             console.warn(`[Geometry] JOINTS_1/WEIGHTS_1 must be provided together. Ignoring additional influences.`);
             joints1 = null; weights1 = null;
         }
-        if ((joints1 || weights1) && (!joints || !weights)) {
+        if ((joints1 || weights1 || descriptor.wasmJoints1 || descriptor.wasmWeights1) && !hasBaseSkin) {
             console.warn(`[Geometry] JOINTS_1/WEIGHTS_1 provided without JOINTS_0/WEIGHTS_0. Ignoring additional influences.`);
             joints1 = null; weights1 = null;
         }
         if (joints1 && joints1.length !== expected) {
             console.warn(`[Geometry] joints1 length mismatch (got ${joints1.length}, expected ${expected}). Ignoring additional influences.`);
-            joints1 = null; weights1 = null;
+            joints1 = null;
+            if (!descriptor.wasmJoints1) weights1 = null;
         }
         if (weights1 && weights1.length !== expected) {
             console.warn(`[Geometry] weights1 length mismatch (got ${weights1.length}, expected ${expected}). Ignoring additional influences.`);
-            joints1 = null; weights1 = null;
+            weights1 = null;
+            if (!descriptor.wasmWeights1) joints1 = null;
         }
         this.joints1 = joints1;
         this.weights1 = weights1;
+        if (joints1) this._cpuProvided.joints1 = true;
+        if (weights1) this._cpuProvided.weights1 = true;
+
         this.indices = descriptor.indices ?? null;
-        this.indexCount = this.indices?.length ?? this.vertexCount;
-        const bounds = computeGeometryBounds(this.positions);
-        this._boundsMin = bounds.boxMin;
-        this._boundsMax = bounds.boxMax;
-        this._boundsCenter = bounds.sphereCenter;
-        this._boundsRadius = bounds.sphereRadius;
+        if (this.indices) this._cpuProvided.indices = true;
+        if (descriptor.indexCount !== undefined) {
+            this.indexCount = assertWasmRecordCount(descriptor.indexCount, "Geometry: indexCount");
+            if (this.indices) assert(this.indices.length >= this.indexCount, `Geometry: indices length must be at least indexCount.`);
+        } else if (this.indices) this.indexCount = this.indices.length;
+        else if (descriptor.wasmIndices) this.indexCount = resolveWasmRecordCount(assertWasmU32View(descriptor.wasmIndices, "Geometry: wasmIndices").refresh(), undefined, 1, "Geometry: wasmIndices", "Geometry: indexCount", "indexCount");
+        else this.indexCount = this.vertexCount;
+        if (descriptor.bounds) this.setBounds(descriptor.bounds, "explicit");
+        else if (descriptor.positions) this.setBounds(computeGeometryBounds(this.positions), "computed");
+        else this.setBounds(computeGeometryBounds(wasmPositions!.array().subarray(0, this.vertexCount * 3)), "computed");
+        if (hasGeometryWasmInputs(descriptor)) {
+            this.setWasmAttributes({
+                positions: descriptor.wasmPositions ?? null,
+                normals: descriptor.wasmNormals ?? null,
+                tangents: descriptor.wasmTangents ?? null,
+                uvs: descriptor.wasmUvs ?? null,
+                uvs1: descriptor.wasmUvs1 ?? null,
+                joints: descriptor.wasmJoints ?? null,
+                weights: descriptor.wasmWeights ?? null,
+                joints1: descriptor.wasmJoints1 ?? null,
+                weights1: descriptor.wasmWeights1 ?? null,
+                indices: descriptor.wasmIndices ?? null
+            }, {
+                vertexCount: this.vertexCount,
+                indexCount: this.indexCount,
+                keepCPUData: this._keepCPUData,
+                recomputeBounds: this._boundsSource !== "explicit" && !!descriptor.wasmPositions,
+                vertexCapacity: assertWasmCapacity(descriptor.wasmVertexCapacity, "Geometry: wasmVertexCapacity"),
+                indexCapacity: assertWasmCapacity(descriptor.wasmIndexCapacity, "Geometry: wasmIndexCapacity")
+            });
+        }
     }
 
     private assertAlive(action: string): void {
         if (this._destroyed) throw new Error(`Geometry: cannot ${action}; resource has already been released.`);
+    }
+
+    private setBounds(bounds: GeometryBoundsDescriptor, source: GeometryBoundsSourceMode): void {
+        this._boundsMin = [bounds.boxMin[0], bounds.boxMin[1], bounds.boxMin[2]];
+        this._boundsMax = [bounds.boxMax[0], bounds.boxMax[1], bounds.boxMax[2]];
+        this._boundsCenter = [bounds.sphereCenter[0], bounds.sphereCenter[1], bounds.sphereCenter[2]];
+        this._boundsRadius = Math.max(0, bounds.sphereRadius);
+        this._boundsSource = source;
+    }
+
+    private wasmState(channel: GeometryWasmChannel): GeometryWasmState<GeometryWasmTypedArray> {
+        return this._wasm[channel] as GeometryWasmState<GeometryWasmTypedArray>;
+    }
+
+    private assertWasmSource(channel: GeometryWasmChannel, source: unknown): WasmMemoryView<GeometryWasmTypedArray> {
+        const label = `Geometry: ${geometryWasmFieldName(channel)}`;
+        if (channel === "indices") return assertWasmU32View(source, label) as WasmMemoryView<GeometryWasmTypedArray>;
+        if (channel === "joints" || channel === "joints1") return assertWasmU16View(source, label) as WasmMemoryView<GeometryWasmTypedArray>;
+        return assertWasmF32View(source, label) as WasmMemoryView<GeometryWasmTypedArray>;
+    }
+
+    private copyWasmActiveRange<T extends GeometryWasmTypedArray>(source: WasmMemoryView<T>, elementCount: number): T {
+        const data = source.array().subarray(0, elementCount);
+        if (data instanceof Uint16Array) return new Uint16Array(data) as T;
+        if (data instanceof Uint32Array) return new Uint32Array(data) as T;
+        return new Float32Array(data as Float32Array) as T;
+    }
+
+    private getCPUChannelData(channel: GeometryWasmChannel): GeometryWasmTypedArray | null {
+        switch (channel) {
+            case "positions": return this.positions;
+            case "normals": return this.normals;
+            case "tangents": return this.tangents;
+            case "uvs": return this.uvs;
+            case "uvs1": return this.uvs1;
+            case "joints": return this.joints;
+            case "weights": return this.weights;
+            case "joints1": return this.joints1;
+            case "weights1": return this.weights1;
+            case "indices": return this.indices;
+        }
+    }
+
+    private setCPUChannelData(channel: GeometryWasmChannel, data: GeometryWasmTypedArray | null): void {
+        switch (channel) {
+            case "positions": this.positions = (data ?? new Float32Array(0)) as Float32Array; break;
+            case "normals": this.normals = (data ?? createFallbackNormals(this.vertexCount)) as Float32Array; break;
+            case "tangents": this.tangents = (data ?? createDerivativeFallbackTangents(this.vertexCount)) as Float32Array; break;
+            case "uvs": this.uvs = (data ?? new Float32Array(this.vertexCount * 2)) as Float32Array; break;
+            case "uvs1": this.uvs1 = (data ?? new Float32Array(this.vertexCount * 2)) as Float32Array; break;
+            case "joints": this.joints = data as Uint16Array | null; break;
+            case "weights": this.weights = data as Float32Array | null; break;
+            case "joints1": this.joints1 = data as Uint16Array | null; break;
+            case "weights1": this.weights1 = data as Float32Array | null; break;
+            case "indices": this.indices = data as Uint32Array | null; break;
+        }
+        if (data) this._cpuProvided[channel] = true;
+        this._cpuDirty[channel] = true;
+        if (channel === "joints" || channel === "weights" || channel === "joints1" || channel === "weights1") this._skinInfluenceDirty = true;
+    }
+
+    private dropCPUChannelDataForWasm(channel: GeometryWasmChannel): void {
+        switch (channel) {
+            case "positions": this.positions = new Float32Array(0); break;
+            case "normals": this.normals = new Float32Array(0); this.authoredNormals = false; break;
+            case "tangents": this.tangents = new Float32Array(0); break;
+            case "uvs": this.uvs = new Float32Array(0); break;
+            case "uvs1": this.uvs1 = new Float32Array(0); break;
+            case "joints": this.joints = null; break;
+            case "weights": this.weights = null; break;
+            case "joints1": this.joints1 = null; break;
+            case "weights1": this.weights1 = null; break;
+            case "indices": this.indices = null; break;
+        }
+        this._cpuProvided[channel] = false;
+    }
+
+    private getChannelBuffer(channel: GeometryWasmChannel): GPUBuffer | null {
+        switch (channel) {
+            case "positions": return this._positionBuffer;
+            case "normals": return this._normalBuffer;
+            case "tangents": return this._tangentBuffer;
+            case "uvs": return this._uvBuffer;
+            case "uvs1": return this._uv1Buffer;
+            case "joints": return this._jointsBuffer;
+            case "weights": return this._weightsBuffer;
+            case "joints1": return this._joints1Buffer;
+            case "weights1": return this._weights1Buffer;
+            case "indices": return this._indexBuffer;
+        }
+    }
+
+    private setChannelBuffer(channel: GeometryWasmChannel, buffer: GPUBuffer | null): void {
+        switch (channel) {
+            case "positions": this._positionBuffer = buffer; break;
+            case "normals": this._normalBuffer = buffer; break;
+            case "tangents": this._tangentBuffer = buffer; break;
+            case "uvs": this._uvBuffer = buffer; break;
+            case "uvs1": this._uv1Buffer = buffer; break;
+            case "joints": this._jointsBuffer = buffer; break;
+            case "weights": this._weightsBuffer = buffer; break;
+            case "joints1": this._joints1Buffer = buffer; break;
+            case "weights1": this._weights1Buffer = buffer; break;
+            case "indices": this._indexBuffer = buffer; break;
+        }
+    }
+
+    private replaceChannelBuffer(channel: GeometryWasmChannel, buffer: GPUBuffer | null): void {
+        const current = this.getChannelBuffer(channel);
+        if (current && current !== buffer) current.destroy();
+        this.setChannelBuffer(channel, buffer);
+    }
+
+    private validateCPUVertexChannel(channel: GeometryWasmVertexChannel, vertexCount: number): void {
+        if (this.wasmState(channel).source) return;
+        const data = this.getCPUChannelData(channel);
+        if (!data) return;
+        if (!this._cpuProvided[channel] && channel !== "positions") return;
+        const expected = vertexCount * geometryWasmComponents(channel);
+        assert(data.length >= expected, `Geometry: ${channel} length must match vertexCount when wasm vertex count changes.`);
+    }
+
+    private validateNonWasmVertexChannels(vertexCount: number): void {
+        for (const channel of GEOMETRY_WASM_VERTEX_CHANNELS) this.validateCPUVertexChannel(channel, vertexCount);
+    }
+
+    private resizeFallbackVertexChannels(vertexCount: number): void {
+        if (!this._wasm.normals.source && !this._cpuProvided.normals) { this.normals = createFallbackNormals(vertexCount); this.authoredNormals = false; this._cpuDirty.normals = true; }
+        if (!this._wasm.tangents.source && !this._cpuProvided.tangents) { this.tangents = createDerivativeFallbackTangents(vertexCount); this._cpuDirty.tangents = true; }
+        if (!this._wasm.uvs.source && !this._cpuProvided.uvs) { this.uvs = new Float32Array(vertexCount * 2); this._cpuDirty.uvs = true; }
+        if (!this._wasm.uvs1.source && !this._cpuProvided.uvs1) { this.uvs1 = new Float32Array(vertexCount * 2); this._cpuDirty.uvs1 = true; }
+    }
+
+    private restoreCPUFallbackAfterWasmClear(channel: GeometryWasmChannel): void {
+        const expected = this.vertexCount * geometryWasmComponents(channel);
+        const current = this.getCPUChannelData(channel);
+        if (channel === "positions") return;
+        if (channel === "indices") {
+            if (this._cpuProvided.indices && this.indices && this.indices.length >= this.indexCount) return;
+            this.indices = null;
+            this.indexCount = this.vertexCount;
+            this._cpuProvided.indices = false;
+            return;
+        }
+        if (channel === "normals") {
+            if (this._cpuProvided.normals && current && current.length >= expected) return;
+            this.normals = createFallbackNormals(this.vertexCount);
+            this.authoredNormals = false;
+            this._cpuProvided.normals = false;
+            return;
+        }
+        if (channel === "tangents") {
+            if (this._cpuProvided.tangents && current && current.length >= expected) return;
+            this.tangents = createDerivativeFallbackTangents(this.vertexCount);
+            this._cpuProvided.tangents = false;
+            return;
+        }
+        if (channel === "uvs") {
+            if (this._cpuProvided.uvs && current && current.length >= expected) return;
+            this.uvs = new Float32Array(this.vertexCount * 2);
+            this._cpuProvided.uvs = false;
+            return;
+        }
+        if (channel === "uvs1") {
+            if (this._cpuProvided.uvs1 && current && current.length >= expected) return;
+            this.uvs1 = new Float32Array(this.vertexCount * 2);
+            this._cpuProvided.uvs1 = false;
+        }
+    }
+
+    private clearSkinChannelBuffer(channel: "joints" | "weights" | "joints1" | "weights1"): void {
+        this.replaceChannelBuffer(channel, null);
+        this._cpuDirty[channel] = false;
+        this.wasmState(channel).dirty = false;
+    }
+
+    private normalizeSkinPairsAfterWasmClear(): void {
+        const hasBaseSkin = !!(this.joints || this._wasm.joints.source) && !!(this.weights || this._wasm.weights.source);
+        if (!hasBaseSkin) {
+            this.joints = null;
+            this.weights = null;
+            this.joints1 = null;
+            this.weights1 = null;
+            this._cpuProvided.joints = false;
+            this._cpuProvided.weights = false;
+            this._cpuProvided.joints1 = false;
+            this._cpuProvided.weights1 = false;
+            this.clearSkinChannelBuffer("joints");
+            this.clearSkinChannelBuffer("weights");
+            this.clearSkinChannelBuffer("joints1");
+            this.clearSkinChannelBuffer("weights1");
+            this._skinInfluenceDirty = true;
+            return;
+        }
+        const hasExtraSkin = !!(this.joints1 || this._wasm.joints1.source) && !!(this.weights1 || this._wasm.weights1.source);
+        if (hasExtraSkin) return;
+        this.joints1 = null;
+        this.weights1 = null;
+        this._cpuProvided.joints1 = false;
+        this._cpuProvided.weights1 = false;
+        this.clearSkinChannelBuffer("joints1");
+        this.clearSkinChannelBuffer("weights1");
+        this._skinInfluenceDirty = true;
+    }
+
+    private validateWasmSourceBeforeSet(channel: GeometryWasmChannel, source: WasmMemoryView<GeometryWasmTypedArray>, explicitCount: number | undefined): void {
+        const countTerm = isGeometryWasmVertexChannel(channel) ? "vertexCount" : "indexCount";
+        const countLabel = isGeometryWasmVertexChannel(channel) ? "Geometry: vertexCount" : "Geometry: indexCount";
+        if (explicitCount !== undefined) {
+            const count = assertWasmRecordCount(explicitCount, countLabel);
+            validateWasmRecordRange(source, count, geometryWasmComponents(channel), `Geometry: ${geometryWasmFieldName(channel)}`, countTerm);
+            return;
+        }
+        if (channel === "positions") {
+            resolveWasmRecordCount(source, undefined, 3, "Geometry: wasmPositions", "Geometry: vertexCount", "vertexCount");
+            return;
+        }
+        if (channel === "indices") {
+            resolveWasmRecordCount(source, undefined, 1, "Geometry: wasmIndices", "Geometry: indexCount", "indexCount");
+            return;
+        }
+        if (this.vertexCount > 0) validateWasmRecordRange(source, this.vertexCount, geometryWasmComponents(channel), `Geometry: ${geometryWasmFieldName(channel)}`, "vertexCount");
+    }
+
+    private setVertexCountFromWasm(vertexCount: number): void {
+        const count = assertWasmRecordCount(vertexCount, "Geometry: vertexCount");
+        this.validateNonWasmVertexChannels(count);
+        if (count !== this.vertexCount) {
+            this.vertexCount = count;
+            this.resizeFallbackVertexChannels(count);
+            if (!this.indices && !this._wasm.indices.source) this.indexCount = count;
+            for (const channel of GEOMETRY_WASM_VERTEX_CHANNELS) if (this.wasmState(channel).source) this.wasmState(channel).dirty = true;
+            this._skinInfluenceDirty = true;
+        }
+    }
+
+    private setIndexCountFromWasm(indexCount: number): void {
+        this.indexCount = assertWasmRecordCount(indexCount, "Geometry: indexCount");
+    }
+
+    private hasWasmVertexSources(): boolean {
+        return GEOMETRY_WASM_VERTEX_CHANNELS.some((channel) => !!this.wasmState(channel).source);
+    }
+
+    private hasDirtyWasmSources(): boolean {
+        if (this._wasm.indices.source && this._wasm.indices.dirty) return true;
+        return GEOMETRY_WASM_VERTEX_CHANNELS.some((channel) => !!this.wasmState(channel).source && this.wasmState(channel).dirty);
+    }
+
+    private hasDirtyCPUSources(): boolean {
+        if (this._skinInfluenceDirty) return true;
+        if (this._cpuDirty.indices && !this._wasm.indices.source) return true;
+        return GEOMETRY_WASM_VERTEX_CHANNELS.some((channel) => this._cpuDirty[channel] && !this.wasmState(channel).source);
+    }
+
+    private markAllCPUSourcesDirty(): void {
+        for (const channel of [...GEOMETRY_WASM_VERTEX_CHANNELS, "indices" as const]) this._cpuDirty[channel] = true;
+        this._skinInfluenceDirty = true;
+    }
+
+    private markAllWasmSourcesDirty(): void {
+        for (const channel of [...GEOMETRY_WASM_VERTEX_CHANNELS, "indices" as const]) if (this.wasmState(channel).source) this.wasmState(channel).dirty = true;
+    }
+
+    private clearWasmChannel(channel: GeometryWasmChannel, destroyManagedBuffer: boolean): void {
+        const state = this.wasmState(channel);
+        state.source = null;
+        state.dirty = false;
+        state.capacityHint = 0;
+        if (destroyManagedBuffer && state.managed) this.replaceChannelBuffer(channel, null);
+        state.managed = false;
+        state.capacity = 0;
+        this.restoreCPUFallbackAfterWasmClear(channel);
+        this._cpuDirty[channel] = true;
+        if (channel === "joints" || channel === "weights" || channel === "joints1" || channel === "weights1") {
+            this.normalizeSkinPairsAfterWasmClear();
+            this._skinInfluenceDirty = true;
+        }
+    }
+
+    private setWasmVertexSource(channel: GeometryWasmVertexChannel, source: WasmMemoryView<GeometryWasmTypedArray> | null, capacity: number | undefined, keepCPUData: boolean | undefined, vertexCount: number | undefined): boolean {
+        if (source === null) { this.clearWasmChannel(channel, true); return false; }
+        assert(!(this.morphTargets.length > 0 && channel === "positions"), "Geometry: wasmPositions with morphTargets are not supported yet; provide CPU positions for morph-target geometry.");
+        const state = this.wasmState(channel);
+        const wasmSource = this.assertWasmSource(channel, source);
+        wasmSource.refresh();
+        this.validateWasmSourceBeforeSet(channel, wasmSource, vertexCount);
+        state.capacityHint = assertWasmCapacity(capacity, `Geometry: ${geometryWasmFieldName(channel)} capacity`);
+        if (!state.managed) { this.replaceChannelBuffer(channel, null); state.capacity = 0; }
+        if (!(keepCPUData ?? this._keepCPUData)) this.dropCPUChannelDataForWasm(channel);
+        state.source = wasmSource;
+        state.dirty = true;
+        this._cpuDirty[channel] = false;
+        if (channel === "joints" || channel === "weights" || channel === "joints1" || channel === "weights1") this._skinInfluenceDirty = true;
+        return true;
+    }
+
+    private setWasmIndexSource(source: WasmMemoryView<Uint32Array> | null, capacity: number | undefined, keepCPUData: boolean | undefined, indexCount: number | undefined): boolean {
+        if (source === null) { this.clearWasmChannel("indices", true); return false; }
+        const state = this.wasmState("indices");
+        const wasmSource = assertWasmU32View(source, "Geometry: wasmIndices") as WasmMemoryView<GeometryWasmTypedArray>;
+        wasmSource.refresh();
+        this.validateWasmSourceBeforeSet("indices", wasmSource, indexCount);
+        state.capacityHint = assertWasmCapacity(capacity, "Geometry: wasmIndices capacity");
+        if (!state.managed) { this.replaceChannelBuffer("indices", null); state.capacity = 0; }
+        if (!(keepCPUData ?? this._keepCPUData)) this.dropCPUChannelDataForWasm("indices");
+        state.source = wasmSource;
+        state.dirty = true;
+        this._cpuDirty.indices = false;
+        return true;
+    }
+
+    private updateWasmBounds(options: GeometryWasmVertexRefreshOptions): void {
+        if (!options.recomputeBounds || this._boundsSource === "explicit") return;
+        const source = this._wasm.positions.source;
+        if (!source) return;
+        validateWasmRecordRange(source, this.vertexCount, 3, "Geometry: wasmPositions", "vertexCount");
+        this.setBounds(computeGeometryBounds((source as WasmMemoryView<Float32Array>).array().subarray(0, this.vertexCount * 3)), "computed");
+    }
+
+    setWasmPositions(source: WasmMemoryView<Float32Array> | null, options: GeometryWasmAttributeOptions = {}): void {
+        if (this.setWasmVertexSource("positions", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
+    }
+
+    setWasmNormals(source: WasmMemoryView<Float32Array> | null, options: GeometryWasmAttributeOptions = {}): void {
+        if (this.setWasmVertexSource("normals", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
+    }
+
+    setWasmTangents(source: WasmMemoryView<Float32Array> | null, options: GeometryWasmAttributeOptions = {}): void {
+        if (this.setWasmVertexSource("tangents", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
+    }
+
+    setWasmUvs(source: WasmMemoryView<Float32Array> | null, options: GeometryWasmAttributeOptions = {}): void {
+        if (this.setWasmVertexSource("uvs", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
+    }
+
+    setWasmUvs1(source: WasmMemoryView<Float32Array> | null, options: GeometryWasmAttributeOptions = {}): void {
+        if (this.setWasmVertexSource("uvs1", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
+    }
+
+    setWasmJoints(source: WasmMemoryView<Uint16Array> | null, options: GeometryWasmAttributeOptions = {}): void {
+        if (this.setWasmVertexSource("joints", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
+    }
+
+    setWasmWeights(source: WasmMemoryView<Float32Array> | null, options: GeometryWasmAttributeOptions = {}): void {
+        if (this.setWasmVertexSource("weights", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
+    }
+
+    setWasmJoints1(source: WasmMemoryView<Uint16Array> | null, options: GeometryWasmAttributeOptions = {}): void {
+        if (this.setWasmVertexSource("joints1", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
+    }
+
+    setWasmWeights1(source: WasmMemoryView<Float32Array> | null, options: GeometryWasmAttributeOptions = {}): void {
+        if (this.setWasmVertexSource("weights1", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
+    }
+
+    setWasmIndices(source: WasmMemoryView<Uint32Array> | null, options: GeometryWasmIndexOptions = {}): void {
+        if (this.setWasmIndexSource(source, options.capacity, options.keepCPUData, options.indexCount)) this.refreshWasmIndices(options);
+    }
+
+    setWasmAttributes(sources: GeometryWasmSources, options: GeometryWasmAttributeSetOptions = {}): void {
+        const vertexCapacity = options.vertexCapacity ?? options.capacity;
+        const indexCapacity = options.indexCapacity ?? options.capacity;
+        let touchedVertex = false;
+        let touchedIndex = false;
+        if (Object.prototype.hasOwnProperty.call(sources, "positions")) touchedVertex = this.setWasmVertexSource("positions", sources.positions as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
+        if (Object.prototype.hasOwnProperty.call(sources, "normals")) touchedVertex = this.setWasmVertexSource("normals", sources.normals as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
+        if (Object.prototype.hasOwnProperty.call(sources, "tangents")) touchedVertex = this.setWasmVertexSource("tangents", sources.tangents as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
+        if (Object.prototype.hasOwnProperty.call(sources, "uvs")) touchedVertex = this.setWasmVertexSource("uvs", sources.uvs as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
+        if (Object.prototype.hasOwnProperty.call(sources, "uvs1")) touchedVertex = this.setWasmVertexSource("uvs1", sources.uvs1 as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
+        if (Object.prototype.hasOwnProperty.call(sources, "joints")) touchedVertex = this.setWasmVertexSource("joints", sources.joints as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
+        if (Object.prototype.hasOwnProperty.call(sources, "weights")) touchedVertex = this.setWasmVertexSource("weights", sources.weights as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
+        if (Object.prototype.hasOwnProperty.call(sources, "joints1")) touchedVertex = this.setWasmVertexSource("joints1", sources.joints1 as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
+        if (Object.prototype.hasOwnProperty.call(sources, "weights1")) touchedVertex = this.setWasmVertexSource("weights1", sources.weights1 as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
+        if (Object.prototype.hasOwnProperty.call(sources, "indices")) touchedIndex = this.setWasmIndexSource(sources.indices ?? null, indexCapacity, options.keepCPUData, options.indexCount);
+        if (touchedVertex) this.refreshWasmVertices(options);
+        if (touchedIndex) this.refreshWasmIndices(options);
+    }
+
+    refreshWasmVertices(options: GeometryWasmVertexRefreshOptions = {}): void {
+        assert(this.hasWasmVertexSources(), "Geometry: refreshWasmVertices() requires at least one wasm vertex source.");
+        for (const channel of GEOMETRY_WASM_VERTEX_CHANNELS) {
+            const source = this.wasmState(channel).source;
+            if (!source) continue;
+            source.refresh();
+            this.assertWasmSource(channel, source);
+        }
+        let count = options.vertexCount;
+        if (count === undefined && this._wasm.positions.source) count = resolveWasmRecordCount(this._wasm.positions.source, undefined, 3, "Geometry: wasmPositions", "Geometry: vertexCount", "vertexCount");
+        if (count === undefined) count = this.vertexCount;
+        this.setVertexCountFromWasm(count);
+        for (const channel of GEOMETRY_WASM_VERTEX_CHANNELS) {
+            const source = this.wasmState(channel).source;
+            if (!source) continue;
+            validateWasmRecordRange(source, this.vertexCount, geometryWasmComponents(channel), `Geometry: ${geometryWasmFieldName(channel)}`, "vertexCount");
+            this.wasmState(channel).dirty = true;
+            if (options.keepCPUData ?? this._keepCPUData) this.setCPUChannelData(channel, this.copyWasmActiveRange(source, this.vertexCount * geometryWasmComponents(channel)));
+        }
+        this.updateWasmBounds(options);
+    }
+
+    refreshWasmIndices(options: GeometryWasmIndexRefreshOptions = {}): void {
+        const source = this._wasm.indices.source;
+        assert(!!source, "Geometry: refreshWasmIndices() requires wasmIndices.");
+        source.refresh();
+        assertWasmU32View(source, "Geometry: wasmIndices");
+        const count = resolveWasmRecordCount(source, options.indexCount, 1, "Geometry: wasmIndices", "Geometry: indexCount", "indexCount");
+        this.setIndexCountFromWasm(count);
+        validateWasmRecordRange(source, this.indexCount, 1, "Geometry: wasmIndices", "indexCount");
+        this._wasm.indices.dirty = true;
+        if (options.keepCPUData ?? this._keepCPUData) this.setCPUChannelData("indices", this.copyWasmActiveRange(source, this.indexCount));
+    }
+
+    refreshFromWasm(options: GeometryWasmVertexRefreshOptions & GeometryWasmIndexRefreshOptions = {}): void {
+        if (this.hasWasmVertexSources()) this.refreshWasmVertices(options);
+        if (this._wasm.indices.source) this.refreshWasmIndices(options);
+    }
+
+    clearWasmSources(): void {
+        for (const channel of GEOMETRY_WASM_VERTEX_CHANNELS) this.clearWasmChannel(channel, true);
+        this.clearWasmChannel("indices", true);
     }
 
     retain(): this {
@@ -369,19 +1012,91 @@ export class Geometry {
 
     upload(device: GPUDevice): void {
         this.assertAlive("upload");
-        if (this._device === device) return;
+        const deviceChanged = this._device !== device;
+        if (deviceChanged) {
+            if (this._device) this.disposeResources();
+            this._device = device;
+            this.markAllCPUSourcesDirty();
+            this.markAllWasmSourcesDirty();
+        }
+        if (!deviceChanged && !this.hasDirtyWasmSources() && !this.hasDirtyCPUSources()) return;
+        const queue = device.queue;
+        for (const channel of GEOMETRY_WASM_VERTEX_CHANNELS) this.uploadCPUChannel(device, channel);
+        this.uploadCPUChannel(device, "indices");
+        for (const channel of GEOMETRY_WASM_VERTEX_CHANNELS) this.uploadWasmChannel(device, queue, channel);
+        this.uploadWasmChannel(device, queue, "indices");
+        this.uploadSkinInfluenceBuffer(device);
         this._device = device;
-        this._positionBuffer = createBuffer(device, this.positions, GPUBufferUsage.VERTEX);
-        this._normalBuffer = createBuffer(device, this.normals, GPUBufferUsage.VERTEX);
-        this._tangentBuffer = createBuffer(device, this.tangents, GPUBufferUsage.VERTEX);
-        this._uvBuffer = createBuffer(device, this.uvs, GPUBufferUsage.VERTEX);
-        this._uv1Buffer = createBuffer(device, this.uvs1, GPUBufferUsage.VERTEX);
-        if (this.joints) this._jointsBuffer = createBuffer(device, this.joints, GPUBufferUsage.VERTEX);
-        if (this.weights) this._weightsBuffer = createBuffer(device, this.weights, GPUBufferUsage.VERTEX);
-        if (this.joints1) this._joints1Buffer = createBuffer(device, this.joints1, GPUBufferUsage.VERTEX);
-        if (this.weights1) this._weights1Buffer = createBuffer(device, this.weights1, GPUBufferUsage.VERTEX);
-        if (this.joints && this.weights) this._skinInfluenceBuffer = createBuffer(device, packSkinInfluences(this.joints, this.weights, this.joints1, this.weights1), GPUBufferUsage.VERTEX);
-        if (this.indices) this._indexBuffer = createBuffer(device, this.indices, GPUBufferUsage.INDEX);
+    }
+
+    private uploadCPUChannel(device: GPUDevice, channel: GeometryWasmChannel): void {
+        if (this.wasmState(channel).source || !this._cpuDirty[channel]) return;
+        const data = this.getCPUChannelData(channel);
+        if (!data) {
+            this.replaceChannelBuffer(channel, null);
+            this._cpuDirty[channel] = false;
+            return;
+        }
+        if (channel === "positions" && data.length < this.vertexCount * 3) throw new Error("Geometry: positions are required after clearing wasmPositions; provide CPU positions with keepCPUData or setWasmPositions().");
+        const usage = channel === "indices" ? GPUBufferUsage.INDEX : GPUBufferUsage.VERTEX;
+        this.replaceChannelBuffer(channel, createBuffer(device, data, usage, `Geometry.${channel}`));
+        this._cpuDirty[channel] = false;
+    }
+
+    private ensureWasmBuffer(device: GPUDevice, channel: GeometryWasmChannel, count: number): void {
+        const state = this.wasmState(channel);
+        const required = Math.max(count, state.capacityHint);
+        if (required <= 0) return;
+        if (state.managed && this.getChannelBuffer(channel) && state.capacity >= required) return;
+        const capacity = growWasmCapacity(required, state.capacity);
+        const size = capacity * geometryWasmComponents(channel) * geometryWasmBytesPerElement(channel);
+        const usage = (channel === "indices" ? GPUBufferUsage.INDEX : GPUBufferUsage.VERTEX) | GPUBufferUsage.COPY_DST;
+        this.replaceChannelBuffer(channel, device.createBuffer({ label: `Geometry.${geometryWasmFieldName(channel)}`, size, usage }));
+        state.managed = true;
+        state.capacity = capacity;
+    }
+
+    private uploadWasmChannel(device: GPUDevice, queue: GPUQueue, channel: GeometryWasmChannel): void {
+        const state = this.wasmState(channel);
+        const source = state.source;
+        if (!source || !state.dirty) return;
+        source.refresh();
+        this.assertWasmSource(channel, source);
+        const count = isGeometryWasmVertexChannel(channel) ? this.vertexCount : this.indexCount;
+        validateWasmRecordRange(source, count, geometryWasmComponents(channel), `Geometry: ${geometryWasmFieldName(channel)}`, isGeometryWasmVertexChannel(channel) ? "vertexCount" : "indexCount");
+        if (count <= 0) { state.dirty = false; return; }
+        this.ensureWasmBuffer(device, channel, count);
+        const buffer = this.getChannelBuffer(channel);
+        assert(!!buffer, `Geometry: ${geometryWasmFieldName(channel)} upload requires a GPU buffer.`);
+        const byteLength = count * geometryWasmComponents(channel) * geometryWasmBytesPerElement(channel);
+        const data = source.array();
+        queue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, byteLength);
+        state.dirty = false;
+        if (channel === "joints" || channel === "weights" || channel === "joints1" || channel === "weights1") this._skinInfluenceDirty = true;
+    }
+
+    private resolveSkinArray<T extends Uint16Array | Float32Array>(channel: "joints" | "weights" | "joints1" | "weights1"): T | null {
+        const source = this.wasmState(channel).source as WasmMemoryView<T> | null;
+        if (source) return source.array().subarray(0, this.vertexCount * 4) as T;
+        return this.getCPUChannelData(channel) as T | null;
+    }
+
+    private uploadSkinInfluenceBuffer(device: GPUDevice): void {
+        if (!this._skinInfluenceDirty) return;
+        if (!this.hasSkinAttributes) {
+            this._skinInfluenceBuffer?.destroy();
+            this._skinInfluenceBuffer = null;
+            this._skinInfluenceDirty = false;
+            return;
+        }
+        const joints = this.resolveSkinArray<Uint16Array>("joints");
+        const weights = this.resolveSkinArray<Float32Array>("weights");
+        assert(!!joints && !!weights, "Geometry: skin influence upload requires JOINTS_0/WEIGHTS_0.");
+        const joints1 = this.resolveSkinArray<Uint16Array>("joints1");
+        const weights1 = this.resolveSkinArray<Float32Array>("weights1");
+        this._skinInfluenceBuffer?.destroy();
+        this._skinInfluenceBuffer = createBuffer(device, packSkinInfluences(joints, weights, joints1, weights1), GPUBufferUsage.VERTEX, "Geometry.skinInfluences");
+        this._skinInfluenceDirty = false;
     }
 
     get positionBuffer(): GPUBuffer {
@@ -450,6 +1165,14 @@ export class Geometry {
         return this._jointsBuffer !== null && this._weightsBuffer !== null && this._joints1Buffer !== null && this._weights1Buffer !== null;
     }
 
+    get hasSkinAttributes(): boolean {
+        return !!(this.joints || this._wasm.joints.source) && !!(this.weights || this._wasm.weights.source);
+    }
+
+    get hasSkin8Attributes(): boolean {
+        return this.hasSkinAttributes && !!(this.joints1 || this._wasm.joints1.source) && !!(this.weights1 || this._wasm.weights1.source);
+    }
+
     get boundsMin(): readonly [number, number, number] {
         return this._boundsMin;
     }
@@ -494,6 +1217,11 @@ export class Geometry {
         this._uv1Buffer = null;
         this._indexBuffer = null;
         this._device = null;
+        for (const channel of [...GEOMETRY_WASM_VERTEX_CHANNELS, "indices" as const]) {
+            const state = this.wasmState(channel);
+            state.managed = false;
+            state.capacity = 0;
+        }
     }
 
     static point(size = 1, plane: "xy" | "xz" | "yz" = "xy", doubleSided: boolean = false): Geometry {
@@ -1706,6 +2434,7 @@ export class Geometry {
 
     private static _makeDoubleSided(descriptor: GeometryDescriptor): GeometryDescriptor {
         const positions = descriptor.positions;
+        assert(!!positions, "Geometry: positions are required for double-sided geometry generation.");
         const normals = descriptor.normals ?? new Float32Array((positions.length / 3) * 3);
         const tangents = descriptor.tangents ?? null;
         const uvs = descriptor.uvs ?? new Float32Array((positions.length / 3) * 2);
