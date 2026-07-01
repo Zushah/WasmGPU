@@ -557,6 +557,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
     });
     assert.strictEqual(directField.splatCount, 2, "Expected wasmCenterOpacity to derive splatCount");
     assert.strictEqual(directField.getSplatRecord(0), null, "Default wasm path should not retain CPU splat records");
+    assert.deepStrictEqual([directField.getLocalBounds().empty, directField.getLocalBounds().partial], [true, true], "Default external-wasm SplatField bounds should stay partial until recomputed");
     directField.upload(device, device.queue);
     arraysApproxEqual(await readBufferAsF32(directField.centerOpacityBuffer, 8), directCore.centerOpacity.data.subarray(0, 8), 0, "wasmCenterOpacity upload mismatch");
     arraysApproxEqual(await readBufferAsF32(directField.rotationBuffer, 8), directCore.rotation.data.subarray(0, 8), 0, "wasmRotation upload mismatch");
@@ -570,11 +571,22 @@ const makeRenderableField = (count = 3, zValues = null) => {
     directField.upload(device, device.queue);
     assert.strictEqual(directField.bindGroupKey, "sf:stable-wasm", "same-buffer wasm uploads should not invalidate a reused bind group");
     arraysApproxEqual(await readBufferAsF32(directField.centerOpacityBuffer, 8), directCore.centerOpacity.data.subarray(0, 8), 0, "refreshed wasmCenterOpacity upload mismatch");
+    directField.refreshFromWasm({ recomputeBounds: true });
+    assert.strictEqual(directField.getLocalBounds().empty, false, "recomputeBounds should compute SplatField bounds from external wasm sources");
+    directCore.centerOpacity.data.set([-10, -11, -12, 0.8], 0);
+    directField.refreshFromWasm({ recomputeBounds: true });
+    assert.ok(directField.getLocalBounds().boxMin[0] < -10, "Repeated recomputeBounds should refresh active SplatField wasm bounds");
     directField.setWasmColor(null);
     directField.upload(device, device.queue);
     assert.strictEqual(directField.getUniformData()[1], 0, "Clearing wasmColor should clear external sRGB decode state");
     arraysApproxEqual(await readBufferAsF32(directField.colorBuffer, 8), new Float32Array([1, 1, 1, 1, 1, 1, 1, 1]), 0, "Clearing wasmColor should schedule fallback white colors");
     directField.destroy();
+
+    const explicitCore = fillCore("sf:wasm:explicit");
+    const explicitField = new SplatField({ wasmCenterOpacity: explicitCore.centerOpacity.view, wasmRotation: explicitCore.rotation.view, wasmScale: explicitCore.scale.view, boundsMin: [-1, -2, -3], boundsMax: [1, 2, 3] });
+    explicitField.refreshFromWasm({ recomputeBounds: true });
+    arraysApproxEqual(explicitField.boundsMin, [-1, -2, -3], 1e-6, "Explicit SplatField bounds should not be overwritten by wasm recomputeBounds");
+    explicitField.destroy();
 
     const cpuGuard = new SplatField({ positions: new Float32Array([1, 2, 3]), scales: new Float32Array([0.5, 0.5, 0.5]), colors: new Float32Array([0.2, 0.3, 0.4]), keepCPUData: true });
     assert.throws(() => cpuGuard.setWasmCenterOpacity(directCore.centerOpacity.view), /setWasmPackedData\(\).*initial wasm source-family replacement/i, "Single wasm core setters should not destructively start wasm conversion");

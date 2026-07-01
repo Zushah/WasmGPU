@@ -201,6 +201,32 @@ device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured 
     assert.strictEqual(fallback.normalBuffer, fallbackNormalBuffer, "Rejected wasmNormals should not destroy the existing fallback normal buffer");
     fallback.destroy();
 
+    const skinPositions = makeView(9, "f32", "geometry:wasm:skin:positions", 9);
+    const skinJoints = makeView(12, "u16", "geometry:wasm:skin:joints", 12);
+    const skinWeights = makeView(12, "f32", "geometry:wasm:skin:weights", 12);
+    setPositions(skinPositions.data, 3, 0);
+    skinJoints.data.set([0, 1, 0, 0, 1, 2, 0, 0, 2, 3, 0, 0]);
+    skinWeights.data.set([0.75, 0.25, 0, 0, 0.5, 0.5, 0, 0, 0.25, 0.75, 0, 0]);
+    const skin4 = new Geometry({ wasmPositions: skinPositions.view, wasmJoints: skinJoints.view, wasmWeights: skinWeights.view });
+    assert.equal(skin4.hasSkinAttributes, true, "wasmJoints+wasmWeights should enable 4-influence skin detection");
+    assert.equal(skin4.hasSkin8Attributes, false, "4-influence wasm skinning should not enable 8-influence skin detection");
+    skin4.upload(device);
+    assert.ok(skin4.jointsBuffer && skin4.weightsBuffer, "UnlitMaterial-compatible separate wasm skin buffers should upload");
+    assert.ok(skin4.skinInfluenceBuffer, "StandardMaterial-compatible packed wasm skin buffer should upload");
+    skin4.destroy();
+
+    const skinJoints1 = makeView(12, "u16", "geometry:wasm:skin:joints1", 12);
+    const skinWeights1 = makeView(12, "f32", "geometry:wasm:skin:weights1", 12);
+    skinJoints1.data.set([4, 5, 0, 0, 5, 6, 0, 0, 6, 7, 0, 0]);
+    skinWeights1.data.set([0.2, 0.1, 0, 0, 0.15, 0.1, 0, 0, 0.1, 0.05, 0, 0]);
+    const skin8 = new Geometry({ wasmPositions: skinPositions.view, wasmJoints: skinJoints.view, wasmWeights: skinWeights.view, wasmJoints1: skinJoints1.view, wasmWeights1: skinWeights1.view });
+    assert.equal(skin8.hasSkinAttributes, true, "Base wasm skin pair should enable skin detection");
+    assert.equal(skin8.hasSkin8Attributes, true, "Second wasm skin pair should enable 8-influence skin detection");
+    skin8.upload(device);
+    assert.ok(skin8.joints1Buffer && skin8.weights1Buffer, "8-influence separate wasm skin buffers should upload");
+    assert.ok(skin8.skinInfluenceBuffer, "8-influence packed wasm skin buffer should upload");
+    skin8.destroy();
+
     const keepPositions = makeView(12, "f32", "geometry:wasm:keep:positions", 18);
     setPositions(keepPositions.data, 4, -2);
     const keep = new Geometry({ wasmPositions: keepPositions.view, vertexCount: 2, wasmVertexCapacity: 4, keepCPUData: true });

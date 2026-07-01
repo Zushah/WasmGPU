@@ -190,6 +190,7 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     assert.strictEqual(link.edgeCount, 2, "NodeLink should derive edgeCount from wasmEdges");
     assert.strictEqual(link.getNodeRecord(0), null, "Default wasm node path should not retain CPU node records");
     assert.strictEqual(link.getEdgeRecord(0), null, "Default wasm edge path should not retain CPU edge records");
+    assert.deepStrictEqual([link.getLocalBounds().empty, link.getLocalBounds().partial], [true, true], "Default external-wasm NodeLink bounds should stay partial until recomputed");
     link.upload(device, device.queue);
     arraysApproxEqual(await readBufferAsF32(link.nodePositionsBuffer, 8), nodePositions.data.subarray(0, 8), 0, "wasmNodePositions upload mismatch");
     arraysApproxEqual(await readBufferAsF32(link.nodeScalarsBuffer, 2), nodeScalars.data.subarray(0, 2), 0, "wasmNodeScalars upload mismatch");
@@ -212,7 +213,18 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     assert.strictEqual(link.bindGroupKey, "nl:stable-wasm", "same-buffer wasm uploads should not invalidate a reused bind group");
     arraysApproxEqual(await readBufferAsF32(link.nodeScalarsBuffer, 2), nodeScalars.data.subarray(0, 2), 0, "Refreshed wasmNodeScalars upload mismatch");
     arraysApproxEqual(await readBufferAsF32(link.edgeScalarsBuffer, 2), edgeScalars.data.subarray(0, 2), 0, "Refreshed wasmEdgeScalars upload mismatch");
+    nodePositions.data.set([2, 3, 4, 0, 5, 6, 7, 0]);
+    link.refreshWasmNodePositions({ nodeCount: 2, recomputeBounds: true });
+    arraysApproxEqual(link.boundsMax, [5, 6, 7], 1e-6, "recomputeBounds should use active external wasm node positions");
+    nodePositions.data.set([-4, -5, -6, 0, 1, 2, 3, 0]);
+    link.refreshWasmNodePositions({ nodeCount: 2, recomputeBounds: true });
+    arraysApproxEqual(link.boundsMin, [-4, -5, -6], 1e-6, "Repeated recomputeBounds should refresh NodeLink wasm bounds");
     link.destroy();
+
+    const explicitLink = new NodeLink({ wasmNodePositions: nodePositions.view, nodeCount: 2, boundsMin: [-1, -1, -1], boundsMax: [1, 1, 1] });
+    explicitLink.refreshWasmNodePositions({ nodeCount: 2, recomputeBounds: true });
+    arraysApproxEqual(explicitLink.boundsMin, [-1, -1, -1], 1e-6, "Explicit NodeLink bounds should not be overwritten by wasm recomputeBounds");
+    explicitLink.destroy();
 
     const mixedNodeScalars = makeView(2, "f32", "nl:wasm:mixed:nodeScalars");
     const mixedEdgeColors = makeView(4, "f32", "nl:wasm:mixed:edgeColors");

@@ -124,6 +124,7 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
 
     assert.strictEqual(gf.instanceCount, 2, "GlyphField should derive instanceCount from wasmPositions length");
     assert.strictEqual(gf.getAttributeRecord(0), null, "Default wasmAttributes path should not retain CPU records");
+    assert.deepStrictEqual([gf.getLocalBounds().empty, gf.getLocalBounds().partial], [true, true], "Default external-wasm GlyphField bounds should stay partial until recomputed");
     gf.upload(device, device.queue);
     assert.ok(gf.positionsBuffer, "GlyphField.positionsBuffer not created after wasmPositions upload");
     assert.ok(gf.rotationsBuffer, "GlyphField.rotationsBuffer not created after wasmRotations upload");
@@ -152,7 +153,17 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
     gf.upload(device, device.queue);
     assert.strictEqual(gf.getScaleSourceDescriptor()?.revision ?? -1, coreRevision, "Core wasm channel refreshes should not bump scale revision");
     assert.strictEqual(gf.bindGroupKey, "gf:stable-wasm", "Core same-buffer wasm uploads should not invalidate a reused bind group");
+    gf.refreshFromWasm({ recomputeBounds: true });
+    assert.strictEqual(gf.getLocalBounds().empty, false, "recomputeBounds should compute GlyphField bounds from external wasm sources");
+    positions.data.set([-5, -6, -7, 0], 0);
+    gf.refreshFromWasm({ recomputeBounds: true });
+    assert.ok(gf.getLocalBounds().boxMin[0] < -4, "Repeated recomputeBounds should refresh active GlyphField wasm positions");
     gf.destroy?.();
+
+    const explicitGlyph = new GlyphField({ wasmPositions: positions.view, wasmRotations: rotations.view, wasmScales: scales.view, boundsMin: [-3, -2, -1], boundsMax: [3, 2, 1], scaleTransform: baseScaleTransform });
+    explicitGlyph.refreshFromWasm({ recomputeBounds: true });
+    arraysApproxEqual(explicitGlyph.getLocalBounds().boxMin, [-3, -2, -1], 1e-6, "Explicit GlyphField bounds should not be overwritten by wasm recomputeBounds");
+    explicitGlyph.destroy?.();
 
     const capacityPositions = makeView(20, "gf:wasm:capacity:positions", true);
     const capacityRotations = makeView(20, "gf:wasm:capacity:rotations");

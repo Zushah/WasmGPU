@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { assert, createBuffer, nextPow2 } from "../utils";
+import { assert, createBuffer } from "../utils";
 import { boundsf, meshf, wasm, WasmMemoryView, assertWasmF32View, assertWasmU16View, assertWasmU32View, assertWasmRecordCount, assertWasmCapacity, resolveWasmRecordCount, validateWasmRecordRange, growWasmCapacity } from "../wasm";
 
 export type GeometryAttribute = {
@@ -153,7 +153,7 @@ let _normOutPtr = 0;
 let _normOutCap = 0;
 
 const ensureBoundsScratch = (posLenF32: number): void => {
-    if (_boundsPosCap < posLenF32) { _boundsPosCap = nextPow2(posLenF32); _boundsPosPtr = wasm.allocF32(_boundsPosCap); }
+    if (_boundsPosCap < posLenF32) { _boundsPosCap = growWasmCapacity(posLenF32, _boundsPosCap); _boundsPosPtr = wasm.allocF32(_boundsPosCap); }
     if (_boundsBoxMinPtr === 0) _boundsBoxMinPtr = wasm.allocF32(3);
     if (_boundsBoxMaxPtr === 0) _boundsBoxMaxPtr = wasm.allocF32(3);
     if (_boundsSphereCenterPtr === 0) _boundsSphereCenterPtr = wasm.allocF32(3);
@@ -161,13 +161,13 @@ const ensureBoundsScratch = (posLenF32: number): void => {
 };
 
 const ensureNormalScratch = (posLenF32: number, idxLenU32: number): void => {
-    if (_normPosCap < posLenF32) { _normPosCap = nextPow2(posLenF32); _normPosPtr = wasm.allocF32(_normPosCap); }
-    if (_normOutCap < posLenF32) { _normOutCap = nextPow2(posLenF32); _normOutPtr = wasm.allocF32(_normOutCap); }
-    if (idxLenU32 > 0 && _normIdxCap < idxLenU32) { _normIdxCap = nextPow2(idxLenU32); _normIdxPtr = wasm.allocU32(_normIdxCap); }
+    if (_normPosCap < posLenF32) { _normPosCap = growWasmCapacity(posLenF32, _normPosCap); _normPosPtr = wasm.allocF32(_normPosCap); }
+    if (_normOutCap < posLenF32) { _normOutCap = growWasmCapacity(posLenF32, _normOutCap); _normOutPtr = wasm.allocF32(_normOutCap); }
+    if (idxLenU32 > 0 && _normIdxCap < idxLenU32) { _normIdxCap = growWasmCapacity(idxLenU32, _normIdxCap); _normIdxPtr = wasm.allocU32(_normIdxCap); }
 };
 
 export const computeGeometryBounds = (positions: Float32Array): GeometryBoundsDescriptor => {
-    const vertexCount = (positions.length / 3) | 0;
+    const vertexCount = Math.floor(positions.length / 3);
     if (vertexCount <= 0) return { boxMin: [0, 0, 0], boxMax: [0, 0, 0], sphereCenter: [0, 0, 0], sphereRadius: 0 };
     ensureBoundsScratch(positions.length);
     wasm.f32view(_boundsPosPtr, positions.length).set(positions);
@@ -185,8 +185,8 @@ export const computeGeometryBounds = (positions: Float32Array): GeometryBoundsDe
 };
 
 export const computeGeometryVertexNormals = (positions: Float32Array, indices: Uint32Array | null): Float32Array => {
-    const vertexCount = (positions.length / 3) | 0;
-    const idxLen = indices ? (indices.length | 0) : 0;
+    const vertexCount = Math.floor(positions.length / 3);
+    const idxLen = indices ? indices.length : 0;
     ensureNormalScratch(positions.length, idxLen);
     wasm.f32view(_normPosPtr, positions.length).set(positions);
     const idxPtr = (indices && idxLen > 0) ? _normIdxPtr : 0;
@@ -348,7 +348,7 @@ const createFallbackNormals = (vertexCount: number): Float32Array => {
     return out;
 };
 
-type GeometryWasmAttributeSetOptions = GeometryWasmVertexRefreshOptions & GeometryWasmIndexRefreshOptions & {
+export type GeometryWasmAttributeSetOptions = GeometryWasmVertexRefreshOptions & GeometryWasmIndexRefreshOptions & {
     capacity?: number;
     vertexCapacity?: number;
     indexCapacity?: number;

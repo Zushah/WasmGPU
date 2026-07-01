@@ -11,7 +11,7 @@ import { Colormap, type BuiltinColormapName } from "../graphics/colormap";
 import { cloneScaleTransform, normalizeScaleTransform, packScaleTransform } from "../scaling";
 import type { ScaleSourceDescriptor, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor } from "../scaling";
 import { Geometry } from "../graphics/geometry";
-import { boundsf, driver, wasm, WasmMemoryView, assertWasmF32View, assertWasmRecordCount, assertWasmCapacity, resolveWasmRecordCount, validateWasmRecordRange, growWasmCapacity, type WasmPtr } from "../wasm";
+import { driver, WasmMemoryView, assertWasmF32View, assertWasmRecordCount, assertWasmCapacity, resolveWasmRecordCount, validateWasmRecordRange, growWasmCapacity, type WasmPtr } from "../wasm";
 import { Bounds3, boundsFromBox, boundsFromSphere, emptyBounds, transformBounds } from "./bounds";
 
 export type GlyphColormap = BuiltinColormapName | "custom";
@@ -97,14 +97,9 @@ const resolveGlyphWasmRecordCount = (source: WasmMemoryView<Float32Array>, expli
 
 const validateGlyphWasmRecordRange = (source: WasmMemoryView<Float32Array>, instanceCount: number, field: string): void => validateWasmRecordRange(source, instanceCount, GLYPH_RECORD_FLOATS, `GlyphField: ${field}`, "instanceCount");
 
-const normalizeGlyphScaleTransform = (transform: ScaleTransformDescriptor | ScaleTransform): ScaleTransform => {
-    return normalizeScaleTransform({
-        componentCount: 4,
-        componentIndex: 0,
-        stride: 4,
-        ...transform
-    });
-};
+const rotateGlyphOffset = (x: number, y: number, z: number, qx: number, qy: number, qz: number, qw: number): [number, number, number] => { const tx = 2 * ((qy * z) - (qz * y)), ty = 2 * ((qz * x) - (qx * z)), tz = 2 * ((qx * y) - (qy * x)); return [x + (qw * tx) + ((qy * tz) - (qz * ty)), y + (qw * ty) + ((qz * tx) - (qx * tz)), z + (qw * tz) + ((qx * ty) - (qy * tx))]; };
+
+const normalizeGlyphScaleTransform = (transform: ScaleTransformDescriptor | ScaleTransform): ScaleTransform => normalizeScaleTransform({ componentCount: 4, componentIndex: 0, stride: 4, ...transform });
 
 const colorModeId = (mode: GlyphColorMode): number => {
     switch (mode) {
@@ -781,37 +776,34 @@ export class GlyphField {
 
     private computeBoundsFromPackedData(positions: Float32Array, scales: Float32Array, rotations: Float32Array | null, instanceCount: number): void {
         if (instanceCount <= 0) return;
-        const activeLength = instanceCount * GLYPH_RECORD_FLOATS;
-        const positionsPtr = wasm.allocF32(activeLength);
-        const scalesPtr = wasm.allocF32(activeLength);
-        let rotationsPtr: WasmPtr = 0;
-        const glyphCenterPtr = wasm.allocF32(3);
-        const boxMinPtr = wasm.allocF32(3);
-        const boxMaxPtr = wasm.allocF32(3);
-        const sphereCenterPtr = wasm.allocF32(3);
-        const sphereRadiusPtr = wasm.allocF32(1);
-        try {
-            wasm.f32view(positionsPtr, activeLength).set(positions.subarray(0, activeLength));
-            wasm.f32view(scalesPtr, activeLength).set(scales.subarray(0, activeLength));
+        const glyphCenter = this.geometry.boundsCenter;
+        const glyphRadius = this.geometry.boundsRadius;
+        let minX = Number.POSITIVE_INFINITY;
+        let minY = Number.POSITIVE_INFINITY;
+        let minZ = Number.POSITIVE_INFINITY;
+        let maxX = Number.NEGATIVE_INFINITY;
+        let maxY = Number.NEGATIVE_INFINITY;
+        let maxZ = Number.NEGATIVE_INFINITY;
+        for (let i = 0; i < instanceCount; i++) {
+            const base = i * GLYPH_RECORD_FLOATS;
+            const sx = Math.abs(scales[base + 0]);
+            const sy = Math.abs(scales[base + 1]);
+            const sz = Math.abs(scales[base + 2]);
+            let cx = glyphCenter[0] * sx;
+            let cy = glyphCenter[1] * sy;
+            let cz = glyphCenter[2] * sz;
             if (rotations) {
-                rotationsPtr = wasm.allocF32(activeLength);
-                wasm.f32view(rotationsPtr, activeLength).set(rotations.subarray(0, activeLength));
+                const rotated = rotateGlyphOffset(cx, cy, cz, rotations[base + 0], rotations[base + 1], rotations[base + 2], rotations[base + 3]);
+                cx = rotated[0]; cy = rotated[1]; cz = rotated[2];
             }
-            wasm.writeF32(glyphCenterPtr, 3, this.geometry.boundsCenter);
-            boundsf.glyphInstances(boxMinPtr, boxMaxPtr, sphereCenterPtr, sphereRadiusPtr, positionsPtr, scalesPtr, rotationsPtr, instanceCount, glyphCenterPtr, this.geometry.boundsRadius);
-            const boxMin = wasm.f32view(boxMinPtr, 3);
-            const boxMax = wasm.f32view(boxMaxPtr, 3);
-            this.setBounds(boundsFromBox([boxMin[0], boxMin[1], boxMin[2]], [boxMax[0], boxMax[1], boxMax[2]]), "computed");
-        } finally {
-            wasm.freeF32(sphereRadiusPtr, 1);
-            wasm.freeF32(sphereCenterPtr, 3);
-            wasm.freeF32(boxMaxPtr, 3);
-            wasm.freeF32(boxMinPtr, 3);
-            wasm.freeF32(glyphCenterPtr, 3);
-            if (rotationsPtr) wasm.freeF32(rotationsPtr, activeLength);
-            wasm.freeF32(scalesPtr, activeLength);
-            wasm.freeF32(positionsPtr, activeLength);
+            const x = positions[base + 0] + cx;
+            const y = positions[base + 1] + cy;
+            const z = positions[base + 2] + cz;
+            const r = glyphRadius * Math.max(sx, sy, sz);
+            if (x - r < minX) minX = x - r; if (y - r < minY) minY = y - r; if (z - r < minZ) minZ = z - r;
+            if (x + r > maxX) maxX = x + r; if (y + r > maxY) maxY = y + r; if (z + r > maxZ) maxZ = z + r;
         }
+        this.setBounds(boundsFromBox([minX, minY, minZ], [maxX, maxY, maxZ]), "computed");
     }
 
     private computeBoundsFromWasmSources(instanceCount: number): boolean {
@@ -1202,37 +1194,7 @@ export class GlyphField {
         const scales = this._scalesCPU;
         const count = this._instanceCount;
         if (!positions || !scales || count <= 0) return;
-        const rotations = this._rotationsCPU;
-        const positionsPtr = wasm.allocF32(positions.length);
-        const scalesPtr = wasm.allocF32(scales.length);
-        let rotationsPtr: WasmPtr = 0;
-        const glyphCenterPtr = wasm.allocF32(3);
-        const boxMinPtr = wasm.allocF32(3);
-        const boxMaxPtr = wasm.allocF32(3);
-        const sphereCenterPtr = wasm.allocF32(3);
-        const sphereRadiusPtr = wasm.allocF32(1);
-        try {
-            wasm.f32view(positionsPtr, positions.length).set(positions);
-            wasm.f32view(scalesPtr, scales.length).set(scales);
-            if (rotations) {
-                rotationsPtr = wasm.allocF32(rotations.length);
-                wasm.f32view(rotationsPtr, rotations.length).set(rotations);
-            }
-            wasm.writeF32(glyphCenterPtr, 3, this.geometry.boundsCenter);
-            boundsf.glyphInstances(boxMinPtr, boxMaxPtr, sphereCenterPtr, sphereRadiusPtr, positionsPtr, scalesPtr, rotationsPtr, count, glyphCenterPtr, this.geometry.boundsRadius);
-            const boxMin = wasm.f32view(boxMinPtr, 3);
-            const boxMax = wasm.f32view(boxMaxPtr, 3);
-            this.setBounds(boundsFromBox([boxMin[0], boxMin[1], boxMin[2]], [boxMax[0], boxMax[1], boxMax[2]]), "computed");
-        } finally {
-            wasm.freeF32(sphereRadiusPtr, 1);
-            wasm.freeF32(sphereCenterPtr, 3);
-            wasm.freeF32(boxMaxPtr, 3);
-            wasm.freeF32(boxMinPtr, 3);
-            wasm.freeF32(glyphCenterPtr, 3);
-            if (rotationsPtr && rotations) wasm.freeF32(rotationsPtr, rotations.length);
-            wasm.freeF32(scalesPtr, scales.length);
-            wasm.freeF32(positionsPtr, positions.length);
-        }
+        this.computeBoundsFromPackedData(positions, scales, this._rotationsCPU, count);
     }
 
     getLocalBounds(): Bounds3 {

@@ -83,6 +83,7 @@ const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-was
     const colorCloud = new PointCloud({ wasmData: colorPoints.view, wasmColors: colorData.view, scaleTransform: baseScaleTransform });
     assert.strictEqual(colorCloud.pointCount, 2, "PointCloud should derive pointCount from wasmData length");
     assert.strictEqual(colorCloud.getPointRecord(0), null, "Default wasmData path should not retain CPU point records");
+    assert.deepStrictEqual([colorCloud.getLocalBounds().empty, colorCloud.getLocalBounds().partial], [true, true], "Default external-wasm PointCloud bounds should stay partial until recomputed");
     colorCloud.upload(device, device.queue);
     assert.ok(colorCloud.pointsBuffer, "PointCloud.pointsBuffer not created after wasmData upload");
     assert.ok(colorCloud.colorsBuffer, "PointCloud.colorsBuffer not created after wasmColors upload");
@@ -98,7 +99,18 @@ const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-was
     assert.strictEqual(colorCloud.bindGroupKey, "pc:stable-wasm-colors", "wasmColors upload should not invalidate a reused bind group");
     arraysApproxEqual(await readBufferAsF32(colorCloud.colorsBuffer, 8), colorData.data, 0, "refreshWasmColors() should upload refreshed colors");
     assert.throws(() => colorCloud.refreshWasmColors({ pointCount: 3 }), /refreshWasmData\(\) or refreshFromWasm\(\)/i, "wasmColors should not change pointCount while wasmData is active");
+    colorPoints.data.set([10, 20, 30, 0.5, 40, 50, 60, 0.25]);
+    colorCloud.refreshWasmData({ pointCount: 2, recomputeBounds: true });
+    arraysApproxEqual(colorCloud.boundsMax, [40, 50, 60], 1e-6, "recomputeBounds should use active external wasmData records");
+    colorPoints.data.set([-1, -2, -3, 0.5, 4, 5, 6, 0.25]);
+    colorCloud.refreshWasmData({ pointCount: 2, recomputeBounds: true });
+    arraysApproxEqual(colorCloud.boundsMin, [-1, -2, -3], 1e-6, "Repeated recomputeBounds should refresh bounds without requiring CPU retention");
     colorCloud.destroy?.();
+
+    const explicitCloud = new PointCloud({ wasmData: colorPoints.view, boundsMin: [-2, -3, -4], boundsMax: [2, 3, 4], scaleTransform: baseScaleTransform });
+    explicitCloud.refreshWasmData({ pointCount: 2, recomputeBounds: true });
+    arraysApproxEqual(explicitCloud.boundsMin, [-2, -3, -4], 1e-6, "Explicit PointCloud bounds should not be overwritten by wasm recomputeBounds");
+    explicitCloud.destroy?.();
 
     const capacityData = makeWasmF32ViewWithLengthGlobal(20, 0, "pc:wasm:data:capacity");
     capacityData.data.set([1, 2, 3, 0.1, 4, 5, 6, 0.2, 7, 8, 9, 0.3, 10, 11, 12, 0.4, 13, 14, 15, 0.5]);
@@ -151,11 +163,19 @@ const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-was
     const invalidCases = [
         { message: "Invalid derived wasmData pointCount should throw", error: /wasmData length must be a multiple of 4/i, create: () => new PointCloud({ wasmData: makeWasmF32View(5, 0, "pc:wasm:bad:data:multiple").view, scaleTransform: baseScaleTransform }) },
         { message: "Short explicit-count wasmData should throw", error: /wasmData length must be at least pointCount\*4/i, create: () => new PointCloud({ wasmData: makeWasmF32View(7, 0, "pc:wasm:bad:data:count").view, pointCount: 2, scaleTransform: baseScaleTransform }) },
+        { message: "Large safe pointCount should not wrap to zero", error: /wasmData length must be at least pointCount\*4/i, create: () => new PointCloud({ wasmData: makeWasmF32View(4, 0, "pc:wasm:bad:data:large-count").view, pointCount: 2 ** 32, scaleTransform: baseScaleTransform }) },
+        { message: "Unsafe pointCount should throw", error: /safe integer/i, create: () => new PointCloud({ wasmData: makeWasmF32View(4, 0, "pc:wasm:bad:data:unsafe-count").view, pointCount: Number.MAX_SAFE_INTEGER + 1, scaleTransform: baseScaleTransform }) },
+        { message: "Overflowing pointCount range should throw", error: /exceeds Number\.MAX_SAFE_INTEGER/i, create: () => new PointCloud({ wasmData: makeWasmF32View(4, 0, "pc:wasm:bad:data:overflow-count").view, pointCount: Number.MAX_SAFE_INTEGER, scaleTransform: baseScaleTransform }) },
         { message: "Short wasmColors should throw", error: /wasmColors length must be at least pointCount\*4/i, create: () => new PointCloud({ wasmColors: makeWasmF32View(4, 0, "pc:wasm:bad:colors").view, pointCount: 2, scaleTransform: baseScaleTransform }) },
+        { message: "Large safe wasmCapacity should not truncate", error: null, create: () => { const pc = new PointCloud({ wasmData: makeWasmF32View(0, 0, "pc:wasm:large-capacity").view, wasmCapacity: 2 ** 32, scaleTransform: baseScaleTransform }); assert.strictEqual(pc._wasmPointCapacityHint, 2 ** 32, "wasmCapacity should preserve safe integers without 32-bit truncation"); pc.destroy?.(); } },
+        { message: "Unsafe wasmCapacity should throw", error: /safe integer/i, create: () => new PointCloud({ wasmData: makeWasmF32View(0, 0, "pc:wasm:bad:unsafe-capacity").view, wasmCapacity: Number.MAX_SAFE_INTEGER + 1, scaleTransform: baseScaleTransform }) },
         { message: "Non-WasmMemoryView wasmData should throw", error: /wasmData must be a WasmMemoryView/i, create: () => new PointCloud({ wasmData: makeWasmF32View(8, 0, "pc:wasm:bad:source-type").data, scaleTransform: baseScaleTransform }) },
         { message: "Non-f32 wasmData should throw", error: /wasmData dtype must be 'f32'/i, create: () => { const memory = new WebAssembly.Memory({ initial: 1 }), moduleRef = WasmGPU.webassemblyInterop.fromMemory(memory, { name: "pc:wasm:bad:dtype" }); return new PointCloud({ wasmData: moduleRef.view({ ptr: 0, length: 8, dtype: "u32", name: "u32-points" }), scaleTransform: baseScaleTransform }); } }
     ];
-    for (const testCase of invalidCases) assert.throws(testCase.create, testCase.error, testCase.message);
+    for (const testCase of invalidCases) {
+        if (testCase.error) assert.throws(testCase.create, testCase.error, testCase.message);
+        else assert.doesNotThrow(testCase.create, testCase.message);
+    }
 }
 
 // External buffers are borrowed by default, owned when requested, and owned replacements are destroyed exactly once.

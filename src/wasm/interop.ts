@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { assert, nextPow2 } from "../utils";
+import { assert } from "../utils";
 import { dtypeInfo, type DType, type NumberTypedArray } from "../compute/ndarray";
 
 export type WasmExportsLike = Record<string, unknown>;
@@ -88,20 +88,28 @@ export const assertWasmU16View = (source: unknown, label: string): WasmMemoryVie
 export const assertWasmU32View = (source: unknown, label: string): WasmMemoryView<Uint32Array> => assertWasmViewDType<Uint32Array>(source, "u32", label);
 
 export const assertWasmRecordCount = (value: number, label: string = "record count"): number => {
+    assert(typeof value === "number" && Number.isFinite(value), `${label} must be a finite number.`);
     assert(Number.isInteger(value) && value >= 0, `${label} must be an integer >= 0.`);
-    return value | 0;
+    assert(Number.isSafeInteger(value), `${label} must be a safe integer.`);
+    return value;
 };
 
 export const assertWasmCapacity = (value: number | undefined, label: string = "wasmCapacity"): number => {
     if (value === undefined) return 0;
+    assert(typeof value === "number" && Number.isFinite(value), `${label} must be a finite number.`);
     assert(Number.isInteger(value) && value >= 0, `${label} must be an integer >= 0.`);
-    return value | 0;
+    assert(Number.isSafeInteger(value), `${label} must be a safe integer.`);
+    return value;
 };
 
 export const validateWasmRecordRange = (source: WasmMemoryView, count: number, componentsPerRecord: number, sourceLabel: string, countTerm: string = "count"): void => {
-    assertWasmRecordCount(count, countTerm);
+    const safeCount = assertWasmRecordCount(count, countTerm);
+    assert(typeof componentsPerRecord === "number" && Number.isFinite(componentsPerRecord), `${sourceLabel} componentsPerRecord must be finite.`);
     assert(Number.isInteger(componentsPerRecord) && componentsPerRecord > 0, `${sourceLabel} componentsPerRecord must be an integer > 0.`);
-    assert(source.length >= count * componentsPerRecord, `${sourceLabel} length must be at least ${countTerm}*${componentsPerRecord}.`);
+    assert(Number.isSafeInteger(componentsPerRecord), `${sourceLabel} componentsPerRecord must be a safe integer.`);
+    assert(safeCount <= Math.floor(Number.MAX_SAFE_INTEGER / componentsPerRecord), `${sourceLabel} ${countTerm}*${componentsPerRecord} exceeds Number.MAX_SAFE_INTEGER.`);
+    const requiredLength = safeCount * componentsPerRecord;
+    assert(source.length >= requiredLength, `${sourceLabel} length must be at least ${countTerm}*${componentsPerRecord}.`);
 };
 
 export const resolveWasmRecordCount = (source: WasmMemoryView, explicitCount: number | undefined, componentsPerRecord: number, sourceLabel: string, countLabel: string = "record count", countTerm: string = "count"): number => {
@@ -119,7 +127,13 @@ export const growWasmCapacity = (requiredCount: number, currentCapacity: number 
     const required = assertWasmRecordCount(requiredCount, "wasm required capacity");
     const current = assertWasmCapacity(currentCapacity, "wasm current capacity");
     if (required <= current) return current;
-    return nextPow2(required);
+    let capacity = current > 0 ? current : 1;
+    while (capacity < required) {
+        const next = capacity * 2;
+        assert(Number.isSafeInteger(next) && next <= Number.MAX_SAFE_INTEGER, "wasm capacity growth exceeds Number.MAX_SAFE_INTEGER.");
+        capacity = next;
+    }
+    return capacity;
 };
 
 type ResolvedByteRange = {

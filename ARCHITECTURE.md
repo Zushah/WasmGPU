@@ -2,7 +2,7 @@
 
 Last updated: Wednesday, July 1, 2026.
 
-Last commit: Wednesday, July 1, 2026, [**`1b1f52f`**](https://www.github.com/Zushah/WasmGPU/commit/1b1f52f).
+Last commit: Wednesday, July 1, 2026, [**`c28b1df`**](https://www.github.com/Zushah/WasmGPU/commit/c28b1df).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
