@@ -25,7 +25,7 @@
     "build:ts": "tsc --noEmit --project ./tsconfig.json",
     "build:es": "node ./esbuild.config.js",
     "build": "npm run build:rs && npm run build:ts && npm run build:es",
-    "test": "node --test --experimental-test-isolation=none ./test/*.test.js",
+    "test": "node ./scripts/run-tests.js",
     "dev": "npm run build && npm run test",
     "restore": "git restore build dist",
     "website": "py ./scripts/build_website.py",
