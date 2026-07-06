@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: Wednesday, July 1, 2026.
+Last updated: Monday, July 6, 2026.
 
-Last commit: Wednesday, July 1, 2026, [**`c28b1df`**](https://www.github.com/Zushah/WasmGPU/commit/c28b1df).
+Last commit: Friday, July 3, 2026, [**`3cb9b23`**](https://www.github.com/Zushah/WasmGPU/commit/3cb9b23).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -607,7 +607,7 @@ Common interactions:
 - `./src/core/renderer.ts` reads graphics data and binds buffers, textures, samplers, and material uniforms.
 - `./src/gltf/import.ts` creates geometry, materials, textures, animations, skins, and morph data.
 - `./src/wgsl/graphics/` must match material and geometry layouts.
-- Tests under `./test/material.test.js`, `./test/mesh.test.js`, `./test/renderer.test.js`, and `./test/gltf.test.js` cover important behavior.
+- Tests under `./test/material.test.js`, `./test/geometry.test.js`, `./test/mesh.test.js`, `./test/renderer.test.js`, and `./test/gltf.test.js` cover important behavior.
 
 ### 2.5. Compute, ndarray, and scaling
 
@@ -971,11 +971,11 @@ Use the commands from `./package.json`:
 | `npm run build:ts` | Type-check TypeScript with `./tsconfig.json`. |
 | `npm run build:es` | Bundle the package via `./esbuild.config.js`. |
 | `npm run build` | Run Rust build, TypeScript check, and bundle build. |
-| `npm run test` | Run Node tests under `./test/*.test.js`. |
+| `npm run test` | Run tests under `./test/*.test.js` via `./scripts/run-tests.js`. |
 | `npm run dev` | Run build and tests. |
 | `npm run website` | Build the website into `./website/build/`. |
 | `npm run restore` | Restore `./build/` and `./dist/` from Git after local builds. |
-| `npm run logo` | Regenerate logo raster assets through `./scripts/rasterize_logo.py`. |
+| `npm run logo` | Regenerate logo raster assets via `./scripts/rasterize_logo.py`. |
 
 The appropriate minimum depends on the change. Documentation-only changes usually need Markdown review. TypeScript behavior changes need at least `npm run build:ts` and focused tests. Rust, shader, or bundle changes need the matching build steps.
 
