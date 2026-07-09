@@ -11,12 +11,17 @@
         <link rel="icon" type="image/png" href="../assets/favicon.png">
         <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
-            body { background: #000; overflow: hidden; }
+            body { background: #000; overflow: hidden; color: #d8e2ef; font: 12px/1.4 monospace; }
             canvas { display: block; width: 100vw; height: 100vh; }
+            .hud { position: fixed; left: 10px; top: 10px; width: 250px; z-index: 6; pointer-events: none; }
+            .pane { padding: 10px; background: rgba(5, 10, 18, 0.78); border: 1px solid rgba(180, 210, 255, 0.2); }
         </style>
     </head>
     <body>
         <canvas></canvas>
+        <div class="hud">
+            <div class="pane">Click terrain to lock pointer<br>W/A/S/D move<br>Q/E down/up<br>Z/C roll<br>Shift faster, Alt slower<br>Wheel changes move speed<br>Esc unlocks pointer</div>
+        </div>
         <script src="../dist/WasmGPU.iife.min.js"></script>
         <script type="module">
             const WORLD_SIZE = 100.0;
@@ -248,7 +253,17 @@
             const camera = wgpu.createCamera.perspective({ fov: 30, near: 0.1, far: 500 });
             camera.transform.setPosition(-75, 50, 75);
             camera.lookAt(0, 5, 0);
-            const controls = wgpu.createControls.orbit(camera, canvas, { target: [0, 5, 0], enableDamping: true });
+            const controls = wgpu.createControls.fly(camera, canvas, {
+                target: [0, 5, 0],
+                pointerLock: "on-click",
+                yawMode: "local",
+                moveSpeed: 15,
+                lookSpeed: 0.002,
+                wheelSpeedFactor: 1.1,
+                enableDamping: true,
+                dampingFactor: 0.08,
+                preventDefaultKeys: true
+            });
             const heightfield = createHeightfield(HEIGHTFIELD_RESOLUTION, WORLD_SIZE, WORLD_SIZE);
             const terrain = createTerrain(TERRAIN_RESOLUTION, TERRAIN_RESOLUTION, heightfield);
             const terrainMaterial = wgpu.material.custom({ fragmentShader: wgsl() });
