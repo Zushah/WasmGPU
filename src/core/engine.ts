@@ -31,8 +31,8 @@ import { pythonInterop } from "../python";
 import { ScaleService } from "../scaling";
 import { driver, frameArena, initWebAssembly, mat4, quat, vec3, WasmHeapArena, webassemblyInterop } from "../wasm";
 import { Camera, PerspectiveCamera, OrthographicCamera } from "../world/camera";
-import { NavigationControls, OrbitControls, TrackballControls } from "../world/controls";
-import type { NavigationControlsDescriptor, OrbitControlsDescriptor, TrackballControlsDescriptor } from "../world/controls";
+import { NavigationControls, OrbitControls, TrackballControls, FlyControls } from "../world/controls";
+import type { NavigationControlsDescriptor, OrbitControlsDescriptor, TrackballControlsDescriptor, FlyControlsDescriptor } from "../world/controls";
 import { GlyphField } from "../world/glyphfield";
 import type { GlyphFieldDescriptor } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
@@ -353,6 +353,9 @@ export class WasmGPU {
         },
         trackball: (camera: Camera, domElement: HTMLCanvasElement, options?: TrackballControlsDescriptor): TrackballControls => {
             return new TrackballControls(camera, domElement, options);
+        },
+        fly: (camera: Camera, domElement: HTMLCanvasElement, options?: FlyControlsDescriptor): FlyControls => {
+            return new FlyControls(camera, domElement, options);
         }
     };
 

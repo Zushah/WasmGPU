@@ -11,30 +11,21 @@ import { create, globals } from "webgpu";
 Object.assign(globalThis, globals);
 const navigator = { gpu: create([]) };
 
-const numberApproxEqual = (a, b, tol = 1e-5, msg = "Numbers differ") => {
-    assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers");
-    assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`);
-};
+const numberApproxEqual = (a, b, tol = 1e-5, msg = "Numbers differ") => { assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers"); assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`); };
 
-const arraysApproxEqual = (a, b, tol = 1e-5, msg = "Arrays differ") => {
-    assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`);
-    for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`);
-};
+const arraysApproxEqual = (a, b, tol = 1e-5, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`); };
 
-const makeCanvas = (width = 800, height = 600) => {
-    const listeners = new Map();
-    return {
-        style: {},
-        clientWidth: width,
-        clientHeight: height,
-        addEventListener(type, handler) { listeners.set(type, handler); },
-        removeEventListener(type, handler) { if (listeners.get(type) === handler) listeners.delete(type); },
-        setPointerCapture() {},
-        releasePointerCapture() {},
-        getBoundingClientRect() { return { left: 0, top: 0, width, height, right: width, bottom: height }; },
-        listeners
-    };
-};
+const makeCanvas = (width = 800, height = 600) => { const listeners = new Map(); return { style: {}, clientWidth: width, clientHeight: height, addEventListener(type, handler) { listeners.set(type, handler); }, removeEventListener(type, handler) { if (listeners.get(type) === handler) listeners.delete(type); }, setPointerCapture() {}, releasePointerCapture() {}, getBoundingClientRect() { return { left: 0, top: 0, width, height, right: width, bottom: height }; }, listeners }; };
+
+const makeEventTarget = () => { const listeners = new Map(); return { addEventListener(type, handler) { listeners.set(type, handler); }, removeEventListener(type, handler) { if (listeners.get(type) === handler) listeners.delete(type); }, listeners }; };
+
+const dispatch = (target, type, event = {}) => target.listeners.get(type)?.({ preventDefault() {}, stopPropagation() {}, target: null, ...event });
+
+const cameraForward = (camera) => { const m = camera.transform.worldMatrix; return [-m[8], -m[9], -m[10]]; };
+
+const cameraUp = (camera) => { const m = camera.transform.worldMatrix; return [m[4], m[5], m[6]]; };
+
+const withFakeWindow = (run) => { const hadWindow = Object.prototype.hasOwnProperty.call(globalThis, "window"); const previousWindow = globalThis.window; const fakeWindow = makeEventTarget(); Object.defineProperty(globalThis, "window", { value: fakeWindow, configurable: true }); try { return run(fakeWindow); } finally { if (hadWindow) Object.defineProperty(globalThis, "window", { value: previousWindow, configurable: true }); else delete globalThis.window; } };
 
 const gpu = navigator.gpu;
 assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
@@ -42,20 +33,18 @@ const adapter = await gpu.requestAdapter();
 assert.ok(adapter, "Failed to acquire a WebGPU adapter");
 const device = await adapter.requestDevice();
 assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => {
-    throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`);
-});
+device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
 
 await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
-
-const { NavigationControls, OrbitControls, TrackballControls, PerspectiveCamera, OrthographicCamera, Geometry, Mesh, PointCloud, GlyphField, Scene, UnlitMaterial, AxisConventions } = WasmGPU;
-
+const { NavigationControls, OrbitControls, TrackballControls, FlyControls, PerspectiveCamera, OrthographicCamera, Geometry, Mesh, PointCloud, GlyphField, Scene, UnlitMaterial, AxisConventions } = WasmGPU;
 assert.ok(NavigationControls, "Missing export: NavigationControls");
+assert.ok(FlyControls, "Missing export: FlyControls");
 assert.ok(AxisConventions && AxisConventions.Y_UP_RH, "Missing export: AxisConventions");
 
 const pointScaleTransform = { componentCount: 4, componentIndex: 3, stride: 4, offset: 0 };
 const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, offset: 0 };
 
+// 1) Orbit perspective controls preserve spherical state, damping, named views, reset, and dolly.
 {
     const canvas = makeCanvas();
     const camera = new PerspectiveCamera({ fov: 60, aspect: 4 / 3, near: 0.1, far: 200 });
@@ -86,6 +75,7 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
     numberApproxEqual(controls.distance, 20, 1e-4, "Orbit perspective dolly mismatch");
 }
 
+// 2) Orbit orthographic controls apply zoom through projection bounds.
 {
     const canvas = makeCanvas();
     const camera = new OrthographicCamera({ left: -4, right: 4, top: 4, bottom: -4, near: 0.1, far: 100 });
@@ -98,6 +88,7 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
     numberApproxEqual(camera.right, 2, 1e-5, "Orbit orthographic right mismatch after zoom");
 }
 
+// 3) Trackball perspective controls rotate, pan, and reset target-centric camera state.
 {
     const canvas = makeCanvas();
     const camera = new PerspectiveCamera({ fov: 60, aspect: 4 / 3, near: 0.1, far: 200 });
@@ -118,6 +109,7 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
     arraysApproxEqual(controls.target, [0, 0, 0], 1e-5, "Trackball reset should restore target");
 }
 
+// 4) Trackball orthographic controls apply zoom through projection bounds.
 {
     const canvas = makeCanvas();
     const camera = new OrthographicCamera({ left: -6, right: 6, top: 3, bottom: -3, near: 0.1, far: 100 });
@@ -130,6 +122,7 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
     numberApproxEqual(camera.right, 2, 1e-5, "Trackball orthographic zoom right mismatch");
 }
 
+// 5) Navigation controls preserve shared view, transition, mode-switch, and camera-sync behavior.
 {
     const canvas = makeCanvas();
     const camera = new PerspectiveCamera({ fov: 60, aspect: 4 / 3, near: 0.1, far: 200 });
@@ -168,6 +161,99 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
     numberApproxEqual(controls.distance, Math.sqrt(29), 1e-4, "syncFromCamera should refresh distance from external camera edits");
 }
 
+// 6) Fly controls move in camera space, scale speed with the wheel, drag-look, reset, and clean up listeners.
+{
+    withFakeWindow((fakeWindow) => {
+        const orbit = new OrbitControls(new PerspectiveCamera(), makeCanvas());
+        const trackball = new TrackballControls(new PerspectiveCamera(), makeCanvas());
+        assert.strictEqual(fakeWindow.listeners.size, 0, "Orbit/trackball controls should not attach default keyboard listeners");
+        orbit.dispose();
+        trackball.dispose();
+        const navigationFly = new NavigationControls(new PerspectiveCamera(), makeCanvas(), { mode: "fly" });
+        assert.ok(fakeWindow.listeners.has("keydown") && fakeWindow.listeners.has("keyup"), "Fly mode should attach default keyboard listeners when window exists");
+        navigationFly.setMode("orbit");
+        assert.strictEqual(fakeWindow.listeners.size, 0, "Leaving fly mode should detach default keyboard listeners");
+        navigationFly.setMode("fly");
+        assert.ok(fakeWindow.listeners.has("keydown") && fakeWindow.listeners.has("keyup"), "Re-entering fly mode should restore default keyboard listeners");
+        navigationFly.dispose();
+    });
+
+    const keyboard = makeEventTarget();
+    const canvas = makeCanvas();
+    const camera = new PerspectiveCamera({ fov: 60, aspect: 4 / 3, near: 0.1, far: 200 });
+    camera.transform.setPosition(0, 0, 10);
+    camera.lookAt(0, 0, 0);
+    const controls = new FlyControls(camera, canvas, { keyboardTarget: keyboard, moveSpeed: 10, wheelSpeedFactor: 1.1, pointerLock: "on-click" });
+    assert.strictEqual(controls.mode, "fly", "FlyControls should force fly mode");
+    const navigationFly = new NavigationControls(new PerspectiveCamera(), makeCanvas(), { mode: "fly", keyboardTarget: null });
+    assert.strictEqual(navigationFly.mode, "fly", "NavigationControls should accept fly mode directly");
+    navigationFly.dispose();
+
+    dispatch(keyboard, "keydown", { code: "KeyW" });
+    controls.update(0.5);
+    dispatch(keyboard, "keyup", { code: "KeyW" });
+    arraysApproxEqual(camera.position, [0, 0, 5], 1e-4, "Fly forward movement should follow camera forward");
+
+    dispatch(keyboard, "keydown", { code: "KeyE" });
+    controls.update(0.25);
+    dispatch(keyboard, "keyup", { code: "KeyE" });
+    arraysApproxEqual(camera.position, [0, 2.5, 5], 1e-4, "Fly vertical movement should follow camera up");
+
+    controls.moveSpeed = 10;
+    dispatch(canvas, "wheel", { deltaY: 100, deltaMode: 0, clientX: 0, clientY: 0 });
+    numberApproxEqual(controls.moveSpeed, 11, 1e-5, "Fly wheel should scale moveSpeed by wheelSpeedFactor");
+
+    const beforeForward = cameraForward(camera);
+    dispatch(canvas, "pointerdown", { pointerId: 1, button: 0, clientX: 100, clientY: 100 });
+    dispatch(canvas, "pointermove", { pointerId: 1, clientX: 180, clientY: 100, movementX: 80, movementY: 0 });
+    controls.update(1 / 60);
+    dispatch(canvas, "pointerup", { pointerId: 1 });
+    const afterForward = cameraForward(camera);
+    assert.ok(afterForward[0] > beforeForward[0] + 0.01, "Fly pointer drag should yaw the camera");
+
+    controls.reset();
+    arraysApproxEqual(camera.position, [0, 0, 10], 1e-4, "Fly reset should restore saved camera position");
+
+    camera.transform.setPosition(2, 3, 4);
+    camera.lookAtWithUp([5, 5, 1], [0, 1, 0]);
+    controls.target = [99, 99, 99];
+    controls.saveState();
+    const savedForward = cameraForward(camera);
+    const savedUp = cameraUp(camera);
+    camera.transform.setPosition(-4, -5, -6);
+    camera.lookAtWithUp([0, 0, 0], [0, 1, 0]);
+    controls.target = [0, 0, 0];
+    controls.reset();
+    arraysApproxEqual(camera.position, [2, 3, 4], 1e-4, "Fly reset should restore explicitly saved position");
+    arraysApproxEqual(cameraForward(camera), savedForward, 1e-4, "Fly reset should restore saved forward direction independent of target");
+    arraysApproxEqual(cameraUp(camera), savedUp, 1e-4, "Fly reset should restore saved up direction independent of target");
+    controls.dispose();
+    assert.strictEqual(canvas.listeners.size, 0, "Fly dispose should remove canvas listeners");
+    assert.strictEqual(keyboard.listeners.size, 0, "Fly dispose should remove keyboard listeners");
+
+    const globalYawCamera = new PerspectiveCamera();
+    globalYawCamera.transform.setPosition(0, 0, 0);
+    globalYawCamera.lookAtWithUp([0, 0, -1], [1, 0, 0]);
+    const globalYawControls = new FlyControls(globalYawCamera, makeCanvas(), { keyboardTarget: null });
+    globalYawControls._flyYawDelta = Math.PI * 0.25;
+    globalYawControls.update(1 / 60);
+
+    const localYawCamera = new PerspectiveCamera();
+    localYawCamera.transform.setPosition(0, 0, 0);
+    localYawCamera.lookAtWithUp([0, 0, -1], [1, 0, 0]);
+    const localYawControls = new FlyControls(localYawCamera, makeCanvas(), { keyboardTarget: null, yawMode: "local" });
+    localYawControls._flyYawDelta = Math.PI * 0.25;
+    localYawControls.update(1 / 60);
+
+    const globalForward = cameraForward(globalYawCamera);
+    const localForward = cameraForward(localYawCamera);
+    assert.ok(Math.abs(globalForward[1]) < 1e-4, "Default fly yaw should use global up after roll");
+    assert.ok(Math.abs(localForward[1]) > 0.5, "Local fly yaw should keep aircraft-style rolled yaw");
+    globalYawControls.dispose();
+    localYawControls.dispose();
+}
+
+// 7) Scene fitting frames mixed object bounds for perspective and orthographic cameras.
 {
     const scene = new Scene();
     const mesh = new Mesh(Geometry.box(2, 4, 6), new UnlitMaterial());
@@ -212,6 +298,7 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
     assert.ok(orthographic.far > orthographic.near, "Orthographic fit should stabilize depth range");
 }
 
+// 8) Partial bounds remain usable when at least one scene contributor has explicit bounds.
 {
     const explicit = new PointCloud({ pointCount: 4, boundsMin: [-1, -2, -3], boundsMax: [4, 5, 6], scaleTransform: pointScaleTransform });
     const explicitBounds = explicit.getBounds();

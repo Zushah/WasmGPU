@@ -36,8 +36,8 @@ export type { Bounds3, BoundsProvider, BoundsLike, Vec3 as BoundsVec3 } from "./
 export { emptyBounds, cloneBounds, boundsFromBox, boundsFromSphere, boundsFromBoxAndSphere, normalizeBounds, unionBounds, getBoundsCenter, getBoundsSize, expandBounds, getBoundsCorners, transformBounds } from "./world/bounds";
 export { Camera, PerspectiveCamera, OrthographicCamera } from "./world/camera";
 export type { CameraType, PerspectiveCameraDescriptor, OrthographicCameraDescriptor } from "./world/camera";
-export { NavigationControls, OrbitControls, TrackballControls, AxisConventions } from "./world/controls";
-export type { NavigationMode, InspectionView, NavigationControlsMouseButtons, OrbitControlsMouseButtons, TrackballControlsMouseButtons, NavigationControlsChangeListener, NavigationControlsInteractionListener, NavigationControlsDescriptor, OrbitControlsDescriptor, TrackballControlsDescriptor, AxisConventionDescriptor, AxisConventionPreset, AxisConventionInput, FitToBoundsOptions, SetViewOptions } from "./world/controls";
+export { NavigationControls, OrbitControls, TrackballControls, FlyControls, AxisConventions } from "./world/controls";
+export type { NavigationMode, InspectionView, NavigationControlsMouseButtons, OrbitControlsMouseButtons, TrackballControlsMouseButtons, FlyControlsKeyMap, FlyControlsYawMode, NavigationControlsChangeListener, NavigationControlsInteractionListener, NavigationControlsDescriptor, OrbitControlsDescriptor, TrackballControlsDescriptor, FlyControlsDescriptor, AxisConventionDescriptor, AxisConventionPreset, AxisConventionInput, FitToBoundsOptions, SetViewOptions } from "./world/controls";
 export { GlyphField } from "./world/glyphfield";
 export type { GlyphFieldDescriptor, GlyphShape, GlyphColorMode, GlyphColormap, GlyphFieldVisualChangeKind, GlyphFieldWasmRefreshOptions, GlyphFieldWasmChannelOptions, GlyphFieldWasmInstancesOptions, GlyphFieldWasmSources } from "./world/glyphfield";
 export { Light, AmbientLight, DirectionalLight, PointLight, SpotLight } from "./world/light";

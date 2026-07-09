@@ -9,13 +9,26 @@ import type { Bounds3, BoundsLike, Vec3 } from "./bounds";
 import { boundsFromSphere, expandBounds, getBoundsCenter, getBoundsCorners, normalizeBounds } from "./bounds";
 import type { Scene } from "./scene";
 
-export type NavigationMode = "orbit" | "trackball";
+export type NavigationMode = "orbit" | "trackball" | "fly";
 export type InspectionView = "front" | "back" | "left" | "right" | "top" | "bottom";
 
 export type NavigationControlsMouseButtons = {
     rotate?: number;
     pan?: number;
     zoom?: number;
+};
+
+export type FlyControlsKeyMap = {
+    forward?: readonly string[];
+    backward?: readonly string[];
+    left?: readonly string[];
+    right?: readonly string[];
+    up?: readonly string[];
+    down?: readonly string[];
+    rollLeft?: readonly string[];
+    rollRight?: readonly string[];
+    fast?: readonly string[];
+    slow?: readonly string[];
 };
 
 export type AxisConventionDescriptor = {
@@ -67,6 +80,12 @@ type FitSolveResult = {
     projection: ProjectionState;
 };
 
+type FlyControlsKeyAction = keyof Required<FlyControlsKeyMap>;
+
+type FlyControlsPointerLockMode = false | "on-click" | "on-drag";
+
+export type FlyControlsYawMode = "global" | "local";
+
 export type NavigationControlsDescriptor = {
     mode?: NavigationMode;
     axisConvention?: AxisConventionInput;
@@ -90,12 +109,31 @@ export type NavigationControlsDescriptor = {
     minAzimuthAngle?: number;
     maxAzimuthAngle?: number;
     mouseButtons?: NavigationControlsMouseButtons;
+    enableKeyboard?: boolean;
+    enablePointer?: boolean;
+    enableWheel?: boolean;
+    moveSpeed?: number;
+    lookSpeed?: number;
+    rollSpeed?: number;
+    fastMultiplier?: number;
+    slowMultiplier?: number;
+    wheelSpeedFactor?: number;
+    minMoveSpeed?: number;
+    maxMoveSpeed?: number;
+    invertY?: boolean;
+    yawMode?: FlyControlsYawMode;
+    mouseButton?: number;
+    pointerLock?: boolean | "on-click" | "on-drag";
+    keyMap?: FlyControlsKeyMap;
+    keyboardTarget?: HTMLElement | Window | Document | null;
+    preventDefaultKeys?: boolean;
 };
 
 export type OrbitControlsMouseButtons = NavigationControlsMouseButtons;
 export type TrackballControlsMouseButtons = NavigationControlsMouseButtons;
 export type OrbitControlsDescriptor = NavigationControlsDescriptor;
 export type TrackballControlsDescriptor = NavigationControlsDescriptor;
+export type FlyControlsDescriptor = NavigationControlsDescriptor;
 export type NavigationControlsChangeListener = () => void;
 export type NavigationControlsInteractionListener = (active: boolean) => void;
 
@@ -134,61 +172,16 @@ const vec3scl = (v: readonly number[], s: number): Vec3 => [v[0] * s, v[1] * s, 
 const vec3dot = (a: readonly number[], b: readonly number[]): number => (a[0] * b[0]) + (a[1] * b[1]) + (a[2] * b[2]);
 const vec3cross = (a: readonly number[], b: readonly number[]): Vec3 => [(a[1] * b[2]) - (a[2] * b[1]), (a[2] * b[0]) - (a[0] * b[2]), (a[0] * b[1]) - (a[1] * b[0])];
 const vec3mag = (v: readonly number[]): number => Math.hypot(v[0], v[1], v[2]);
-const vec3normalize = (v: readonly number[], fallback: readonly number[] = [0, 0, 1]): Vec3 => {
-    const len = vec3mag(v);
-    if (len <= EPSILON) return vec3clone(fallback);
-    const inv = 1 / len;
-    return [v[0] * inv, v[1] * inv, v[2] * inv];
-};
+const vec3normalize = (v: readonly number[], fallback: readonly number[] = [0, 0, 1]): Vec3 => { const len = vec3mag(v); if (len <= EPSILON) return vec3clone(fallback); const inv = 1 / len; return [v[0] * inv, v[1] * inv, v[2] * inv]; };
 const vec3lerp = (a: readonly number[], b: readonly number[], t: number): Vec3 => [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)];
-const quatmul = (ax: number, ay: number, az: number, aw: number, bx: number, by: number, bz: number, bw: number): [number, number, number, number] => {
-    return [
-        (aw * bx) + (ax * bw) + (ay * bz) - (az * by),
-        (aw * by) - (ax * bz) + (ay * bw) + (az * bx),
-        (aw * bz) + (ax * by) - (ay * bx) + (az * bw),
-        (aw * bw) - (ax * bx) - (ay * by) - (az * bz)
-    ];
-};
+const vec3rotate = (v: readonly number[], axisInput: readonly number[], angle: number): Vec3 => { const axis = vec3normalize(axisInput, [0, 1, 0]); const c = Math.cos(angle); const s = Math.sin(angle); const d = vec3dot(axis, v); const cross = vec3cross(axis, v); return [(v[0] * c) + (cross[0] * s) + (axis[0] * d * (1 - c)), (v[1] * c) + (cross[1] * s) + (axis[1] * d * (1 - c)), (v[2] * c) + (cross[2] * s) + (axis[2] * d * (1 - c))]; };
+const quatmul = (ax: number, ay: number, az: number, aw: number, bx: number, by: number, bz: number, bw: number): [number, number, number, number] => { return [(aw * bx) + (ax * bw) + (ay * bz) - (az * by), (aw * by) - (ax * bz) + (ay * bw) + (az * bx), (aw * bz) + (ax * by) - (ay * bx) + (az * bw), (aw * bw) - (ax * bx) - (ay * by) - (az * bz)]; };
 const quatinvert = (x: number, y: number, z: number, w: number): [number, number, number, number] => [-x, -y, -z, w];
-const quatnormalize = (x: number, y: number, z: number, w: number): [number, number, number, number] => {
-    const len = Math.hypot(x, y, z, w);
-    if (len <= EPSILON) return [0, 0, 0, 1];
-    const inv = 1 / len;
-    return [x * inv, y * inv, z * inv, w * inv];
-};
-const quatrotvec = (vx: number, vy: number, vz: number, qx: number, qy: number, qz: number, qw: number): Vec3 => {
-    const tx = 2 * ((qy * vz) - (qz * vy));
-    const ty = 2 * ((qz * vx) - (qx * vz));
-    const tz = 2 * ((qx * vy) - (qy * vx));
-    return [
-        vx + (qw * tx) + ((qy * tz) - (qz * ty)),
-        vy + (qw * ty) + ((qz * tx) - (qx * tz)),
-        vz + (qw * tz) + ((qx * ty) - (qy * tx))
-    ];
-};
+const quatnormalize = (x: number, y: number, z: number, w: number): [number, number, number, number] => { const len = Math.hypot(x, y, z, w); if (len <= EPSILON) return [0, 0, 0, 1]; const inv = 1 / len; return [x * inv, y * inv, z * inv, w * inv]; };
+const quatrotvec = (vx: number, vy: number, vz: number, qx: number, qy: number, qz: number, qw: number): Vec3 => { const tx = 2 * ((qy * vz) - (qz * vy)); const ty = 2 * ((qz * vx) - (qx * vz)); const tz = 2 * ((qx * vy) - (qy * vx)); return [vx + (qw * tx) + ((qy * tz) - (qz * ty)), vy + (qw * ty) + ((qz * tx) - (qx * tz)), vz + (qw * tz) + ((qx * ty) - (qy * tx))]; };
 const quatisid = (x: number, y: number, z: number, w: number): boolean => Math.abs(x) < EPSILON && Math.abs(y) < EPSILON && Math.abs(z) < EPSILON && Math.abs(1 - w) < EPSILON;
-const quatslerpid = (x: number, y: number, z: number, w: number, t: number): [number, number, number, number] => {
-    const tt = clamp01(t);
-    let cosHalfTheta = clamp(w, -1, 1);
-    let qx = x;
-    let qy = y;
-    let qz = z;
-    let qw = w;
-    if (cosHalfTheta < 0) {
-        cosHalfTheta = -cosHalfTheta;
-        qx = -qx;
-        qy = -qy;
-        qz = -qz;
-        qw = -qw;
-    }
-    if (cosHalfTheta >= 0.9995) return quatnormalize(qx * tt, qy * tt, qz * tt, (1 - tt) + (qw * tt));
-    const halfTheta = Math.acos(cosHalfTheta);
-    const sinHalfTheta = Math.sqrt(1 - (cosHalfTheta * cosHalfTheta));
-    if (sinHalfTheta <= EPSILON) return [0, 0, 0, 1];
-    const a = Math.sin((1 - tt) * halfTheta) / sinHalfTheta;
-    const b = Math.sin(tt * halfTheta) / sinHalfTheta;
-    return [qx * b, qy * b, qz * b, a + (qw * b)];
-};
+const quatslerpid = (x: number, y: number, z: number, w: number, t: number): [number, number, number, number] => { const tt = clamp01(t); let cosHalfTheta = clamp(w, -1, 1); let qx = x; let qy = y; let qz = z; let qw = w; if (cosHalfTheta < 0) { cosHalfTheta = -cosHalfTheta; qx = -qx; qy = -qy; qz = -qz; qw = -qw; } if (cosHalfTheta >= 0.9995) return quatnormalize(qx * tt, qy * tt, qz * tt, (1 - tt) + (qw * tt)); const halfTheta = Math.acos(cosHalfTheta); const sinHalfTheta = Math.sqrt(1 - (cosHalfTheta * cosHalfTheta)); if (sinHalfTheta <= EPSILON) return [0, 0, 0, 1]; const a = Math.sin((1 - tt) * halfTheta) / sinHalfTheta; const b = Math.sin(tt * halfTheta) / sinHalfTheta; return [qx * b, qy * b, qz * b, a + (qw * b)]; };
+
 const resolveAxisConvention = (input: AxisConventionInput | undefined): AxisConventionResolved => {
     if (!input || input === "y-up-rh") return { right: [1, 0, 0], up: [0, 1, 0], forward: [0, 0, 1] };
     if (input === "z-up-rh") return { right: [1, 0, 0], up: [0, 0, 1], forward: [0, -1, 0] };
@@ -200,6 +193,51 @@ const resolveAxisConvention = (input: AxisConventionInput | undefined): AxisConv
     const correctedRight = vec3normalize(vec3cross(up, forward), right);
     const correctedUp = vec3normalize(vec3cross(forward, correctedRight), up);
     return { right: correctedRight, up: correctedUp, forward };
+};
+
+const FLY_KEY_ACTIONS: readonly FlyControlsKeyAction[] = ["forward", "backward", "left", "right", "up", "down", "rollLeft", "rollRight", "fast", "slow"];
+
+const DEFAULT_FLY_KEY_MAP: Required<FlyControlsKeyMap> = {
+    forward: ["KeyW", "ArrowUp"],
+    backward: ["KeyS", "ArrowDown"],
+    left: ["KeyA", "ArrowLeft"],
+    right: ["KeyD", "ArrowRight"],
+    up: ["KeyE"],
+    down: ["KeyQ"],
+    rollLeft: ["KeyZ"],
+    rollRight: ["KeyC"],
+    fast: ["ShiftLeft", "ShiftRight"],
+    slow: ["AltLeft", "AltRight"]
+};
+
+const resolveFlyKeyMap = (input: FlyControlsKeyMap | undefined): Required<FlyControlsKeyMap> => {
+    const out = {} as Required<FlyControlsKeyMap>;
+    for (const action of FLY_KEY_ACTIONS) out[action] = [...(input?.[action] ?? DEFAULT_FLY_KEY_MAP[action])];
+    return out;
+};
+
+const collectFlyKeyCodes = (keyMap: Required<FlyControlsKeyMap>): Set<string> => {
+    const codes = new Set<string>();
+    for (const action of FLY_KEY_ACTIONS) for (const code of keyMap[action]) codes.add(code);
+    return codes;
+};
+
+const normalizePointerLockMode = (mode: boolean | "on-click" | "on-drag" | undefined): FlyControlsPointerLockMode => {
+    if (mode === true) return "on-click";
+    if (mode === "on-click" || mode === "on-drag") return mode;
+    return false;
+};
+
+const defaultKeyboardTarget = (mode: NavigationMode): HTMLElement | Window | Document | null => mode === "fly" && typeof window !== "undefined" ? window : null;
+
+const isEditableEventTarget = (target: EventTarget | null): boolean => {
+    if (!target || typeof target !== "object") return false;
+    const candidate = target as { tagName?: string; isContentEditable?: boolean; getAttribute?: (name: string) => string | null };
+    if (candidate.isContentEditable) return true;
+    const tag = typeof candidate.tagName === "string" ? candidate.tagName.toLowerCase() : "";
+    if (tag === "input" || tag === "textarea" || tag === "select") return true;
+    const editable = candidate.getAttribute?.("contenteditable");
+    return editable === "" || editable === "true";
 };
 
 export class NavigationControls {
@@ -225,9 +263,27 @@ export class NavigationControls {
     minAzimuthAngle: number = -Infinity;
     maxAzimuthAngle: number = Infinity;
     mouseButtons: Required<NavigationControlsMouseButtons> = { rotate: 0, zoom: 1, pan: 2 };
+    enableKeyboard: boolean = true;
+    enablePointer: boolean = true;
+    enableWheel: boolean = true;
+    moveSpeed: number = 10;
+    lookSpeed: number = 0.002;
+    rollSpeed: number = 1.5;
+    fastMultiplier: number = 4;
+    slowMultiplier: number = 0.25;
+    wheelSpeedFactor: number = 1.1;
+    minMoveSpeed: number = 0.001;
+    maxMoveSpeed: number = Infinity;
+    invertY: boolean = false;
+    yawMode: FlyControlsYawMode = "global";
+    mouseButton: number = 0;
+    pointerLock: FlyControlsPointerLockMode = false;
+    keyMap: Required<FlyControlsKeyMap> = resolveFlyKeyMap(undefined);
+    keyboardTarget: HTMLElement | Window | Document | null = null;
+    preventDefaultKeys: boolean = false;
     private _mode: NavigationMode;
     private _axisConvention: AxisConventionResolved = resolveAxisConvention(undefined);
-    private _state: "none" | "rotate" | "pan" | "zoom" = "none";
+    private _state: "none" | "rotate" | "pan" | "zoom" | "fly" = "none";
     private _pointerId: number | null = null;
     private _pointerX: number = 0;
     private _pointerY: number = 0;
@@ -247,6 +303,16 @@ export class NavigationControls {
     private _zoom: number = 1.0;
     private _dollyDelta: number = 0;
     private _panOffset: Vec3 = [0, 0, 0];
+    private _flyYawDelta: number = 0;
+    private _flyPitchDelta: number = 0;
+    private _flyPressedKeys: Set<string> = new Set();
+    private _flyMappedKeys: Set<string> = collectFlyKeyCodes(this.keyMap);
+    private _flyPointerLocked: boolean = false;
+    private _flyPointerLockRequested: boolean = false;
+    private _pointerLockDocument: Document | null = null;
+    private _documentMouseMoveAttached: boolean = false;
+    private _keyboardTargetExplicit: boolean = false;
+    private _keyboardListenerTarget: HTMLElement | Window | Document | null = null;
     private _orthoBaseLeft: number = -1;
     private _orthoBaseRight: number = 1;
     private _orthoBaseTop: number = 1;
@@ -266,7 +332,7 @@ export class NavigationControls {
         this.domElement = domElement;
         this.target = desc.target ? vec3clone(desc.target) : [0, 0, 0];
         this._mode = desc.mode ?? "orbit";
-        this.axisConvention = desc.axisConvention ?? "y-up-rh";
+        this._axisConvention = resolveAxisConvention(desc.axisConvention ?? "y-up-rh");
         if (desc.enabled !== undefined) this.enabled = desc.enabled;
         if (desc.enableRotate !== undefined) this.enableRotate = desc.enableRotate;
         if (desc.enablePan !== undefined) this.enablePan = desc.enablePan;
@@ -290,8 +356,28 @@ export class NavigationControls {
             if (desc.mouseButtons.zoom !== undefined) this.mouseButtons.zoom = desc.mouseButtons.zoom;
             if (desc.mouseButtons.pan !== undefined) this.mouseButtons.pan = desc.mouseButtons.pan;
         }
+        if (desc.enableKeyboard !== undefined) this.enableKeyboard = desc.enableKeyboard;
+        if (desc.enablePointer !== undefined) this.enablePointer = desc.enablePointer;
+        if (desc.enableWheel !== undefined) this.enableWheel = desc.enableWheel;
+        if (desc.moveSpeed !== undefined) this.moveSpeed = desc.moveSpeed;
+        if (desc.lookSpeed !== undefined) this.lookSpeed = desc.lookSpeed;
+        if (desc.rollSpeed !== undefined) this.rollSpeed = desc.rollSpeed;
+        if (desc.fastMultiplier !== undefined) this.fastMultiplier = desc.fastMultiplier;
+        if (desc.slowMultiplier !== undefined) this.slowMultiplier = desc.slowMultiplier;
+        if (desc.wheelSpeedFactor !== undefined) this.wheelSpeedFactor = Math.max(EPSILON, desc.wheelSpeedFactor);
+        if (desc.minMoveSpeed !== undefined) this.minMoveSpeed = Math.max(EPSILON, desc.minMoveSpeed);
+        if (desc.maxMoveSpeed !== undefined) this.maxMoveSpeed = Math.max(this.minMoveSpeed, desc.maxMoveSpeed);
+        if (desc.invertY !== undefined) this.invertY = desc.invertY;
+        if (desc.yawMode !== undefined) this.yawMode = desc.yawMode;
+        if (desc.mouseButton !== undefined) this.mouseButton = desc.mouseButton;
+        this.pointerLock = normalizePointerLockMode(desc.pointerLock);
+        this.keyMap = resolveFlyKeyMap(desc.keyMap);
+        this._flyMappedKeys = collectFlyKeyCodes(this.keyMap);
+        this._keyboardTargetExplicit = desc.keyboardTarget !== undefined;
+        this.keyboardTarget = this._keyboardTargetExplicit ? desc.keyboardTarget ?? null : defaultKeyboardTarget(this._mode);
+        if (desc.preventDefaultKeys !== undefined) this.preventDefaultKeys = desc.preventDefaultKeys;
         this.domElement.style.touchAction = "none";
-        this.syncFromCamera();
+        this.syncFromCameraState();
         this.saveState();
         this.domElement.addEventListener("pointerdown", this.onPointerDown);
         this.domElement.addEventListener("pointermove", this.onPointerMove);
@@ -299,11 +385,17 @@ export class NavigationControls {
         this.domElement.addEventListener("pointercancel", this.onPointerUp);
         this.domElement.addEventListener("wheel", this.onWheel, this._wheelListenerOptions);
         this.domElement.addEventListener("contextmenu", this.onContextMenu);
+        this._pointerLockDocument = this.getPointerLockDocument();
+        this._pointerLockDocument?.addEventListener("pointerlockchange", this.onPointerLockChange);
+        this._pointerLockDocument?.addEventListener("pointerlockerror", this.onPointerLockError);
+        this.syncKeyboardListeners();
     }
 
     dispose(): void {
         this.cancelTransition();
         this.clearWheelInteractionTimer();
+        this.exitFlyPointerLock();
+        this.detachPointerLockMouseMove();
         this.setInteractionState(false);
         this.domElement.removeEventListener("pointerdown", this.onPointerDown);
         this.domElement.removeEventListener("pointermove", this.onPointerMove);
@@ -311,6 +403,10 @@ export class NavigationControls {
         this.domElement.removeEventListener("pointercancel", this.onPointerUp);
         this.domElement.removeEventListener("wheel", this.onWheel, this._wheelListenerOptions);
         this.domElement.removeEventListener("contextmenu", this.onContextMenu);
+        this._pointerLockDocument?.removeEventListener("pointerlockchange", this.onPointerLockChange);
+        this._pointerLockDocument?.removeEventListener("pointerlockerror", this.onPointerLockError);
+        this.detachKeyboardListeners();
+        this._flyPressedKeys.clear();
         this._changeListeners.clear();
         this._interactionListeners.clear();
     }
@@ -402,12 +498,19 @@ export class NavigationControls {
     setMode(mode: NavigationMode): this {
         if (mode === this._mode) return this;
         this.syncFromCamera();
+        if (this._mode === "fly") this.stopFlyInteraction();
         this._mode = mode;
+        this.updateImplicitKeyboardTarget();
+        this.syncKeyboardListeners();
         this.syncFromCamera();
         return this;
     }
 
     syncFromCamera(): void {
+        this.syncFromCameraState();
+    }
+
+    private syncFromCameraState(): void {
         const position = vec3clone(this.camera.position);
         const offset = vec3sub(position, this.target);
         this._radius = Math.max(EPSILON, vec3mag(offset));
@@ -426,6 +529,8 @@ export class NavigationControls {
         this._phiDelta = 0;
         this._dollyDelta = 0;
         this._panOffset = [0, 0, 0];
+        this._flyYawDelta = 0;
+        this._flyPitchDelta = 0;
         this._trackballEye = offset;
         this._trackballUp = vec3normalize(this.camera.up, this._axisConvention.up);
         this._trackballRotateStart = [0, 0, 1];
@@ -433,8 +538,9 @@ export class NavigationControls {
     }
 
     saveState(): void {
-        this._savedTarget = vec3clone(this.target);
-        this._savedPosition = vec3clone(this.camera.position);
+        const position = vec3clone(this.camera.position);
+        this._savedPosition = position;
+        this._savedTarget = this._mode === "fly" ? vec3add(position, this.computeFlyBasis().forward) : vec3clone(this.target);
         this._savedUp = vec3normalize(this.camera.up, this._axisConvention.up);
         this._savedProjection = this.captureProjectionState();
     }
@@ -469,7 +575,8 @@ export class NavigationControls {
             return;
         }
         if (this._mode === "orbit") this.updateOrbit(dt);
-        else this.updateTrackball(dt);
+        else if (this._mode === "trackball") this.updateTrackball(dt);
+        else this.updateFly(dt);
         this.emitChange();
     }
 
@@ -519,6 +626,7 @@ export class NavigationControls {
     private onPointerDown = (event: PointerEvent): void => {
         if (!this.enabled || this._pointerId !== null) return;
         this.cancelTransition();
+        if (this._mode === "fly") { this.onFlyPointerDown(event); return; }
         this._pointerId = event.pointerId;
         this.domElement.setPointerCapture(this._pointerId);
         this._pointerX = event.clientX;
@@ -536,6 +644,7 @@ export class NavigationControls {
     };
 
     private onPointerMove = (event: PointerEvent): void => {
+        if (this._mode === "fly") { this.onFlyPointerMove(event); return; }
         if (!this.enabled || this._pointerId === null || event.pointerId !== this._pointerId) return;
         const dx = event.clientX - this._pointerX;
         const dy = event.clientY - this._pointerY;
@@ -565,6 +674,7 @@ export class NavigationControls {
     };
 
     private onPointerUp = (event: PointerEvent): void => {
+        if (this._mode === "fly") { this.onFlyPointerUp(event); return; }
         if (this._pointerId === null || event.pointerId !== this._pointerId) return;
         this.domElement.releasePointerCapture(this._pointerId);
         this._pointerId = null;
@@ -574,6 +684,7 @@ export class NavigationControls {
     };
 
     private onWheel = (event: WheelEvent): void => {
+        if (this._mode === "fly") { this.onFlyWheel(event); return; }
         if (!this.enabled || !this.enableZoom) return;
         this.cancelTransition();
         this._dollyDelta += event.deltaY * this.zoomSpeed * 0.001;
@@ -589,6 +700,178 @@ export class NavigationControls {
     private onContextMenu = (event: MouseEvent): void => {
         event.preventDefault();
     };
+
+    private onFlyPointerDown(event: PointerEvent): void {
+        if (!this.enablePointer || event.button !== this.mouseButton) return;
+        this._pointerId = event.pointerId;
+        try { this.domElement.setPointerCapture(this._pointerId); } catch { /* ignore */ }
+        this._pointerX = event.clientX;
+        this._pointerY = event.clientY;
+        this._state = "fly";
+        this.setInteractionState(true);
+        if (this.pointerLock !== false && !this._flyPointerLocked) this.requestFlyPointerLock();
+        event.preventDefault();
+    }
+
+    private onFlyPointerMove(event: PointerEvent): void {
+        if (!this.enabled || !this.enablePointer) return;
+        if (!this._flyPointerLocked && (this._pointerId === null || event.pointerId !== this._pointerId)) return;
+        const dx = this._flyPointerLocked ? (event.movementX ?? 0) : event.clientX - this._pointerX;
+        const dy = this._flyPointerLocked ? (event.movementY ?? 0) : event.clientY - this._pointerY;
+        this._pointerX = event.clientX;
+        this._pointerY = event.clientY;
+        this.queueFlyLook(dx, dy);
+        event.preventDefault();
+    }
+
+    private onFlyPointerUp(event: PointerEvent): void {
+        if (this._pointerId === null || event.pointerId !== this._pointerId) return;
+        try { this.domElement.releasePointerCapture(this._pointerId); } catch { /* ignore */ }
+        this._pointerId = null;
+        if (this.pointerLock === "on-drag") this.exitFlyPointerLock();
+        const keepLocked = this.pointerLock === "on-click" && (this._flyPointerLocked || this._flyPointerLockRequested);
+        if (!keepLocked) {
+            this._state = "none";
+            this.setInteractionState(false);
+        }
+        event.preventDefault();
+    }
+
+    private onFlyWheel(event: WheelEvent): void {
+        if (!this.enabled || !this.enableWheel) return;
+        this.cancelTransition();
+        const lineHeight = 16;
+        const pageHeight = this.getViewportHeight();
+        const raw = event.deltaMode === 1 ? event.deltaY * lineHeight : event.deltaMode === 2 ? event.deltaY * pageHeight : event.deltaY;
+        const steps = clamp(raw / 100, -1, 1);
+        if (Math.abs(steps) > EPSILON) this.moveSpeed = clamp(this.moveSpeed * Math.pow(this.wheelSpeedFactor, steps), this.minMoveSpeed, this.maxMoveSpeed);
+        this.setInteractionState(true);
+        this.scheduleWheelInteractionEnd();
+        event.preventDefault();
+        event.stopPropagation();
+    }
+
+    private onKeyDown = (event: KeyboardEvent): void => {
+        if (!this.enabled || this._mode !== "fly" || !this.enableKeyboard || isEditableEventTarget(event.target)) return;
+        if (!this._flyMappedKeys.has(event.code)) return;
+        this._flyPressedKeys.add(event.code);
+        this.setInteractionState(true);
+        if (this.preventDefaultKeys) event.preventDefault();
+    };
+
+    private onKeyUp = (event: KeyboardEvent): void => {
+        if (!this._flyMappedKeys.has(event.code)) return;
+        this._flyPressedKeys.delete(event.code);
+        if (this._flyPressedKeys.size === 0 && this._pointerId === null && this._state === "none") this.setInteractionState(false);
+        if (this.enabled && this._mode === "fly" && this.enableKeyboard && this.preventDefaultKeys && !isEditableEventTarget(event.target)) event.preventDefault();
+    };
+
+    private onDocumentMouseMove = (event: MouseEvent): void => {
+        if (!this.enabled || this._mode !== "fly" || !this.enablePointer || !this._flyPointerLocked) return;
+        this.queueFlyLook(event.movementX ?? 0, event.movementY ?? 0);
+        event.preventDefault();
+    };
+
+    private onPointerLockChange = (): void => {
+        const doc = this._pointerLockDocument;
+        const locked = !!doc && doc.pointerLockElement === this.domElement;
+        this._flyPointerLocked = locked;
+        this._flyPointerLockRequested = false;
+        if (locked) {
+            this.attachPointerLockMouseMove();
+            this._state = "fly";
+            this.setInteractionState(true);
+            return;
+        }
+        this.detachPointerLockMouseMove();
+        if (this._state === "fly" && this._pointerId === null) {
+            this._state = "none";
+            this.setInteractionState(false);
+        }
+    };
+
+    private onPointerLockError = (): void => {
+        this._flyPointerLockRequested = false;
+        if (this._state === "fly" && this._pointerId === null) {
+            this._state = "none";
+            this.setInteractionState(false);
+        }
+    };
+
+    private queueFlyLook(dx: number, dy: number): void {
+        if (dx === 0 && dy === 0) return;
+        this._flyYawDelta += -dx * this.lookSpeed;
+        this._flyPitchDelta += (this.invertY ? dy : -dy) * this.lookSpeed;
+    }
+
+    private requestFlyPointerLock(): void {
+        const request = this.domElement.requestPointerLock;
+        if (typeof request !== "function") return;
+        this._flyPointerLockRequested = true;
+        try {
+            const result = request.call(this.domElement) as Promise<void> | void;
+            if (result && typeof (result as Promise<void>).catch === "function") (result as Promise<void>).catch(() => { this.onPointerLockError(); });
+        } catch { this.onPointerLockError(); }
+    }
+
+    private exitFlyPointerLock(): void {
+        if (!this._flyPointerLocked && !this._flyPointerLockRequested) return;
+        const doc = this._pointerLockDocument;
+        this._flyPointerLockRequested = false;
+        if (doc?.pointerLockElement === this.domElement && typeof doc.exitPointerLock === "function") try { doc.exitPointerLock(); } catch { /* ignore */ }
+        this._flyPointerLocked = false;
+        this.detachPointerLockMouseMove();
+    }
+
+    private attachPointerLockMouseMove(): void {
+        if (this._documentMouseMoveAttached || !this._pointerLockDocument) return;
+        this._pointerLockDocument.addEventListener("mousemove", this.onDocumentMouseMove);
+        this._documentMouseMoveAttached = true;
+    }
+
+    private detachPointerLockMouseMove(): void {
+        if (!this._documentMouseMoveAttached || !this._pointerLockDocument) return;
+        this._pointerLockDocument.removeEventListener("mousemove", this.onDocumentMouseMove);
+        this._documentMouseMoveAttached = false;
+    }
+
+    private updateImplicitKeyboardTarget(): void {
+        if (!this._keyboardTargetExplicit) this.keyboardTarget = defaultKeyboardTarget(this._mode);
+    }
+
+    private syncKeyboardListeners(): void {
+        const target = this._mode === "fly" ? this.keyboardTarget : null;
+        if (target === this._keyboardListenerTarget) return;
+        this.detachKeyboardListeners();
+        if (!target) return;
+        target.addEventListener("keydown", this.onKeyDown as EventListener);
+        target.addEventListener("keyup", this.onKeyUp as EventListener);
+        this._keyboardListenerTarget = target;
+    }
+
+    private detachKeyboardListeners(): void {
+        if (!this._keyboardListenerTarget) return;
+        this._keyboardListenerTarget.removeEventListener("keydown", this.onKeyDown as EventListener);
+        this._keyboardListenerTarget.removeEventListener("keyup", this.onKeyUp as EventListener);
+        this._keyboardListenerTarget = null;
+    }
+
+    private stopFlyInteraction(): void {
+        this._flyPressedKeys.clear();
+        this._flyYawDelta = 0;
+        this._flyPitchDelta = 0;
+        this.exitFlyPointerLock();
+        if (this._pointerId !== null) try { this.domElement.releasePointerCapture(this._pointerId); } catch { /* ignore */ }
+        this._state = "none";
+        this._pointerId = null;
+        this.setInteractionState(false);
+    }
+
+    private getPointerLockDocument(): Document | null {
+        const doc = this.domElement.ownerDocument ?? (typeof document !== "undefined" ? document : null);
+        if (!doc || typeof doc.addEventListener !== "function" || typeof doc.removeEventListener !== "function") return null;
+        return doc;
+    }
 
     private getViewportRect(): { left: number; top: number; width: number; height: number } {
         const rect = this.domElement.getBoundingClientRect();
@@ -684,6 +967,32 @@ export class NavigationControls {
         };
     }
 
+    private updateFly(dt: number): void {
+        const damping = this.enableDamping ? (1 - Math.pow(1 - clamp01(this.dampingFactor), dt * 60)) : 1;
+        const yaw = this.enablePointer ? this._flyYawDelta * damping : 0;
+        const pitch = this.enablePointer ? this._flyPitchDelta * damping : 0;
+        const roll = this.enableKeyboard ? this.getFlyAxis("rollRight", "rollLeft") * this.rollSpeed * dt : 0;
+        if (Math.abs(yaw) > EPSILON || Math.abs(pitch) > EPSILON || Math.abs(roll) > EPSILON) this.applyFlyRotation(yaw, pitch, roll);
+        if (this.enablePointer) {
+            this._flyYawDelta *= (1 - damping);
+            this._flyPitchDelta *= (1 - damping);
+        } else {
+            this._flyYawDelta = 0;
+            this._flyPitchDelta = 0;
+        }
+        if (!this.enableKeyboard) return;
+        const x = this.getFlyAxis("right", "left");
+        const y = this.getFlyAxis("up", "down");
+        const z = this.getFlyAxis("forward", "backward");
+        const mag = Math.hypot(x, y, z);
+        if (mag <= EPSILON) return;
+        const basis = this.computeFlyBasis();
+        const direction = vec3scl(vec3add(vec3add(vec3scl(basis.right, x), vec3scl(basis.up, y)), vec3scl(basis.forward, z)), 1 / mag);
+        const speed = this.moveSpeed * this.getFlySpeedMultiplier() * dt;
+        const position = vec3add(this.camera.position, vec3scl(direction, speed));
+        this.applyFlyPose(position, basis.forward, basis.up);
+    }
+
     private updateOrbit(dt: number): void {
         const damping = this.enableDamping ? (1 - Math.pow(1 - clamp01(this.dampingFactor), dt * 60)) : 1;
         if (this.enableRotate) {
@@ -763,20 +1072,13 @@ export class NavigationControls {
     }
 
     private applyDolly(damping: number, basis: Basis3): void {
-        if (!this.enableZoom) {
-            this._dollyDelta = 0;
-            return;
-        }
+        if (!this.enableZoom) { this._dollyDelta = 0; return; }
         const dolly = this._dollyDelta * damping;
-        if (Math.abs(dolly) <= EPSILON) {
-            this._dollyDelta *= (1 - damping);
-            return;
-        }
+        if (Math.abs(dolly) <= EPSILON) { this._dollyDelta *= (1 - damping); return; }
         const prevRadius = this._radius;
         const prevZoom = this._zoom;
-        if (this.camera.type === "orthographic") {
-            this._zoom = clamp(this._zoom * Math.exp(-dolly), this.minZoom, this.maxZoom);
-        } else {
+        if (this.camera.type === "orthographic") this._zoom = clamp(this._zoom * Math.exp(-dolly), this.minZoom, this.maxZoom);
+        else {
             const next = clamp(this._radius * Math.exp(dolly), this.minDistance, this.maxDistance);
             if (this._mode === "trackball") {
                 const current = Math.max(EPSILON, vec3mag(this._trackballEye));
@@ -789,10 +1091,7 @@ export class NavigationControls {
     }
 
     private applyPan(damping: number): void {
-        if (!this.enablePan) {
-            this._panOffset = [0, 0, 0];
-            return;
-        }
+        if (!this.enablePan) { this._panOffset = [0, 0, 0]; return; }
         this.target[0] += this._panOffset[0] * damping;
         this.target[1] += this._panOffset[1] * damping;
         this.target[2] += this._panOffset[2] * damping;
@@ -915,6 +1214,62 @@ export class NavigationControls {
         const basis = this.computeLookBasis(forward, this._trackballUp);
         this._trackballUp = basis.up;
         return basis;
+    }
+
+    private computeFlyBasis(): Basis3 {
+        const m = this.camera.transform.worldMatrix;
+        const right = vec3normalize([m[0], m[1], m[2]], this._axisConvention.right);
+        const up = vec3normalize([m[4], m[5], m[6]], this._axisConvention.up);
+        const forward = vec3normalize([-m[8], -m[9], -m[10]], vec3scl(this._axisConvention.forward, -1));
+        return this.computeLookBasis(forward, up);
+    }
+
+    private applyFlyRotation(yaw: number, pitch: number, roll: number): void {
+        let basis = this.computeFlyBasis();
+        let { right, up, forward } = basis;
+        const globalYaw = this.yawMode === "global";
+        if (Math.abs(yaw) > EPSILON) {
+            const yawAxis = globalYaw ? this._axisConvention.up : up;
+            forward = vec3rotate(forward, yawAxis, yaw);
+            basis = this.computeLookBasis(forward, yawAxis);
+            right = basis.right;
+            up = basis.up;
+        }
+        if (Math.abs(pitch) > EPSILON) {
+            forward = vec3rotate(forward, right, pitch);
+            up = vec3rotate(up, right, pitch);
+            basis = this.computeLookBasis(forward, globalYaw ? this._axisConvention.up : up);
+            right = basis.right;
+            up = basis.up;
+        }
+        if (Math.abs(roll) > EPSILON) {
+            right = vec3rotate(right, forward, roll);
+            up = vec3rotate(up, forward, roll);
+        }
+        basis = this.computeLookBasis(forward, up);
+        this.applyFlyPose(vec3clone(this.camera.position), basis.forward, basis.up);
+    }
+
+    private applyFlyPose(position: Vec3, forward: Vec3, up: Vec3): void {
+        this.camera.transform.setPosition(position[0], position[1], position[2]);
+        this.camera.lookAtWithUp(vec3add(position, forward), up);
+        this.target = vec3add(position, vec3scl(forward, Math.max(EPSILON, this._radius)));
+    }
+
+    private getFlyAxis(positive: FlyControlsKeyAction, negative: FlyControlsKeyAction): number {
+        return (this.isFlyActionPressed(positive) ? 1 : 0) - (this.isFlyActionPressed(negative) ? 1 : 0);
+    }
+
+    private getFlySpeedMultiplier(): number {
+        let multiplier = 1;
+        if (this.isFlyActionPressed("fast")) multiplier *= this.fastMultiplier;
+        if (this.isFlyActionPressed("slow")) multiplier *= this.slowMultiplier;
+        return multiplier;
+    }
+
+    private isFlyActionPressed(action: FlyControlsKeyAction): boolean {
+        for (const code of this.keyMap[action]) if (this._flyPressedKeys.has(code)) return true;
+        return false;
     }
 
     private getOrbitUp(forward: readonly number[]): Vec3 {
@@ -1073,5 +1428,11 @@ export class OrbitControls extends NavigationControls {
 export class TrackballControls extends NavigationControls {
     constructor(camera: Camera, domElement: HTMLCanvasElement, desc: TrackballControlsDescriptor = {}) {
         super(camera, domElement, { ...desc, mode: "trackball" });
+    }
+}
+
+export class FlyControls extends NavigationControls {
+    constructor(camera: Camera, domElement: HTMLCanvasElement, desc: FlyControlsDescriptor = {}) {
+        super(camera, domElement, { ...desc, mode: "fly" });
     }
 }

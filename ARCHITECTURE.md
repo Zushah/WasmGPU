@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: Monday, July 6, 2026.
+Last updated: Wednesday, July 8, 2026.
 
-Last commit: Friday, July 3, 2026, [**`3cb9b23`**](https://www.github.com/Zushah/WasmGPU/commit/3cb9b23).
+Last commit: Monday, July 6, 2026, [**`67c9a8c`**](https://www.github.com/Zushah/WasmGPU/commit/67c9a8c).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -325,7 +325,7 @@ Before changing one of these object types, inspect the matching WGSL under `./sr
 
 Cameras are implemented in `./src/world/camera.ts`. The base `Camera` owns a transform and cached matrices. `PerspectiveCamera` and `OrthographicCamera` compute projection matrices and expose setters for projection parameters. The renderer updates perspective aspect ratio from the canvas before drawing.
 
-Controls are implemented in `./src/world/controls.ts`. `NavigationControls` handles orbit and trackball modes, pointer and wheel input, damping, target state, fitting to bounds, and event listener cleanup. `OrbitControls` and `TrackballControls` are mode-specific subclasses. Controls mutate camera transforms and emit events used by overlays.
+Controls are implemented in `./src/world/controls.ts`. `NavigationControls` handles orbit, trackball, and fly modes, pointer, keyboard, and wheel input, damping, target state for target-centric modes, fitting to bounds, pointer lock, configurable fly yaw, and event listener cleanup. `OrbitControls`, `TrackballControls`, and `FlyControls` are mode-specific subclasses and runtime factories. Controls mutate camera transforms and emit events used by overlays.
 
 Lights are implemented in `./src/world/light.ts`. Ambient, directional, point, and spot lights share a base class. Scene lighting data reads light colors, intensities, positions, directions, ranges, and cone angles. glTF import can bind light transforms so imported lights follow imported node transforms.
 
@@ -574,7 +574,7 @@ Important files:
 - `./src/world/nodelink.ts`: node and edge data, rendering modes, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
 - `./src/world/splatfield.ts`: Gaussian splat data, direct colors, spherical harmonic coefficient data, GPU-buffer upload, CPU-array upload, WASM-memory upload, bounds, color-space handling, and picking records.
 - `./src/world/camera.ts`: base, perspective, and orthographic cameras.
-- `./src/world/controls.ts`: navigation controls, orbit controls, trackball controls, pointer input, damping, and scene fitting.
+- `./src/world/controls.ts`: navigation controls, orbit controls, trackball controls, fly controls, pointer and keyboard input, damping, pointer lock, and scene fitting.
 - `./src/world/light.ts`: ambient, directional, point, and spot lights plus glTF light transform binding helpers.
 - `./src/world/picking.ts`: pick result types, region query types, and `SelectionStore`.
 - `./src/world/bounds.ts`: bounds helpers.
@@ -798,7 +798,7 @@ Examples import built bundles from `./dist/`. When source changes public behavio
 Architectural role:
 
 - Validate selected public API behavior and internal behavior through Node test files.
-- Cover renderer setup, mesh behavior, materials, glTF import, accessors, compute behavior, transforms, math, scaling, overlays, annotations, picking data, nodelinks, and splatfields.
+- Cover renderer setup, geometry, mesh behavior, materials, glTF import, accessors, compute behavior, transforms, math, controls, scaling, overlays, annotations, picking data, and scientific visualization primitives.
 
 Important files:
 
