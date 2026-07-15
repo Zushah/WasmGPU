@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<!--
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+-->
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title>WasmGPU | Quantum Example</title>
+        <link rel="icon" type="image/png" href="../assets/favicon.png">
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { overflow: hidden; background: #05070d; color: #dce8f8; font: 12px/1.45 monospace; }
+            canvas.main { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+            .hud { position: fixed; top: 12px; left: 12px; z-index: 6; display: flex; flex-direction: column; gap: 10px; width: 360px; pointer-events: none; }
+            .pane { padding: 10px; border: 1px solid rgba(170, 205, 255, 0.24); background: rgba(6, 11, 20, 0.84); }
+            .intro { white-space: pre-line; }
+            .controls { pointer-events: auto; }
+            .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 9px; }
+            .control-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
+            .control-grid label.wide { grid-column: 1 / span 2; }
+            .control-grid select, .control-grid input { width: 100%; font: 11px monospace; color: #dce8f8; border: 1px solid rgba(170, 205, 255, 0.25); background: rgba(10, 16, 28, 0.96); }
+            .control-grid select { padding: 4px; }
+            .control-grid input[type="checkbox"] { width: auto; align-self: flex-start; }
+            .readout { min-height: 154px; white-space: pre-line; }
+        </style>
+    </head>
+    <body>
+        <canvas class="main"></canvas>
+        <div class="hud">
+            <div class="pane intro">Quantum Orbital Laboratory<br>
+                Left: probability-thresholded 3D cells.
+                Right: signed-amplitude y = 0 cross-section.
+                Drag to orbit, scroll to zoom, or click a cell to probe it.
+            </div>
+            <div class="pane controls">
+                <div class="control-grid">
+                    <label class="wide">orbital
+                        <select id="orbital">
+                            <option value="2s">2s radial node</option>
+                            <option value="2p-z">2p_z</option>
+                            <option value="3d-z2" selected>3d_z²</option>
+                            <option value="3d-xz">3d_xz</option>
+                            <option value="4f-z3">4f_z³</option>
+                            <option value="4f-x3">4f_x(x²-3y²)</option>
+                            <option value="4f-zx2y2">4f_z(x²-y²)</option>
+                            <option value="5g-x4">5g_(x⁴-6x²y²+y⁴)</option>
+                            <option value="5g-xz3">5g_xz(7z²-3r²)</option>
+                            <option value="6h-z5">6h_z⁵</option>
+                        </select>
+                    </label>
+                    <label class="wide">probability threshold <output id="threshold-value"></output><input id="threshold" type="range" min="0.01" max="25" step="0.01" value="5"></label>
+                    <label>3D cell scale <output id="cell-scale-value"></output><input id="cell-scale" type="range" min="0.1" max="1" step="0.01" value="0.75"></label>
+                    <label>3D cell opacity <output id="opacity-value"></output><input id="opacity" type="range" min="0.1" max="1.0" step="0.01" value="0.25"></label>
+                    <label class="wide">3D auto-rotation<input id="auto-rotate" type="checkbox" checked></label>
+                </div>
+            </div>
+            <div class="pane readout"></div>
+        </div>
+        <script src="../dist/WasmGPU.iife.min.js"></script>
+        <script type="module">
+            const canvas = document.querySelector("canvas.main");
+            const readout = document.querySelector(".readout");
+            const ui = {
+                orbital: document.querySelector("#orbital"),
+                threshold: document.querySelector("#threshold"),
+                thresholdValue: document.querySelector("#threshold-value"),
+                cellScale: document.querySelector("#cell-scale"),
+                cellScaleValue: document.querySelector("#cell-scale-value"),
+                opacity: document.querySelector("#opacity"),
+                opacityValue: document.querySelector("#opacity-value"),
+                autoRotate: document.querySelector("#auto-rotate")
+            };
+
+            const fmt = (value, digits = 4) => Number.isFinite(value) ? value.toFixed(digits) : "nan";
+            const fmtVec3 = (value) => `[${fmt(value[0])}, ${fmt(value[1])}, ${fmt(value[2])}]`;
+            const gridCoordinate = (index, size, extent) => extent * ((2 * index / Math.max(1, size - 1)) - 1);
+            const radius = (x, y, z) => Math.hypot(x, y, z);
+
+            const orbitals = {
+                "2s": {
+                    label: "2s",
+                    extent: 10,
+                    threshold: 0.8,
+                    description: "one spherical radial node",
+                    evaluate: (x, y, z) => {
+                        const r = radius(x, y, z);
+                        return (2 - r) * Math.exp(-0.5 * r);
+                    }
+                },
+                "2p-z": {
+                    label: "2p_z",
+                    extent: 8,
+                    threshold: 3,
+                    description: "two lobes separated by the xy nodal plane",
+                    evaluate: (x, y, z) => z * Math.exp(-0.5 * radius(x, y, z))
+                },
+                "3d-z2": {
+                    label: "3d_z²",
+                    extent: 12,
+                    threshold: 5,
+                    description: "axial lobes and an equatorial torus",
+                    evaluate: (x, y, z) => {
+                        const r = radius(x, y, z);
+                        return ((3 * z * z) - (r * r)) * Math.exp(-r / 3);
+                    }
+                },
+                "3d-xz": {
+                    label: "3d_xz",
+                    extent: 12,
+                    threshold: 8,
+                    description: "four lobes separated by the xy and yz nodal planes",
+                    evaluate: (x, y, z) => x * z * Math.exp(-radius(x, y, z) / 3)
+                },
+                "4f-z3": {
+                    label: "4f_z³",
+                    extent: 16,
+                    threshold: 12,
+                    description: "opposite phases separated by one planar and two conical nodes",
+                    evaluate: (x, y, z) => {
+                        const r = radius(x, y, z);
+                        return z * ((5 * z * z) - (3 * r * r)) * Math.exp(-0.25 * r);
+                    }
+                },
+                "4f-x3": {
+                    label: "4f_x(x²-3y²)",
+                    extent: 16,
+                    threshold: 16,
+                    description: "six alternating lobes separated by three vertical nodal planes",
+                    evaluate: (x, y, z) => x * ((x * x) - (3 * y * y)) * Math.exp(-0.25 * radius(x, y, z))
+                },
+                "4f-zx2y2": {
+                    label: "4f_z(x²-y²)",
+                    extent: 16,
+                    threshold: 20,
+                    description: "eight alternating lobes divided by one horizontal and two diagonal nodal planes",
+                    evaluate: (x, y, z) => z * ((x * x) - (y * y)) * Math.exp(-0.25 * radius(x, y, z))
+                },
+                "5g-x4": {
+                    label: "5g_(x⁴-6x²y²+y⁴)",
+                    extent: 24,
+                    threshold: 16,
+                    description: "eight-petal azimuthal structure separated by four vertical nodal planes",
+                    evaluate: (x, y, z) => {
+                        const x2 = x * x;
+                        const y2 = y * y;
+                        return ((x2 * x2) - (6 * x2 * y2) + (y2 * y2)) * Math.exp(-radius(x, y, z) / 5);
+                    }
+                },
+                "5g-xz3": {
+                    label: "5g_xz(7z²-3r²)",
+                    extent: 24,
+                    threshold: 12,
+                    description: "interleaved axial and equatorial lobes separated by two planes and conical nodes",
+                    evaluate: (x, y, z) => {
+                        const r = radius(x, y, z);
+                        return x * z * ((7 * z * z) - (3 * r * r)) * Math.exp(-r / 5);
+                    }
+                },
+                "6h-z5": {
+                    label: "6h_z⁵",
+                    extent: 34,
+                    threshold: 8,
+                    description: "nested axial and toroidal regions separated by one planar and four conical nodes",
+                    evaluate: (x, y, z) => {
+                        const r = radius(x, y, z);
+                        const r2 = r * r;
+                        const z2 = z * z;
+                        return z * ((63 * z2 * z2) - (70 * z2 * r2) + (15 * r2 * r2)) * Math.exp(-r / 6);
+                    }
+                }
+            };
+
+            const volumeDimensions = [25, 25, 25];
+            const sliceDimensions = [49, 49];
+            const displayExtent = 6;
+            const volumeSpacing = (2 * displayExtent) / (volumeDimensions[0] - 1);
+            const sliceSpacing = (2 * displayExtent) / (sliceDimensions[0] - 1);
+            const colormapStops = [
+                [0.025, 0.08, 0.48, 1],
+                [0.04, 0.55, 1.0, 1],
+                [0.015, 0.02, 0.035, 1],
+                [1.0, 0.18, 0.035, 1],
+                [1.0, 0.82, 0.12, 1]
+            ];
+
+            const sampleOrbital = (orbital) => {
+                const volumeValues = new Float32Array(volumeDimensions[0] * volumeDimensions[1] * volumeDimensions[2]);
+                let peak = 0;
+                for (let z = 0; z < volumeDimensions[2]; z++) for (let y = 0; y < volumeDimensions[1]; y++) for (let x = 0; x < volumeDimensions[0]; x++) {
+                    const px = gridCoordinate(x, volumeDimensions[0], orbital.extent);
+                    const py = gridCoordinate(y, volumeDimensions[1], orbital.extent);
+                    const pz = gridCoordinate(z, volumeDimensions[2], orbital.extent);
+                    const index = x + volumeDimensions[0] * (y + volumeDimensions[1] * z);
+                    const value = orbital.evaluate(px, py, pz);
+                    volumeValues[index] = value;
+                    peak = Math.max(peak, Math.abs(value));
+                }
+                const sliceValues = new Float32Array(sliceDimensions[0] * sliceDimensions[1]);
+                for (let z = 0; z < sliceDimensions[1]; z++) for (let x = 0; x < sliceDimensions[0]; x++) {
+                    const px = gridCoordinate(x, sliceDimensions[0], orbital.extent);
+                    const pz = gridCoordinate(z, sliceDimensions[1], orbital.extent);
+                    const index = x + sliceDimensions[0] * z;
+                    const value = orbital.evaluate(px, 0, pz);
+                    sliceValues[index] = value;
+                    peak = Math.max(peak, Math.abs(value));
+                }
+                peak = Math.max(peak, Number.EPSILON);
+                for (let i = 0; i < volumeValues.length; i++) volumeValues[i] /= peak;
+                for (let i = 0; i < sliceValues.length; i++) sliceValues[i] /= peak;
+                return { volumeValues, sliceValues };
+            };
+
+            const buildProbabilityMask = (values, thresholdPercent) => {
+                const mask = new Uint32Array(values.length);
+                const threshold = thresholdPercent / 100;
+                let activeCount = 0;
+                for (let i = 0; i < values.length; i++) {
+                    const active = values[i] * values[i] >= threshold;
+                    mask[i] = active ? 1 : 0;
+                    if (active) activeCount++;
+                }
+                return { mask, activeCount };
+            };
+
+            const state = { orbital: orbitals[ui.orbital.value], samples: null, activeCount: 0, pick: null };
+            state.samples = sampleOrbital(state.orbital);
+            const initialMask = buildProbabilityMask(state.samples.volumeValues, Number(ui.threshold.value));
+            state.activeCount = initialMask.activeCount;
+
+            const wgpu = await WasmGPU.create(canvas, { powerPreference: "high-performance", antialias: true, frustumCulling: true });
+            const scene = wgpu.createScene([0.012, 0.018, 0.032]);
+            const camera = wgpu.createCamera.perspective({ fov: 46, near: 0.05, far: 200 });
+            camera.transform.setPosition(0, -35, 16);
+            camera.lookAtWithUp([0.5, 0, 0], [0, 0, 1]);
+            const controls = wgpu.createControls.navigation(camera, canvas, {
+                mode: "orbit",
+                axisConvention: "z-up-rh",
+                target: [0.5, 0, 0],
+                enableDamping: true,
+                dampingFactor: 0.1,
+                zoomOnCursor: true,
+                minDistance: 5,
+                maxDistance: 100
+            });
+            scene.addLight(wgpu.createLight.ambient({ color: [1, 1, 1], intensity: 0.42 }));
+            scene.addLight(wgpu.createLight.directional({ direction: [0.45, -1, -0.7], color: [1, 1, 1], intensity: 1.15 }));
+
+            const volume = wgpu.createLatticeSpace({
+                dimensions: volumeDimensions,
+                data: state.samples.volumeValues,
+                mask: initialMask.mask,
+                origin: [-displayExtent, -displayExtent, -displayExtent],
+                spacing: [volumeSpacing, volumeSpacing, volumeSpacing],
+                cellScale: Number(ui.cellScale.value),
+                blendMode: "transparent",
+                depthWrite: false,
+                opacity: Number(ui.opacity.value),
+                lit: true,
+                colormap: "custom",
+                colormapStops,
+                scaleTransform: { domainMin: -1, domainMax: 1 },
+                keepCPUData: true,
+                name: "orbital probability volume"
+            });
+            volume.transform.setPosition(-7.5, 0, 0);
+            scene.add(volume);
+
+            const slice = wgpu.createLatticeSpace({
+                dimensions: sliceDimensions,
+                data: state.samples.sliceValues,
+                origin: [-displayExtent, -displayExtent, 0],
+                spacing: [sliceSpacing, sliceSpacing, 1],
+                cellScale: 1,
+                colormap: "custom",
+                colormapStops,
+                scaleTransform: { domainMin: -1, domainMax: 1 },
+                keepCPUData: true,
+                name: "y = 0 signed-amplitude cross-section"
+            });
+            slice.transform.setPosition(8, 0, 0);
+            slice.transform.rotateX(Math.PI * 0.5);
+            scene.add(slice);
+
+            const overlaySystem = wgpu.createOverlay.system({
+                controls,
+                camera,
+                scene,
+                zIndex: 4,
+                interactionThrottleMs: 30,
+                autoUpdate: true
+            }).addLayer(wgpu.createOverlay.axisTriad({
+                id: "quantum-axis-triad",
+                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-26, -26] },
+                sizePx: 52,
+                lineWidthPx: 2,
+                labels: ["x", "y", "z"]
+            })).addLayer(wgpu.createOverlay.legend({
+                id: "quantum-amplitude-legend",
+                title: "Signed ψ / sampled peak",
+                source: volume,
+                anchor: { kind: "screen", corner: "top-right", offsetPx: [-14, 14] },
+                widthPx: 24,
+                heightPx: 220,
+                tickCount: 7,
+                strictParity: true
+            }));
+
+            const physicalCoordinateForHit = (hit) => {
+                if (hit.object === volume) return [
+                    gridCoordinate(hit.ndIndex[0], volumeDimensions[0], state.orbital.extent),
+                    gridCoordinate(hit.ndIndex[1], volumeDimensions[1], state.orbital.extent),
+                    gridCoordinate(hit.ndIndex[2], volumeDimensions[2], state.orbital.extent)
+                ];
+                return [gridCoordinate(hit.ndIndex[0], sliceDimensions[0], state.orbital.extent), 0, gridCoordinate(hit.ndIndex[1], sliceDimensions[1], state.orbital.extent)];
+            };
+
+            const refreshReadout = () => {
+                const threshold = Number(ui.threshold.value);
+                const activeFraction = 100 * state.activeCount / state.samples.volumeValues.length;
+                const lines = [
+                    `orbital: ${state.orbital.label}`,
+                    `structure: ${state.orbital.description}`,
+                    `sample extent: ±${state.orbital.extent} a₀`,
+                    `3D lattice: ${volumeDimensions.join(" × ")} cells`,
+                    `active cells: ${state.activeCount} (${fmt(activeFraction, 2)}%)`,
+                    `probability threshold: ${fmt(threshold, 2)}% of sampled peak`,
+                    "",
+                    "Color encodes signed amplitude.",
+                    "3D mask uses |ψ|²."
+                ];
+                if (state.pick) lines.push(
+                    "",
+                    `picked: ${state.pick.objectName}`,
+                    `linear index: ${state.pick.linearIndex}`,
+                    `lattice index: [${state.pick.ndIndex.join(", ")}]`,
+                    `atomic position: ${fmtVec3(state.pick.atomicPosition)} a₀`,
+                    `world position: ${fmtVec3(state.pick.worldPosition)}`,
+                    `signed amplitude: ${fmt(state.pick.scalar, 6)}`,
+                    `relative probability: ${fmt(100 * state.pick.scalar * state.pick.scalar, 4)}%`
+                );
+                readout.textContent = lines.join("\n");
+                ui.thresholdValue.textContent = `${fmt(threshold, 2)}%`;
+                ui.cellScaleValue.textContent = fmt(Number(ui.cellScale.value), 2);
+                ui.opacityValue.textContent = fmt(Number(ui.opacity.value), 2);
+            };
+
+            const applyThreshold = () => {
+                const result = buildProbabilityMask(state.samples.volumeValues, Number(ui.threshold.value));
+                state.activeCount = result.activeCount;
+                state.pick = null;
+                volume.setMask(result.mask, { keepCPUData: true });
+                refreshReadout();
+            };
+
+            const applyOrbital = () => {
+                state.orbital = orbitals[ui.orbital.value];
+                state.samples = sampleOrbital(state.orbital);
+                state.pick = null;
+                ui.threshold.value = String(state.orbital.threshold);
+                volume.setData(state.samples.volumeValues, { keepCPUData: true });
+                slice.setData(state.samples.sliceValues, { keepCPUData: true });
+                applyThreshold();
+            };
+
+            ui.orbital.addEventListener("change", applyOrbital);
+            ui.threshold.addEventListener("input", applyThreshold);
+            ui.cellScale.addEventListener("input", () => { volume.cellScale = Number(ui.cellScale.value); refreshReadout(); });
+            ui.opacity.addEventListener("input", () => { volume.opacity = Number(ui.opacity.value); refreshReadout(); });
+
+            canvas.addEventListener("click", async (event) => {
+                const hit = await wgpu.pick(scene, camera, event.clientX, event.clientY);
+                if (!hit || hit.kind !== "latticespace" || !hit.ndIndex || (hit.object !== volume && hit.object !== slice)) { state.pick = null; refreshReadout(); return; }
+                const scalar = hit.attributes?.scalar;
+                if (!Number.isFinite(scalar)) return;
+                state.pick = {
+                    objectName: hit.object.name ?? "unnamed lattice",
+                    linearIndex: hit.elementIndex,
+                    ndIndex: hit.ndIndex,
+                    atomicPosition: physicalCoordinateForHit(hit),
+                    worldPosition: hit.worldPosition,
+                    scalar
+                };
+                refreshReadout();
+            });
+
+            refreshReadout();
+            wgpu.run((dt) => {
+                controls.update();
+                if (ui.autoRotate.checked) volume.transform.rotateZ(dt * 0.16);
+                wgpu.render(scene, camera);
+            });
+        </script>
+    </body>
+</html>

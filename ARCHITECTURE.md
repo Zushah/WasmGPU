@@ -2,7 +2,7 @@
 
 Last updated: Wednesday, July 15, 2026.
 
-Last commit: Wednesday, July 15, 2026, [**`8b82ea6`**](https://www.github.com/Zushah/WasmGPU/commit/8b82ea6).
+Last commit: Wednesday, July 15, 2026, [**`0f9da6d`**](https://www.github.com/Zushah/WasmGPU/commit/0f9da6d).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -793,7 +793,7 @@ Important files:
 - `./examples/overlay.html`: overlay layers.
 - `./examples/picking.html`: picking and selection.
 - `./examples/scaling.html`: scaling and colormap behavior.
-- `./examples/fluid.html`, `./examples/galaxy.html`, `./examples/graphing.html`, `./examples/mandelbulb.html`, `./examples/protein.html`, `./examples/terrain.html`, and `./examples/lego.html`: larger rendering and compute examples.
+- `./examples/fluid.html`, `./examples/galaxy.html`, `./examples/graphing.html`, `./examples/mandelbulb.html`, `./examples/protein.html`, `./examples/terrain.html`, `./examples/lego.html`, and `./examples/quantum.html`: larger rendering and compute examples.
 
 Examples import built bundles from `./dist/`. When source changes public behavior, update examples when preparing a release or when a specific example fix is needed.
 
