@@ -4,8 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use core::mem;
 use crate::shared::align_up;
+use core::mem;
 
 extern "C" {
     static mut __heap_base: u8;
@@ -18,17 +18,13 @@ static mut HEAP_PTR: usize = usize::MAX;
 unsafe fn ensure_memory(end: usize) -> bool {
     use core::arch::wasm32;
     const PAGE: usize = 65536;
-
     let cur_pages: usize = wasm32::memory_size::<0>();
     let cur_bytes: usize = cur_pages * PAGE;
-
     if end <= cur_bytes {
         return true;
     }
-
     let needed = end - cur_bytes;
     let add_pages: usize = (needed + (PAGE - 1)) / PAGE;
-
     let prev: usize = wasm32::memory_grow::<0>(add_pages);
     prev != usize::MAX
 }
@@ -71,7 +67,12 @@ pub extern "C" fn wasmgpu_free(_ptr: u32, _bytes: u32) {
 
 #[no_mangle]
 pub extern "C" fn wasmgpu_alloc_f32(len: u32) -> u32 {
-    unsafe { alloc_raw((len as usize) * mem::size_of::<f32>(), mem::align_of::<f32>()) }
+    unsafe {
+        alloc_raw(
+            (len as usize) * mem::size_of::<f32>(),
+            mem::align_of::<f32>(),
+        )
+    }
 }
 
 #[no_mangle]
@@ -81,7 +82,12 @@ pub extern "C" fn wasmgpu_free_f32(_ptr: u32, _len: u32) {
 
 #[no_mangle]
 pub extern "C" fn wasmgpu_alloc_u32(len: u32) -> u32 {
-    unsafe { alloc_raw((len as usize) * mem::size_of::<u32>(), mem::align_of::<u32>()) }
+    unsafe {
+        alloc_raw(
+            (len as usize) * mem::size_of::<u32>(),
+            mem::align_of::<u32>(),
+        )
+    }
 }
 
 #[no_mangle]

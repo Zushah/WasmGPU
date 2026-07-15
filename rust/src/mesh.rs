@@ -7,18 +7,21 @@
 use crate::shared::{f32_slice, f32_slice_mut, u32_slice};
 
 #[no_mangle]
-pub extern "C" fn mesh_compute_vertex_normals(out_normals: u32, positions: u32, vertex_count: u32, indices: u32, index_count: u32) -> u32 {
+pub extern "C" fn mesh_compute_vertex_normals(
+    out_normals: u32,
+    positions: u32,
+    vertex_count: u32,
+    indices: u32,
+    index_count: u32,
+) -> u32 {
     unsafe {
         let vcount = vertex_count as usize;
         let plen = vcount * 3;
-
         let pos = f32_slice(positions, plen);
         let out = f32_slice_mut(out_normals, plen);
-
         for i in 0..plen {
             out[i] = 0.0;
         }
-
         #[inline(always)]
         fn add(out: &mut [f32], i: usize, nx: f32, ny: f32, nz: f32) {
             let b = i * 3;
@@ -26,38 +29,30 @@ pub extern "C" fn mesh_compute_vertex_normals(out_normals: u32, positions: u32, 
             out[b + 1] += ny;
             out[b + 2] += nz;
         }
-
         #[inline(always)]
         fn tri(pos: &[f32], out: &mut [f32], ia: usize, ib: usize, ic: usize) {
             let ax = pos[ia * 3 + 0];
             let ay = pos[ia * 3 + 1];
             let az = pos[ia * 3 + 2];
-
             let bx = pos[ib * 3 + 0];
             let by = pos[ib * 3 + 1];
             let bz = pos[ib * 3 + 2];
-
             let cx = pos[ic * 3 + 0];
             let cy = pos[ic * 3 + 1];
             let cz = pos[ic * 3 + 2];
-
             let e1x = bx - ax;
             let e1y = by - ay;
             let e1z = bz - az;
-
             let e2x = cx - ax;
             let e2y = cy - ay;
             let e2z = cz - az;
-
             let nx = e1y * e2z - e1z * e2y;
             let ny = e1z * e2x - e1x * e2z;
             let nz = e1x * e2y - e1y * e2x;
-
             add(out, ia, nx, ny, nz);
             add(out, ib, nx, ny, nz);
             add(out, ic, nx, ny, nz);
         }
-
         if indices != 0 && index_count != 0 {
             let icount = index_count as usize;
             let idx = u32_slice(indices, icount);
@@ -82,7 +77,6 @@ pub extern "C" fn mesh_compute_vertex_normals(out_normals: u32, positions: u32, 
                 }
             }
         }
-
         for i in 0..vcount {
             let b = i * 3;
             let nx = out[b + 0];

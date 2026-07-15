@@ -312,7 +312,6 @@ pub extern "C" fn vec3_oproj(out: u32, v1: u32, v2: u32) -> u32 {
         let b = f32_slice(v2, 3);
         let vb = [b[0], b[1], b[2]];
         let n2 = vec3_normsq_from(&vb);
-
         let mut p = [0.0f32; 3];
         if n2 != 0.0 {
             let va = [a[0], a[1], a[2]];
@@ -321,7 +320,6 @@ pub extern "C" fn vec3_oproj(out: u32, v1: u32, v2: u32) -> u32 {
             p[1] = vb[1] * d;
             p[2] = vb[2] * d;
         }
-
         let o = f32_slice_mut(out, 3);
         o[0] = a[0] - p[0];
         o[1] = a[1] - p[1];
@@ -337,7 +335,6 @@ pub extern "C" fn vec3_proj(out: u32, v1: u32, v2: u32) -> u32 {
         let b = f32_slice(v2, 3);
         let vb = [b[0], b[1], b[2]];
         let n2: f32 = vec3_normsq_from(&vb);
-
         let o = f32_slice_mut(out, 3);
         if n2 == 0.0 {
             o[0] = 0.0;
@@ -345,7 +342,6 @@ pub extern "C" fn vec3_proj(out: u32, v1: u32, v2: u32) -> u32 {
             o[2] = 0.0;
             return 0;
         }
-
         let va = [a[0], a[1], a[2]];
         let d = vec3_dot_from(&va, &vb) / n2;
         o[0] = vb[0] * d;
@@ -382,7 +378,6 @@ pub extern "C" fn vec3_reflect(out: u32, v1: u32, v2: u32) -> u32 {
     unsafe {
         let a = f32_slice(v1, 3);
         let b = f32_slice(v2, 3);
-
         let vb = [b[0], b[1], b[2]];
         let n = vec3_norm_from(&vb);
         let vn = if n == 0.0 {
@@ -390,12 +385,9 @@ pub extern "C" fn vec3_reflect(out: u32, v1: u32, v2: u32) -> u32 {
         } else {
             [vb[0] / n, vb[1] / n, vb[2] / n]
         };
-
         let va = [a[0], a[1], a[2]];
         let d: f32 = vec3_dot_from(&va, &vn);
-
         let vd = [vn[0] * (2.0 * d), vn[1] * (2.0 * d), vn[2] * (2.0 * d)];
-
         let o = f32_slice_mut(out, 3);
         o[0] = va[0] - vd[0];
         o[1] = va[1] - vd[1];
@@ -414,10 +406,8 @@ pub extern "C" fn vec3_refract(out: u32, v1: u32, v2: u32, n: f32) -> u32 {
             o[2] = 0.0;
             return 0;
         }
-
         let a = f32_slice(v1, 3);
         let b = f32_slice(v2, 3);
-
         let vb = [b[0], b[1], b[2]];
         let nb = vec3_norm_from(&vb);
         let vn = if nb == 0.0 {
@@ -425,15 +415,15 @@ pub extern "C" fn vec3_refract(out: u32, v1: u32, v2: u32, n: f32) -> u32 {
         } else {
             [vb[0] / nb, vb[1] / nb, vb[2] / nb]
         };
-
         let va = [a[0], a[1], a[2]];
         let d = vec3_dot_from(&va, &vn);
-
         let t = -(1.0 - n * n * (1.0 - d * d)).sqrt();
-
-        let perp = [(va[0] - vn[0] * d) * n, (va[1] - vn[1] * d) * n, (va[2] - vn[2] * d) * n];
+        let perp = [
+            (va[0] - vn[0] * d) * n,
+            (va[1] - vn[1] * d) * n,
+            (va[2] - vn[2] * d) * n,
+        ];
         let parr = [vn[0] * t, vn[1] * t, vn[2] * t];
-
         let o = f32_slice_mut(out, 3);
         o[0] = perp[0] + parr[0];
         o[1] = perp[1] + parr[1];

@@ -4,8 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::shared::{f32_slice, f32_slice_mut, u32_slice};
 use crate::mat4::mat4_invert_from;
+use crate::shared::{f32_slice, f32_slice_mut, u32_slice};
 
 const INTERP_STEP: u32 = 0;
 const INTERP_LINEAR: u32 = 1;
@@ -37,7 +37,17 @@ fn quat_normalize(x: f32, y: f32, z: f32, w: f32) -> (f32, f32, f32, f32) {
 }
 
 #[inline]
-fn quat_slerp(ax: f32, ay: f32, az: f32, aw: f32, bx: f32, by: f32, bz: f32, bw: f32, t: f32) -> (f32, f32, f32, f32) {
+fn quat_slerp(
+    ax: f32,
+    ay: f32,
+    az: f32,
+    aw: f32,
+    bx: f32,
+    by: f32,
+    bz: f32,
+    bw: f32,
+    t: f32,
+) -> (f32, f32, f32, f32) {
     let mut bx2 = bx;
     let mut by2 = by;
     let mut bz2 = bz;
@@ -120,7 +130,16 @@ fn hermite(t: f32) -> (f32, f32, f32, f32) {
 }
 
 #[inline]
-fn sample_vec(values: &[f32], stride: usize, interp: u32, i0: usize, i1: usize, alpha: f32, dt: f32, out: &mut [f32]) {
+fn sample_vec(
+    values: &[f32],
+    stride: usize,
+    interp: u32,
+    i0: usize,
+    i1: usize,
+    alpha: f32,
+    dt: f32,
+    out: &mut [f32],
+) {
     match interp {
         INTERP_STEP => {
             let base0 = i0 * stride;
@@ -131,14 +150,12 @@ fn sample_vec(values: &[f32], stride: usize, interp: u32, i0: usize, i1: usize, 
         INTERP_CUBIC => {
             let (h00, h10, h01, h11) = hermite(alpha);
             let dt_scaled = dt;
-
             let base0 = i0 * stride * 3;
             let base1 = i1 * stride * 3;
             let v0 = base0 + stride;
             let out0 = base0 + stride * 2;
             let in1 = base1 + 0;
             let v1 = base1 + stride;
-
             for k in 0..stride {
                 let p0 = values[v0 + k];
                 let m0 = values[out0 + k] * dt_scaled;
@@ -157,7 +174,6 @@ fn sample_vec(values: &[f32], stride: usize, interp: u32, i0: usize, i1: usize, 
             }
         }
         _ => {
-            // Unknown interpolation => treat as LINEAR.
             let base0 = i0 * stride;
             let base1 = i1 * stride;
             for k in 0..stride {
@@ -170,27 +186,49 @@ fn sample_vec(values: &[f32], stride: usize, interp: u32, i0: usize, i1: usize, 
 }
 
 #[inline]
-fn sample_quat(values: &[f32], interp: u32, i0: usize, i1: usize, alpha: f32, dt: f32) -> (f32, f32, f32, f32) {
+fn sample_quat(
+    values: &[f32],
+    interp: u32,
+    i0: usize,
+    i1: usize,
+    alpha: f32,
+    dt: f32,
+) -> (f32, f32, f32, f32) {
     match interp {
         INTERP_STEP => {
             let base0 = i0 * 4;
-            (values[base0 + 0], values[base0 + 1], values[base0 + 2], values[base0 + 3])
+            (
+                values[base0 + 0],
+                values[base0 + 1],
+                values[base0 + 2],
+                values[base0 + 3],
+            )
         }
         INTERP_CUBIC => {
             let (h00, h10, h01, h11) = hermite(alpha);
             let dt_scaled = dt;
-
             let base0 = i0 * 4 * 3;
             let base1 = i1 * 4 * 3;
             let v0 = base0 + 4;
             let out0 = base0 + 8;
             let in1 = base1 + 0;
             let v1 = base1 + 4;
-
-            let x = h00 * values[v0 + 0] + h10 * (values[out0 + 0] * dt_scaled) + h01 * values[v1 + 0] + h11 * (values[in1 + 0] * dt_scaled);
-            let y = h00 * values[v0 + 1] + h10 * (values[out0 + 1] * dt_scaled) + h01 * values[v1 + 1] + h11 * (values[in1 + 1] * dt_scaled);
-            let z = h00 * values[v0 + 2] + h10 * (values[out0 + 2] * dt_scaled) + h01 * values[v1 + 2] + h11 * (values[in1 + 2] * dt_scaled);
-            let w = h00 * values[v0 + 3] + h10 * (values[out0 + 3] * dt_scaled) + h01 * values[v1 + 3] + h11 * (values[in1 + 3] * dt_scaled);
+            let x = h00 * values[v0 + 0]
+                + h10 * (values[out0 + 0] * dt_scaled)
+                + h01 * values[v1 + 0]
+                + h11 * (values[in1 + 0] * dt_scaled);
+            let y = h00 * values[v0 + 1]
+                + h10 * (values[out0 + 1] * dt_scaled)
+                + h01 * values[v1 + 1]
+                + h11 * (values[in1 + 1] * dt_scaled);
+            let z = h00 * values[v0 + 2]
+                + h10 * (values[out0 + 2] * dt_scaled)
+                + h01 * values[v1 + 2]
+                + h11 * (values[in1 + 2] * dt_scaled);
+            let w = h00 * values[v0 + 3]
+                + h10 * (values[out0 + 3] * dt_scaled)
+                + h01 * values[v1 + 3]
+                + h11 * (values[in1 + 3] * dt_scaled);
             quat_normalize(x, y, z, w)
         }
         INTERP_LINEAR => {
@@ -207,7 +245,6 @@ fn sample_quat(values: &[f32], interp: u32, i0: usize, i1: usize, alpha: f32, dt
             quat_slerp(ax, ay, az, aw, bx, by, bz, bw, alpha)
         }
         _ => {
-            // Unknown interpolation => treat as LINEAR.
             let base0 = i0 * 4;
             let base1 = i1 * 4;
             let ax = values[base0 + 0];
@@ -224,7 +261,17 @@ fn sample_quat(values: &[f32], interp: u32, i0: usize, i1: usize, alpha: f32, dt
 }
 
 #[no_mangle]
-pub extern "C" fn anim_sample_clip_trs(pos_ptr: u32, rot_ptr: u32, scl_ptr: u32, transform_count: u32, samplers_ptr: u32, sampler_count: u32, channels_ptr: u32, channel_count: u32, time: f32) -> u32 {
+pub extern "C" fn anim_sample_clip_trs(
+    pos_ptr: u32,
+    rot_ptr: u32,
+    scl_ptr: u32,
+    transform_count: u32,
+    samplers_ptr: u32,
+    sampler_count: u32,
+    channels_ptr: u32,
+    channel_count: u32,
+    time: f32,
+) -> u32 {
     unsafe {
         let samplers = u32_slice(samplers_ptr, sampler_count as usize * 5);
         let channels = u32_slice(channels_ptr, channel_count as usize * 3);
@@ -232,9 +279,7 @@ pub extern "C" fn anim_sample_clip_trs(pos_ptr: u32, rot_ptr: u32, scl_ptr: u32,
         let pos = f32_slice_mut(pos_ptr, tcount * 3);
         let rot = f32_slice_mut(rot_ptr, tcount * 4);
         let scl = f32_slice_mut(scl_ptr, tcount * 3);
-
         let mut tmp_vec = [0.0f32; 4];
-
         for c in 0..(channel_count as usize) {
             let co = c * 3;
             let sampler_index = channels[co + 0] as usize;
@@ -246,7 +291,6 @@ pub extern "C" fn anim_sample_clip_trs(pos_ptr: u32, rot_ptr: u32, scl_ptr: u32,
             if target >= tcount {
                 continue;
             }
-
             let so = sampler_index * 5;
             let times_ptr = samplers[so + 0];
             let count = samplers[so + 1] as usize;
@@ -256,13 +300,14 @@ pub extern "C" fn anim_sample_clip_trs(pos_ptr: u32, rot_ptr: u32, scl_ptr: u32,
             if count == 0 {
                 continue;
             }
-
             let times = f32_slice(times_ptr, count);
             let (i0, i1, alpha, dt) = find_keyframe(times, time);
-
-            let values_len = if interp == INTERP_CUBIC { count * stride * 3 } else { count * stride };
+            let values_len = if interp == INTERP_CUBIC {
+                count * stride * 3
+            } else {
+                count * stride
+            };
             let values = f32_slice(values_ptr, values_len);
-
             match path {
                 PATH_TRANSLATION => {
                     if stride != 3 {
@@ -325,23 +370,27 @@ fn mat4_mul_to(out: &mut [f32; 16], a: &[f32; 16], b: &[f32; 16]) {
 }
 
 #[no_mangle]
-pub extern "C" fn anim_compute_joint_matrices_to(out_ptr: u32, joint_indices_ptr: u32, joint_count: u32, inv_bind_ptr: u32, world_base_ptr: u32, mesh_world_ptr: u32) -> u32 {
+pub extern "C" fn anim_compute_joint_matrices_to(
+    out_ptr: u32,
+    joint_indices_ptr: u32,
+    joint_count: u32,
+    inv_bind_ptr: u32,
+    world_base_ptr: u32,
+    mesh_world_ptr: u32,
+) -> u32 {
     unsafe {
         let joint_count_usize = joint_count as usize;
         let joint_indices = u32_slice(joint_indices_ptr, joint_count_usize);
         let inv_bind = f32_slice(inv_bind_ptr, joint_count_usize * 16);
         let out = f32_slice_mut(out_ptr, joint_count_usize * 16);
-
         let mesh_world = f32_slice(mesh_world_ptr, 16);
         let mut mesh_arr = [0.0f32; 16];
         mesh_arr.copy_from_slice(mesh_world);
         let mesh_inv = mat4_invert_from(&mesh_arr);
-
         let mut jw = [0.0f32; 16];
         let mut ib = [0.0f32; 16];
         let mut tmp = [0.0f32; 16];
         let mut res = [0.0f32; 16];
-
         for i in 0..joint_count_usize {
             let j_index = joint_indices[i] as usize;
             let joint_ptr = world_base_ptr.wrapping_add((j_index * 16 * 4) as u32);

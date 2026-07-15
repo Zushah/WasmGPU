@@ -4,9 +4,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use core::mem;
 use crate::heap::alloc_raw;
 use crate::shared::align_up;
+use core::mem;
 
 static mut FRAME_ARENA_BASE: usize = 0;
 static mut FRAME_ARENA_CAP: usize = 0;
@@ -25,17 +25,14 @@ pub extern "C" fn wasmgpu_frame_arena_init(cap_bytes: u32) -> u32 {
         if cap_bytes == 0 {
             return 0;
         }
-
         let base = alloc_raw(cap_bytes as usize, 16);
         if base == 0 {
             return 0;
         }
-
         FRAME_ARENA_BASE = base as usize;
         FRAME_ARENA_CAP = cap_bytes as usize;
         FRAME_ARENA_HEAD = 0;
         FRAME_ARENA_EPOCH = 1;
-
         base
     }
 }
@@ -75,26 +72,21 @@ pub extern "C" fn wasmgpu_frame_alloc(bytes: u32, align: u32) -> u32 {
         if FRAME_ARENA_BASE == 0 || FRAME_ARENA_CAP == 0 {
             return 0;
         }
-
         let align = align as usize;
         if align == 0 || (align & (align - 1)) != 0 {
             return 0;
         }
-
         let base = FRAME_ARENA_BASE;
         let head = FRAME_ARENA_HEAD;
         let cap = FRAME_ARENA_CAP;
-
         let start = align_up(base + head, align);
         let end = match start.checked_add(bytes as usize) {
             Some(v) => v,
             None => return 0,
         };
-
         if end - base > cap {
             return 0;
         }
-
         FRAME_ARENA_HEAD = end - base;
         start as u32
     }

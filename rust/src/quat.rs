@@ -23,7 +23,17 @@ fn quat_normalize_arr(q: &[f32; 4]) -> [f32; 4] {
 }
 
 #[inline(always)]
-pub(crate) fn quat_from_rotation_mat3(r00: f32, r01: f32, r02: f32, r10: f32, r11: f32, r12: f32, r20: f32, r21: f32, r22: f32) -> [f32; 4] {
+pub(crate) fn quat_from_rotation_mat3(
+    r00: f32,
+    r01: f32,
+    r02: f32,
+    r10: f32,
+    r11: f32,
+    r12: f32,
+    r20: f32,
+    r21: f32,
+    r22: f32,
+) -> [f32; 4] {
     let trace = r00 + r11 + r22;
     let (x, y, z, w): (f32, f32, f32, f32);
     if trace > 0.0 {
@@ -210,12 +220,10 @@ pub extern "C" fn quat_mul(out: u32, q1: u32, q2: u32) -> u32 {
         let a = f32_slice(q1, 4);
         let b = f32_slice(q2, 4);
         let mut t = [0.0f32; 4];
-
         t[0] = a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1];
         t[1] = a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0];
         t[2] = a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3];
         t[3] = a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2];
-
         let o = f32_slice_mut(out, 4);
         for i in 0..4 {
             o[i] = t[i];
@@ -344,9 +352,7 @@ pub extern "C" fn quat_slerp(out: u32, q1: u32, q2: u32, t: f32) -> u32 {
         let b = f32_slice(q2, 4);
         let q1v = [a[0], a[1], a[2], a[3]];
         let mut q2v = [b[0], b[1], b[2], b[3]];
-
         let mut dot: f32 = q1v[0] * q2v[0] + q1v[1] * q2v[1] + q1v[2] * q2v[2] + q1v[3] * q2v[3];
-
         if dot < 0.0 {
             q2v[0] = -q2v[0];
             q2v[1] = -q2v[1];
@@ -354,7 +360,6 @@ pub extern "C" fn quat_slerp(out: u32, q1: u32, q2: u32, t: f32) -> u32 {
             q2v[3] = -q2v[3];
             dot = -dot;
         }
-
         let res: [f32; 4] = if dot > 0.9995 {
             let q = [
                 q1v[0] + t * (q2v[0] - q1v[0]),
@@ -377,7 +382,6 @@ pub extern "C" fn quat_slerp(out: u32, q1: u32, q2: u32, t: f32) -> u32 {
                 s0 * q1v[3] + s1 * q2v[3],
             ]
         };
-
         let o = f32_slice_mut(out, 4);
         o[0] = res[0];
         o[1] = res[1];
@@ -405,11 +409,9 @@ pub extern "C" fn quat_toRotation(out: u32, q: u32, v: u32) -> u32 {
     unsafe {
         let q = f32_slice(q, 4);
         let v = f32_slice(v, 3);
-
         let tx: f32 = 2.0 * (q[1] * v[2] - q[2] * v[1]);
         let ty: f32 = 2.0 * (q[2] * v[0] - q[0] * v[2]);
         let tz: f32 = 2.0 * (q[0] * v[1] - q[1] * v[0]);
-
         let o = f32_slice_mut(out, 3);
         o[0] = v[0] + q[3] * tx + q[1] * tz - q[2] * ty;
         o[1] = v[1] + q[3] * ty + q[2] * tx - q[0] * tz;
