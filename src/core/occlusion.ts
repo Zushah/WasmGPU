@@ -9,6 +9,7 @@ import { Mesh, getMeshLocalBoundsSource, getMeshVertexBuffers, getMeshVertexSour
 import { PointCloud } from "../world/pointcloud";
 import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
+import { LatticeSpace } from "../world/latticespace";
 import { Geometry } from "../graphics/geometry";
 import { BlendMode, CullMode, CustomMaterial, DataMaterial, Material, StandardMaterial, UnlitMaterial } from "../graphics/material";
 import { cullf, frameArena, wasm } from "../wasm";
@@ -18,12 +19,13 @@ import occlusionReduceWGSL from "../wgsl/core/occlusion-reduce.wgsl";
 import occlusionPointCloudWGSL from "../wgsl/world/occlusion-pointcloud.wgsl";
 import occlusionGlyphFieldWGSL from "../wgsl/world/occlusion-glyphfield.wgsl";
 import occlusionNodeLinkWGSL from "../wgsl/world/occlusion-nodelink.wgsl";
+import occlusionLatticeSpaceWGSL from "../wgsl/world/occlusion-latticespace.wgsl";
 import type { Camera } from "../world/camera";
 import type { RendererContext } from "./context";
-import type { DrawItem, GlyphFieldDrawItem, NodeLinkDrawItem, OcclusionCandidate, OcclusionFrameState, OcclusionHierarchyLayout, OcclusionHierarchyMetadata, OcclusionReadbackSlot, PointCloudDrawItem } from "./types";
+import type { DrawItem, GlyphFieldDrawItem, LatticeSpaceDrawItem, NodeLinkDrawItem, OcclusionCandidate, OcclusionFrameState, OcclusionHierarchyLayout, OcclusionHierarchyMetadata, OcclusionReadbackSlot, PointCloudDrawItem } from "./types";
 import { ensureCullingCapacity } from "./drawlists";
 import { getCullMode } from "./materials";
-import { ensureGlyphFieldBindGroup, ensureNodeLinkBindGroup, ensurePointCloudBindGroup, getGlyphFieldBindGroupLayout, getNodeLinkBindGroupLayout, getPointCloudBindGroupLayout } from "./objects";
+import { ensureGlyphFieldBindGroup, ensureLatticeSpaceBindGroup, ensureNodeLinkBindGroup, ensurePointCloudBindGroup, getGlyphFieldBindGroupLayout, getLatticeSpaceBindGroupLayout, getNodeLinkBindGroupLayout, getPointCloudBindGroupLayout } from "./objects";
 import { getObjectId, writeModelUniformSlot } from "./resources";
 import { isOpticallyTransmissiveMaterial } from "./transmission";
 
@@ -159,6 +161,7 @@ export const buildOcclusionFrameState = (ctx: RendererContext): OcclusionFrameSt
     const pointCloudOccluders: PointCloudDrawItem[] = [];
     const glyphOccluders: GlyphFieldDrawItem[] = [];
     const nodeLinkOccluders: NodeLinkDrawItem[] = [];
+    const latticeSpaceOccluders: LatticeSpaceDrawItem[] = [];
     const candidateSeen = ctx.occlusionVisibleObjectIds;
     candidateSeen.clear();
     for (const item of ctx.opaqueDrawList) {
@@ -202,8 +205,18 @@ export const buildOcclusionFrameState = (ctx: RendererContext): OcclusionFrameSt
         }
         if (!candidateSeen.has(getObjectId(ctx, item.link)) && tryPushNodeLinkOcclusionCandidate(ctx, item.link, candidates)) candidateSeen.add(getObjectId(ctx, item.link));
     }
+    for (const item of ctx.opaqueLatticeSpaceDrawList) {
+        if (isSafeLatticeSpaceOccluder(item)) {
+            latticeSpaceOccluders.push(item);
+            signature = mixOcclusionHash(signature, 5);
+            signature = mixOcclusionHash(signature, getObjectId(ctx, item.space));
+            signature = mixOcclusionHash(signature, item.space.occluderRevision);
+            signature = mixOcclusionHash(signature, hashWorldMatrix(item.space.transform.worldMatrixPtr as WasmPtr));
+        }
+        if (!candidateSeen.has(getObjectId(ctx, item.space)) && tryPushLatticeSpaceOcclusionCandidate(ctx, item.space, candidates)) candidateSeen.add(getObjectId(ctx, item.space));
+    }
     candidateSeen.clear();
-    return { signature: signature >>> 0, candidates, meshOccluders, pointCloudOccluders, glyphOccluders, nodeLinkOccluders };
+    return { signature: signature >>> 0, candidates, meshOccluders, pointCloudOccluders, glyphOccluders, nodeLinkOccluders, latticeSpaceOccluders };
 };
 
 const tryPushMeshOcclusionCandidate = (ctx: RendererContext, item: DrawItem, out: OcclusionCandidate[]): boolean => {
@@ -257,6 +270,20 @@ const tryPushNodeLinkOcclusionCandidate = (ctx: RendererContext, link: NodeLink,
         object: link, objectId: getObjectId(ctx, link),
         worldMatrixPtr: link.transform.worldMatrixPtr as WasmPtr,
         boundsCenter: [center[0], center[1], center[2]], boundsRadius: link.boundsRadius
+    });
+    return true;
+};
+
+const tryPushLatticeSpaceOcclusionCandidate = (ctx: RendererContext, space: LatticeSpace, out: OcclusionCandidate[]): boolean => {
+    const bounds = space.getLocalBounds();
+    if (!(bounds.sphereRadius > 0) || !Number.isFinite(bounds.sphereRadius)) return false;
+    out.push({
+        kind: "latticespace",
+        object: space,
+        objectId: getObjectId(ctx, space),
+        worldMatrixPtr: space.transform.worldMatrixPtr as WasmPtr,
+        boundsCenter: [bounds.sphereCenter[0], bounds.sphereCenter[1], bounds.sphereCenter[2]],
+        boundsRadius: bounds.sphereRadius
     });
     return true;
 };
@@ -339,6 +366,7 @@ export const applyOcclusionFiltering = (ctx: RendererContext, _camera: Camera, c
         const id = getObjectId(ctx, item.link);
         return !candidateSet.has(id) || visibleSet.has(id);
     });
+    filterOpaqueDrawListInPlace(ctx.opaqueLatticeSpaceDrawList, (item) => { const id = getObjectId(ctx, item.space); return !candidateSet.has(id) || visibleSet.has(id); });
     visibleSet.clear();
     candidateSet.clear();
 };
@@ -401,10 +429,12 @@ const isSafeGlyphOccluder = (item: GlyphFieldDrawItem): boolean => item.field.bl
 
 const isSafeNodeLinkOccluder = (item: NodeLinkDrawItem): boolean => item.link.blendMode === BlendMode.Opaque && item.link.depthWrite && item.link.depthTest;
 
+const isSafeLatticeSpaceOccluder = (item: LatticeSpaceDrawItem): boolean => item.space.blendMode === BlendMode.Opaque && item.space.depthWrite && item.space.depthTest;
+
 export const captureOcclusionHierarchy = (ctx: RendererContext, camera: Camera): void => {
     const frameState = ctx.pendingOcclusionFrameState;
     if (!frameState) return;
-    const safeOccluderCount = frameState.meshOccluders.length + frameState.pointCloudOccluders.length + frameState.glyphOccluders.length + frameState.nodeLinkOccluders.length;
+    const safeOccluderCount = frameState.meshOccluders.length + frameState.pointCloudOccluders.length + frameState.glyphOccluders.length + frameState.nodeLinkOccluders.length + frameState.latticeSpaceOccluders.length;
     if (safeOccluderCount <= 0) return;
     ensureOcclusionResources(ctx);
     if (!ctx.occlusionHierarchyTexture || !ctx.occlusionDepthView || !ctx.occlusionHierarchyLayout) return;
@@ -434,6 +464,7 @@ export const captureOcclusionHierarchy = (ctx: RendererContext, camera: Camera):
     executeOcclusionGlyphFieldDrawList(ctx, capturePass, frameState.glyphOccluders);
     executeOcclusionPointCloudDrawList(ctx, capturePass, frameState.pointCloudOccluders);
     executeOcclusionNodeLinkDrawList(ctx, capturePass, frameState.nodeLinkOccluders);
+    executeOcclusionLatticeSpaceDrawList(ctx, capturePass, frameState.latticeSpaceOccluders);
     capturePass.end();
     for (let mip = 1; mip < ctx.occlusionHierarchyLayout.mipCount; mip++) {
         const pass = encoder.beginRenderPass({
@@ -642,6 +673,30 @@ const executeOcclusionNodeLinkDrawList = (ctx: RendererContext, pass: GPURenderP
             }
             else pass.draw(item.geometry.vertexCount, link.edgeCount);
         }
+    }
+};
+
+const executeOcclusionLatticeSpaceDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, list: LatticeSpaceDrawItem[]): void => {
+    let lastSpace: LatticeSpace | null = null;
+    let lastPipeline: GPURenderPipeline | null = null;
+    for (const item of list) {
+        const space = item.space;
+        ensureLatticeSpaceBindGroup(ctx, space);
+        if (!space.bindGroup) continue;
+        const pipeline = getOrCreateOcclusionLatticeSpacePipeline(ctx, space);
+        if (pipeline !== lastPipeline) {
+            pass.setPipeline(pipeline);
+            lastPipeline = pipeline;
+        }
+        const slot = ctx.modelBufferIndex++;
+        writeModelUniformSlot(ctx, slot, space.transform.worldMatrixPtr as WasmPtr);
+        pass.setBindGroup(0, ctx.globalBindGroups[slot]);
+        if (space !== lastSpace) {
+            pass.setBindGroup(1, space.bindGroup);
+            lastSpace = space;
+        }
+        if (space.dimensionCount === 2) pass.draw(6);
+        else pass.draw(36, space.drawCellCount);
     }
 };
 
@@ -864,6 +919,27 @@ const getOrCreateOcclusionNodeLinkPipeline = (ctx: RendererContext, link: NodeLi
             depthWriteEnabled: true,
             depthCompare: "less"
         }
+    });
+    ctx.pipelineCache.set(key, pipeline);
+    return pipeline;
+};
+
+const getOrCreateOcclusionLatticeSpacePipeline = (ctx: RendererContext, space: LatticeSpace): GPURenderPipeline => {
+    const cullMode = space.dimensionCount === 2 ? "none" : getCullMode(ctx, space.cullMode);
+    const key = `occlusion:latticespace:${space.dimensionCount}:${cullMode}`;
+    const cached = ctx.pipelineCache.get(key);
+    if (cached) return cached;
+    let module = ctx.shaderCache.get(occlusionLatticeSpaceWGSL);
+    if (!module) {
+        module = ctx.device.createShaderModule({ code: occlusionLatticeSpaceWGSL });
+        ctx.shaderCache.set(occlusionLatticeSpaceWGSL, module);
+    }
+    const pipeline = ctx.device.createRenderPipeline({
+        layout: ctx.device.createPipelineLayout({ bindGroupLayouts: [ctx.globalBindGroupLayout, getLatticeSpaceBindGroupLayout(ctx)] }),
+        vertex: { module, entryPoint: space.dimensionCount === 2 ? "vs_2d" : "vs_3d", buffers: [] },
+        fragment: { module, entryPoint: "fs_main", targets: [{ format: "r32float" }] },
+        primitive: { topology: "triangle-list", cullMode },
+        depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" }
     });
     ctx.pipelineCache.set(key, pipeline);
     return pipeline;

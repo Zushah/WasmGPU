@@ -11,6 +11,7 @@ import type { Mesh } from "../world/mesh";
 import type { NodeLink } from "../world/nodelink";
 import type { PointCloud } from "../world/pointcloud";
 import type { SplatField } from "../world/splatfield";
+import type { LatticeSpace } from "../world/latticespace";
 import type { WasmPtr } from "../wasm";
 
 export type RendererDescriptor = {
@@ -61,14 +62,6 @@ export type PointCloudDrawItem = {
     sortKey: number;
 };
 
-export type SplatFieldDrawItem = {
-    field: SplatField;
-    pipeline: GPURenderPipeline;
-    pipelineId: number;
-    fieldId: number;
-    sortKey: number;
-};
-
 export type GlyphFieldDrawItem = {
     field: GlyphField;
     geometry: Geometry;
@@ -90,7 +83,23 @@ export type NodeLinkDrawItem = {
     sortKey: number;
 };
 
-export type TransparentDrawItem = DrawItem | PointCloudDrawItem | SplatFieldDrawItem | GlyphFieldDrawItem | NodeLinkDrawItem;
+export type SplatFieldDrawItem = {
+    field: SplatField;
+    pipeline: GPURenderPipeline;
+    pipelineId: number;
+    fieldId: number;
+    sortKey: number;
+};
+
+export type LatticeSpaceDrawItem = {
+    space: LatticeSpace;
+    pipeline: GPURenderPipeline;
+    pipelineId: number;
+    spaceId: number;
+    sortKey: number;
+};
+
+export type TransparentDrawItem = DrawItem | PointCloudDrawItem | SplatFieldDrawItem | GlyphFieldDrawItem | NodeLinkDrawItem | LatticeSpaceDrawItem;
 
 export type SplatFieldSortState = {
     sortedIndexBuffer: GPUBuffer | null;
@@ -105,11 +114,25 @@ export type SplatFieldSortScanLevel = {
     blockOffsetsCapacity: number;
 };
 
-export type OcclusionCandidateKind = "mesh" | "pointcloud" | "glyphfield" | "nodelink";
+export type LatticeSpaceSortState = {
+    sortedIndexBuffer: GPUBuffer | null;
+    sortedIndexCapacity: number;
+    identityKey: string | null;
+    transformBuffer: GPUBuffer | null;
+};
+
+export type LatticeSpaceSortScanLevel = {
+    blockSums: GPUBuffer | null;
+    blockSumsCapacity: number;
+    blockOffsets: GPUBuffer | null;
+    blockOffsetsCapacity: number;
+};
+
+export type OcclusionCandidateKind = "mesh" | "pointcloud" | "glyphfield" | "nodelink" | "latticespace";
 
 export type OcclusionCandidate = {
     kind: OcclusionCandidateKind;
-    object: Mesh | PointCloud | GlyphField | NodeLink;
+    object: Mesh | PointCloud | GlyphField | NodeLink | LatticeSpace;
     objectId: number;
     worldMatrixPtr: WasmPtr;
     boundsCenter: [number, number, number];
@@ -155,6 +178,7 @@ export type OcclusionFrameState = {
     pointCloudOccluders: PointCloudDrawItem[];
     glyphOccluders: GlyphFieldDrawItem[];
     nodeLinkOccluders: NodeLinkDrawItem[];
+    latticeSpaceOccluders: LatticeSpaceDrawItem[];
 };
 
 export type RendererPickHit =
@@ -189,6 +213,13 @@ export type RendererPickHit =
     {
         kind: "splatfield";
         object: SplatField;
+        objectId: number;
+        elementIndex: number;
+        worldPosition: [number, number, number];
+    } |
+    {
+        kind: "latticespace";
+        object: LatticeSpace;
         objectId: number;
         elementIndex: number;
         worldPosition: [number, number, number];

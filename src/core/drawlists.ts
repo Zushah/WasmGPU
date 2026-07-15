@@ -14,12 +14,13 @@ import { PointCloud } from "../world/pointcloud";
 import { SplatField } from "../world/splatfield";
 import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
+import { LatticeSpace } from "../world/latticespace";
 import { animf, cullf, driver, frameArena, frustumf, mat4f, wasm } from "../wasm";
 import type { WasmPtr } from "../wasm";
 import type { RendererContext } from "./context";
-import type { DrawItem, GlyphFieldDrawItem, NodeLinkDrawItem, PointCloudDrawItem, SplatFieldDrawItem, TransparentDrawItem } from "./types";
+import type { DrawItem, GlyphFieldDrawItem, LatticeSpaceDrawItem, NodeLinkDrawItem, PointCloudDrawItem, SplatFieldDrawItem, TransparentDrawItem } from "./types";
 import { ensureModelBufferPool, getObjectId } from "./resources";
-import { destroySplatFieldSortState, ensureGlyphFieldBindGroup, ensureNodeLinkBindGroup, ensurePointCloudBindGroup, ensureSplatFieldBindGroup, getOrCreateGlyphFieldPipeline, getOrCreateNodeLinkPipeline, getOrCreatePointCloudPipeline, getOrCreateSplatFieldPipeline } from "./objects";
+import { destroyLatticeSpaceSortState, destroySplatFieldSortState, ensureGlyphFieldBindGroup, ensureLatticeSpaceBindGroup, ensureNodeLinkBindGroup, ensurePointCloudBindGroup, ensureSplatFieldBindGroup, getOrCreateGlyphFieldPipeline, getOrCreateLatticeSpacePipeline, getOrCreateNodeLinkPipeline, getOrCreatePointCloudPipeline, getOrCreateSplatFieldPipeline } from "./objects";
 import { ensureMaterialBindGroup, getOrCreatePipeline, isMirroredWorldMatrix, materialSupportsSkinning } from "./materials";
 import { isOpticallyTransmissiveMaterial } from "./transmission";
 
@@ -83,6 +84,13 @@ export const acquireNodeLinkDrawItem = (ctx: RendererContext): NodeLinkDrawItem 
         item = { link: null as unknown as NodeLink, pipeline: null as unknown as GPURenderPipeline, pipelineId: 0, linkId: 0, passKind: "node-points", geometry: null, geometryId: 0, sortKey: 0 };
         ctx.nodeLinkDrawItemPool[i] = item;
     }
+    return item;
+};
+
+export const acquireLatticeSpaceDrawItem = (ctx: RendererContext): LatticeSpaceDrawItem => {
+    const i = ctx.latticeSpaceDrawItemPoolUsed++;
+    let item = ctx.latticeSpaceDrawItemPool[i];
+    if (!item) { item = { space: null as unknown as LatticeSpace, pipeline: null as unknown as GPURenderPipeline, pipelineId: 0, spaceId: 0, sortKey: 0 }; ctx.latticeSpaceDrawItemPool[i] = item; }
     return item;
 };
 
@@ -558,6 +566,65 @@ export const buildNodeLinkDrawLists = (ctx: RendererContext, scene: Scene, camer
     ctx.transparentNodeLinkDrawList.sort((a, b) => b.sortKey - a.sortKey || a.pipelineId - b.pipelineId || a.geometryId - b.geometryId || a.linkId - b.linkId);
 };
 
+export const buildLatticeSpaceDrawLists = (ctx: RendererContext, scene: Scene, camera: Camera): void => {
+    const sceneSpaces = new Set(scene.latticeSpaces);
+    for (const [space, state] of ctx.latticeSpaceSortStates) {
+        if (sceneSpaces.has(space)) continue;
+        destroyLatticeSpaceSortState(ctx, space, state);
+        ctx.latticeSpaceSortStates.delete(space);
+    }
+    ctx.latticeSpaceDrawItemPoolUsed = 0;
+    ctx.opaqueLatticeSpaceDrawList.length = 0;
+    ctx.transparentLatticeSpaceDrawList.length = 0;
+    ctx.cullLatticeSpaceScratch.length = 0;
+    for (const space of scene.latticeSpaces) if (space.visible && space.drawCellCount > 0 && (space.hasData || space.colorMode === "solid")) ctx.cullLatticeSpaceScratch.push(space);
+    const visible: LatticeSpace[] = [];
+    if (ctx.frustumCullingEnabled && ctx.cullLatticeSpaceScratch.length > 0) {
+        const count = ctx.cullLatticeSpaceScratch.length;
+        ensureCullingCapacity(ctx, count);
+        const store = TransformStore.global();
+        const worldPtrsPtr = frameArena.alloc(count * 4, 4) as WasmPtr;
+        const centersPtr = frameArena.allocF32(count * 3) as WasmPtr;
+        const radiiPtr = frameArena.allocF32(count) as WasmPtr;
+        const worldPtrs = store.u32().subarray(worldPtrsPtr >>> 2, (worldPtrsPtr >>> 2) + count);
+        const centers = store.f32().subarray(centersPtr >>> 2, (centersPtr >>> 2) + count * 3);
+        const radii = store.f32().subarray(radiiPtr >>> 2, (radiiPtr >>> 2) + count);
+        for (let i = 0; i < count; i++) {
+            const space = ctx.cullLatticeSpaceScratch[i];
+            const bounds = space.getLocalBounds();
+            worldPtrs[i] = space.transform.worldMatrixPtr >>> 0;
+            centers[i * 3] = bounds.sphereCenter[0];
+            centers[i * 3 + 1] = bounds.sphereCenter[1];
+            centers[i * 3 + 2] = bounds.sphereCenter[2];
+            radii[i] = bounds.sphereRadius;
+        }
+        cullf.prepareWorldSpheresFromPtrs(ctx.cullCentersPtr, ctx.cullRadiiPtr, worldPtrsPtr, centersPtr, radiiPtr, count);
+        const planesPtr = frameArena.allocF32(24) as WasmPtr;
+        frustumf.writePlanesFromViewProjection(planesPtr, ctx.cameraUniformStagingPtr);
+        const outPtr = frameArena.alloc(count * 4, 4) as WasmPtr;
+        const visibleCount = cullf.spheresFrustum(outPtr, ctx.cullCentersPtr, ctx.cullRadiiPtr, count, planesPtr);
+        const out = store.u32();
+        for (let i = 0; i < visibleCount; i++) visible.push(ctx.cullLatticeSpaceScratch[out[(outPtr >>> 2) + i]]);
+    } else visible.push(...ctx.cullLatticeSpaceScratch);
+    recordFrustumCounts(ctx, ctx.cullLatticeSpaceScratch.length, visible.length);
+    for (const space of visible) {
+        const pipeline = getOrCreateLatticeSpacePipeline(ctx, space);
+        const item = acquireLatticeSpaceDrawItem(ctx);
+        item.space = space;
+        item.pipeline = pipeline;
+        item.pipelineId = getObjectId(ctx, pipeline);
+        item.spaceId = getObjectId(ctx, space);
+        const bounds = space.getWorldBounds();
+        const dx = bounds.sphereCenter[0] - camera.position[0];
+        const dy = bounds.sphereCenter[1] - camera.position[1];
+        const dz = bounds.sphereCenter[2] - camera.position[2];
+        item.sortKey = dx * dx + dy * dy + dz * dz;
+        if (space.blendMode === BlendMode.Opaque) ctx.opaqueLatticeSpaceDrawList.push(item); else ctx.transparentLatticeSpaceDrawList.push(item);
+    }
+    ctx.opaqueLatticeSpaceDrawList.sort((a, b) => a.pipelineId - b.pipelineId || a.spaceId - b.spaceId);
+    ctx.transparentLatticeSpaceDrawList.sort((a, b) => b.sortKey - a.sortKey || a.pipelineId - b.pipelineId || a.spaceId - b.spaceId);
+};
+
 export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder): void => {
     ctx.transparentMergedDrawList.length = 0;
     for (const item of ctx.transparentDrawList) ctx.transparentMergedDrawList.push(item);
@@ -565,13 +632,15 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
     for (const item of ctx.transparentPointCloudDrawList) ctx.transparentMergedDrawList.push(item);
     for (const item of ctx.transparentNodeLinkDrawList) ctx.transparentMergedDrawList.push(item);
     for (const item of ctx.transparentSplatFieldDrawList) ctx.transparentMergedDrawList.push(item);
+    for (const item of ctx.transparentLatticeSpaceDrawList) ctx.transparentMergedDrawList.push(item);
     if (ctx.transparentMergedDrawList.length === 0) return;
     const typeOrder = (x: TransparentDrawItem): number => {
         if ("mesh" in x) return 0;
         if ("field" in x && "geometry" in x) return 1;
         if ("cloud" in x) return 2;
         if ("link" in x) return 3;
-        return 4;
+        if ("space" in x) return 4;
+        return 5;
     };
     ctx.transparentMergedDrawList.sort((a, b) => {
         const d0 = b.sortKey - a.sortKey;
@@ -619,6 +688,9 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
             const bs = b as SplatFieldDrawItem;
             return as.fieldId - bs.fieldId;
         }
+        const aIsLattice = "space" in a;
+        const bIsLattice = "space" in b;
+        if (aIsLattice && bIsLattice) return (a as LatticeSpaceDrawItem).spaceId - (b as LatticeSpaceDrawItem).spaceId;
         return typeOrder(a) - typeOrder(b);
     });
     const bytes = driver.bytes();
@@ -632,8 +704,44 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
     let lastSplatField: SplatField | null = null;
     let lastGlyph: GlyphField | null = null;
     let lastNodeLink: NodeLink | null = null;
+    let lastLatticeSpace: LatticeSpace | null = null;
     for (let i = 0; i < ctx.transparentMergedDrawList.length; i++) {
         const item = ctx.transparentMergedDrawList[i];
+        if ("space" in item) {
+            const drawItem = item as LatticeSpaceDrawItem;
+            const space = drawItem.space;
+            if (!space.visible || space.drawCellCount <= 0) continue;
+            ensureLatticeSpaceBindGroup(ctx, space);
+            if (!space.bindGroup) continue;
+            if (drawItem.pipeline !== lastPipeline) {
+                pass.setPipeline(drawItem.pipeline);
+                lastPipeline = drawItem.pipeline;
+                lastLatticeSpace = null;
+                lastMaterial = null;
+                lastGeometry = null;
+                lastCloud = null;
+                lastSplatField = null;
+                lastGlyph = null;
+                lastNodeLink = null;
+            }
+            if (space !== lastLatticeSpace) {
+                pass.setBindGroup(1, space.bindGroup);
+                lastLatticeSpace = space;
+            }
+            if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
+            const slot = ctx.modelBufferIndex++;
+            const modelPtr = space.transform.worldMatrixPtr as WasmPtr;
+            const invPtr = ctx.modelUniformStagingPtr;
+            const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
+            mat4f.invert(invPtr, modelPtr);
+            mat4f.transpose(normalPtr, invPtr);
+            ctx.queue.writeBuffer(ctx.modelUniformBuffers[slot], 0, bytes, modelPtr, 64);
+            ctx.queue.writeBuffer(ctx.modelUniformBuffers[slot], 64, bytes, normalPtr, 64);
+            pass.setBindGroup(0, ctx.globalBindGroups[slot]);
+            if (space.dimensionCount === 2) pass.draw(6);
+            else pass.draw(36, space.drawCellCount);
+            continue;
+        }
         if ("mesh" in item) {
             const drawItem = item as DrawItem;
             const mesh = drawItem.mesh;

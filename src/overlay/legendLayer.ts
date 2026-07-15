@@ -8,9 +8,10 @@ import { clamp01, sampleColorStops } from "../utils";
 import { Colormap } from "../graphics/colormap";
 import { DataMaterial, type Color4 } from "../graphics/material";
 import { invertScaleTransformCPU, normalizeScaleTransform, type ScaleTransform } from "../scaling";
+import { PointCloud } from "../world/pointcloud";
 import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
-import { PointCloud } from "../world/pointcloud";
+import { LatticeSpace } from "../world/latticespace";
 import { DOMNodePool } from "./pool";
 import { resolveScreenAnchorPoint } from "./projection";
 import type { LegendLayerDescriptor, OverlayLayer, OverlayLegendExplicitSource, OverlayLegendSource, OverlaySystemLike, OverlayUpdateContext, OverlayVisualChangeEmitter } from "./types";
@@ -102,6 +103,24 @@ const resolveSource = (source: OverlayLegendSource, strictParity: boolean): Lege
         return {
             transform,
             signature: `glyphfield|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`,
+            sample: (t: number) => colormap.sampleCPU(t)
+        };
+    }
+    if (source instanceof LatticeSpace) {
+        const transform = normalizeScaleTransform(source.scaleTransform);
+        if (source.colorMode === "scalar" && source.colormap === "custom") {
+            const stops = source.colormapStops.slice();
+            return {
+                transform,
+                signature: `latticespace|custom|${serializeTransform(transform)}|${JSON.stringify(stops)}`,
+                sample: (t: number) => sampleCustomStops(t, stops)
+            };
+        }
+        const colormap = source.getColormapForBinding();
+        if (strictParity && !colormap.canSampleCPU) throw new Error("LegendLayer: bound latticespace colormap is GPU-only and cannot be sampled on CPU in strict parity mode.");
+        return {
+            transform,
+            signature: `latticespace|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`,
             sample: (t: number) => colormap.sampleCPU(t)
         };
     }

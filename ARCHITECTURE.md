@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: Wednesday, July 8, 2026.
+Last updated: Wednesday, July 15, 2026.
 
-Last commit: Wednesday, July 8, 2026, [**`208f7cd`**](https://www.github.com/Zushah/WasmGPU/commit/208f7cd).
+Last commit: Wednesday, July 8, 2026, [**`cb5a70a`**](https://www.github.com/Zushah/WasmGPU/commit/cb5a70a).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -16,7 +16,7 @@ Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah
   - [1.5. Scene and object model](#15-scene-and-object-model)
   - [1.6. Transforms](#16-transforms)
   - [1.7. Geometry, materials, textures, and colormaps](#17-geometry-materials-textures-and-colormaps)
-  - [1.8. Pointcloud, glyphfield, nodelink, and splatfield data](#18-pointcloud-glyphfield-nodelink-and-splatfield-data)
+  - [1.8. Pointcloud, glyphfield, nodelink, splatfield, and latticespace data](#18-pointcloud-glyphfield-nodelink-splatfield-and-latticespace-data)
   - [1.9. Lights, cameras, and controls](#19-lights-cameras-and-controls)
   - [1.10. Rendering pipeline](#110-rendering-pipeline)
   - [1.11. Browser runtime resources](#111-browser-runtime-resources)
@@ -69,7 +69,7 @@ flowchart LR
     subgraph API["Public API"]
         APP["User Application"]
         ENG["WasmGPU"]
-        FAC["Factory surface: scene, camera, controls, geometry, material, texture, mesh, pointcloud, glyphfield, nodelink, splatfield, light, asset import, animation, overlay, annotation, interop"]
+        FAC["Factory surface: scene, camera, controls, geometry, material, texture, mesh, pointcloud, glyphfield, nodelink, splatfield, latticespace, light, asset import, animation, overlay, annotation, interop"]
     end
 
     subgraph WGPU["WebGPU Engine"]
@@ -93,7 +93,7 @@ flowchart LR
         SCN["Scene"]
         TSTORE["Transform store in SoA memory"]
         MESH["Mesh with geometry, material, texture, morphing, & skinning"]
-        PGN["Pointcloud, glyphfield, nodelink, & splatfield"]
+        PGN["Pointcloud, glyphfield, nodelink, splatfield, & latticespace"]
         CMAP["Colormapping"]
         SKIN["Skinning instance data"]
         ASTORE["Annotation store"]
@@ -229,9 +229,9 @@ This diagram describes the current source tree, including [unreleased work](http
 
 The public API is exported from `./src/index.ts`. It exports the `WasmGPU` class, the renderer, compute helpers, scaling helpers, world objects, graphics objects, glTF helpers, overlay and annotation types, Python interop, WebAssembly interop, and math helpers.
 
-Applications normally enter through `WasmGPU.create(canvas, descriptor)` in `./src/core/engine.ts`. The runtime initializes WebAssembly, creates a WebGPU renderer, constructs the compute subsystem, and exposes factories for scenes, cameras, controls, geometry, materials, textures, meshes, pointclouds, glyphfields, nodelinks, splatfields, lights, glTF loading, animation, overlays, and annotations.
+Applications normally enter through `WasmGPU.create(canvas, descriptor)` in `./src/core/engine.ts`. The runtime initializes WebAssembly, creates a WebGPU renderer, constructs the compute subsystem, and exposes factories for scenes, cameras, controls, geometry, materials, textures, meshes, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, lights, glTF loading, animation, overlays, and annotations.
 
-The public API reads and writes data owned by the objects it creates. For example, a `Mesh` owns a transform, references geometry and material objects, and may own skin or morph runtime state. `Geometry`, `PointCloud`, `GlyphField`, `NodeLink`, and `SplatField` keep CPU-side records for external WebAssembly memory upload paths only when configured to retain CPU data. `PointCloud`, `GlyphField`, `NodeLink`, and `SplatField` follow an explicit external-buffer ownership model of owning GPU buffers they create internally and destroying caller-supplied external buffers only when constructed with `ownBuffers: true`. `PointCloud` supports setter-level `ownBuffer: true` on point and color buffer replacement, `GlyphField` supports setter-level `ownBuffers: true` on instance-buffer replacement, and `NodeLink` supports setter-level `ownBuffer: true` on per-channel node and edge buffer replacement. `DataMaterial` handles externally supplied data buffers differently because it does not destroy a `dataBuffer` supplied by the caller.
+The public API reads and writes data owned by the objects it creates. For example, a `Mesh` owns a transform, references geometry and material objects, and may own skin or morph runtime state. `Geometry`, `PointCloud`, `GlyphField`, `NodeLink`, `SplatField`, and `LatticeSpace` keep CPU-side records for external WebAssembly memory upload paths only when configured to retain CPU data. `PointCloud`, `GlyphField`, `NodeLink`, `SplatField`, and `LatticeSpace` follow an explicit external-buffer ownership model of owning GPU buffers they create internally and destroying caller-supplied external buffers only when constructed with `ownBuffers: true`. `PointCloud` supports setter-level `ownBuffer: true` on point and color buffer replacement, `GlyphField` supports setter-level `ownBuffers: true` on instance-buffer replacement, `NodeLink` supports setter-level `ownBuffer: true` on per-channel node and edge buffer replacement, and `LatticeSpace` supports setter-level `ownBuffer: true` on data and mask buffer replacement. `DataMaterial` handles externally supplied data buffers differently because it does not destroy a `dataBuffer` supplied by the caller.
 
 Before changing exported names, constructor descriptors, or factory return values, inspect `./src/index.ts`, `./src/core/engine.ts`, `./test/*.test.js`, and the examples under `./examples/`. Public API changes often require updates to examples and release-facing documentation when preparing a release.
 
@@ -265,7 +265,7 @@ The engine reads scene objects, transform state, camera state, material state, t
 
 ### 1.5. Scene and object model
 
-The scene model is implemented in `./src/world/scene.ts`. A `Scene` owns arrays of meshes, pointclouds, glyphfields, nodelinks, splatfields, lights, and a background color. It mutates those arrays through `add()`, `remove()`, `clear()`, and typed add/remove helpers.
+The scene model is implemented in `./src/world/scene.ts`. A `Scene` owns arrays of meshes, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, lights, and a background color. It mutates those arrays through `add()`, `remove()`, `clear()`, and typed add/remove helpers.
 
 The renderer reads visible scene objects through scene getters. It also reads scene lighting data and scene bounds. The scene limits non-ambient lights used for packed lighting data to `MAX_LIGHTS`, currently eight.
 
@@ -276,8 +276,9 @@ Objects in the scene own different data:
 - `./src/world/glyphfield.ts`: glyph geometry, instance data, optional borrowed external WebAssembly memory views, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external instance buffers.
 - `./src/world/nodelink.ts`: node data, edge data, optional borrowed external WebAssembly memory views, node and edge rendering modes, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external node and edge buffers.
 - `./src/world/splatfield.ts`: Gaussian splat instance data, optional borrowed external WebAssembly memory views, packed GPU buffers, transform, bounds, optional CPU records for upload and bounds computation, and per-object ownership flags for external buffers.
+- `./src/world/latticespace.ts`: regular 2D or 3D cell dimensions, X-fastest scalar/vector/RGBA data, optional activity masks, CPU/WebAssembly/GPU source ownership, scale and colormap state, analytic bounds, and retained cell records for picking.
 
-Mesh geometry and materials are reference-counted. `Mesh.destroy()` detaches the mesh from scene owners, destroys morph runtime state, disposes the skin instance, disposes the transform, and releases geometry and material references. `Scene.clear()` and typed clear methods remove scene references; they do not call `destroy()` on removed objects. `Scene.destroy()` calls `destroy()` on current meshes, pointclouds, glyphfields, nodelinks, and splatfields, then clears lights. Pointcloud, glyphfield, nodelink, and splatfield changes should be checked against renderer draw-list building, object-family culling behavior, GPU buffer ownership, picking paths, overlay legends where applicable, and tests.
+Mesh geometry and materials are reference-counted. `Mesh.destroy()` detaches the mesh from scene owners, destroys morph runtime state, disposes the skin instance, disposes the transform, and releases geometry and material references. `Scene.clear()` and typed clear methods remove scene references; they do not call `destroy()` on removed objects. `Scene.destroy()` calls `destroy()` on current meshes, pointclouds, glyphfields, nodelinks, splatfields, and latticespaces, then clears lights. Pointcloud, glyphfield, nodelink, splatfield, and latticespace changes should be checked against renderer draw-list building, object-family culling behavior, GPU buffer ownership, picking paths, overlay legends where applicable, and tests.
 
 ### 1.6. Transforms
 
@@ -307,9 +308,9 @@ Graphics data is implemented under `./src/graphics/`.
 
 `./src/graphics/colormap.ts` stores built-in or caller-provided color stops, optional CPU lookup tables, and optional caller-provided GPU texture views and samplers. It can create cached GPU lookup resources for a device, and CPU sampling works only for colormaps that have CPU lookup data.
 
-### 1.8. Pointcloud, glyphfield, nodelink, and splatfield data
+### 1.8. Pointcloud, glyphfield, nodelink, splatfield, and latticespace data
 
-Pointclouds, glyphfields, nodelinks, and splatfields are separate scene object types. They share several patterns: a transform, visibility flags, GPU buffer references, uniform buffers, bind groups, bounds, and renderer-owned draw-list state. Pointclouds, glyphfields, and nodelinks also carry scale transform state plus optional CPU records for picking, while splatfields carry packed Gaussian attributes, optional CPU records for picking, and private renderer-side GPU sort state for transparent rendering.
+Pointclouds, glyphfields, nodelinks, splatfields, and latticespaces are separate scene object types. They share several patterns: a transform, visibility flags, GPU buffer references, uniform buffers, bind groups, bounds, and renderer-owned draw-list state. Pointclouds, glyphfields, nodelinks, and latticespaces carry scale transform state plus optional CPU records for picking, while splatfields carry packed Gaussian attributes, optional CPU records for picking, and private renderer-side GPU sort state for transparent rendering.
 
 `./src/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays, borrowed external `WasmMemoryView<Float32Array>` sources, or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available or external WebAssembly data is explicitly refreshed with bounds recomputation. Pointcloud WebAssembly sources are borrowed, refresh is explicit, and upload copies the active packed f32 vec4 ranges into pointcloud-owned GPU buffers without freeing or owning the external WebAssembly memory. It owns GPU buffers it creates from CPU data or external WebAssembly sources and destroys caller-supplied external point and color buffers only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer.
 
@@ -318,6 +319,8 @@ Pointclouds, glyphfields, nodelinks, and splatfields are separate scene object t
 `./src/world/nodelink.ts` handles node positions, node scalar or color data, node radii, edges, node geometry modes, edge geometry modes, separate node and edge scale transforms, separate colormaps, uniform data, and picking records. It can read CPU arrays, borrowed external `WasmMemoryView` sources, or external GPU buffers per channel. Nodelink external WebAssembly sources are borrowed, refresh is explicit, and upload copies active node and edge ranges into nodelink-owned GPU buffers without freeing or owning the external WebAssembly memory. It computes bounds from retained CPU node positions in TypeScript. Its update methods can queue or write GPU-buffer changes for node positions, edges, scalars, radii, and colors. It owns GPU buffers it creates from CPU data or external WebAssembly sources and borrows caller-supplied external node and edge buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer. The renderer has nodelink draw and pick paths, and overlay legends can read nodelink scale and colormap state.
 
 `./src/world/splatfield.ts` handles precomputed Gaussian splat records. It reads friendly CPU arrays, borrowed external `WasmMemoryView<Float32Array>` sources, or caller-supplied packed GPU buffers for center-plus-opacity, rotation, scale, and either direct color data or spherical harmonic color coefficients. Splatfield external WebAssembly sources are borrowed, refresh is explicit, and upload copies active packed ranges into splatfield-owned GPU buffers without freeing or owning the external WebAssembly memory. Splatfield keeps CPU arrays, external WebAssembly memory upload, and external GPU buffers as distinct source families. Spherical harmonic coefficients use flat f32 RGB-triple storage for degree 0 through degree 3 and can come from `sh0`, `sh1`, `sh2`, and `sh3` CPU arrays, an external `shBuffer`, or an external `wasmSphericalHarmonics` source. CPU direct colors in sRGB space are decoded to linear during packing. External direct colors in sRGB space and spherical harmonic colors in sRGB space are decoded in the shader. In spherical harmonic mode, the splatfield render shader evaluates RGB from the local-frame view direction; it does not rotate coefficients with Wigner-D matrices. Bounds can come from explicit descriptors or from conservative CPU-side center-plus-scale expansion. `SplatField.destroy()` destroys internally created buffers and optionally destroys caller-supplied external buffers when `ownBuffers: true`. The renderer treats splatfields as transparent-only objects, GPU-sorts each field by camera depth for rendering, includes them in nearest-footprint picking without consuming the sorted index buffer, but excludes them from occlusion culling.
+
+`./src/world/latticespace.ts` handles regular 2D and 3D cell lattices. Public dimensions are spatial `[x, y]` or `[x, y, z]`, while flat data is C-compatible X-fastest storage: `x + width * y` in 2D and `x + width * (y + height * z)` in 3D. Dimensions and component count are immutable structural properties. Scalar, vector, RGBA, and solid-color visualization share scale, colormap, clipping, mask, filtering, ownership, WebAssembly refresh, and CPU-retention behavior with the other scientific primitives. Bounds are analytic from origin, spacing, cell scale, index range, and transform. The renderer draws one procedural quad for 2D lattices and procedural cube instances for 3D lattices; `cellScale < 1` exposes separated cell faces, while fully packed cells suppress shared internal faces. Transparent 3D lattices use a latticespace-private GPU radix sorter over implicit cell centers; it reuses the raw scan WGSL sources but does not use or extend the public compute kernel API. Picking returns exact linear and spatial cell indices, and opaque latticespaces participate in occlusion capture and filtering. This surface renderer does not implement raymarched participating-media volume rendering, bricking, or out-of-core streaming.
 
 Before changing one of these object types, inspect the matching WGSL under `./src/wgsl/world/`, the renderer drawlist and object helper code under `./src/core/renderer.ts`, `./src/core/drawlists.ts`, `./src/core/objects.ts`, `./src/core/picking.ts`, and `./src/core/occlusion.ts` when applicable, picking types in `./src/world/picking.ts` when the object participates in picking, scale source descriptors in `./src/scaling/` when the object participates in scaling, and tests such as `./test/nodelink.test.js` or `./test/splatfield.test.js`.
 
@@ -344,16 +347,16 @@ The public renderer class is implemented in `./src/core/renderer.ts`. It stores 
 - allocate camera, lighting, and model staging memory from the WebAssembly frame arena;
 - update camera matrices and scene transforms;
 - write camera and lighting uniforms;
-- build unfiltered draw lists for meshes, pointclouds, glyphfields, nodelinks, and splatfields;
+- build unfiltered draw lists for meshes, pointclouds, glyphfields, nodelinks, splatfields, and latticespaces;
 - aggregate render-only frustum culling stats when enabled;
-- optionally reuse a valid previous-frame occlusion hierarchy to conservatively filter opaque meshes, pointclouds, glyphfields, and nodelinks;
-- GPU-sort visible splats inside each visible splatfield before transparent draw encoding;
+- optionally reuse a valid previous-frame occlusion hierarchy to conservatively filter opaque meshes, pointclouds, glyphfields, nodelinks, and latticespaces;
+- GPU-sort visible splats and transparent 3D lattice cells inside their respective renderer-private sort paths before transparent draw encoding;
 - encode render passes for opaque objects, transmission copies and passes when needed, transparent objects, and optional SMAA;
 - encode timestamp query resolve and readback when GPU timing is available;
 - submit the command buffer;
 - optionally capture a low-resolution opaque depth hierarchy for a later frame and schedule its readback without blocking the current frame.
 
-The renderer reads scene objects, transform world matrices, material state, texture views, geometry buffers, pointcloud buffers, glyphfield buffers, nodelink buffers, splatfield buffers, camera matrices, light data, and WebAssembly culling results. It mutates GPU buffers, bind groups, pipeline caches, draw-list pools, pick textures, timing query buffers, private splatfield sort buffers, internal counters, and the bounded ring of occlusion readback slots. Splatfield bind groups include a spherical harmonic storage-buffer binding; non-SH splatfields use a renderer-owned dummy buffer for that binding. Picking helpers are in `./src/core/picking.ts` while render-only previous-frame occlusion helpers are in `./src/core/occlusion.ts`. Note that picking and warmup do not apply render-only previous-frame occlusion filtering.
+The renderer reads scene objects, transform world matrices, material state, texture views, geometry buffers, pointcloud buffers, glyphfield buffers, nodelink buffers, splatfield buffers, latticespace data and mask buffers, camera matrices, light data, and WebAssembly culling results. It mutates GPU buffers, bind groups, pipeline caches, draw-list pools, pick textures, timing query buffers, private splatfield and latticespace sort buffers, internal counters, and the bounded ring of occlusion readback slots. Splatfield bind groups include a spherical harmonic storage-buffer binding; non-SH splatfields use a renderer-owned dummy buffer for that binding. Picking helpers are in `./src/core/picking.ts` while render-only previous-frame occlusion helpers are in `./src/core/occlusion.ts`. Note that picking and warmup do not apply render-only previous-frame occlusion filtering.
 
 Changing render behavior usually means checking `./src/core/renderer.ts`, the relevant helper module(s) under `./src/core/`, the graphics classes in `./src/graphics/`, object classes in `./src/world/`, WGSL shader variants in `./src/wgsl/`, and renderer-focused tests in `./test/`.
 
@@ -361,7 +364,7 @@ Changing render behavior usually means checking `./src/core/renderer.ts`, the re
 
 Browser runtime resources are WebGPU objects created and mutated by renderer and compute paths. The renderer creates the adapter, device, queue, canvas context, render targets, depth targets, texture views, samplers, bind group layouts, bind groups, render pipelines, and render pass descriptors. The compute subsystem stores device and queue references from the runtime and creates storage buffers, uniform buffers, compute pipelines, bind groups, scratch buffers, and readback staging buffers.
 
-Geometry, materials, textures, pointclouds, glyphfields, nodelinks, splatfields, skin instances, and compute objects store WebGPU handles. Render and compute command encoding read those handles. Destruction paths exist for renderer resources, textures, geometry and material buffers, pointclouds, glyphfields, nodelinks, splatfields, private splatfield sort scratch buffers, skin instances, compute buffers, readback rings, scratch pools, and GPUndarray-owned buffers. Compute pipeline wrappers do not expose a `destroy()` method because WebGPU pipeline objects are not explicitly destroyed.
+Geometry, materials, textures, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, skin instances, and compute objects store WebGPU handles. Render and compute command encoding read those handles. Destruction paths exist for renderer resources, textures, geometry and material buffers, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, private splatfield and latticespace sort scratch buffers, skin instances, compute buffers, readback rings, scratch pools, and GPUndarray-owned buffers. Compute pipeline wrappers do not expose a `destroy()` method because WebGPU pipeline objects are not explicitly destroyed.
 
 Changing browser resource layout requires checking usage flags, bind group layout entries, pipeline layout creation, shader bindings, fallback resources, resize paths, and destruction paths. A resource layout change usually spans TypeScript, WGSL, and at least one test or example.
 
@@ -369,7 +372,7 @@ Changing browser resource layout requires checking usage flags, bind group layou
 
 Picking types and selection helpers are implemented in `./src/world/picking.ts`. The renderer keeps the public pick wrappers in `./src/core/renderer.ts`, while `./src/core/picking.ts` implements the actual pick passes. Pick rendering writes object and element identifiers into GPU textures, then reads back the requested pixel or region.
 
-The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./src/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, nodelinks, and splatfields when CPU records are available. Retained splatfield CPU records can include direct color data or spherical harmonic degree and coefficient data. Picking is nearest-footprint/depth picking and does not evaluate spherical harmonic visual contribution. Pick preparation uses the renderer's base scene-preparation path only, so it does not apply render-only occlusion filtering and does not consume previous-frame occlusion results.
+The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./src/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, nodelinks, splatfields, and latticespaces when CPU records are available. Retained splatfield CPU records can include direct color data or spherical harmonic degree and coefficient data. Picking is nearest-footprint/depth picking and does not evaluate spherical harmonic visual contribution. Pick preparation uses the renderer's base scene-preparation path only, so it does not apply render-only occlusion filtering and does not consume previous-frame occlusion results.
 
 The overlay framework lives under `./src/overlay/`. `./src/overlay/system.ts` creates a DOM overlay root next to the canvas, tracks layers, observes resize and scroll changes, listens to controls when attached, and marks layers dirty for camera, viewport, layout, scale, colormap, or interaction changes. Built-in layers include axis triad, grid, and legend layers.
 
@@ -401,7 +404,7 @@ Contributors changing compute code should check buffer usage flags, copy alignme
 
 The scaling service is implemented in `./src/scaling/service.ts` with scale transform logic in `./src/scaling/transform.ts`. It uses compute kernels to extract finite f32 values, compact them, compute min and max values, build histograms when percentile clamping is requested, and read results back asynchronously.
 
-The service reads scale source descriptors from data materials, pointclouds, glyphfields, and nodelinks. It caches in-flight and completed results using source buffer identity, revision, component selection, value mode, stride, offset, count, transform settings, and percentile settings.
+The service reads scale source descriptors from data materials, pointclouds, glyphfields, nodelinks, and latticespaces. It caches in-flight and completed results using source buffer identity, revision, component selection, value mode, stride, offset, count, transform settings, and percentile settings.
 
 Scale transforms pack values for WGSL in a fixed float layout. The current modes include linear, logarithmic, and symmetric logarithmic behavior, plus range or percentile clamping, gamma, and inversion.
 
@@ -467,7 +470,7 @@ Shader directories currently map to architecture areas:
 
 - `./src/wgsl/core/`: SMAA, mesh picking shaders, mesh occlusion capture, and occlusion hierarchy reduction.
 - `./src/wgsl/graphics/`: mesh material shaders, transmission shaders, data material shaders, custom material defaults, mipmap generation, and skinned or instanced variants.
-- `./src/wgsl/world/`: pointcloud, glyphfield, nodelink, splatfield, picking, private splatfield sorting, and object-family occlusion capture shaders.
+- `./src/wgsl/world/`: pointcloud, glyphfield, nodelink, splatfield, latticespace, picking, private splatfield and latticespace sorting, and object-family occlusion capture shaders.
 - `./src/wgsl/compute/`: copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, and blit kernels.
 
 WGSL changes must stay in sync with bind group layouts, vertex buffer layouts, uniform packing, material descriptors, object uniform layouts, and compute pipeline resource bindings in TypeScript.
@@ -504,9 +507,9 @@ These invariants are visible in the current code:
 - Scene lighting uniform data currently uses at most eight non-ambient lights.
 - WebGPU buffer readback requires buffers with copy-source usage.
 - Buffer writes are padded to four-byte alignment where needed.
-- Opaque occluder capture uses only coverage-safe subsets of meshes, pointclouds, glyphfields, and nodelinks; splatfields are currently excluded from occlusion capture and render-only occlusion filtering.
-- Picking attributes for pointclouds, glyphfields, nodelinks, and splatfields depend on retained CPU-side records.
-- Pointcloud, glyphfield, nodelink, and splatfield external GPU buffers are borrowed by default and are destroyed only when their ownership options request it.
+- Opaque occluder capture uses only coverage-safe subsets of meshes, pointclouds, glyphfields, nodelinks, and latticespaces; splatfields are currently excluded from occlusion capture and render-only occlusion filtering.
+- Picking attributes for pointclouds, glyphfields, nodelinks, splatfields, and latticespaces depend on retained CPU-side records.
+- Pointcloud, glyphfield, nodelink, splatfield, and latticespace external GPU buffers are borrowed by default and are destroyed only when their ownership options request it.
 - Shader uniform layouts, TypeScript packing code, and WGSL structs must match.
 
 ## 2. Codebase
@@ -548,7 +551,7 @@ Important files:
 - `./src/core/transmission.ts`: transmission target lifecycle and transmissive draw detection.
 - `./src/core/drawlists.ts`: drawitem pools, drawlist building, culling-capacity helpers, and transparent merged execution.
 - `./src/core/materials.ts`: material pipeline, shader-module, bind-group, blend, and cull helpers.
-- `./src/core/objects.ts`: mesh, pointcloud, glyphfield, nodelink, and splatfield helpers.
+- `./src/core/objects.ts`: mesh, pointcloud, glyphfield, nodelink, splatfield, and latticespace helpers, including renderer-private sort state.
 - `./src/core/picking.ts`: pick target resources, pick queries, pick draw execution, and pick pipelines.
 - `./src/core/occlusion.ts`: render-only previous-frame occlusion resource lifecycle, hierarchy validity checks, conservative opaque filtering, capture/readback, and occlusion pipelines.
 - `./src/core/transform.ts`: global transform store and `Transform` class. It stores transform data in WebAssembly memory and calls Rust transform functions.
@@ -573,6 +576,7 @@ Important files:
 - `./src/world/glyphfield.ts`: glyph instance data, geometry modes, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
 - `./src/world/nodelink.ts`: node and edge data, rendering modes, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
 - `./src/world/splatfield.ts`: Gaussian splat data, direct colors, spherical harmonic coefficient data, GPU-buffer upload, CPU-array upload, WASM-memory upload, bounds, color-space handling, and picking records.
+- `./src/world/latticespace.ts`: regular 2D/3D cell data, X-fastest indexing, masks, GPU-buffer upload, CPU-array upload, WASM-memory upload, analytic bounds, scale and colormap state, and picking records.
 - `./src/world/camera.ts`: base, perspective, and orthographic cameras.
 - `./src/world/controls.ts`: navigation controls, orbit controls, trackball controls, fly controls, pointer and keyboard input, damping, pointer lock, and scene fitting.
 - `./src/world/light.ts`: ambient, directional, point, and spot lights plus glTF light transform binding helpers.
@@ -584,7 +588,7 @@ Common interactions:
 - `./src/core/renderer.ts` reads visible world objects and their GPU resources.
 - `./src/gltf/import.ts` creates and mutates world objects from assets.
 - `./src/overlay/annotation/` creates marker objects and reads picking results.
-- `./src/scaling/` reads scale source descriptors from pointclouds, glyphfields, nodelinks, and data materials.
+- `./src/scaling/` reads scale source descriptors from pointclouds, glyphfields, nodelinks, latticespaces, and data materials.
 
 ### 2.4. Graphics data
 
@@ -637,7 +641,7 @@ Important files:
 
 Common interactions:
 
-- `./src/world/pointcloud.ts`, `./src/world/glyphfield.ts`, `./src/world/nodelink.ts`, and `./src/graphics/material.ts` expose scale sources.
+- `./src/world/pointcloud.ts`, `./src/world/glyphfield.ts`, `./src/world/nodelink.ts`, `./src/world/latticespace.ts`, and `./src/graphics/material.ts` expose scale sources.
 - `./src/overlay/legendLayer.ts` reads scaling and colormap state for legends.
 - WGSL kernels under `./src/wgsl/compute/` implement GPU work.
 
@@ -763,7 +767,7 @@ Important directories:
 
 - `./src/wgsl/core/`: core render support shaders such as SMAA, mesh picking, mesh occlusion capture, and occlusion hierarchy reduction.
 - `./src/wgsl/graphics/`: material shaders, standard and transmission shader variants, data material shaders, mipmap generation, and custom material defaults.
-- `./src/wgsl/world/`: pointcloud, glyphfield, nodelink, splatfield, picking, private splatfield sorting, and occlusion capture shaders.
+- `./src/wgsl/world/`: pointcloud, glyphfield, nodelink, splatfield, latticespace, picking, private object-family sorting, and occlusion capture shaders.
 - `./src/wgsl/compute/`: compute kernels for copy, reductions, scans, histograms, compaction, radix sort, scaling, blitting, and LU factoring/solving.
 
 Common interactions:

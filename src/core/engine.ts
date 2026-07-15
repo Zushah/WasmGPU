@@ -35,10 +35,12 @@ import { NavigationControls, OrbitControls, TrackballControls, FlyControls } fro
 import type { NavigationControlsDescriptor, OrbitControlsDescriptor, TrackballControlsDescriptor, FlyControlsDescriptor } from "../world/controls";
 import { GlyphField } from "../world/glyphfield";
 import type { GlyphFieldDescriptor } from "../world/glyphfield";
-import { NodeLink } from "../world/nodelink";
-import type { NodeLinkDescriptor } from "../world/nodelink";
+import { LatticeSpace } from "../world/latticespace";
+import type { LatticeSpaceDescriptor } from "../world/latticespace";
 import { AmbientLight, DirectionalLight, PointLight, SpotLight } from "../world/light";
 import { Mesh } from "../world/mesh";
+import { NodeLink } from "../world/nodelink";
+import type { NodeLinkDescriptor } from "../world/nodelink";
 import { SelectionStore } from "../world/picking";
 import type { PickAttributes, PickHit, PickLassoPoint, PickQuery, PickRegionQuery, PickRegionResult, PickResult } from "../world/picking";
 import { PointCloud } from "../world/pointcloud";
@@ -220,6 +222,7 @@ export class WasmGPU {
         if (hit.kind === "pointcloud") return hit.object.mapLinearIndexToNd(hit.elementIndex);
         if (hit.kind === "glyphfield") return hit.object.mapLinearIndexToNd(hit.elementIndex);
         if (hit.kind === "splatfield") return hit.object.mapLinearIndexToNd(hit.elementIndex);
+        if (hit.kind === "latticespace") return hit.object.mapLinearIndexToCell(hit.elementIndex);
         if (hit.kind === "nodelink") { const decoded = hit.object.decodePickElement(hit.elementIndex); if (!decoded || decoded.component !== "node") return null; return hit.object.mapLinearNodeIndexToNd(decoded.componentIndex); }
         return null;
     }
@@ -274,6 +277,12 @@ export class WasmGPU {
                 sphericalHarmonicsDegree: rec.sphericalHarmonicsDegree,
                 sphericalHarmonics: rec.sphericalHarmonics
             };
+        }
+        if (hit.kind === "latticespace") {
+            const record = hit.object.getCellRecord(hit.elementIndex);
+            if (!record || record.values.length === 0) return null;
+            const vector: [number, number, number, number] = [record.values[0] ?? 0, record.values[1] ?? 0, record.values[2] ?? 0, record.values[3] ?? 0];
+            return { scalar: record.scalar, vector, color: record.color };
         }
         return null;
     }
@@ -486,6 +495,10 @@ export class WasmGPU {
 
     createSplatField(descriptor: SplatFieldDescriptor): SplatField {
         return new SplatField(descriptor);
+    }
+
+    createLatticeSpace(descriptor: LatticeSpaceDescriptor): LatticeSpace {
+        return new LatticeSpace(descriptor);
     }
 
     readonly colormap = {

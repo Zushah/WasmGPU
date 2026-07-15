@@ -40,6 +40,8 @@ export { NavigationControls, OrbitControls, TrackballControls, FlyControls, Axis
 export type { NavigationMode, InspectionView, NavigationControlsMouseButtons, OrbitControlsMouseButtons, TrackballControlsMouseButtons, FlyControlsKeyMap, FlyControlsYawMode, NavigationControlsChangeListener, NavigationControlsInteractionListener, NavigationControlsDescriptor, OrbitControlsDescriptor, TrackballControlsDescriptor, FlyControlsDescriptor, AxisConventionDescriptor, AxisConventionPreset, AxisConventionInput, FitToBoundsOptions, SetViewOptions } from "./world/controls";
 export { GlyphField } from "./world/glyphfield";
 export type { GlyphFieldDescriptor, GlyphShape, GlyphColorMode, GlyphColormap, GlyphFieldVisualChangeKind, GlyphFieldWasmRefreshOptions, GlyphFieldWasmChannelOptions, GlyphFieldWasmInstancesOptions, GlyphFieldWasmSources } from "./world/glyphfield";
+export { LatticeSpace } from "./world/latticespace";
+export type { LatticeSpaceDescriptor, LatticeSpaceDimensions, LatticeSpaceIndex, LatticeSpaceIndexRange, LatticeSpaceColorMode, LatticeSpaceColorSpace, LatticeSpaceColormap, LatticeSpaceVisualChangeKind, LatticeSpaceWasmRefreshOptions, LatticeSpaceWasmSourceOptions } from "./world/latticespace";
 export { Light, AmbientLight, DirectionalLight, PointLight, SpotLight } from "./world/light";
 export type { LightType, AmbientLightDescriptor, DirectionalLightDescriptor, PointLightDescriptor, SpotLightDescriptor } from "./world/light";
 export { Mesh } from "./world/mesh";

@@ -9,6 +9,7 @@ import { PointCloud } from "./pointcloud";
 import { GlyphField } from "./glyphfield";
 import { NodeLink } from "./nodelink";
 import { SplatField } from "./splatfield";
+import { LatticeSpace } from "./latticespace";
 import { Color } from "../graphics/material";
 import { Light, AmbientLight } from "./light";
 import { Bounds3, emptyBounds, unionBounds } from "./bounds";
@@ -27,6 +28,7 @@ export class Scene {
     private _glyphFields: GlyphField[] = [];
     private _nodeLinks: NodeLink[] = [];
     private _splatFields: SplatField[] = [];
+    private _latticeSpaces: LatticeSpace[] = [];
     private _lights: Light[] = [];
     private _background: Color;
     static readonly MAX_LIGHTS = 8;
@@ -63,12 +65,17 @@ export class Scene {
         return this._splatFields;
     }
 
+    get latticeSpaces(): readonly LatticeSpace[] {
+        return this._latticeSpaces;
+    }
+
     add(mesh: Mesh): this;
     add(pointCloud: PointCloud): this;
     add(glyphField: GlyphField): this;
     add(nodeLink: NodeLink): this;
     add(splatField: SplatField): this;
-    add(obj: Mesh | PointCloud | GlyphField | NodeLink | SplatField): this {
+    add(latticeSpace: LatticeSpace): this;
+    add(obj: Mesh | PointCloud | GlyphField | NodeLink | SplatField | LatticeSpace): this {
         if (obj instanceof Mesh) {
             if (obj.destroyed) throw new Error("Scene: cannot add a destroyed mesh.");
             if (!this._meshes.includes(obj)) {
@@ -81,8 +88,10 @@ export class Scene {
             if (!this._glyphFields.includes(obj)) this._glyphFields.push(obj);
         } else if (obj instanceof NodeLink) {
             if (!this._nodeLinks.includes(obj)) this._nodeLinks.push(obj);
-        } else {
+        } else if (obj instanceof SplatField) {
             if (!this._splatFields.includes(obj)) this._splatFields.push(obj);
+        } else {
+            if (!this._latticeSpaces.includes(obj)) this._latticeSpaces.push(obj);
         }
         return this;
     }
@@ -92,7 +101,8 @@ export class Scene {
     remove(glyphField: GlyphField): this;
     remove(nodeLink: NodeLink): this;
     remove(splatField: SplatField): this;
-    remove(obj: Mesh | PointCloud | GlyphField | NodeLink | SplatField): this {
+    remove(latticeSpace: LatticeSpace): this;
+    remove(obj: Mesh | PointCloud | GlyphField | NodeLink | SplatField | LatticeSpace): this {
         if (obj instanceof Mesh) {
             const idx = this._meshes.indexOf(obj);
             if (idx !== -1) this._meshes.splice(idx, 1);
@@ -106,9 +116,12 @@ export class Scene {
         } else if (obj instanceof NodeLink) {
             const idx = this._nodeLinks.indexOf(obj);
             if (idx !== -1) this._nodeLinks.splice(idx, 1);
-        } else {
+        } else if (obj instanceof SplatField) {
             const idx = this._splatFields.indexOf(obj);
             if (idx !== -1) this._splatFields.splice(idx, 1);
+        } else {
+            const idx = this._latticeSpaces.indexOf(obj);
+            if (idx !== -1) this._latticeSpaces.splice(idx, 1);
         }
         return this;
     }
@@ -120,6 +133,7 @@ export class Scene {
         this._glyphFields = [];
         this._nodeLinks = [];
         this._splatFields = [];
+        this._latticeSpaces = [];
         return this;
     }
 
@@ -140,6 +154,11 @@ export class Scene {
 
     clearSplatFields(): this {
         this._splatFields = [];
+        return this;
+    }
+
+    clearLatticeSpaces(): this {
+        this._latticeSpaces = [];
         return this;
     }
 
@@ -206,6 +225,14 @@ export class Scene {
         return this._splatFields.filter(s => s.name === name);
     }
 
+    findLatticeSpaceByName(name: string): LatticeSpace | undefined {
+        return this._latticeSpaces.find(s => s.name === name);
+    }
+
+    findAllLatticeSpacesByName(name: string): LatticeSpace[] {
+        return this._latticeSpaces.filter(s => s.name === name);
+    }
+
     get visibleMeshes(): Mesh[] {
         return this._meshes.filter(m => m.visible);
     }
@@ -224,6 +251,10 @@ export class Scene {
 
     get visibleSplatFields(): SplatField[] {
         return this._splatFields.filter(s => s.visible);
+    }
+
+    get visibleLatticeSpaces(): LatticeSpace[] {
+        return this._latticeSpaces.filter(s => s.visible);
     }
 
     get enabledLights(): Light[] {
@@ -263,11 +294,13 @@ export class Scene {
         const glyphs = visibleOnly ? this.visibleGlyphFields : this._glyphFields;
         const links = visibleOnly ? this.visibleNodeLinks : this._nodeLinks;
         const splats = visibleOnly ? this.visibleSplatFields : this._splatFields;
+        const spaces = visibleOnly ? this.visibleLatticeSpaces : this._latticeSpaces;
         for (const mesh of meshes) addBounds(mesh.getWorldBounds());
         for (const pointCloud of clouds) addBounds(pointCloud.getWorldBounds());
         for (const glyphField of glyphs) addBounds(glyphField.getWorldBounds());
         for (const nodeLink of links) addBounds(nodeLink.getWorldBounds());
         for (const splatField of splats) addBounds(splatField.getWorldBounds());
+        for (const latticeSpace of spaces) addBounds(latticeSpace.getWorldBounds());
         return aggregated;
     }
 
@@ -311,6 +344,14 @@ export class Scene {
         for (const s of this._splatFields) if (s.visible) callback(s);
     }
 
+    traverseLatticeSpaces(callback: (s: LatticeSpace) => void): void {
+        for (const s of this._latticeSpaces) callback(s);
+    }
+
+    traverseVisibleLatticeSpaces(callback: (s: LatticeSpace) => void): void {
+        for (const s of this._latticeSpaces) if (s.visible) callback(s);
+    }
+
     destroy(): void {
         const meshes = [...this._meshes];
         for (const mesh of meshes) this.remove(mesh);
@@ -319,11 +360,13 @@ export class Scene {
         for (const g of this._glyphFields) g.destroy();
         for (const n of this._nodeLinks) n.destroy();
         for (const s of this._splatFields) s.destroy();
+        for (const s of this._latticeSpaces) s.destroy();
         this._meshes = [];
         this._pointClouds = [];
         this._glyphFields = [];
         this._nodeLinks = [];
         this._splatFields = [];
+        this._latticeSpaces = [];
         this._lights = [];
     }
 }

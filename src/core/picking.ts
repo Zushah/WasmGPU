@@ -14,6 +14,7 @@ import { PointCloud } from "../world/pointcloud";
 import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
 import { SplatField } from "../world/splatfield";
+import { LatticeSpace } from "../world/latticespace";
 import { Scene } from "../world/scene";
 import type { PickLassoPoint, PickRegionQuery } from "../world/picking";
 import { animf, driver, frameArena, mat4, mat4f } from "../wasm";
@@ -25,10 +26,11 @@ import pickPointCloudWGSL from "../wgsl/world/picking-pointcloud.wgsl";
 import pickGlyphFieldWGSL from "../wgsl/world/picking-glyphfield.wgsl";
 import pickNodeLinkWGSL from "../wgsl/world/picking-nodelink.wgsl";
 import pickSplatFieldWGSL from "../wgsl/world/picking-splatfield.wgsl";
+import pickLatticeSpaceWGSL from "../wgsl/world/picking-latticespace.wgsl";
 import type { RendererContext } from "./context";
-import type { DecodedPickSample, DrawItem, GlyphFieldDrawItem, NodeLinkDrawItem, PointCloudDrawItem, RendererPickHit, RendererPickRegionBounds, RendererPickRegionResult, ResolvedPickRegionQuery, SplatFieldDrawItem } from "./types";
+import type { DecodedPickSample, DrawItem, GlyphFieldDrawItem, LatticeSpaceDrawItem, NodeLinkDrawItem, PointCloudDrawItem, RendererPickHit, RendererPickRegionBounds, RendererPickRegionResult, ResolvedPickRegionQuery, SplatFieldDrawItem } from "./types";
 import { getCullMode } from "./materials";
-import { ensureGlyphFieldBindGroup, ensureNodeLinkBindGroup, ensurePointCloudBindGroup, ensureSplatFieldBindGroup, getGlyphFieldBindGroupLayout, getNodeLinkBindGroupLayout, getPointCloudBindGroupLayout, getSplatFieldBindGroupLayout } from "./objects";
+import { ensureGlyphFieldBindGroup, ensureLatticeSpaceBindGroup, ensureNodeLinkBindGroup, ensurePointCloudBindGroup, ensureSplatFieldBindGroup, getGlyphFieldBindGroupLayout, getLatticeSpaceBindGroupLayout, getNodeLinkBindGroupLayout, getPointCloudBindGroupLayout, getSplatFieldBindGroupLayout } from "./objects";
 import { ensureModelBufferPool, getObjectId } from "./resources";
 
 const alignTo256 = (x: number): number => (x + 255) & ~255;
@@ -149,6 +151,7 @@ const resolveRendererPickHit = (ctx: RendererContext, camera: Camera, sample: De
     if (obj instanceof GlyphField) return { kind: "glyphfield", object: obj, objectId: sample.objectId, elementIndex: sample.elementIndex, worldPosition };
     if (obj instanceof NodeLink) return { kind: "nodelink", object: obj, objectId: sample.objectId, elementIndex: sample.elementIndex, worldPosition };
     if (obj instanceof SplatField) return { kind: "splatfield", object: obj, objectId: sample.objectId, elementIndex: sample.elementIndex, worldPosition };
+    if (obj instanceof LatticeSpace) return { kind: "latticespace", object: obj, objectId: sample.objectId, elementIndex: sample.elementIndex, worldPosition };
     return null;
 };
 
@@ -206,6 +209,8 @@ const executePickRegion = async (ctx: RendererContext, scene: Scene, camera: Cam
     executeSplatFieldPickDrawList(ctx, pass, ctx.transparentSplatFieldDrawList);
     executeNodeLinkPickDrawList(ctx, pass, ctx.opaqueNodeLinkDrawList);
     executeNodeLinkPickDrawList(ctx, pass, ctx.transparentNodeLinkDrawList);
+    executeLatticeSpacePickDrawList(ctx, pass, ctx.opaqueLatticeSpaceDrawList);
+    executeLatticeSpacePickDrawList(ctx, pass, ctx.transparentLatticeSpaceDrawList);
     pass.end();
     encoder.copyTextureToBuffer(
         { texture: ctx.pickIdTexture, origin: { x: query.x, y: query.y, z: 0 } },
@@ -616,6 +621,42 @@ const executeSplatFieldPickDrawList = (ctx: RendererContext, pass: GPURenderPass
     }
 };
 
+const executeLatticeSpacePickDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, items: LatticeSpaceDrawItem[]): void => {
+    const bytes = driver.bytes();
+    let lastPipeline: GPURenderPipeline | null = null;
+    let lastSpace: LatticeSpace | null = null;
+    for (const item of items) {
+        const space = item.space;
+        if (!space.visible || space.drawCellCount <= 0) continue;
+        ensureLatticeSpaceBindGroup(ctx, space);
+        if (!space.bindGroup) continue;
+        const pipeline = getOrCreatePickLatticeSpacePipeline(ctx, space);
+        if (pipeline !== lastPipeline) {
+            pass.setPipeline(pipeline);
+            lastPipeline = pipeline;
+            lastSpace = null;
+        }
+        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
+        const slot = ctx.modelBufferIndex++;
+        const modelPtr = space.transform.worldMatrixPtr as WasmPtr;
+        const invPtr = ctx.modelUniformStagingPtr;
+        const normalPtr = (ctx.modelUniformStagingPtr + 64) as WasmPtr;
+        mat4f.invert(invPtr, modelPtr);
+        mat4f.transpose(normalPtr, invPtr);
+        ctx.queue.writeBuffer(ctx.modelUniformBuffers[slot], 0, bytes, modelPtr, 64);
+        ctx.queue.writeBuffer(ctx.modelUniformBuffers[slot], 64, bytes, normalPtr, 64);
+        writePickUniform(ctx, slot, getObjectId(ctx, space), 0);
+        pass.setBindGroup(0, ctx.globalBindGroups[slot]);
+        if (space !== lastSpace) {
+            pass.setBindGroup(1, space.bindGroup);
+            lastSpace = space;
+        }
+        pass.setBindGroup(2, ctx.pickBindGroups[slot]);
+        if (space.dimensionCount === 2) pass.draw(6);
+        else pass.draw(36, space.drawCellCount);
+    }
+};
+
 const getOrCreatePickMeshPipeline = (ctx: RendererContext, material: Material, skinned: boolean, skinned8: boolean, mirrored: boolean = false): GPURenderPipeline => {
     if (skinned8 && !skinned) skinned = true;
     const cullMode = getCullMode(ctx, material.cullMode);
@@ -837,6 +878,28 @@ const getOrCreatePickSplatFieldPipeline = (ctx: RendererContext): GPURenderPipel
             depthWriteEnabled: true,
             depthCompare: "less"
         }
+    });
+    ctx.pipelineCache.set(key, pipeline);
+    return pipeline;
+};
+
+const getOrCreatePickLatticeSpacePipeline = (ctx: RendererContext, space: LatticeSpace): GPURenderPipeline => {
+    const cullMode = space.dimensionCount === 2 ? "none" : getCullMode(ctx, space.cullMode);
+    const key = `pick:latticespace:${space.dimensionCount}:${cullMode}`;
+    const cached = ctx.pipelineCache.get(key);
+    if (cached) return cached;
+    let module = ctx.shaderCache.get(pickLatticeSpaceWGSL);
+    if (!module) {
+        module = ctx.device.createShaderModule({ code: pickLatticeSpaceWGSL });
+        ctx.shaderCache.set(pickLatticeSpaceWGSL, module);
+    }
+    const pipeline = ctx.device.createRenderPipeline({
+        label: key,
+        layout: ctx.device.createPipelineLayout({ bindGroupLayouts: [ctx.globalBindGroupLayout, getLatticeSpaceBindGroupLayout(ctx), getPickBindGroupLayout(ctx)] }),
+        vertex: { module, entryPoint: space.dimensionCount === 2 ? "vs_2d" : "vs_3d", buffers: [] },
+        fragment: { module, entryPoint: "fs_main", targets: [{ format: "rg32uint" }, { format: "r32float" }] },
+        primitive: { topology: "triangle-list", cullMode },
+        depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" }
     });
     ctx.pipelineCache.set(key, pipeline);
     return pipeline;

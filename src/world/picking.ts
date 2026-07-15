@@ -9,8 +9,9 @@ import { PointCloud } from "./pointcloud";
 import { GlyphField } from "./glyphfield";
 import { NodeLink } from "./nodelink";
 import { SplatField } from "./splatfield";
+import { LatticeSpace } from "./latticespace";
 
-export type PickKind = "mesh" | "pointcloud" | "glyphfield" | "nodelink" | "splatfield";
+export type PickKind = "mesh" | "pointcloud" | "glyphfield" | "nodelink" | "splatfield" | "latticespace";
 
 export type PickAttributes = {
     scalar?: number | null;
@@ -32,7 +33,7 @@ export type PickAttributes = {
 
 export type PickHit = {
     kind: PickKind;
-    object: Mesh | PointCloud | GlyphField | NodeLink | SplatField;
+    object: Mesh | PointCloud | GlyphField | NodeLink | SplatField | LatticeSpace;
     objectId: number;
     elementIndex: number;
     worldPosition: [number, number, number];

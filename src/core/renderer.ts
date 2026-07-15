@@ -13,14 +13,18 @@ import { Scene } from "../world/scene";
 import { Camera } from "../world/camera";
 import { Mesh } from "../world/mesh";
 import { PointCloud } from "../world/pointcloud";
-import { SplatField } from "../world/splatfield";
 import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
+import { SplatField } from "../world/splatfield";
+import { LatticeSpace } from "../world/latticespace";
 import type { PickLassoPoint, PickQuery, PickRegionQuery } from "../world/picking";
 
 import type {
     DrawItem,
     GlyphFieldDrawItem,
+    LatticeSpaceDrawItem,
+    LatticeSpaceSortScanLevel,
+    LatticeSpaceSortState,
     NodeLinkDrawItem,
     OcclusionCandidate,
     OcclusionFrameState,
@@ -73,6 +77,7 @@ import {
     acquireSplatFieldDrawItem as acquireSplatFieldDrawItemImpl,
     buildDrawLists as buildDrawListsImpl,
     buildGlyphFieldDrawLists as buildGlyphFieldDrawListsImpl,
+    buildLatticeSpaceDrawLists as buildLatticeSpaceDrawListsImpl,
     buildNodeLinkDrawLists as buildNodeLinkDrawListsImpl,
     buildPointCloudDrawLists as buildPointCloudDrawListsImpl,
     buildSplatFieldDrawLists as buildSplatFieldDrawListsImpl,
@@ -98,6 +103,8 @@ import {
 } from "./materials";
 import {
     destroySplatFieldSortState as destroySplatFieldSortStateImpl,
+    destroyLatticeSpaceSortState as destroyLatticeSpaceSortStateImpl,
+    encodeLatticeSpaceSorts as encodeLatticeSpaceSortsImpl,
     drawInstancedRun as drawInstancedRunImpl,
     encodeSplatFieldSort as encodeSplatFieldSortImpl,
     encodeSplatFieldSorts as encodeSplatFieldSortsImpl,
@@ -111,6 +118,7 @@ import {
     ensureSplatSortScanLevel as ensureSplatSortScanLevelImpl,
     executeDrawList as executeDrawListImpl,
     executeGlyphFieldDrawList as executeGlyphFieldDrawListImpl,
+    executeLatticeSpaceDrawList as executeLatticeSpaceDrawListImpl,
     executeNodeLinkDrawList as executeNodeLinkDrawListImpl,
     executePointCloudDrawList as executePointCloudDrawListImpl,
     executeSplatFieldDrawList as executeSplatFieldDrawListImpl,
@@ -142,6 +150,7 @@ import {
     getSplatSortScatterBindGroupLayout as getSplatSortScatterBindGroupLayoutImpl,
     getSplatSortZeroCountBindGroupLayout as getSplatSortZeroCountBindGroupLayoutImpl,
     warmGlyphFieldDrawList as warmGlyphFieldDrawListImpl,
+    warmLatticeSpaceDrawList as warmLatticeSpaceDrawListImpl,
     warmInstancedRunResources as warmInstancedRunResourcesImpl,
     warmMeshDrawList as warmMeshDrawListImpl,
     warmNodeLinkDrawList as warmNodeLinkDrawListImpl,
@@ -274,6 +283,30 @@ export class Renderer {
     nodeLinkSphereGeometry: Geometry | null = null;
     nodeLinkCubeGeometry: Geometry | null = null;
     nodeLinkCylinderGeometry: Geometry | null = null;
+    latticeSpaceBindGroupLayout: GPUBindGroupLayout | null = null;
+    latticeSpaceDummyF32Buffer: GPUBuffer | null = null;
+    latticeSpaceDummyU32Buffer: GPUBuffer | null = null;
+    latticeSpaceDrawItemPool: LatticeSpaceDrawItem[] = [];
+    latticeSpaceDrawItemPoolUsed: number = 0;
+    opaqueLatticeSpaceDrawList: LatticeSpaceDrawItem[] = [];
+    transparentLatticeSpaceDrawList: LatticeSpaceDrawItem[] = [];
+    cullLatticeSpaceScratch: LatticeSpace[] = [];
+    readonly latticeSpaceSortStates: Map<LatticeSpace, LatticeSpaceSortState> = new Map();
+    latticeSortCapacity: number = 0;
+    latticeSortKeyA: GPUBuffer | null = null;
+    latticeSortKeyB: GPUBuffer | null = null;
+    latticeSortIndexA: GPUBuffer | null = null;
+    latticeSortIndexB: GPUBuffer | null = null;
+    latticeSortFlags: GPUBuffer | null = null;
+    latticeSortPrefix: GPUBuffer | null = null;
+    latticeSortZerosCount: GPUBuffer | null = null;
+    latticeSortScanLevels: LatticeSpaceSortScanLevel[] = [];
+    latticeSortKeygenBindGroupLayout: GPUBindGroupLayout | null = null;
+    latticeSortFlagsBindGroupLayout: GPUBindGroupLayout | null = null;
+    latticeSortScanBlockBindGroupLayout: GPUBindGroupLayout | null = null;
+    latticeSortScanAddBindGroupLayout: GPUBindGroupLayout | null = null;
+    latticeSortZeroCountBindGroupLayout: GPUBindGroupLayout | null = null;
+    latticeSortScatterBindGroupLayout: GPUBindGroupLayout | null = null;
     cullGlyphFieldScratch: GlyphField[] = [];
     transparentMergedDrawList: TransparentDrawItem[] = [];
     cullPointCloudScratch: PointCloud[] = [];
@@ -509,6 +542,7 @@ export class Renderer {
         this.buildSplatFieldDrawLists(scene, camera);
         this.buildGlyphFieldDrawLists(scene, camera);
         this.buildNodeLinkDrawLists(scene, camera);
+        this.buildLatticeSpaceDrawLists(scene, camera);
     }
 
     private applyRenderCullingAndStats(camera: Camera): void {
@@ -533,6 +567,7 @@ export class Renderer {
         this.applyRenderCullingAndStats(camera);
         const encoder = this.device.createCommandEncoder();
         this.encodeSplatFieldSorts(encoder);
+        this.encodeLatticeSpaceSorts(encoder);
         const timestampWrites = (this.gpuTimingEnabled && this.gpuQuerySet) ? ({ querySet: this.gpuQuerySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } as any) : undefined;
         const timestampBeginWrites = (this.gpuTimingEnabled && this.gpuQuerySet) ? ({ querySet: this.gpuQuerySet, beginningOfPassWriteIndex: 0 } as any) : undefined;
         const timestampEndWrites = (this.gpuTimingEnabled && this.gpuQuerySet) ? ({ querySet: this.gpuQuerySet, endOfPassWriteIndex: 1 } as any) : undefined;
@@ -561,6 +596,7 @@ export class Renderer {
             this.executeGlyphFieldDrawList(pass, this.opaqueGlyphFieldDrawList);
             this.executePointCloudDrawList(pass, this.opaquePointCloudDrawList);
             this.executeNodeLinkDrawList(pass, this.opaqueNodeLinkDrawList);
+            this.executeLatticeSpaceDrawList(pass, this.opaqueLatticeSpaceDrawList);
             if (!hasTransmission) this.executeTransparentMergedDrawList(pass);
             pass.end();
             if (hasTransmission) {
@@ -619,6 +655,7 @@ export class Renderer {
             this.executeGlyphFieldDrawList(pass, this.opaqueGlyphFieldDrawList);
             this.executePointCloudDrawList(pass, this.opaquePointCloudDrawList);
             this.executeNodeLinkDrawList(pass, this.opaqueNodeLinkDrawList);
+            this.executeLatticeSpaceDrawList(pass, this.opaqueLatticeSpaceDrawList);
             if (!hasTransmission) this.executeTransparentMergedDrawList(pass);
             pass.end();
             if (hasTransmission) {
@@ -678,6 +715,8 @@ export class Renderer {
         this.warmGlyphFieldDrawList(this.transparentGlyphFieldDrawList);
         this.warmNodeLinkDrawList(this.opaqueNodeLinkDrawList);
         this.warmNodeLinkDrawList(this.transparentNodeLinkDrawList);
+        this.warmLatticeSpaceDrawList(this.opaqueLatticeSpaceDrawList);
+        this.warmLatticeSpaceDrawList(this.transparentLatticeSpaceDrawList);
     }
 
     private schedulePick<T>(run: () => Promise<T>): Promise<T> {
@@ -816,6 +855,30 @@ export class Renderer {
         this.nodeLinkDummyU32Buffer?.destroy();
         this.nodeLinkDummyF32Buffer = null;
         this.nodeLinkDummyU32Buffer = null;
+        this.latticeSpaceDummyF32Buffer?.destroy();
+        this.latticeSpaceDummyU32Buffer?.destroy();
+        this.latticeSpaceDummyF32Buffer = null;
+        this.latticeSpaceDummyU32Buffer = null;
+        this.latticeSpaceBindGroupLayout = null;
+        for (const [space, state] of this.latticeSpaceSortStates) destroyLatticeSpaceSortStateImpl(this, space, state);
+        this.latticeSpaceSortStates.clear();
+        for (const buffer of [this.latticeSortKeyA, this.latticeSortKeyB, this.latticeSortIndexA, this.latticeSortIndexB, this.latticeSortFlags, this.latticeSortPrefix, this.latticeSortZerosCount]) buffer?.destroy();
+        this.latticeSortKeyA = null;
+        this.latticeSortKeyB = null;
+        this.latticeSortIndexA = null;
+        this.latticeSortIndexB = null;
+        this.latticeSortFlags = null;
+        this.latticeSortPrefix = null;
+        this.latticeSortZerosCount = null;
+        this.latticeSortCapacity = 0;
+        for (const level of this.latticeSortScanLevels) { level.blockSums?.destroy(); level.blockOffsets?.destroy(); }
+        this.latticeSortScanLevels = [];
+        this.latticeSortKeygenBindGroupLayout = null;
+        this.latticeSortFlagsBindGroupLayout = null;
+        this.latticeSortScanBlockBindGroupLayout = null;
+        this.latticeSortScanAddBindGroupLayout = null;
+        this.latticeSortZeroCountBindGroupLayout = null;
+        this.latticeSortScatterBindGroupLayout = null;
         this.nodeLinkSphereGeometry = null;
         this.nodeLinkCubeGeometry = null;
         this.nodeLinkCylinderGeometry = null;
@@ -969,6 +1032,10 @@ export class Renderer {
         buildNodeLinkDrawListsImpl(this, scene, camera);
     }
 
+    private buildLatticeSpaceDrawLists(scene: Scene, camera: Camera): void {
+        buildLatticeSpaceDrawListsImpl(this, scene, camera);
+    }
+
     private captureOcclusionHierarchy(camera: Camera): void {
         captureOcclusionHierarchyImpl(this, camera);
     }
@@ -1001,6 +1068,10 @@ export class Renderer {
         warmNodeLinkDrawListImpl(this, items);
     }
 
+    private warmLatticeSpaceDrawList(items: LatticeSpaceDrawItem[]): void {
+        warmLatticeSpaceDrawListImpl(this, items);
+    }
+
     private executeDrawList(pass: GPURenderPassEncoder, items: DrawItem[]): void {
         executeDrawListImpl(this, pass, items);
     }
@@ -1019,6 +1090,10 @@ export class Renderer {
 
     private executeNodeLinkDrawList(pass: GPURenderPassEncoder, list: NodeLinkDrawItem[]): void {
         executeNodeLinkDrawListImpl(this, pass, list);
+    }
+
+    private executeLatticeSpaceDrawList(pass: GPURenderPassEncoder, list: LatticeSpaceDrawItem[]): void {
+        executeLatticeSpaceDrawListImpl(this, pass, list);
     }
 
     private executeTransparentMergedDrawList(pass: GPURenderPassEncoder): void {
@@ -1175,6 +1250,10 @@ export class Renderer {
 
     private encodeSplatFieldSorts(encoder: GPUCommandEncoder): void {
         encodeSplatFieldSortsImpl(this, encoder);
+    }
+
+    private encodeLatticeSpaceSorts(encoder: GPUCommandEncoder): void {
+        encodeLatticeSpaceSortsImpl(this, encoder);
     }
 
     private getPointCloudBindGroupLayout(): GPUBindGroupLayout {

@@ -6,10 +6,11 @@
 
 import type { Camera } from "../world/camera";
 import type { NavigationControls } from "../world/controls";
-import type { GlyphField } from "../world/glyphfield";
-import type { NodeLink } from "../world/nodelink";
 import type { Scene } from "../world/scene";
 import type { PointCloud } from "../world/pointcloud";
+import type { GlyphField } from "../world/glyphfield";
+import type { NodeLink } from "../world/nodelink";
+import type { LatticeSpace } from "../world/latticespace";
 import type { Colormap, BuiltinColormapName } from "../graphics/colormap";
 import type { Color4, DataMaterial } from "../graphics/material";
 import type { ScaleTransform, ScaleTransformDescriptor } from "../scaling";
@@ -130,7 +131,7 @@ export type OverlayLegendNodeLinkSource = {
     component?: "node" | "edge";
 };
 
-export type OverlayLegendSource = PointCloud | GlyphField | NodeLink | OverlayLegendNodeLinkSource | DataMaterial | OverlayLegendExplicitSource;
+export type OverlayLegendSource = PointCloud | GlyphField | NodeLink | LatticeSpace | OverlayLegendNodeLinkSource | DataMaterial | OverlayLegendExplicitSource;
 
 export type LegendLayerDescriptor = {
     id?: string;
