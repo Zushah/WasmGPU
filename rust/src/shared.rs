@@ -44,6 +44,7 @@ pub(crate) unsafe fn u8_slice_mut(ptr: u32, len: usize) -> &'static mut [u8] {
     core::slice::from_raw_parts_mut(ptr as *mut u8, len)
 }
 
+#[cfg(any(target_arch = "wasm32", test))]
 #[inline(always)]
 pub(crate) fn align_up(x: usize, align: usize) -> usize {
     (x + (align - 1)) & !(align - 1)

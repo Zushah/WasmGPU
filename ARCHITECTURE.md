@@ -2,7 +2,7 @@
 
 Last updated: Wednesday, July 15, 2026.
 
-Last commit: Wednesday, July 15, 2026, [**`0f9da6d`**](https://www.github.com/Zushah/WasmGPU/commit/0f9da6d).
+Last commit: Wednesday, July 15, 2026, [**`8711c8e`**](https://www.github.com/Zushah/WasmGPU/commit/8711c8e).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -452,6 +452,8 @@ WebAssembly interop with external modules lives in `./src/wasm/interop.ts`. It w
 
 Rust memory allocation is implemented in `./rust/src/heap.rs`. The heap allocator is a bump allocator. The exported free functions currently do not reclaim memory. Contributors should treat heap allocations as persistent within the current WebAssembly instance unless an arena reset pattern is used.
 
+The Rust driver separates portable slice and fixed-array computation from WebAssembly-only heap and frame-arena adapters where native testing requires it. The heap and frame-arena modules compile only for `wasm32`; their 32-bit pointer, memory-growth, alignment, capacity, and epoch contracts are tested against the compiled WebAssembly module rather than emulated with native pointers.
+
 Data movement commonly follows these paths:
 
 - TypeScript typed arrays are copied into WebAssembly memory for Rust processing.
@@ -749,11 +751,14 @@ Important files:
 - `./rust/src/bounds.rs`: geometry, pointcloud, and glyph bounds helpers.
 - `./rust/src/cull.rs`: frustum plane extraction, sphere culling, and conservative hierarchical-Z occlusion culling over packed world-space spheres.
 - `./rust/src/shared.rs` and `./rust/src/utils.rs`: shared Rust helpers.
+- `./rust/src/tests/`: native Rust conformance tests for portable algorithms and edge cases.
 
 Common interactions:
 
 - TypeScript calls Rust through generated bindings from `./build/wasm.js`.
 - `./scripts/build-rust-wasm.js` compiles the Rust crate and emits generated files under `./build/`.
+- Native tests exercise portable Rust computation without converting native pointers to the WebAssembly ABI's 32-bit offsets.
+- `./test/wasm.test.js` validates the compiled function ABI, generated bridge and declarations, heap allocations, frame-arena behavior, and representative pointer-based calls.
 - Changes to Rust exports must be reflected in TypeScript wrappers and tests.
 
 ### 2.10. WGSL shaders
@@ -801,15 +806,18 @@ Examples import built bundles from `./dist/`. When source changes public behavio
 
 Architectural role:
 
-- Validate selected public API behavior and internal behavior through Node test files.
+- Validate selected public API behavior and internal behavior through Node and Rust test files.
 - Cover renderer setup, geometry, mesh behavior, materials, glTF import, accessors, compute behavior, transforms, math, controls, scaling, overlays, annotations, picking data, and scientific visualization primitives.
+- Keep the manually generated Rust-to-WebAssembly function bridge synchronized with the compiled module and its TypeScript declarations.
 
 Important files:
 
-- `./test/*.test.js`: Node test files run by `npm run test`.
+- `./rust/src/tests/*.rs`: native Rust conformance tests run by `npm run test:rs`.
+- `./test/*.test.js`: Node test files run by `npm run test:js`.
+- `./test/wasm.test.js`: WebAssembly ABI, generated-binding, heap, frame-arena, and external-module interop coverage.
 - `./.github/workflows/test.yaml`: GitHub Actions workflow for automatically running tests on every push and pull request.
 
-Tests use generated or bundled files when needed. If a change modifies Rust exports, generated WebAssembly bindings, renderer behavior, glTF import, shader layouts, or public descriptors, add or update focused tests where the current test setup can exercise the behavior.
+`npm run test` runs both the native Rust and Node suites. Tests use generated or bundled files when needed. If a change modifies Rust exports, generated WebAssembly bindings, renderer behavior, glTF import, shader layouts, or public descriptors, add or update focused tests where the current test setup can exercise the behavior.
 
 ### 2.13. Documentation and website
 
@@ -910,9 +918,10 @@ When changing renderer paths, inspect the object class, material class, texture 
 For Rust changes:
 
 - edit source under `./rust/src/`;
+- add portable algorithm coverage under `./rust/src/tests/` and WebAssembly-only ABI coverage in `./test/wasm.test.js`;
 - update TypeScript wrappers in `./src/wasm/index.ts` or `./src/wasm/interop.ts` when exports change;
 - run `npm run build:rs` to regenerate WebAssembly files;
-- run `npm run build:ts` and `npm run test` after wrapper changes;
+- run `npm run test:rs` for native Rust checks and `npm run test` after wrapper changes;
 - keep pointer, length, dtype, stride, and alignment assumptions explicit at call sites.
 
 The Rust heap free functions currently do not reclaim memory. Prefer frame arena or arena patterns for temporary data. If allocation semantics change, update `./src/wasm/interop.ts`, callers, and this file.
@@ -975,7 +984,9 @@ Use the commands from `./package.json`:
 | `npm run build:ts` | Type-check TypeScript with `./tsconfig.json`. |
 | `npm run build:es` | Bundle the package via `./esbuild.config.js`. |
 | `npm run build` | Run Rust build, TypeScript check, and bundle build. |
-| `npm run test` | Run tests under `./test/*.test.js` via `./scripts/run-tests.js`. |
+| `npm run test:rs` | Run Rust tests under `./rust/src/tests/`. |
+| `npm run test:js` | Run Node tests under `./test/*.test.js` via `./scripts/run-tests.js`. |
+| `npm run test` | Run the Rust and Node test suites. |
 | `npm run dev` | Run build and tests. |
 | `npm run website` | Build the website into `./website/build/`. |
 | `npm run restore` | Restore `./build/` and `./dist/` from Git after local builds. |

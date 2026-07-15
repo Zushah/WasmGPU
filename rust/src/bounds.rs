@@ -6,6 +6,72 @@
 
 use crate::shared::{f32_slice, f32_slice_mut};
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct BoundsResult {
+    pub(crate) min: [f32; 3],
+    pub(crate) max: [f32; 3],
+    pub(crate) center: [f32; 3],
+    pub(crate) radius: f32,
+}
+
+impl BoundsResult {
+    pub(crate) const ZERO: Self = Self {
+        min: [0.0; 3],
+        max: [0.0; 3],
+        center: [0.0; 3],
+        radius: 0.0,
+    };
+}
+
+pub(crate) fn bounds_positions_stride(
+    points: &[f32],
+    count: usize,
+    stride_f32: usize,
+) -> BoundsResult {
+    if count == 0 || stride_f32 < 3 || points.len() < count.saturating_mul(stride_f32) {
+        return BoundsResult::ZERO;
+    }
+    let mut min = [points[0], points[1], points[2]];
+    let mut max = min;
+    for point in points.chunks_exact(stride_f32).take(count) {
+        for axis in 0..3 {
+            min[axis] = min[axis].min(point[axis]);
+            max[axis] = max[axis].max(point[axis]);
+        }
+    }
+    let center = [
+        0.5 * (min[0] + max[0]),
+        0.5 * (min[1] + max[1]),
+        0.5 * (min[2] + max[2]),
+    ];
+    let mut max_r2 = 0.0f32;
+    for point in points.chunks_exact(stride_f32).take(count) {
+        let dx = point[0] - center[0];
+        let dy = point[1] - center[1];
+        let dz = point[2] - center[2];
+        max_r2 = max_r2.max(dx * dx + dy * dy + dz * dz);
+    }
+    BoundsResult {
+        min,
+        max,
+        center,
+        radius: max_r2.sqrt(),
+    }
+}
+
+unsafe fn write_bounds(
+    out_box_min_ptr: u32,
+    out_box_max_ptr: u32,
+    out_sphere_center_ptr: u32,
+    out_sphere_radius_ptr: u32,
+    bounds: BoundsResult,
+) {
+    f32_slice_mut(out_box_min_ptr, 3).copy_from_slice(&bounds.min);
+    f32_slice_mut(out_box_max_ptr, 3).copy_from_slice(&bounds.max);
+    f32_slice_mut(out_sphere_center_ptr, 3).copy_from_slice(&bounds.center);
+    f32_slice_mut(out_sphere_radius_ptr, 1)[0] = bounds.radius;
+}
+
 #[inline(always)]
 unsafe fn write_zero_bounds(
     out_box_min_ptr: u32,
@@ -13,20 +79,13 @@ unsafe fn write_zero_bounds(
     out_sphere_center_ptr: u32,
     out_sphere_radius_ptr: u32,
 ) {
-    let out_min = f32_slice_mut(out_box_min_ptr, 3);
-    let out_max = f32_slice_mut(out_box_max_ptr, 3);
-    let out_center = f32_slice_mut(out_sphere_center_ptr, 3);
-    let out_radius = f32_slice_mut(out_sphere_radius_ptr, 1);
-    out_min[0] = 0.0;
-    out_min[1] = 0.0;
-    out_min[2] = 0.0;
-    out_max[0] = 0.0;
-    out_max[1] = 0.0;
-    out_max[2] = 0.0;
-    out_center[0] = 0.0;
-    out_center[1] = 0.0;
-    out_center[2] = 0.0;
-    out_radius[0] = 0.0;
+    write_bounds(
+        out_box_min_ptr,
+        out_box_max_ptr,
+        out_sphere_center_ptr,
+        out_sphere_radius_ptr,
+        BoundsResult::ZERO,
+    );
 }
 
 #[inline(always)]
@@ -49,68 +108,18 @@ unsafe fn compute_bounds_positions_stride(
         return;
     }
     let points = f32_slice(points_ptr, count * stride_f32);
-    let mut min_x = points[0];
-    let mut min_y = points[1];
-    let mut min_z = points[2];
-    let mut max_x = points[0];
-    let mut max_y = points[1];
-    let mut max_z = points[2];
-    for i in 0..count {
-        let base = i * stride_f32;
-        let x = points[base + 0];
-        let y = points[base + 1];
-        let z = points[base + 2];
-        if x < min_x {
-            min_x = x;
-        }
-        if y < min_y {
-            min_y = y;
-        }
-        if z < min_z {
-            min_z = z;
-        }
-        if x > max_x {
-            max_x = x;
-        }
-        if y > max_y {
-            max_y = y;
-        }
-        if z > max_z {
-            max_z = z;
-        }
-    }
-    let cx = 0.5 * (min_x + max_x);
-    let cy = 0.5 * (min_y + max_y);
-    let cz = 0.5 * (min_z + max_z);
-    let mut max_r2 = 0.0f32;
-    for i in 0..count {
-        let base = i * stride_f32;
-        let dx = points[base + 0] - cx;
-        let dy = points[base + 1] - cy;
-        let dz = points[base + 2] - cz;
-        let r2 = dx * dx + dy * dy + dz * dz;
-        if r2 > max_r2 {
-            max_r2 = r2;
-        }
-    }
-    let out_min = f32_slice_mut(out_box_min_ptr, 3);
-    let out_max = f32_slice_mut(out_box_max_ptr, 3);
-    let out_center = f32_slice_mut(out_sphere_center_ptr, 3);
-    let out_radius = f32_slice_mut(out_sphere_radius_ptr, 1);
-    out_min[0] = min_x;
-    out_min[1] = min_y;
-    out_min[2] = min_z;
-    out_max[0] = max_x;
-    out_max[1] = max_y;
-    out_max[2] = max_z;
-    out_center[0] = cx;
-    out_center[1] = cy;
-    out_center[2] = cz;
-    out_radius[0] = max_r2.sqrt();
+    let bounds = bounds_positions_stride(points, count, stride_f32);
+    write_bounds(
+        out_box_min_ptr,
+        out_box_max_ptr,
+        out_sphere_center_ptr,
+        out_sphere_radius_ptr,
+        bounds,
+    );
 }
 
 #[inline(always)]
-fn rotate_vector_by_quat(
+pub(crate) fn rotate_vector_by_quat(
     vx: f32,
     vy: f32,
     vz: f32,
@@ -126,6 +135,69 @@ fn rotate_vector_by_quat(
     let out_y = vy + (qw * ty) + ((qz * tx) - (qx * tz));
     let out_z = vz + (qw * tz) + ((qx * ty) - (qy * tx));
     (out_x, out_y, out_z)
+}
+
+pub(crate) fn bounds_glyphs(
+    positions: &[f32],
+    scales: &[f32],
+    rotations: Option<&[f32]>,
+    count: usize,
+    glyph_center: &[f32; 3],
+    glyph_radius: f32,
+) -> BoundsResult {
+    if count == 0 || positions.len() < count * 4 || scales.len() < count * 4 {
+        return BoundsResult::ZERO;
+    }
+    if rotations.is_some_and(|values| values.len() < count * 4) {
+        return BoundsResult::ZERO;
+    }
+    let mut min = [f32::INFINITY; 3];
+    let mut max = [f32::NEG_INFINITY; 3];
+    for i in 0..count {
+        let base = i * 4;
+        let sx = scales[base + 0].abs();
+        let sy = scales[base + 1].abs();
+        let sz = scales[base + 2].abs();
+        let mut center = [
+            glyph_center[0] * sx,
+            glyph_center[1] * sy,
+            glyph_center[2] * sz,
+        ];
+        if let Some(rot) = rotations {
+            let rotated = rotate_vector_by_quat(
+                center[0],
+                center[1],
+                center[2],
+                rot[base + 0],
+                rot[base + 1],
+                rot[base + 2],
+                rot[base + 3],
+            );
+            center = [rotated.0, rotated.1, rotated.2];
+        }
+        let world_center = [
+            positions[base + 0] + center[0],
+            positions[base + 1] + center[1],
+            positions[base + 2] + center[2],
+        ];
+        let radius = glyph_radius * sx.max(sy).max(sz);
+        for axis in 0..3 {
+            min[axis] = min[axis].min(world_center[axis] - radius);
+            max[axis] = max[axis].max(world_center[axis] + radius);
+        }
+    }
+    let center = [
+        0.5 * (min[0] + max[0]),
+        0.5 * (min[1] + max[1]),
+        0.5 * (min[2] + max[2]),
+    ];
+    let extent = [max[0] - center[0], max[1] - center[1], max[2] - center[2]];
+    BoundsResult {
+        min,
+        max,
+        center,
+        radius: (extent[0] * extent[0] + extent[1] * extent[1] + extent[2] * extent[2]).sqrt(),
+    }
 }
 
 #[no_mangle]
@@ -253,75 +325,15 @@ pub extern "C" fn bounds_glyph_instances(
             None
         };
         let glyph_center = f32_slice(glyph_center_ptr, 3);
-        let mut min_x = f32::INFINITY;
-        let mut min_y = f32::INFINITY;
-        let mut min_z = f32::INFINITY;
-        let mut max_x = f32::NEG_INFINITY;
-        let mut max_y = f32::NEG_INFINITY;
-        let mut max_z = f32::NEG_INFINITY;
-        for i in 0..count {
-            let base = i * 4;
-            let sx = scales[base + 0].abs();
-            let sy = scales[base + 1].abs();
-            let sz = scales[base + 2].abs();
-            let mut cx = glyph_center[0] * sx;
-            let mut cy = glyph_center[1] * sy;
-            let mut cz = glyph_center[2] * sz;
-            if let Some(rot) = rotations {
-                let qx = rot[base + 0];
-                let qy = rot[base + 1];
-                let qz = rot[base + 2];
-                let qw = rot[base + 3];
-                let rotated = rotate_vector_by_quat(cx, cy, cz, qx, qy, qz, qw);
-                cx = rotated.0;
-                cy = rotated.1;
-                cz = rotated.2;
-            }
-            let wx = positions[base + 0] + cx;
-            let wy = positions[base + 1] + cy;
-            let wz = positions[base + 2] + cz;
-            let r = glyph_radius * sx.max(sy).max(sz);
-            if wx - r < min_x {
-                min_x = wx - r;
-            }
-            if wy - r < min_y {
-                min_y = wy - r;
-            }
-            if wz - r < min_z {
-                min_z = wz - r;
-            }
-
-            if wx + r > max_x {
-                max_x = wx + r;
-            }
-            if wy + r > max_y {
-                max_y = wy + r;
-            }
-            if wz + r > max_z {
-                max_z = wz + r;
-            }
-        }
-        let cx = 0.5 * (min_x + max_x);
-        let cy = 0.5 * (min_y + max_y);
-        let cz = 0.5 * (min_z + max_z);
-        let ex = max_x - cx;
-        let ey = max_y - cy;
-        let ez = max_z - cz;
-        let radius = (ex * ex + ey * ey + ez * ez).sqrt();
-        let out_min = f32_slice_mut(out_box_min_ptr, 3);
-        let out_max = f32_slice_mut(out_box_max_ptr, 3);
-        let out_center = f32_slice_mut(out_sphere_center_ptr, 3);
-        let out_radius = f32_slice_mut(out_sphere_radius_ptr, 1);
-        out_min[0] = min_x;
-        out_min[1] = min_y;
-        out_min[2] = min_z;
-        out_max[0] = max_x;
-        out_max[1] = max_y;
-        out_max[2] = max_z;
-        out_center[0] = cx;
-        out_center[1] = cy;
-        out_center[2] = cz;
-        out_radius[0] = radius;
+        let center = [glyph_center[0], glyph_center[1], glyph_center[2]];
+        let bounds = bounds_glyphs(positions, scales, rotations, count, &center, glyph_radius);
+        write_bounds(
+            out_box_min_ptr,
+            out_box_max_ptr,
+            out_sphere_center_ptr,
+            out_sphere_radius_ptr,
+            bounds,
+        );
     }
     0
 }

@@ -7,15 +7,15 @@
 use crate::mat4::mat4_invert_from;
 use crate::shared::{f32_slice, f32_slice_mut, u32_slice};
 
-const INTERP_STEP: u32 = 0;
-const INTERP_LINEAR: u32 = 1;
-const INTERP_CUBIC: u32 = 2;
-const PATH_TRANSLATION: u32 = 0;
-const PATH_ROTATION: u32 = 1;
-const PATH_SCALE: u32 = 2;
+pub(crate) const INTERP_STEP: u32 = 0;
+pub(crate) const INTERP_LINEAR: u32 = 1;
+pub(crate) const INTERP_CUBIC: u32 = 2;
+pub(crate) const PATH_TRANSLATION: u32 = 0;
+pub(crate) const PATH_ROTATION: u32 = 1;
+pub(crate) const PATH_SCALE: u32 = 2;
 
 #[inline]
-fn clamp01(x: f32) -> f32 {
+pub(crate) fn clamp01(x: f32) -> f32 {
     if x < 0.0 {
         0.0
     } else if x > 1.0 {
@@ -26,7 +26,7 @@ fn clamp01(x: f32) -> f32 {
 }
 
 #[inline]
-fn quat_normalize(x: f32, y: f32, z: f32, w: f32) -> (f32, f32, f32, f32) {
+pub(crate) fn quat_normalize(x: f32, y: f32, z: f32, w: f32) -> (f32, f32, f32, f32) {
     let len = (x * x + y * y + z * z + w * w).sqrt();
     if len == 0.0 {
         (0.0, 0.0, 0.0, 1.0)
@@ -37,7 +37,7 @@ fn quat_normalize(x: f32, y: f32, z: f32, w: f32) -> (f32, f32, f32, f32) {
 }
 
 #[inline]
-fn quat_slerp(
+pub(crate) fn quat_slerp(
     ax: f32,
     ay: f32,
     az: f32,
@@ -82,7 +82,7 @@ fn quat_slerp(
 }
 
 #[inline]
-fn find_keyframe(times: &[f32], time: f32) -> (usize, usize, f32, f32) {
+pub(crate) fn find_keyframe(times: &[f32], time: f32) -> (usize, usize, f32, f32) {
     let n = times.len();
     if n == 0 {
         return (0, 0, 0.0, 0.0);
@@ -119,7 +119,7 @@ fn find_keyframe(times: &[f32], time: f32) -> (usize, usize, f32, f32) {
 }
 
 #[inline]
-fn hermite(t: f32) -> (f32, f32, f32, f32) {
+pub(crate) fn hermite(t: f32) -> (f32, f32, f32, f32) {
     let t2 = t * t;
     let t3 = t2 * t;
     let h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
@@ -130,7 +130,7 @@ fn hermite(t: f32) -> (f32, f32, f32, f32) {
 }
 
 #[inline]
-fn sample_vec(
+pub(crate) fn sample_vec(
     values: &[f32],
     stride: usize,
     interp: u32,
@@ -186,7 +186,7 @@ fn sample_vec(
 }
 
 #[inline]
-fn sample_quat(
+pub(crate) fn sample_quat(
     values: &[f32],
     interp: u32,
     i0: usize,
@@ -350,7 +350,7 @@ pub extern "C" fn anim_sample_clip_trs(
 }
 
 #[inline]
-fn mat4_mul_to(out: &mut [f32; 16], a: &[f32; 16], b: &[f32; 16]) {
+pub(crate) fn mat4_mul_to(out: &mut [f32; 16], a: &[f32; 16], b: &[f32; 16]) {
     out[0] = a[0] * b[0] + a[4] * b[1] + a[8] * b[2] + a[12] * b[3];
     out[1] = a[1] * b[0] + a[5] * b[1] + a[9] * b[2] + a[13] * b[3];
     out[2] = a[2] * b[0] + a[6] * b[1] + a[10] * b[2] + a[14] * b[3];

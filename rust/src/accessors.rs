@@ -6,16 +6,16 @@
 
 use crate::shared::{f32_slice_mut, u8_slice, u8_slice_mut};
 
-const CT_I8: u32 = 5120;
-const CT_U8: u32 = 5121;
-const CT_I16: u32 = 5122;
-const CT_U16: u32 = 5123;
-const CT_I32: u32 = 5124;
-const CT_U32: u32 = 5125;
-const CT_F32: u32 = 5126;
+pub(crate) const CT_I8: u32 = 5120;
+pub(crate) const CT_U8: u32 = 5121;
+pub(crate) const CT_I16: u32 = 5122;
+pub(crate) const CT_U16: u32 = 5123;
+pub(crate) const CT_I32: u32 = 5124;
+pub(crate) const CT_U32: u32 = 5125;
+pub(crate) const CT_F32: u32 = 5126;
 
 #[inline(always)]
-fn component_bytes(component_type: u32) -> usize {
+pub(crate) fn component_bytes(component_type: u32) -> usize {
     match component_type {
         CT_I8 | CT_U8 => 1,
         CT_I16 | CT_U16 => 2,
@@ -25,7 +25,7 @@ fn component_bytes(component_type: u32) -> usize {
 }
 
 #[inline(always)]
-fn component_bits(component_type: u32) -> u32 {
+pub(crate) fn component_bits(component_type: u32) -> u32 {
     match component_type {
         CT_I8 | CT_U8 => 8,
         CT_I16 | CT_U16 => 16,
@@ -35,7 +35,7 @@ fn component_bits(component_type: u32) -> u32 {
 }
 
 #[inline(always)]
-fn component_signed(component_type: u32) -> bool {
+pub(crate) fn component_signed(component_type: u32) -> bool {
     matches!(component_type, CT_I8 | CT_I16 | CT_I32 | CT_F32)
 }
 
@@ -80,7 +80,7 @@ fn read_f32_le(bytes: &[u8], byte_offset: usize) -> f32 {
 }
 
 #[inline(always)]
-fn read_component_as_f64(bytes: &[u8], index: usize, component_type: u32) -> f64 {
+pub(crate) fn read_component_as_f64(bytes: &[u8], index: usize, component_type: u32) -> f64 {
     let b = component_bytes(component_type);
     let o = index * b;
     match component_type {
@@ -96,7 +96,7 @@ fn read_component_as_f64(bytes: &[u8], index: usize, component_type: u32) -> f64
 }
 
 #[inline(always)]
-fn read_component_as_i64(bytes: &[u8], index: usize, component_type: u32) -> i64 {
+pub(crate) fn read_component_as_i64(bytes: &[u8], index: usize, component_type: u32) -> i64 {
     let b = component_bytes(component_type);
     let o = index * b;
     match component_type {
@@ -112,7 +112,7 @@ fn read_component_as_i64(bytes: &[u8], index: usize, component_type: u32) -> i64
 }
 
 #[inline(always)]
-fn read_sparse_index(indices: &[u8], i: usize, indices_component_type: u32) -> u32 {
+pub(crate) fn read_sparse_index(indices: &[u8], i: usize, indices_component_type: u32) -> u32 {
     match indices_component_type {
         CT_U8 => indices[i] as u32,
         CT_U16 => read_u16_le(indices, i * 2) as u32,
@@ -122,13 +122,90 @@ fn read_sparse_index(indices: &[u8], i: usize, indices_component_type: u32) -> u
 }
 
 #[inline(always)]
-fn js_to_u32(v: f64) -> u32 {
+pub(crate) fn js_to_u32(v: f64) -> u32 {
     if !v.is_finite() || v == 0.0 {
         return 0;
     }
     let t = if v < 0.0 { v.ceil() } else { v.floor() };
     let m = t.rem_euclid(4294967296.0);
     m as u32
+}
+
+pub(crate) fn component_to_f32(
+    bytes: &[u8],
+    index: usize,
+    component_type: u32,
+    normalized: bool,
+) -> f32 {
+    if !normalized || component_type == CT_F32 {
+        return read_component_as_f64(bytes, index, component_type) as f32;
+    }
+    let bits = component_bits(component_type);
+    if component_signed(component_type) {
+        let v = read_component_as_i64(bytes, index, component_type);
+        let max_pos = (1i64 << (bits - 1)) - 1i64;
+        let min_neg = -(1i64 << (bits - 1));
+        if v == min_neg {
+            -1.0
+        } else {
+            ((v as f64) / (max_pos as f64)).clamp(-1.0, 1.0) as f32
+        }
+    } else {
+        let v = read_component_as_f64(bytes, index, component_type);
+        let max = ((1u64 << bits) - 1u64) as f64;
+        (v / max) as f32
+    }
+}
+
+pub(crate) fn component_to_u16(bytes: &[u8], index: usize, component_type: u32) -> u16 {
+    let v = read_component_as_f64(bytes, index, component_type);
+    if v < 0.0 {
+        0
+    } else if v > 65535.0 {
+        65535
+    } else {
+        (v as i64) as u16
+    }
+}
+
+pub(crate) fn deinterleave(
+    out: &mut [u8],
+    src: &[u8],
+    count: usize,
+    num_components: usize,
+    component_bytes_size: usize,
+    byte_stride: usize,
+) -> bool {
+    if count == 0 || num_components == 0 || component_bytes_size == 0 {
+        return false;
+    }
+    let elem_bytes = match num_components.checked_mul(component_bytes_size) {
+        Some(v) => v,
+        None => return false,
+    };
+    if byte_stride < elem_bytes {
+        return false;
+    }
+    let src_len = match (count - 1)
+        .checked_mul(byte_stride)
+        .and_then(|v| v.checked_add(elem_bytes))
+    {
+        Some(v) => v,
+        None => return false,
+    };
+    let out_len = match count.checked_mul(elem_bytes) {
+        Some(v) => v,
+        None => return false,
+    };
+    if src.len() < src_len || out.len() < out_len {
+        return false;
+    }
+    for i in 0..count {
+        let src_base = i * byte_stride;
+        let dst_base = i * elem_bytes;
+        out[dst_base..dst_base + elem_bytes].copy_from_slice(&src[src_base..src_base + elem_bytes]);
+    }
+    true
 }
 
 #[no_mangle]
@@ -159,12 +236,7 @@ pub extern "C" fn accessor_deinterleave(
         let out_len = n * elem_bytes;
         let src = u8_slice(src_ptr, src_len);
         let out = u8_slice_mut(out_ptr, out_len);
-        for i in 0..n {
-            let src_base = i * stride;
-            let dst_base = i * elem_bytes;
-            out[dst_base..dst_base + elem_bytes]
-                .copy_from_slice(&src[src_base..src_base + elem_bytes]);
-        }
+        deinterleave(out, src, n, comps, comp_bytes, stride);
     }
     0
 }
@@ -233,29 +305,8 @@ pub extern "C" fn accessor_convert_to_f32(
         }
         let src = u8_slice(src_ptr, count * comp_bytes);
         let out = f32_slice_mut(out_ptr, count);
-        let norm = normalized != 0;
-        let signed = component_signed(component_type);
-        let bits = component_bits(component_type);
         for i in 0..count {
-            if !norm || component_type == CT_F32 {
-                out[i] = read_component_as_f64(src, i, component_type) as f32;
-                continue;
-            }
-            if signed {
-                let v = read_component_as_i64(src, i, component_type);
-                let max_pos = (1i64 << (bits - 1)) - 1i64;
-                let min_neg = -(1i64 << (bits - 1));
-                if v == min_neg {
-                    out[i] = -1.0;
-                } else {
-                    let f = (v as f64) / (max_pos as f64);
-                    out[i] = f.max(-1.0).min(1.0) as f32;
-                }
-            } else {
-                let v = read_component_as_f64(src, i, component_type);
-                let max = ((1u64 << bits) - 1u64) as f64;
-                out[i] = (v / max) as f32;
-            }
+            out[i] = component_to_f32(src, i, component_type, normalized != 0);
         }
     }
     0
@@ -283,15 +334,7 @@ pub extern "C" fn accessor_convert_to_u16(
         let src = u8_slice(src_ptr, count * comp_bytes);
         let out = u8_slice_mut(out_ptr, count * 2);
         for i in 0..count {
-            let v = read_component_as_f64(src, i, component_type);
-            let out_value = if v < 0.0 {
-                0u16
-            } else if v > 65535.0 {
-                65535u16
-            } else {
-                (v as i64) as u16
-            };
-
+            let out_value = component_to_u16(src, i, component_type);
             let bytes = out_value.to_le_bytes();
             let base = i * 2;
             out[base] = bytes[0];

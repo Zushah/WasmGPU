@@ -8,12 +8,12 @@ use crate::shared::{f32_slice, f32_slice_mut};
 use crate::utils::{rand_f32_01, rand_range, round_js};
 
 #[inline(always)]
-fn quat_norm_from(q: &[f32; 4]) -> f32 {
+pub(crate) fn quat_norm_from(q: &[f32; 4]) -> f32 {
     (q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt()
 }
 
 #[inline(always)]
-fn quat_normalize_arr(q: &[f32; 4]) -> [f32; 4] {
+pub(crate) fn quat_normalize_arr(q: &[f32; 4]) -> [f32; 4] {
     let n = quat_norm_from(q);
     if n == 0.0 {
         return [0.0, 0.0, 0.0, 0.0];

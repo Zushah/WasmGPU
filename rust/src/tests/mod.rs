@@ -4,18 +4,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#![allow(non_snake_case)]
-#![allow(clippy::identity_op)]
-#![allow(clippy::too_many_arguments)]
-
 mod accessors;
 mod anim;
 mod bounds;
+mod common;
 mod cull;
-#[cfg(target_arch = "wasm32")]
-mod frame_arena;
-#[cfg(target_arch = "wasm32")]
-mod heap;
 mod mat4;
 mod mesh;
 mod ndarray;
@@ -24,6 +17,3 @@ mod shared;
 mod transform;
 mod utils;
 mod vec3;
-
-#[cfg(test)]
-mod tests;

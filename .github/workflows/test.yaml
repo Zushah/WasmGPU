@@ -66,8 +66,18 @@ jobs:
         run: npm ci
 
       -
-        name: Install Rust target
-        run: rustup target add wasm32-unknown-unknown
+        name: Install Rust tooling
+        run: |
+          rustup target add wasm32-unknown-unknown
+          rustup component add rustfmt
+
+      -
+        name: Check Rust formatting
+        run: cargo fmt --manifest-path ./rust/Cargo.toml -- --check
+
+      -
+        name: Run Rust tests
+        run: npm run test:rs
 
       -
         name: Install Vulkan driver
@@ -77,5 +87,9 @@ jobs:
           vulkaninfo --summary
 
       -
-        name: Build and test
-        run: npm run dev
+        name: Build
+        run: npm run build
+
+      -
+        name: Run Node tests
+        run: npm run test:js

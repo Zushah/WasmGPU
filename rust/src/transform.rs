@@ -7,6 +7,58 @@
 use crate::mat4::mat4_invert_from;
 use crate::shared::{f32_slice, f32_slice_mut, u32_slice};
 
+pub(crate) fn compose_local_many(
+    out: &mut [f32],
+    positions: &[f32],
+    rotations: &[f32],
+    scales: &[f32],
+) {
+    let count = out.len() / 16;
+    assert_eq!(positions.len(), count * 3);
+    assert_eq!(rotations.len(), count * 4);
+    assert_eq!(scales.len(), count * 3);
+    for i in 0..count {
+        let pi = i * 3;
+        let ri = i * 4;
+        let mi = i * 16;
+        let px = positions[pi + 0];
+        let py = positions[pi + 1];
+        let pz = positions[pi + 2];
+        let x = rotations[ri + 0];
+        let y = rotations[ri + 1];
+        let z = rotations[ri + 2];
+        let w = rotations[ri + 3];
+        let sx = scales[pi + 0];
+        let sy = scales[pi + 1];
+        let sz = scales[pi + 2];
+        let xx = x * x;
+        let yy = y * y;
+        let zz = z * z;
+        let xy = x * y;
+        let xz = x * z;
+        let yz = y * z;
+        let wx = w * x;
+        let wy = w * y;
+        let wz = w * z;
+        out[mi + 0] = (1.0 - 2.0 * (yy + zz)) * sx;
+        out[mi + 1] = (2.0 * (xy + wz)) * sx;
+        out[mi + 2] = (2.0 * (xz - wy)) * sx;
+        out[mi + 3] = 0.0;
+        out[mi + 4] = (2.0 * (xy - wz)) * sy;
+        out[mi + 5] = (1.0 - 2.0 * (xx + zz)) * sy;
+        out[mi + 6] = (2.0 * (yz + wx)) * sy;
+        out[mi + 7] = 0.0;
+        out[mi + 8] = (2.0 * (xz + wy)) * sz;
+        out[mi + 9] = (2.0 * (yz - wx)) * sz;
+        out[mi + 10] = (1.0 - 2.0 * (xx + yy)) * sz;
+        out[mi + 11] = 0.0;
+        out[mi + 12] = px;
+        out[mi + 13] = py;
+        out[mi + 14] = pz;
+        out[mi + 15] = 1.0;
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn transform_compose_local_many(
     out_local: u32,
@@ -21,47 +73,7 @@ pub extern "C" fn transform_compose_local_many(
         let r = f32_slice(rot, n * 4);
         let s = f32_slice(scl, n * 3);
         let o = f32_slice_mut(out_local, n * 16);
-        for i in 0..n {
-            let pi = i * 3;
-            let ri = i * 4;
-            let si = i * 3;
-            let mi = i * 16;
-            let px = p[pi + 0];
-            let py = p[pi + 1];
-            let pz = p[pi + 2];
-            let x = r[ri + 0];
-            let y = r[ri + 1];
-            let z = r[ri + 2];
-            let w = r[ri + 3];
-            let sx = s[si + 0];
-            let sy = s[si + 1];
-            let sz = s[si + 2];
-            let xx = x * x;
-            let yy = y * y;
-            let zz = z * z;
-            let xy = x * y;
-            let xz = x * z;
-            let yz = y * z;
-            let wx = w * x;
-            let wy = w * y;
-            let wz = w * z;
-            o[mi + 0] = (1.0 - 2.0 * (yy + zz)) * sx;
-            o[mi + 1] = (2.0 * (xy + wz)) * sx;
-            o[mi + 2] = (2.0 * (xz - wy)) * sx;
-            o[mi + 3] = 0.0;
-            o[mi + 4] = (2.0 * (xy - wz)) * sy;
-            o[mi + 5] = (1.0 - 2.0 * (xx + zz)) * sy;
-            o[mi + 6] = (2.0 * (yz + wx)) * sy;
-            o[mi + 7] = 0.0;
-            o[mi + 8] = (2.0 * (xz + wy)) * sz;
-            o[mi + 9] = (2.0 * (yz - wx)) * sz;
-            o[mi + 10] = (1.0 - 2.0 * (xx + yy)) * sz;
-            o[mi + 11] = 0.0;
-            o[mi + 12] = px;
-            o[mi + 13] = py;
-            o[mi + 14] = pz;
-            o[mi + 15] = 1.0;
-        }
+        compose_local_many(o, p, r, s);
     }
     0
 }

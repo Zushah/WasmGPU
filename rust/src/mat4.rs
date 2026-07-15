@@ -9,7 +9,7 @@ use crate::shared::{f32_slice, f32_slice_mut};
 use crate::utils::{rand_f32_01, rand_range, round_js};
 
 #[inline(always)]
-fn mat4_det_from(m: &[f32; 16]) -> f32 {
+pub(crate) fn mat4_det_from(m: &[f32; 16]) -> f32 {
     let a0: f32 = m[0] * m[5] - m[1] * m[4];
     let a1: f32 = m[0] * m[6] - m[2] * m[4];
     let a2: f32 = m[0] * m[7] - m[3] * m[4];
@@ -26,12 +26,9 @@ fn mat4_det_from(m: &[f32; 16]) -> f32 {
 }
 
 #[inline(always)]
-fn mat4_identity_arr() -> [f32; 16] {
+pub(crate) fn mat4_identity_arr() -> [f32; 16] {
     [
-        1.0, 0.0, 0.0, 0.0,
-        0.0, 1.0, 0.0, 0.0,
-        0.0, 0.0, 1.0, 0.0,
-        0.0, 0.0, 0.0, 1.0,
+        1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
     ]
 }
 

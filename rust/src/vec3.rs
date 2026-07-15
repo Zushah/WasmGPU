@@ -8,22 +8,22 @@ use crate::shared::{f32_slice, f32_slice_mut};
 use crate::utils::{rand_f32_01, rand_range, round_js};
 
 #[inline(always)]
-fn vec3_norm_from(v: &[f32; 3]) -> f32 {
+pub(crate) fn vec3_norm_from(v: &[f32; 3]) -> f32 {
     (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt()
 }
 
 #[inline(always)]
-fn vec3_normsq_from(v: &[f32; 3]) -> f32 {
+pub(crate) fn vec3_normsq_from(v: &[f32; 3]) -> f32 {
     v[0] * v[0] + v[1] * v[1] + v[2] * v[2]
 }
 
 #[inline(always)]
-fn vec3_dot_from(a: &[f32; 3], b: &[f32; 3]) -> f32 {
+pub(crate) fn vec3_dot_from(a: &[f32; 3], b: &[f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
 #[inline(always)]
-fn vec3_cross_from(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
+pub(crate) fn vec3_cross_from(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
     [
         a[1] * b[2] - a[2] * b[1],
         a[2] * b[0] - a[0] * b[2],

@@ -6,7 +6,7 @@
 
 use crate::shared::{f32_slice, f32_slice_mut, u32_slice, u32_slice_mut};
 
-fn write_all_visible(
+pub(crate) fn write_all_visible(
     out: &mut [u32],
     centers: &[f32],
     radii: &[f32],
@@ -39,7 +39,7 @@ fn write_all_visible(
     out_count as u32
 }
 
-fn extract_plane(nx: f32, ny: f32, nz: f32, d: f32) -> [f32; 4] {
+pub(crate) fn extract_plane(nx: f32, ny: f32, nz: f32, d: f32) -> [f32; 4] {
     let len2 = (nx * nx) + (ny * ny) + (nz * nz);
     if len2 <= 0.0 {
         return [nx, ny, nz, d];
@@ -48,11 +48,11 @@ fn extract_plane(nx: f32, ny: f32, nz: f32, d: f32) -> [f32; 4] {
     [nx * inv, ny * inv, nz * inv, d * inv]
 }
 
-fn near_plane_from_view_projection(m: &[f32]) -> [f32; 4] {
+pub(crate) fn near_plane_from_view_projection(m: &[f32]) -> [f32; 4] {
     extract_plane(m[2], m[6], m[10], m[14])
 }
 
-fn mul_clip(m: &[f32], x: f32, y: f32, z: f32) -> [f32; 4] {
+pub(crate) fn mul_clip(m: &[f32], x: f32, y: f32, z: f32) -> [f32; 4] {
     [
         (m[0] * x) + (m[4] * y) + (m[8] * z) + m[12],
         (m[1] * x) + (m[5] * y) + (m[9] * z) + m[13],

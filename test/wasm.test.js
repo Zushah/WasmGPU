@@ -5,9 +5,138 @@
  */
 
 import assert from "assert";
+import { readFile } from "node:fs/promises";
 import { WasmGPU, WasmMemoryView, WasmModule, driver, pythonInterop, webassemblyInterop } from "../dist/WasmGPU.js";
+import * as generatedWasm from "../build/wasm.js";
 
 const encoder = new TextEncoder();
+
+const RUST_ABI = {
+    accessor_apply_sparse: 8,
+    accessor_convert_to_f32: 5,
+    accessor_convert_to_u16: 4,
+    accessor_convert_to_u32: 4,
+    accessor_deinterleave: 6,
+    anim_compute_joint_matrices_to: 6,
+    anim_sample_clip_trs: 9,
+    bounds_geometry_positions: 6,
+    bounds_glyph_instances: 10,
+    bounds_pointcloud_xyzs: 7,
+    cull_prepare_world_spheres_from_ptrs: 6,
+    cull_spheres_frustum: 5,
+    cull_spheres_occlusion: 17,
+    cull_write_planes_from_view_projection: 2,
+    mat4_abs: 2,
+    mat4_add: 3,
+    mat4_copy: 2,
+    mat4_decompose_trs: 2,
+    mat4_det: 1,
+    mat4_identity: 1,
+    mat4_init: 17,
+    mat4_invert: 2,
+    mat4_isEqual: 2,
+    mat4_isIdentity: 1,
+    mat4_isInverse: 2,
+    mat4_isZero: 1,
+    mat4_lookAt: 4,
+    mat4_mul: 3,
+    mat4_mul_vec4: 3,
+    mat4_neg: 2,
+    mat4_norm: 1,
+    mat4_normalize: 2,
+    mat4_normsq: 1,
+    mat4_perspective: 5,
+    mat4_print: 1,
+    mat4_random: 1,
+    mat4_random_range: 3,
+    mat4_rotateX: 3,
+    mat4_rotateY: 3,
+    mat4_rotateZ: 3,
+    mat4_round: 2,
+    mat4_scl: 3,
+    mat4_sub: 3,
+    mat4_trace: 1,
+    mat4_translate: 3,
+    mat4_transpose: 2,
+    mesh_compute_vertex_normals: 5,
+    ndarray_numel: 2,
+    ndarray_offset_bytes: 5,
+    ndarray_strides_row_major: 4,
+    quat_abs: 2,
+    quat_add: 3,
+    quat_copy: 2,
+    quat_dist: 2,
+    quat_distsq: 2,
+    quat_fromAxisAngle: 3,
+    quat_init: 5,
+    quat_invert: 2,
+    quat_isEqual: 2,
+    quat_isNormalized: 1,
+    quat_isZero: 1,
+    quat_mul: 3,
+    quat_neg: 2,
+    quat_norm: 1,
+    quat_normalize: 2,
+    quat_normscl: 3,
+    quat_normsq: 1,
+    quat_print: 1,
+    quat_random: 1,
+    quat_random_range: 3,
+    quat_round: 2,
+    quat_scl: 3,
+    quat_slerp: 4,
+    quat_sub: 3,
+    quat_toRotation: 3,
+    transform_compose_local_many: 5,
+    transform_pack_model_normal_mat4_from_ptrs: 3,
+    transform_update_partial_ordered: 10,
+    transform_update_world_ordered: 5,
+    vec3_abs: 2,
+    vec3_add: 3,
+    vec3_ang: 2,
+    vec3_angBetween: 2,
+    vec3_copy: 2,
+    vec3_cross: 3,
+    vec3_dist: 2,
+    vec3_distsq: 2,
+    vec3_dot: 2,
+    vec3_init: 4,
+    vec3_interp: 5,
+    vec3_isEqual: 2,
+    vec3_isNormalized: 1,
+    vec3_isOrthogonal: 2,
+    vec3_isParallel: 2,
+    vec3_isZero: 1,
+    vec3_neg: 2,
+    vec3_norm: 1,
+    vec3_normalize: 2,
+    vec3_normscl: 3,
+    vec3_normsq: 1,
+    vec3_oproj: 3,
+    vec3_print: 1,
+    vec3_proj: 3,
+    vec3_random: 1,
+    vec3_random_range: 3,
+    vec3_reflect: 3,
+    vec3_refract: 4,
+    vec3_round: 2,
+    vec3_scl: 3,
+    vec3_sub: 3,
+    wasmgpu_alloc: 1,
+    wasmgpu_alloc_f32: 1,
+    wasmgpu_alloc_u32: 1,
+    wasmgpu_frame_alloc: 2,
+    wasmgpu_frame_alloc_f32: 1,
+    wasmgpu_frame_arena_cap: 0,
+    wasmgpu_frame_arena_epoch: 0,
+    wasmgpu_frame_arena_init: 1,
+    wasmgpu_frame_arena_reset: 0,
+    wasmgpu_frame_arena_used: 0,
+    wasmgpu_free: 2,
+    wasmgpu_free_f32: 2,
+    wasmgpu_free_u32: 2,
+    wasmgpu_seed: 1
+};
 
 const makeFixture = () => {
     const memory = new WebAssembly.Memory({ initial: 1 });
@@ -151,4 +280,122 @@ const makeFixture = () => {
     assert.throws(() => moduleRef.view({ ptr: 0, length: Number.POSITIVE_INFINITY, dtype: "u8", name: "inf-len" }), /must be finite/i, "infinite lengths should throw");
     assert.throws(() => moduleRef.view({ ptr: 65530, length: 8, dtype: "u8", name: "oob-range" }), /out of bounds/i, "out-of-bounds ranges should throw");
     assert.throws(() => moduleRef.view({ ptr: 65, length: 4, dtype: "f32", name: "unaligned-f32" }), /not aligned/i, "misaligned typed views should throw");
+}
+
+// 8) The compiled Rust module, generated JavaScript bridge, and declarations expose the exact function ABI.
+{
+    const wasmBytes = await readFile(new URL("../build/wasm.wasm", import.meta.url));
+    const wasmModule = await WebAssembly.compile(wasmBytes);
+    const rawExports = WebAssembly.Module.exports(wasmModule);
+    const rawFunctionNames = rawExports.filter((entry) => entry.kind === "function").map((entry) => entry.name).sort();
+    const expectedFunctionNames = Object.keys(RUST_ABI).sort();
+    assert.deepStrictEqual(rawFunctionNames, expectedFunctionNames, "Compiled Rust function exports must match the ABI manifest exactly");
+    assert.ok(rawExports.some((entry) => entry.kind === "memory" && entry.name === "memory"), "Compiled Rust module must export memory");
+
+    const rawInstance = new WebAssembly.Instance(wasmModule, {});
+    const declarations = await readFile(new URL("../build/wasm.d.ts", import.meta.url), "utf8");
+    for (const [name, arity] of Object.entries(RUST_ABI)) {
+        assert.strictEqual(typeof rawInstance.exports[name], "function", `Raw Wasm export '${name}' must be a function`);
+        assert.strictEqual(rawInstance.exports[name].length, arity, `Raw Wasm export '${name}' arity mismatch`);
+        assert.strictEqual(typeof generatedWasm[name], "function", `Generated JavaScript bridge is missing '${name}'`);
+        assert.strictEqual(generatedWasm[name].length, arity, `Generated JavaScript bridge '${name}' arity mismatch`);
+        const signature = declarations.match(new RegExp(`^export function ${name}\\(([^)]*)\\)`, "m"));
+        assert.ok(signature, `Generated declarations are missing '${name}'`);
+        const declaredArity = signature[1].trim().length === 0 ? 0 : signature[1].split(",").length;
+        assert.strictEqual(declaredArity, arity, `Generated declaration '${name}' arity mismatch`);
+    }
+}
+
+// 9) Heap allocations are aligned, disjoint while live, writable after memory growth, and accepted by matching frees.
+{
+    const bytePtr = generatedWasm.wasmgpu_alloc(17);
+    const f32Ptr = generatedWasm.wasmgpu_alloc_f32(5);
+    const u32Ptr = generatedWasm.wasmgpu_alloc_u32(5);
+    assert.ok(bytePtr > 0 && f32Ptr > 0 && u32Ptr > 0, "Heap allocations must return nonzero pointers");
+    assert.strictEqual(bytePtr % 16, 0, "Byte allocations must be 16-byte aligned");
+    assert.strictEqual(f32Ptr % 4, 0, "f32 allocations must be naturally aligned");
+    assert.strictEqual(u32Ptr % 4, 0, "u32 allocations must be naturally aligned");
+
+    const allocations = [
+        { ptr: bytePtr, bytes: 17 },
+        { ptr: f32Ptr, bytes: 5 * 4 },
+        { ptr: u32Ptr, bytes: 5 * 4 }
+    ];
+    for (let i = 0; i < allocations.length; i++) {
+        for (let j = i + 1; j < allocations.length; j++) {
+            const a = allocations[i], b = allocations[j];
+            assert.ok(a.ptr + a.bytes <= b.ptr || b.ptr + b.bytes <= a.ptr, "Live heap allocations must not overlap");
+        }
+    }
+
+    generatedWasm.u8view(bytePtr, 17).set(Array.from({ length: 17 }, (_, i) => i + 1));
+    generatedWasm.f32view(f32Ptr, 5).set([1.25, -2.5, 3.75, 4.5, 5.25]);
+    generatedWasm.u32view(u32Ptr, 5).set([1, 2, 3, 4, 0xffffffff]);
+    assert.deepStrictEqual(Array.from(generatedWasm.u8view(bytePtr, 17)), Array.from({ length: 17 }, (_, i) => i + 1));
+    assert.deepStrictEqual(Array.from(generatedWasm.f32view(f32Ptr, 5)), [1.25, -2.5, 3.75, 4.5, 5.25]);
+    assert.deepStrictEqual(Array.from(generatedWasm.u32view(u32Ptr, 5)), [1, 2, 3, 4, 0xffffffff]);
+
+    const beforeBuffer = generatedWasm.memory.buffer;
+    const growthPtr = generatedWasm.wasmgpu_alloc(beforeBuffer.byteLength);
+    assert.ok(growthPtr > 0, "Heap allocation large enough to grow memory must succeed");
+    assert.notStrictEqual(generatedWasm.memory.buffer, beforeBuffer, "Heap growth must replace the WebAssembly memory buffer");
+    assert.deepStrictEqual(Array.from(generatedWasm.f32view(f32Ptr, 5)), [1.25, -2.5, 3.75, 4.5, 5.25], "Typed views must remain readable when recreated after memory growth");
+
+    assert.doesNotThrow(() => generatedWasm.wasmgpu_free(bytePtr, 17));
+    assert.doesNotThrow(() => generatedWasm.wasmgpu_free_f32(f32Ptr, 5));
+    assert.doesNotThrow(() => generatedWasm.wasmgpu_free_u32(u32Ptr, 5));
+    assert.doesNotThrow(() => generatedWasm.wasmgpu_free(growthPtr, beforeBuffer.byteLength));
+}
+
+// 10) The frame arena enforces capacity and alignment and invalidates transient allocations on reset.
+{
+    const base = generatedWasm.wasmgpu_frame_arena_init(256);
+    assert.ok(base > 0, "Frame arena initialization must return a nonzero base pointer");
+    assert.strictEqual(generatedWasm.wasmgpu_frame_arena_init(512), base, "Frame arena initialization must be idempotent");
+    assert.strictEqual(generatedWasm.wasmgpu_frame_arena_cap(), 256);
+    assert.strictEqual(generatedWasm.wasmgpu_frame_arena_used(), 0);
+    const epochBefore = generatedWasm.wasmgpu_frame_arena_epoch();
+    assert.ok(epochBefore > 0, "Initialized frame arena epoch must be nonzero");
+
+    const bytePtr = generatedWasm.wasmgpu_frame_alloc(1, 1);
+    const alignedPtr = generatedWasm.wasmgpu_frame_alloc(4, 4);
+    const f32Ptr = generatedWasm.wasmgpu_frame_alloc_f32(2);
+    assert.strictEqual(bytePtr, base);
+    assert.strictEqual(alignedPtr % 4, 0);
+    assert.strictEqual(f32Ptr % 16, 0);
+    const used = generatedWasm.wasmgpu_frame_arena_used();
+    assert.ok(used > 0 && used <= 256);
+    assert.strictEqual(generatedWasm.wasmgpu_frame_alloc(1, 3), 0, "Non-power-of-two alignment must be rejected");
+    assert.strictEqual(generatedWasm.wasmgpu_frame_alloc(257, 1), 0, "Out-of-capacity allocation must be rejected");
+    assert.strictEqual(generatedWasm.wasmgpu_frame_arena_used(), used, "Rejected allocations must not consume arena space");
+
+    generatedWasm.wasmgpu_frame_arena_reset();
+    const epochAfter = generatedWasm.wasmgpu_frame_arena_epoch();
+    assert.ok(epochAfter > 0 && epochAfter !== epochBefore, "Reset must advance to another nonzero epoch");
+    assert.strictEqual(generatedWasm.wasmgpu_frame_arena_used(), 0);
+    assert.strictEqual(generatedWasm.wasmgpu_frame_alloc(1, 1), base, "Reset must make frame storage reusable");
+}
+
+// 11) Representative pointer-based kernels read and write through the generated 32-bit ABI.
+{
+    const shapePtr = generatedWasm.wasmgpu_alloc_u32(3);
+    const matrixPtr = generatedWasm.wasmgpu_alloc_f32(16);
+    const sourcePtr = generatedWasm.wasmgpu_alloc(12);
+    const outputPtr = generatedWasm.wasmgpu_alloc(8);
+    try {
+        generatedWasm.u32view(shapePtr, 3).set([2, 3, 4]);
+        assert.strictEqual(generatedWasm.ndarray_numel(shapePtr, 3), 24);
+
+        generatedWasm.mat4_identity(matrixPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(matrixPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+
+        generatedWasm.u8view(sourcePtr, 12).set([1, 2, 3, 4, 90, 91, 5, 6, 7, 8, 92, 93]);
+        generatedWasm.accessor_deinterleave(outputPtr, sourcePtr, 2, 2, 2, 6);
+        assert.deepStrictEqual(Array.from(generatedWasm.u8view(outputPtr, 8)), [1, 2, 3, 4, 5, 6, 7, 8]);
+    } finally {
+        generatedWasm.wasmgpu_free_u32(shapePtr, 3);
+        generatedWasm.wasmgpu_free_f32(matrixPtr, 16);
+        generatedWasm.wasmgpu_free(sourcePtr, 12);
+        generatedWasm.wasmgpu_free(outputPtr, 8);
+    }
 }
