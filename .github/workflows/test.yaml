@@ -8,6 +8,7 @@ on:
       - src/**
       - rust/**
       - test/**
+      - scripts/run-tests.js
       - scripts/build-rust-wasm.js
       - build/**
       - dist/**
@@ -26,6 +27,7 @@ on:
       - src/**
       - rust/**
       - test/**
+      - scripts/run-tests.js
       - scripts/build-rust-wasm.js
       - build/**
       - dist/**
@@ -46,20 +48,30 @@ concurrency:
 
 jobs:
   test:
-    name: Build and test
-    runs-on: ubuntu-latest
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows 11
+            os: windows-2025
+          - name: MacOS 15
+            os: macos-15-intel
+          - name: Ubuntu 24
+            os: ubuntu-24.04
 
     steps:
       -
         name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       -
         name: Set up Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
-          node-version: "22"
+          node-version: "24"
 
       -
         name: Install dependencies
@@ -81,6 +93,7 @@ jobs:
 
       -
         name: Install Vulkan driver
+        if: ${{ runner.os == 'Linux' }}
         run: |
           sudo apt-get update
           sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
