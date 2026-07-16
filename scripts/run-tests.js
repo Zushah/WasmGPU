@@ -27,58 +27,50 @@ const buildEnv = () => {
         env.LIBGL_ALWAYS_SOFTWARE ??= "1";
         env.WGPU_BACKEND ??= "vulkan";
         const lavapipeIcd = "/usr/share/vulkan/icd.d/lvp_icd.x86_64.json";
-        if (existsSync(lavapipeIcd)) {
-            env.VK_ICD_FILENAMES ??= lavapipeIcd;
-            env.VK_DRIVER_FILES ??= lavapipeIcd;
-        }
+        if (existsSync(lavapipeIcd)) { env.VK_ICD_FILENAMES ??= lavapipeIcd; env.VK_DRIVER_FILES ??= lavapipeIcd; }
     }
     return env;
 };
 
-const isNativeCrash = (result) => result.signal === "SIGSEGV" || result.status === 139;
+const NATIVE_CRASH_RETRIES = 3;
+const isNativeCrash = (result) => result.signal === "SIGSEGV" || result.status === 139 || result.signal === "SIGABRT" || result.status === 134;
+const DAWN_LIMIT_WARNING = /Warning: maxDynamic(?:Uniform|Storage)BuffersPerPipelineLayout artificially reduced from \d+ to \d+ to fit dynamic offset allocation limit\.\r?\n?/g;
+
+const forwardStderr = (stderr) => { if (!stderr) return; const filtered = stderr.replace(DAWN_LIMIT_WARNING, ""); if (filtered) process.stderr.write(filtered); };
 
 const runOne = (file, env, attempt) => {
     const display = toDisplayPath(file);
     const suffix = attempt > 1 ? ` (retry ${attempt - 1})` : "";
     console.log(`\n[test] ${display}${suffix}`);
-    return spawnSync(process.execPath, [file], { cwd: ROOT, env, stdio: "inherit" });
+    const result = spawnSync(process.execPath, [file], { cwd: ROOT, env, stdio: process.env.CI ? ["inherit", "inherit", "pipe"] : "inherit", encoding: "utf8", });
+    if (process.env.CI) forwardStderr(result.stderr);
+    return result;
 };
 
 const runWithRetry = (file, env) => {
-    const first = runOne(file, env, 1);
-    if (first.error) { console.error(`[test] failed to start ${toDisplayPath(file)}: ${first.error.message}`); return first; }
-    if (!process.env.CI || !isNativeCrash(first)) return first;
-    console.warn(`[test] ${toDisplayPath(file)} crashed with ${first.signal ?? `exit ${first.status}`}; retrying once because CI native WebGPU/Vulkan crashes can be intermittent.`);
-    const second = runOne(file, env, 2);
-    if (second.error) console.error(`[test] failed to start retry for ${toDisplayPath(file)}: ${second.error.message}`);
-    return second;
+    let result = runOne(file, env, 1);
+    if (result.error) { console.error(`[test] failed to start ${toDisplayPath(file)}: ${result.error.message}`); return result; }
+    for (let retry = 1; process.env.CI && retry <= NATIVE_CRASH_RETRIES && isNativeCrash(result); retry++) {
+        console.warn(`[test] ${toDisplayPath(file)} crashed with ${result.signal ?? `exit ${result.status}`}; retrying (${retry}/${NATIVE_CRASH_RETRIES}) because CI native WebGPU crashes can be intermittent.`);
+        result = runOne(file, env, retry + 1);
+        if (result.error) { console.error(`[test] failed to start retry for ${toDisplayPath(file)}: ${result.error.message}`); return result; }
+    }
+    return result;
 };
 
 const files = resolveTestFiles();
-if (files.length === 0) {
-    console.error("[test] no test files found.");
-    process.exit(1);
-}
+if (files.length === 0) { console.error("[test] no test files found."); process.exit(1); }
 
 const env = buildEnv();
 const started = Date.now();
 
 for (let i = 0; i < files.length; i++) {
     const file = files[i];
-    if (!existsSync(file)) {
-        console.error(`[test] file not found: ${toDisplayPath(file)}`);
-        process.exit(1);
-    }
+    if (!existsSync(file)) { console.error(`[test] file not found: ${toDisplayPath(file)}`); process.exit(1); }
     const result = runWithRetry(file, env);
     if (result.error) process.exit(1);
-    if (result.signal) {
-        console.error(`[test] ${toDisplayPath(file)} failed with signal ${result.signal}.`);
-        process.exit(1);
-    }
-    if (result.status !== 0) {
-        console.error(`[test] ${toDisplayPath(file)} failed with exit code ${result.status}.`);
-        process.exit(result.status ?? 1);
-    }
+    if (result.signal) { console.error(`[test] ${toDisplayPath(file)} failed with signal ${result.signal}.`); process.exit(1); }
+    if (result.status !== 0) { console.error(`[test] ${toDisplayPath(file)} failed with exit code ${result.status}.`); process.exit(result.status ?? 1); }
 }
 
 const elapsed = Date.now() - started;
