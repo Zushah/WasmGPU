@@ -189,10 +189,13 @@ export class WasmHeapArena {
 
     destroy(): void {
         if (this.destroyed) return;
+        const base = this.basePtr >>> 0;
+        const cap = this.capBytes >>> 0;
         this.destroyed = true;
         this.headBytes = 0;
         this._epoch = (this._epoch + 1) >>> 0;
         if (this._epoch === 0) this._epoch = 1;
+        ensureHost().wasm.freeBytes(base, cap);
     }
 
     alloc(bytes: number, alignBytes: number = 16): WasmPtr {

@@ -4,55 +4,62 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::shared::align_up;
-use core::mem;
+use std::alloc::{alloc, dealloc, Layout};
 
-extern "C" {
-    static mut __heap_base: u8;
-}
-
-static mut HEAP_PTR: usize = usize::MAX;
-
-#[cfg(target_arch = "wasm32")]
 #[inline(always)]
-unsafe fn ensure_memory(end: usize) -> bool {
-    use core::arch::wasm32;
-    const PAGE: usize = 65536;
-    let cur_pages: usize = wasm32::memory_size::<0>();
-    let cur_bytes: usize = cur_pages * PAGE;
-    if end <= cur_bytes {
-        return true;
+unsafe fn alloc_layout(layout: Layout) -> u32 {
+    if layout.size() == 0 {
+        return 0;
     }
-    let needed = end - cur_bytes;
-    let add_pages: usize = (needed + (PAGE - 1)) / PAGE;
-    let prev: usize = wasm32::memory_grow::<0>(add_pages);
-    prev != usize::MAX
+    let ptr = alloc(layout);
+    if ptr.is_null() {
+        return 0;
+    }
+    ptr as usize as u32
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 #[inline(always)]
-unsafe fn ensure_memory(_end: usize) -> bool {
-    true
+unsafe fn free_layout(ptr: u32, layout: Layout) {
+    if ptr == 0 || layout.size() == 0 {
+        return;
+    }
+    dealloc(ptr as usize as *mut u8, layout);
 }
 
 #[inline(always)]
 pub(crate) unsafe fn alloc_raw(bytes: usize, align: usize) -> u32 {
-    if align == 0 || (align & (align - 1)) != 0 {
-        return 0;
-    }
-    if HEAP_PTR == usize::MAX {
-        HEAP_PTR = (&raw mut __heap_base as *mut u8) as usize;
-    }
-    let ptr = align_up(HEAP_PTR, align);
-    let end = match ptr.checked_add(bytes) {
-        Some(v) => v,
-        None => return 0,
+    let layout = match Layout::from_size_align(bytes, align) {
+        Ok(layout) => layout,
+        Err(_) => return 0,
     };
-    if !ensure_memory(end) {
-        return 0;
-    }
-    HEAP_PTR = end;
-    ptr as u32
+    alloc_layout(layout)
+}
+
+#[inline(always)]
+unsafe fn free_raw(ptr: u32, bytes: usize, align: usize) {
+    let layout = match Layout::from_size_align(bytes, align) {
+        Ok(layout) => layout,
+        Err(_) => return,
+    };
+    free_layout(ptr, layout);
+}
+
+#[inline(always)]
+unsafe fn alloc_array<T>(len: u32) -> u32 {
+    let layout = match Layout::array::<T>(len as usize) {
+        Ok(layout) => layout,
+        Err(_) => return 0,
+    };
+    alloc_layout(layout)
+}
+
+#[inline(always)]
+unsafe fn free_array<T>(ptr: u32, len: u32) {
+    let layout = match Layout::array::<T>(len as usize) {
+        Ok(layout) => layout,
+        Err(_) => return,
+    };
+    free_layout(ptr, layout);
 }
 
 #[no_mangle]
@@ -61,36 +68,26 @@ pub extern "C" fn wasmgpu_alloc(bytes: u32) -> u32 {
 }
 
 #[no_mangle]
-pub extern "C" fn wasmgpu_free(_ptr: u32, _bytes: u32) {
-    // bump allocator: no-op free
+pub extern "C" fn wasmgpu_free(ptr: u32, bytes: u32) {
+    unsafe { free_raw(ptr, bytes as usize, 16) }
 }
 
 #[no_mangle]
 pub extern "C" fn wasmgpu_alloc_f32(len: u32) -> u32 {
-    unsafe {
-        alloc_raw(
-            (len as usize) * mem::size_of::<f32>(),
-            mem::align_of::<f32>(),
-        )
-    }
+    unsafe { alloc_array::<f32>(len) }
 }
 
 #[no_mangle]
-pub extern "C" fn wasmgpu_free_f32(_ptr: u32, _len: u32) {
-    // bump allocator: no-op free
+pub extern "C" fn wasmgpu_free_f32(ptr: u32, len: u32) {
+    unsafe { free_array::<f32>(ptr, len) }
 }
 
 #[no_mangle]
 pub extern "C" fn wasmgpu_alloc_u32(len: u32) -> u32 {
-    unsafe {
-        alloc_raw(
-            (len as usize) * mem::size_of::<u32>(),
-            mem::align_of::<u32>(),
-        )
-    }
+    unsafe { alloc_array::<u32>(len) }
 }
 
 #[no_mangle]
-pub extern "C" fn wasmgpu_free_u32(_ptr: u32, _len: u32) {
-    // bump allocator: no-op free
+pub extern "C" fn wasmgpu_free_u32(ptr: u32, len: u32) {
+    unsafe { free_array::<u32>(ptr, len) }
 }

@@ -55,6 +55,12 @@ export type NdarrayTransfer = {
     data: NumberTypedArray;
 };
 
+const FREED_HEAP_HANDLES = new WeakSet<WasmNdarrayHandle>();
+
+const assertHandleAlive = (handle: WasmNdarrayHandle, operation: string): void => {
+    if (FREED_HEAP_HANDLES.has(handle)) throw new Error(`pythonInterop.${operation}(): heap allocation has been freed.`);
+};
+
 const isPyProxyLike = (x: unknown): x is PyProxyLike => {
     return (typeof x === "object") && (x !== null) && (typeof (x as any).getBuffer === "function");
 };
@@ -224,14 +230,17 @@ export const pythonInterop = {
     },
 
     view: (handle: WasmNdarrayHandle): NumberTypedArray => {
+        assertHandleAlive(handle, "view");
         return typedViewFromPtr(handle.dtype, handle.ptr, handle.length);
     },
 
     bytes: (handle: WasmNdarrayHandle): Uint8Array => {
+        assertHandleAlive(handle, "bytes");
         return bytesViewFromPtr(handle.ptr, handle.byteLength);
     },
 
     copyInto: (handle: WasmNdarrayHandle, src: PythonArraySource, options: Omit<SendNdarrayOptions, "allocator" | "shape"> = {}): void => {
+        assertHandleAlive(handle, "copyInto");
         const resolved = resolveSource(src, { ...options, dtype: handle.dtype, shape: handle.shape });
         const { data } = resolved;
         assert((data.length >>> 0) === (handle.length >>> 0), "copyInto: source length mismatch");
@@ -241,6 +250,7 @@ export const pythonInterop = {
     },
 
     receiveNdarray: (handle: WasmNdarrayHandle, options: ReceiveNdarrayOptions = {}): NdarrayTransfer => {
+        assertHandleAlive(handle, "receiveNdarray");
         const view = typedViewFromPtr(handle.dtype, handle.ptr, handle.length);
         if (!options.copy) return { dtype: handle.dtype, shape: Array.from(handle.shape), data: view };
         const info = dtypeInfo(handle.dtype);
@@ -252,6 +262,8 @@ export const pythonInterop = {
 
     free: (handle: WasmNdarrayHandle): void => {
         if (handle.kind !== "heap") throw new Error(`pythonInterop.free(): cannot free a ${handle.kind} allocation. Use reset() for arena-like allocators (frameArena.reset() / WasmHeapArena.reset()).`);
+        if (FREED_HEAP_HANDLES.has(handle)) return;
         wasm.freeBytes(handle.ptr >>> 0, handle.byteLength >>> 0);
+        FREED_HEAP_HANDLES.add(handle);
     }
 };

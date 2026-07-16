@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: Wednesday, July 15, 2026.
+Last updated: Thursday, July 16, 2026.
 
-Last commit: Wednesday, July 15, 2026, [**`8711c8e`**](https://www.github.com/Zushah/WasmGPU/commit/8711c8e).
+Last commit: Wednesday, July 15, 2026, [**`2b68e5b`**](https://www.github.com/Zushah/WasmGPU/commit/2b68e5b).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -438,7 +438,7 @@ Python interop is implemented in `./src/python/index.ts` and `./src/python/inter
 
 `sendNdarray()` accepts JavaScript typed arrays, array-like values, or Pyodide buffer-like proxies. Python buffers must currently be C-contiguous. The function can allocate memory through the WebAssembly heap, frame arena, or a supplied `WasmHeapArena`.
 
-`receiveNdarray()` reads a handle back into JavaScript memory. `view()`, `bytes()`, and `copyInto()` expose lower-level views and copies. The Python helper file mirrors this handle model for Python callers.
+`receiveNdarray()` reads a handle back into JavaScript memory. `view()`, `bytes()`, and `copyInto()` expose lower-level views and copies. Freeing a heap ndarray handle is idempotent, and later memory access through that handle is rejected. The Python helper file mirrors this lifetime state for Python callers.
 
 Interop changes should preserve allocator ownership, frame arena lifetime checks, dtype mapping, stride handling, and error messages for unsupported layouts.
 
@@ -450,7 +450,7 @@ WebAssembly driver initialization is implemented in `./src/wasm/driver.ts` and e
 
 WebAssembly interop with external modules lives in `./src/wasm/interop.ts`. It wraps foreign `WebAssembly.Instance` or exports objects, resolves explicit memory and export descriptors, validates byte ranges and alignment, constructs typed views or raw byte/DataView accessors over external linear memory, and provides small shared validation helpers for object-owned uploads from borrowed `WasmMemoryView` sources.
 
-Rust memory allocation is implemented in `./rust/src/heap.rs`. The heap allocator is a bump allocator. The exported free functions currently do not reclaim memory. Contributors should treat heap allocations as persistent within the current WebAssembly instance unless an arena reset pattern is used.
+Rust memory allocation is implemented in `./rust/src/heap.rs` through Rust's standard allocator. Exported byte, `f32`, and `u32` allocation/free pairs use checked layouts; a successful allocation remains valid until its matching one-time free, after which its storage can be reused. WebAssembly memory pages do not shrink after growth. `WasmHeapArena.destroy()` releases its backing heap block, while the frame arena keeps one persistent backing block and reuses its contents through resets.
 
 The Rust driver separates portable slice and fixed-array computation from WebAssembly-only heap and frame-arena adapters where native testing requires it. The heap and frame-arena modules compile only for `wasm32`; their 32-bit pointer, memory-growth, alignment, capacity, and epoch contracts are tested against the compiled WebAssembly module rather than emulated with native pointers.
 
@@ -497,7 +497,8 @@ These invariants are visible in the current code:
 - WebAssembly must be initialized before code calls Rust-backed functions or reads `wasm` exports.
 - Frame arena memory is valid only for the current frame arena epoch.
 - `WasmHeapArena` slices are invalid after the arena is reset or destroyed.
-- The Rust heap allocator is currently a bump allocator, and exported free functions do not reclaim memory.
+- Python interop heap ndarray handles reject memory access after their idempotent free operation.
+- Rust heap allocations remain valid until their matching one-time free; freed storage is reusable, but WebAssembly memory pages do not shrink.
 - Transform indices map TypeScript `Transform` objects to WebAssembly transform slots.
 - Disposed transforms throw on later use.
 - Transform parenting rejects cycles.
@@ -740,7 +741,7 @@ Important files:
 - `./src/wasm/driver.ts`: internal "glue" between the TypeScript and Rust sides of the overall system, `WasmSlice`, `WasmHeapArena`, frame arena helpers, loader integration, and grouped Rust function wrappers.
 - `./rust/Cargo.toml`: Rust crate metadata and release profile.
 - `./rust/src/lib.rs`: module wiring and exported entry points.
-- `./rust/src/heap.rs`: bump heap allocation and no-op free exports.
+- `./rust/src/heap.rs`: checked heap allocation and reclamation through Rust's global allocator.
 - `./rust/src/frame_arena.rs`: resettable per-frame bump allocator.
 - `./rust/src/transform.rs`: transform composition and world propagation.
 - `./rust/src/mat4.rs`, `./rust/src/vec3.rs`, and `./rust/src/quat.rs`: math helpers.
@@ -924,7 +925,7 @@ For Rust changes:
 - run `npm run test:rs` for native Rust checks and `npm run test` after wrapper changes;
 - keep pointer, length, dtype, stride, and alignment assumptions explicit at call sites.
 
-The Rust heap free functions currently do not reclaim memory. Prefer frame arena or arena patterns for temporary data. If allocation semantics change, update `./src/wasm/interop.ts`, callers, and this file.
+Rust heap allocation/free calls must use the same pointer, allocator family, and byte or element count exactly once. Prefer the frame arena for per-frame data and `WasmHeapArena` for grouped temporary allocations. If allocation semantics change, update `./src/wasm/driver.ts`, interop callers, WebAssembly tests, and this file.
 
 ### 3.6. WGSL changes
 
@@ -943,8 +944,9 @@ Reason explicitly about data ownership and lifetime:
 
 - TypeScript typed arrays may copy into WebAssembly memory, GPU buffers, or both.
 - WebAssembly frame arena slices expire on reset.
-- WebAssembly heap slices persist in the current WebAssembly instance because heap free currently does not reclaim memory.
-- `WasmHeapArena` slices expire when the arena resets or is destroyed.
+- WebAssembly heap slices remain valid until explicitly freed; their storage may be reused immediately afterward, while the grown WebAssembly memory pages remain allocated to the instance.
+- `WasmHeapArena` slices expire when the arena resets or is destroyed, and destroying the arena releases its backing heap allocation for reuse.
+- Python interop heap ndarray handles and `WasmGPUArray` wrappers reject memory access after free; repeated frees of the same handle object are harmless.
 - GPU buffers need correct usage flags for writes, copies, storage binding, vertex binding, index binding, uniform binding, or readback.
 - Textures may be pending upload while render paths use fallback resources.
 - Pick attribute records may require CPU data retention.
@@ -1027,3 +1029,5 @@ When updating this file:
 - keep the writing style completely unchanged despite the writing substance changes;
 - describe current behavior, not only released behavior;
 - remove claims that are not visible from source, tests, documentation, build configuration, or git history.
+
+This file (and more broadly, WasmGPU) is available under the [Mozilla Public License 2.0](https://www.github.com/Zushah/WasmGPU/blob/main/LICENSE.md).

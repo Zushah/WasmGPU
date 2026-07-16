@@ -6,7 +6,7 @@
 
 import assert from "assert";
 import { readFile } from "node:fs/promises";
-import { WasmGPU, WasmMemoryView, WasmModule, driver, pythonInterop, webassemblyInterop } from "../dist/WasmGPU.js";
+import { WasmGPU, WasmMemoryView, WasmModule, driver, initWebAssembly, pythonInterop, webassemblyInterop } from "../dist/WasmGPU.js";
 import * as generatedWasm from "../build/wasm.js";
 
 const encoder = new TextEncoder();
@@ -306,8 +306,18 @@ const makeFixture = () => {
     }
 }
 
-// 9) Heap allocations are aligned, disjoint while live, writable after memory growth, and accepted by matching frees.
+// 9) Heap allocations are checked, aligned, disjoint while live, and reusable after matching frees.
 {
+    assert.strictEqual(generatedWasm.wasmgpu_alloc(0), 0, "Zero-byte allocations must use the null pointer");
+    assert.strictEqual(generatedWasm.wasmgpu_alloc_f32(0), 0, "Zero-length f32 allocations must use the null pointer");
+    assert.strictEqual(generatedWasm.wasmgpu_alloc_u32(0), 0, "Zero-length u32 allocations must use the null pointer");
+    assert.strictEqual(generatedWasm.wasmgpu_alloc(0xffffffff), 0, "Byte allocations beyond Rust Layout limits must fail without wrapping");
+    assert.strictEqual(generatedWasm.wasmgpu_alloc_f32(0xffffffff), 0, "f32 allocation size overflow must fail without wrapping");
+    assert.strictEqual(generatedWasm.wasmgpu_alloc_u32(0xffffffff), 0, "u32 allocation size overflow must fail without wrapping");
+    assert.doesNotThrow(() => generatedWasm.wasmgpu_free(0, 0));
+    assert.doesNotThrow(() => generatedWasm.wasmgpu_free_f32(0, 0));
+    assert.doesNotThrow(() => generatedWasm.wasmgpu_free_u32(0, 0));
+
     const bytePtr = generatedWasm.wasmgpu_alloc(17);
     const f32Ptr = generatedWasm.wasmgpu_alloc_f32(5);
     const u32Ptr = generatedWasm.wasmgpu_alloc_u32(5);
@@ -345,6 +355,37 @@ const makeFixture = () => {
     assert.doesNotThrow(() => generatedWasm.wasmgpu_free_f32(f32Ptr, 5));
     assert.doesNotThrow(() => generatedWasm.wasmgpu_free_u32(u32Ptr, 5));
     assert.doesNotThrow(() => generatedWasm.wasmgpu_free(growthPtr, beforeBuffer.byteLength));
+
+    const guardPtr = generatedWasm.wasmgpu_alloc(64);
+    assert.ok(guardPtr > 0, "Live-allocation guard must succeed");
+    generatedWasm.u8view(guardPtr, 64).fill(0x5a);
+
+    const churnSizes = [257, 4096, 131072, 1024];
+    const churnCycle = () => {
+        const ptrs = churnSizes.map((bytes) => generatedWasm.wasmgpu_alloc(bytes));
+        const f32 = generatedWasm.wasmgpu_alloc_f32(4096);
+        const u32 = generatedWasm.wasmgpu_alloc_u32(4096);
+        assert.ok(ptrs.every((ptr) => ptr > 0) && f32 > 0 && u32 > 0, "Heap churn allocations must succeed");
+        for (let i = 0; i < ptrs.length; i++) {
+            generatedWasm.u8view(ptrs[i], churnSizes[i]).fill(i + 1);
+        }
+        generatedWasm.f32view(f32, 4096).fill(1.25);
+        generatedWasm.u32view(u32, 4096).fill(0xdecafbad);
+        assert.deepStrictEqual(Array.from(generatedWasm.u8view(guardPtr, 64)), new Array(64).fill(0x5a), "Allocator churn must not corrupt a live neighboring allocation");
+        generatedWasm.wasmgpu_free(ptrs[1], churnSizes[1]);
+        generatedWasm.wasmgpu_free(ptrs[3], churnSizes[3]);
+        generatedWasm.wasmgpu_free_f32(f32, 4096);
+        generatedWasm.wasmgpu_free(ptrs[0], churnSizes[0]);
+        generatedWasm.wasmgpu_free_u32(u32, 4096);
+        generatedWasm.wasmgpu_free(ptrs[2], churnSizes[2]);
+    };
+
+    churnCycle();
+    const stabilizedHeapBytes = generatedWasm.memory.buffer.byteLength;
+    for (let i = 0; i < 64; i++) churnCycle();
+    assert.strictEqual(generatedWasm.memory.buffer.byteLength, stabilizedHeapBytes, "Repeated mixed-size allocation/free cycles must reuse heap storage instead of growing memory linearly");
+    assert.deepStrictEqual(Array.from(generatedWasm.u8view(guardPtr, 64)), new Array(64).fill(0x5a), "The live guard must remain intact after stabilized churn");
+    generatedWasm.wasmgpu_free(guardPtr, 64);
 }
 
 // 10) The frame arena enforces capacity and alignment and invalidates transient allocations on reset.
@@ -398,4 +439,57 @@ const makeFixture = () => {
         generatedWasm.wasmgpu_free(sourcePtr, 12);
         generatedWasm.wasmgpu_free(outputPtr, 8);
     }
+}
+
+// 12) Driver-owned heap slices and heap arenas enforce deterministic lifetimes and reclaim their allocations.
+{
+    await initWebAssembly(new URL("../build/", import.meta.url).toString());
+
+    const slice = driver.heap.allocF32(4);
+    slice.write([1, 2, 3, 4]);
+    assert.strictEqual(slice.isAlive(), true);
+    assert.deepStrictEqual(Array.from(slice.view()), [1, 2, 3, 4]);
+    slice.free();
+    assert.strictEqual(slice.isAlive(), false, "Explicitly freed heap slices must become invalid immediately");
+    assert.throws(() => slice.view(), /freed/i, "Freed heap slices must reject later views");
+    assert.doesNotThrow(() => slice.free(), "Heap slice free must remain idempotent");
+
+    const ndarrayHandle = pythonInterop.sendNdarray(new Float32Array([1, 2, 3, 4]), { shape: [2, 2] });
+    assert.deepStrictEqual(Array.from(pythonInterop.view(ndarrayHandle)), [1, 2, 3, 4]);
+    pythonInterop.free(ndarrayHandle);
+    assert.doesNotThrow(() => pythonInterop.free(ndarrayHandle), "Python ndarray heap free must remain idempotent");
+    assert.throws(() => pythonInterop.view(ndarrayHandle), /freed/i, "Freed Python ndarray handles must reject typed views");
+    assert.throws(() => pythonInterop.bytes(ndarrayHandle), /freed/i, "Freed Python ndarray handles must reject byte views");
+    assert.throws(() => pythonInterop.copyInto(ndarrayHandle, new Float32Array([5, 6, 7, 8])), /freed/i, "Freed Python ndarray handles must reject writes");
+    assert.throws(() => pythonInterop.receiveNdarray(ndarrayHandle, { copy: true }), /freed/i, "Freed Python ndarray handles must reject reads");
+    const replacementHandle = pythonInterop.sendNdarray(new Float32Array([9, 10, 11, 12]), { shape: [2, 2] });
+    assert.throws(() => pythonInterop.view(ndarrayHandle), /freed/i, "A freed handle must remain invalid after its storage becomes reusable");
+    pythonInterop.free(replacementHandle);
+
+    const arena = driver.createHeapArena(256);
+    const arenaSlice = arena.allocU8(16);
+    arenaSlice.write([1, 2, 3, 4]);
+    assert.strictEqual(arenaSlice.isAlive(), true);
+    arena.destroy();
+    assert.strictEqual(arenaSlice.isAlive(), false, "Destroying a heap arena must invalidate its slices");
+    assert.throws(() => arenaSlice.view(), /epoch changed/i, "Destroyed-arena slices must reject later views");
+    assert.throws(() => arena.alloc(1), /destroyed/i, "Destroyed heap arenas must reject new allocations");
+    assert.doesNotThrow(() => arena.destroy(), "Heap arena destruction must remain idempotent");
+
+    const arenaChurn = () => {
+        const current = driver.createHeapArena(256 * 1024);
+        const bytes = current.allocU8(256 * 1024);
+        const view = bytes.view();
+        view[0] = 0x35;
+        view[view.length - 1] = 0x79;
+        assert.strictEqual(view[0], 0x35);
+        assert.strictEqual(view[view.length - 1], 0x79);
+        current.destroy();
+        assert.strictEqual(bytes.isAlive(), false);
+    };
+
+    arenaChurn();
+    const stabilizedArenaBytes = generatedWasm.memory.buffer.byteLength;
+    for (let i = 0; i < 64; i++) arenaChurn();
+    assert.strictEqual(generatedWasm.memory.buffer.byteLength, stabilizedArenaBytes, "Repeated heap-arena destruction must release backing blocks for reuse");
 }

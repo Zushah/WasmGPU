@@ -1,8 +1,6 @@
-"""
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
-"""
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 """
 # WasmGPU Python-in-the-browser helpers for Pyodide/JupyterLite.
 
@@ -63,7 +61,8 @@ gpu_handle.free() # frees only heap-allocated handles; arenas require reset()
 ```
 
 ## Notes on memory management
-- WasmGPU's heap allocator is currently bump-style so `free` is a no-op.
+- Heap allocations are reusable after `free`; freed handles reject later memory access.
+- Calling `WasmGPUArray.free()` repeatedly is safe and idempotent.
 - Prefer allocating once and updating via `copyInto`.
 - For batch-style allocations, use `WasmGPUArena` and `reset()` between batches.
 """
@@ -315,6 +314,7 @@ class WasmGPUArray:
         self._interop = interop
         self._handle = handle
         self._arena = arena
+        self._freed = False
 
     @property
     def handle(self) -> Any:
@@ -363,6 +363,8 @@ class WasmGPUArray:
         return self.info.kind
 
     def _assert_valid(self) -> None:
+        if self._freed:
+            raise WasmGPUInteropError("This WasmGPUArray has been freed.")
         i = self.info
         if i.kind == "arena" and self._arena is not None and i.epoch is not None:
             cur = self._arena.epoch()
@@ -378,10 +380,10 @@ class WasmGPUArray:
         return self._interop._python.bytes(self._handle)
 
     def update(self, x: Any, *, copy: CopyPolicy = "if_needed", casting: CastingPolicy = "safe") -> None:
+        self._assert_valid()
         arr = ensure_array(x, dtype=self.dtype, copy=copy, casting=casting)
         if tuple(arr.shape) != self.shape:
             raise WasmGPUInteropError(f"Shape mismatch: handle expects {self.shape}, got {tuple(arr.shape)}")
-        self._assert_valid()
         self._interop._python.copyInto(self._handle, arr)
 
     def to_numpy(self) -> Any:
@@ -394,6 +396,7 @@ class WasmGPUArray:
         return out
 
     def read_into(self, out: Any) -> None:
+        self._assert_valid()
         np = _require_numpy()
         if not isinstance(out, np.ndarray):
             raise WasmGPUInteropError("read_into(out): out must be a numpy.ndarray")
@@ -405,8 +408,11 @@ class WasmGPUArray:
         np.copyto(out, src)
 
     def free(self) -> None:
+        if self._freed:
+            return
         self._assert_valid()
         self._interop._python.free(self._handle)
+        self._freed = True
 
     def __repr__(self) -> str:
         i = self.info
