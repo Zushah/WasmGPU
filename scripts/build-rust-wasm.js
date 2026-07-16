@@ -12,10 +12,10 @@
         - ./build/wasm.js   (JavaScript bridge)
         - ./build/wasm.d.ts (TypeScript declarations)
     It downloads:
-        - ./tools/wabt/1.0.37/ (WABT for generating wasm.wat with wasm2wat.exe)
-        - ./tools/binaryen/version_126/ (Binaryen for optimizing wasm.wasm with wasm-opt.exe)
+        - ./tools/wabt/1.0.41/ (WABT for generating wasm.wat with wasm2wat.exe)
+        - ./tools/binaryen/version_131/ (Binaryen for optimizing wasm.wasm with wasm-opt.exe)
 
-    This file is intentionally self-contained so building WasmGPU with `npm run build` is as straightforward as possible.
+    This file is intentionally self-contained so that building WasmGPU with `npm run build` is as straightforward as possible.
 */
 
 import { execSync } from "node:child_process";
@@ -32,18 +32,12 @@ const RUST_DIR = join(ROOT, "rust");
 const BUILD_DIR = join(ROOT, "build");
 const TOOLS_DIR = join(ROOT, "tools");
 
-const CRATE_NAME = (() => {
-    const cargoTomlPath = join(RUST_DIR, "Cargo.toml");
-    const cargoToml = readFileSync(cargoTomlPath, "utf8");
-    const m = cargoToml.match(/^\s*name\s*=\s*"([^"]+)"\s*$/m);
-    if (!m) throw new Error(`Unable to read crate name from ${cargoTomlPath}`);
-    return m[1];
-})();
+const CRATE_NAME = "wasmgpu";
 const WASM_TARGET = "wasm32-unknown-unknown";
 const PROFILE_DIR = "release";
 
-const WABT_VERSION = "1.0.37";
-const BINARYEN_VERSION = "version_126";
+const WABT_VERSION = "1.0.41";
+const BINARYEN_VERSION = "version_131";
 
 const envFlag = (name, defaultValue) => {
     const raw = process.env[name];
@@ -69,39 +63,19 @@ const ENABLE_WASM_OPT = envFlag("WASMGPU_WASM_OPT", true);
 const WASM_OPT_LEVEL = (process.env.WASMGPU_WASM_OPT_LEVEL ?? "O3").trim();
 const WASM_OPT_CONVERGE = envFlag("WASMGPU_WASM_OPT_CONVERGE", false);
 
-const withEnv = (extraEnv) => {
-    if (!extraEnv) return process.env;
-    return { ...process.env, ...extraEnv };
-};
+const withEnv = (extraEnv) => { if (!extraEnv) return process.env; return { ...process.env, ...extraEnv }; };
 
-const run = (cmd, cwd, env) => {
-    execSync(cmd, { cwd, stdio: "inherit", env: withEnv(env) });
-};
+const run = (cmd, cwd, env) => { execSync(cmd, { cwd, stdio: "inherit", env: withEnv(env) }); };
 
-const tryRun = (cmd, cwd, env) => {
-    try {
-        execSync(cmd, { cwd, stdio: "inherit", shell: true, env: withEnv(env) });
-        return true;
-    } catch {
-        return false;
-    }
-};
+const tryRun = (cmd, cwd, env) => { try { execSync(cmd, { cwd, stdio: "inherit", shell: true, env: withEnv(env) }); return true; } catch { return false; } };
 
-const quote = (p) => {
-    return `"${String(p).replaceAll(`"`, `\\"`)}"`;
-};
+const quote = (p) => `"${String(p).replaceAll(`"`, `\\"`)}"`;
 
-const wabtExeName = () => {
-    return process.platform === "win32" ? "wasm2wat.exe" : "wasm2wat";
-};
+const wabtExeName = () => process.platform === "win32" ? "wasm2wat.exe" : "wasm2wat";
 
 const findWasm2WatBin = (rootDir) => {
     const exe = wabtExeName();
-    const directCandidates = [
-        join(rootDir, "bin", exe),
-        join(rootDir, `wabt-${WABT_VERSION}`, "bin", exe),
-        join(rootDir, exe),
-    ];
+    const directCandidates = [join(rootDir, "bin", exe), join(rootDir, `wabt-${WABT_VERSION}`, "bin", exe), join(rootDir, exe)];
     for (const c of directCandidates) if (existsSync(c)) return c;
     try {
         const ents = readdirSync(rootDir, { withFileTypes: true });
@@ -112,41 +86,23 @@ const findWasm2WatBin = (rootDir) => {
             const c2 = join(rootDir, ent.name, exe);
             if (existsSync(c2)) return c2;
         }
-    } catch {
-        // ignore
-    }
+    } catch { /* ignore */ }
     return null;
 };
 
 const wabtAssetCandidates = () => {
     const v = WABT_VERSION;
     if (process.platform === "win32") {
-        return [
-            { kind: "zip", asset: `wabt-${v}-windows.zip` },
-            { kind: "zip", asset: `wabt-${v}-windows-x86_64.zip` },
-            { kind: "targz", asset: `wabt-${v}-windows.tar.gz` }
-        ];
+        if (process.arch === "arm64") return [{ kind: "targz", asset: `wabt-${v}-windows-arm64.tar.gz` }];
+        return [{ kind: "targz", asset: `wabt-${v}-windows-x64.tar.gz` }];
     }
     if (process.platform === "linux") {
-        return [
-            { kind: "targz", asset: `wabt-${v}-ubuntu.tar.gz` },
-            { kind: "targz", asset: `wabt-${v}-linux.tar.gz` },
-            { kind: "targz", asset: `wabt-${v}-debian.tar.gz` }
-        ];
+        if (process.arch === "arm64") return [{ kind: "targz", asset: `wabt-${v}-linux-arm64.tar.gz` }];
+        return [{ kind: "targz", asset: `wabt-${v}-linux-x64.tar.gz` }];
     }
     if (process.platform === "darwin") {
-        const arch = process.arch;
-        if (arch === "arm64") {
-            return [
-                { kind: "targz", asset: `wabt-${v}-macos-arm64.tar.gz` },
-                { kind: "targz", asset: `wabt-${v}-macos-aarch64.tar.gz` },
-                { kind: "targz", asset: `wabt-${v}-macos.tar.gz` }
-            ];
-        }
-        return [
-            { kind: "targz", asset: `wabt-${v}-macos.tar.gz` },
-            { kind: "targz", asset: `wabt-${v}-macos-x86_64.tar.gz` }
-        ];
+        if (process.arch === "arm64") return [{ kind: "targz", asset: `wabt-${v}-macos-arm64.tar.gz` }];
+        return [{ kind: "targz", asset: `wabt-${v}-macos-x64.tar.gz` }];
     }
     return [];
 };
@@ -165,10 +121,7 @@ const downloadTo = async (url, outPath) => {
     }
     await new Promise((resolve, reject) => {
         const get = (u, depth) => {
-            if (depth > 8) {
-                reject(new Error(`Too many redirects while downloading ${url}`));
-                return;
-            }
+            if (depth > 8) { reject(new Error(`Too many redirects while downloading ${url}`)); return; }
             https.get(u, (res) => {
                 const status = res.statusCode || 0;
                 const loc = res.headers.location;
@@ -186,10 +139,7 @@ const downloadTo = async (url, outPath) => {
                 }
                 const chunks = [];
                 res.on("data", (d) => chunks.push(d));
-                res.on("end", () => {
-                    writeFileSync(outPath, Buffer.concat(chunks));
-                    resolve();
-                });
+                res.on("end", () => { writeFileSync(outPath, Buffer.concat(chunks)); resolve(); });
             }).on("error", reject);
         };
         get(url, 0);
@@ -243,10 +193,7 @@ const ensureWabtWasm2Wat = async () => {
             throw e;
         }
     }
-    if (!picked || !archivePath) {
-        const tried = candidates.map((c) => c.asset).join(", ");
-        throw new Error(`WABT: failed to download any asset for ${process.platform}/${process.arch}. Tried: ${tried}`);
-    }
+    if (!picked || !archivePath) { const tried = candidates.map((c) => c.asset).join(", "); throw new Error(`WABT: failed to download any asset for ${process.platform}/${process.arch}. Tried: ${tried}`); }
     console.log(`WABT: extracting ${picked.asset} -> ${wabtRoot}`);
     if (picked.kind === "zip") await extractZip(archivePath, wabtRoot);
     else await extractTarGz(archivePath, wabtRoot);
@@ -255,9 +202,7 @@ const ensureWabtWasm2Wat = async () => {
     return bin;
 };
 
-const binaryenExeName = () => {
-    return process.platform === "win32" ? "wasm-opt.exe" : "wasm-opt";
-};
+const binaryenExeName = () => process.platform === "win32" ? "wasm-opt.exe" : "wasm-opt";
 
 const findWasmOptBin = (rootDir) => {
     const exe = binaryenExeName();
@@ -276,9 +221,7 @@ const findWasmOptBin = (rootDir) => {
             const c2 = join(rootDir, ent.name, exe);
             if (existsSync(c2)) return c2;
         }
-    } catch {
-        // ignore
-    }
+    } catch { /* ignore */ }
     return null;
 };
 
@@ -324,10 +267,7 @@ const ensureBinaryenWasmOpt = async () => {
             throw e;
         }
     }
-    if (!picked || !archivePath) {
-        const tried = candidates.map((c) => c.asset).join(", ");
-        throw new Error(`Binaryen: failed to download any asset for ${process.platform}/${process.arch}. Tried: ${tried}`);
-    }
+    if (!picked || !archivePath) { const tried = candidates.map((c) => c.asset).join(", "); throw new Error(`Binaryen: failed to download any asset for ${process.platform}/${process.arch}. Tried: ${tried}`); }
     console.log(`Binaryen: extracting ${picked.asset} -> ${binaryenRoot}`);
     if (picked.kind === "zip") await extractZip(archivePath, binaryenRoot);
     else await extractTarGz(archivePath, binaryenRoot);
@@ -341,10 +281,7 @@ const formatBytes = (n) => {
     const units = ["B", "KB", "MB", "GB"];
     let v = bytes;
     let i = 0;
-    while (v >= 1024 && i < units.length - 1) {
-        v /= 1024;
-        i++;
-    }
+    while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
     const s = i === 0 ? `${v}` : v.toFixed(2);
     return `${s} ${units[i]}`;
 };
@@ -411,24 +348,13 @@ if (ENABLE_WASM_OPT) {
         "--all-features"
     ].filter((x) => x && String(x).length > 0).join(" ");
     let downloadedWasmOpt = null;
-    try {
-        downloadedWasmOpt = await ensureBinaryenWasmOpt();
-    } catch (e) {
-        console.log(`Binaryen: auto-download unavailable (${e?.message ?? e}). Falling back to system wasm-opt.`);
-    }
-    if (downloadedWasmOpt) {
-        didWasmOpt = tryRun(`${quote(downloadedWasmOpt)} ${cmdArgs}`, ROOT);
-    }
-    if (!didWasmOpt) {
-        didWasmOpt = tryRun(`wasm-opt ${cmdArgs}`, ROOT);
-    }
+    try { downloadedWasmOpt = await ensureBinaryenWasmOpt(); } catch (e) { console.log(`Binaryen: auto-download unavailable (${e?.message ?? e}). Falling back to system wasm-opt.`); }
+    if (downloadedWasmOpt) didWasmOpt = tryRun(`${quote(downloadedWasmOpt)} ${cmdArgs}`, ROOT);
+    if (!didWasmOpt) didWasmOpt = tryRun(`wasm-opt ${cmdArgs}`, ROOT);
     if (didWasmOpt) {
-        const inSize = statSync(wasmTmp).size;
-        const outSize = statSync(wasmOut).size;
+        const inSize = statSync(wasmTmp).size, outSize = statSync(wasmOut).size;
         console.log(`WASM: wasm-opt applied   -> .\\build\\wasm.wasm (${formatBytes(inSize)} -> ${formatBytes(outSize)})`);
-    } else {
-        console.log(`WASM: wasm-opt not run   (wasm-opt unavailable).`);
-    }
+    } else console.log(`WASM: wasm-opt not run   (wasm-opt unavailable).`);
 }
 
 if (!didWasmOpt) {
@@ -437,31 +363,14 @@ if (!didWasmOpt) {
     console.log(`WASM: copied raw wasm    -> .\\build\\wasm.wasm (${formatBytes(outSize)})`);
 }
 
-try {
-    rmSync(wasmTmp, { force: true });
-} catch {
-    // ignore
-}
+try { rmSync(wasmTmp, { force: true }); } catch { /* ignore */ }
 
 const watOut = join(BUILD_DIR, "wasm.wat");
 
 let downloadedWasm2Wat = null;
-try {
-    downloadedWasm2Wat = await ensureWabtWasm2Wat();
-} catch (e) {
-    console.log(`WABT: auto-download unavailable (${e?.message ?? e}). Falling back to system tools.`);
-}
+try { downloadedWasm2Wat = await ensureWabtWasm2Wat(); } catch (e) { console.log(`WABT: auto-download unavailable (${e?.message ?? e}). Falling back to system tools.`); }
 
-const madeWat =
-    (downloadedWasm2Wat
-        ? (
-            tryRun(`${quote(downloadedWasm2Wat)} --enable-all ${quote(wasmOut)} -o ${quote(watOut)}`, ROOT) ||
-            tryRun(`${quote(downloadedWasm2Wat)} ${quote(wasmOut)} -o ${quote(watOut)}`, ROOT)
-        )
-        : false) ||
-    tryRun(`wasm2wat --enable-all ${quote(wasmOut)} -o ${quote(watOut)}`, ROOT) ||
-    tryRun(`wasm2wat ${quote(wasmOut)} -o ${quote(watOut)}`, ROOT) ||
-    tryRun(`wasm-tools print ${quote(wasmOut)} > ${quote(watOut)}`, ROOT);
+const madeWat = (downloadedWasm2Wat ? (tryRun(`${quote(downloadedWasm2Wat)} --enable-all ${quote(wasmOut)} -o ${quote(watOut)}`, ROOT) || tryRun(`${quote(downloadedWasm2Wat)} ${quote(wasmOut)} -o ${quote(watOut)}`, ROOT)) : false) || tryRun(`wasm2wat --enable-all ${quote(wasmOut)} -o ${quote(watOut)}`, ROOT) || tryRun(`wasm2wat ${quote(wasmOut)} -o ${quote(watOut)}`, ROOT) || tryRun(`wasm-tools print ${quote(wasmOut)} > ${quote(watOut)}`, ROOT);
 
 if (madeWat) console.log(`Generated WAT            -> .\\build\\wasm.wat`);
 else console.log(`Note: .\\build\\wasm.wat not generated (auto-download failed and no system wasm2wat/wasm-tools found).`);
@@ -1007,6 +916,6 @@ export function vec3sub(v1: number[], v2: number[]): number[];
 writeFileSync(join(BUILD_DIR, "wasm.js"), generateWasmLoaderJS(wasmBase64), "utf8");
 writeFileSync(join(BUILD_DIR, "wasm.d.ts"), generateWasmDTS(), "utf8");
 
-console.log(`\nBuilt Rust to WebAssembly     -> .\\build\\wasm.wasm`);
-console.log(`Generated WebAssembly loader  -> .\\build\\wasm.js`);
-console.log(`Generated WebAssembly types   -> .\\build\\wasm.d.ts\n`);
+console.log(`\nBuilt WebAssembly binary        -> .\\build\\wasm.wasm`);
+console.log(`Built JavaScript bridge         -> .\\build\\wasm.js`);
+console.log(`Built TypeScript declarations   -> .\\build\\wasm.d.ts\n`);
