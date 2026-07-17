@@ -5,7 +5,7 @@
  */
 
 import assert from "assert";
-import { initWebAssembly, Transform, TransformStore } from "../dist/WasmGPU.js";
+import { initWebAssembly, Transform, TransformStore, wasm } from "../dist/WasmGPU.js";
 
 await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
@@ -260,5 +260,63 @@ const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
         approxMatArray(fullWorld, orderRebuiltWorld, 1e-5, "Order rebuild parity mismatch");
     } finally {
         cleanup(nodes);
+    }
+}
+
+// 9) Store growth preserves live data and releases superseded capacity blocks.
+{
+    const store = new TransformStore(1);
+    const originalFreeF32 = wasm.freeF32;
+    const originalFreeU32 = wasm.freeU32;
+    const freedF32 = [];
+    const freedU32 = [];
+    wasm.freeF32 = (ptr, len) => { freedF32.push([ptr, len]); originalFreeF32(ptr, len); };
+    wasm.freeU32 = (ptr, len) => { freedU32.push([ptr, len]); originalFreeU32(ptr, len); };
+    try {
+        store.alloc({});
+        const old = {
+            posPtr: store.posPtr,
+            rotPtr: store.rotPtr,
+            sclPtr: store.sclPtr,
+            localPtr: store.localPtr,
+            worldPtr: store.worldPtr,
+            parentPtr: store.parentPtr,
+            orderPtr: store.orderPtr,
+            tmpAxisPtr: store.tmpAxisPtr,
+            tmpQuatPtr: store.tmpQuatPtr
+        };
+        wasm.f32view(old.posPtr, 3).set([1, 2, 3]);
+        store.alloc({});
+        assert.equal(store.cap, 2);
+        assert.deepStrictEqual(Array.from(wasm.f32view(store.posPtr, 3)), [1, 2, 3], "TransformStore growth must preserve live position data");
+        for (const [ptr, len] of [
+            [old.posPtr, 3], [old.rotPtr, 4], [old.sclPtr, 3], [old.localPtr, 16], [old.worldPtr, 16]
+        ]) assert.ok(freedF32.some(([freedPtr, freedLen]) => freedPtr === ptr && freedLen === len), `Expected replaced f32 allocation ${ptr}/${len} to be freed`);
+        for (const [ptr, len] of [[old.parentPtr, 1], [old.orderPtr, 1]]) assert.ok(freedU32.some(([freedPtr, freedLen]) => freedPtr === ptr && freedLen === len), `Expected replaced u32 allocation ${ptr}/${len} to be freed`);
+        assert.equal(store.tmpAxisPtr, old.tmpAxisPtr, "Capacity growth must reuse the fixed temporary axis allocation");
+        assert.equal(store.tmpQuatPtr, old.tmpQuatPtr, "Capacity growth must reuse the fixed temporary quaternion allocation");
+
+        for (let i = 2; i < 8; i++) store.alloc({});
+        store.updateIfNeeded();
+        store.markIndexDirty(0);
+        store.updateIfNeeded();
+        const oldDirtyIndicesPtr = store.dirtyIndicesPtr;
+        store.markIndexDirty(0);
+        store.markIndexDirty(1);
+        store.updateIfNeeded();
+        assert.ok(freedU32.some(([ptr, len]) => ptr === oldDirtyIndicesPtr && len === 1), "Growing dirty-index scratch must free the replaced block");
+    } finally {
+        wasm.freeF32 = originalFreeF32;
+        wasm.freeU32 = originalFreeU32;
+        if (store.dirtyIndicesPtr) originalFreeU32(store.dirtyIndicesPtr, store.dirtyIndicesCap);
+        originalFreeF32(store.posPtr, store.cap * 3);
+        originalFreeF32(store.rotPtr, store.cap * 4);
+        originalFreeF32(store.sclPtr, store.cap * 3);
+        originalFreeF32(store.localPtr, store.cap * 16);
+        originalFreeF32(store.worldPtr, store.cap * 16);
+        originalFreeU32(store.parentPtr, store.cap);
+        originalFreeU32(store.orderPtr, store.cap);
+        originalFreeF32(store.tmpAxisPtr, 4);
+        originalFreeF32(store.tmpQuatPtr, 4);
     }
 }

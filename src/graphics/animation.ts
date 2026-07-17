@@ -132,8 +132,8 @@ export class AnimationClip {
     readonly name: string;
     readonly samplerCount: number;
     readonly channelCount: number;
-    readonly samplersPtr: WasmPtr;
-    readonly channelsPtr: WasmPtr;
+    private readonly _samplersPtr: WasmPtr;
+    private readonly _channelsPtr: WasmPtr;
     readonly startTime: number;
     readonly endTime: number;
     private _ownedF32Allocs: ReadonlyArray<{ ptr: WasmPtr; len: number }> | null;
@@ -148,8 +148,8 @@ export class AnimationClip {
         this.name = desc.name;
         this.samplerCount = desc.samplerCount | 0;
         this.channelCount = desc.channelCount | 0;
-        this.samplersPtr = desc.samplersPtr;
-        this.channelsPtr = desc.channelsPtr;
+        this._samplersPtr = desc.samplersPtr;
+        this._channelsPtr = desc.channelsPtr;
         this.startTime = desc.startTime;
         this.endTime = desc.endTime;
         this._ownedF32Allocs = desc.ownedF32Allocs ?? null;
@@ -164,7 +164,26 @@ export class AnimationClip {
         return Math.max(0, this.endTime - this.startTime);
     }
 
+    get disposed(): boolean {
+        return this._disposed;
+    }
+
+    get samplersPtr(): WasmPtr {
+        this.assertAlive();
+        return this._samplersPtr;
+    }
+
+    get channelsPtr(): WasmPtr {
+        this.assertAlive();
+        return this._channelsPtr;
+    }
+
+    private assertAlive(): void {
+        if (this._disposed) throw new Error(`AnimationClip '${this.name}' is disposed (use-after-dispose).`);
+    }
+
     sample(timeSeconds: number): void {
+        this.assertAlive();
         if (this.channelCount > 0) {
             const store = TransformStore.global();
             const soa = { posPtr: store.posPtr as WasmPtr, rotPtr: store.rotPtr as WasmPtr, sclPtr: store.sclPtr as WasmPtr };
@@ -191,9 +210,9 @@ export class AnimationClip {
 
     dispose(): void {
         if (this._disposed) return;
-        this._disposed = true;
         if (this._ownedF32Allocs) for (const a of this._ownedF32Allocs) if (a.ptr) wasm.freeF32(a.ptr, a.len | 0);
         if (this._ownedU32Allocs) for (const a of this._ownedU32Allocs) if (a.ptr) wasm.freeU32(a.ptr, a.len | 0);
+        this._disposed = true;
         this._ownedF32Allocs = null;
         this._ownedU32Allocs = null;
         this._weightSamplers = null;
@@ -242,65 +261,121 @@ export class Skin {
     readonly name: string;
     readonly joints: Transform[];
     readonly jointCount: number;
-    readonly jointIndicesPtr: WasmPtr;
-    readonly invBindPtr: WasmPtr;
+    private readonly _jointIndicesPtr: WasmPtr;
+    private readonly _invBindPtr: WasmPtr;
     private _disposed: boolean = false;
 
     constructor(name: string, joints: Transform[], inverseBindMatrices: Float32Array | null) {
         this.name = name;
         this.joints = joints;
         this.jointCount = joints.length | 0;
-        this.jointIndicesPtr = wasm.allocU32(this.jointCount) as WasmPtr;
-        const u32 = wasm.u32view(this.jointIndicesPtr, this.jointCount);
-        for (let i = 0; i < this.jointCount; i++) u32[i] = joints[i]!.index >>> 0;
-        this.invBindPtr = wasm.allocF32(this.jointCount * 16) as WasmPtr;
-        const f32 = wasm.f32view(this.invBindPtr, this.jointCount * 16);
-        if (inverseBindMatrices && inverseBindMatrices.length === this.jointCount * 16) {
-            f32.set(inverseBindMatrices);
-        } else {
-            for (let j = 0; j < this.jointCount; j++) {
-                const o = j * 16;
-                f32[o + 0] = 1; f32[o + 1] = 0; f32[o + 2] = 0; f32[o + 3] = 0;
-                f32[o + 4] = 0; f32[o + 5] = 1; f32[o + 6] = 0; f32[o + 7] = 0;
-                f32[o + 8] = 0; f32[o + 9] = 0; f32[o + 10] = 1; f32[o + 11] = 0;
-                f32[o + 12] = 0; f32[o + 13] = 0; f32[o + 14] = 0; f32[o + 15] = 1;
+        let jointIndicesPtr = 0 as WasmPtr;
+        let invBindPtr = 0 as WasmPtr;
+        try {
+            jointIndicesPtr = wasm.allocU32(this.jointCount) as WasmPtr;
+            if (!jointIndicesPtr && this.jointCount !== 0) throw new Error(`Skin '${name}': joint index allocation failed (${this.jointCount} elements).`);
+            const u32 = wasm.u32view(jointIndicesPtr, this.jointCount);
+            for (let i = 0; i < this.jointCount; i++) u32[i] = joints[i]!.index >>> 0;
+            invBindPtr = wasm.allocF32(this.jointCount * 16) as WasmPtr;
+            if (!invBindPtr && this.jointCount !== 0) throw new Error(`Skin '${name}': inverse bind allocation failed (${this.jointCount * 16} elements).`);
+            const f32 = wasm.f32view(invBindPtr, this.jointCount * 16);
+            if (inverseBindMatrices && inverseBindMatrices.length === this.jointCount * 16) {
+                f32.set(inverseBindMatrices);
+            } else {
+                for (let j = 0; j < this.jointCount; j++) {
+                    const o = j * 16;
+                    f32[o + 0] = 1; f32[o + 1] = 0; f32[o + 2] = 0; f32[o + 3] = 0;
+                    f32[o + 4] = 0; f32[o + 5] = 1; f32[o + 6] = 0; f32[o + 7] = 0;
+                    f32[o + 8] = 0; f32[o + 9] = 0; f32[o + 10] = 1; f32[o + 11] = 0;
+                    f32[o + 12] = 0; f32[o + 13] = 0; f32[o + 14] = 0; f32[o + 15] = 1;
+                }
             }
+        } catch (error) {
+            if (invBindPtr) wasm.freeF32(invBindPtr, this.jointCount * 16);
+            if (jointIndicesPtr) wasm.freeU32(jointIndicesPtr, this.jointCount);
+            throw error;
         }
+        this._jointIndicesPtr = jointIndicesPtr;
+        this._invBindPtr = invBindPtr;
+    }
+
+    get disposed(): boolean {
+        return this._disposed;
+    }
+
+    get jointIndicesPtr(): WasmPtr {
+        this.assertAlive();
+        return this._jointIndicesPtr;
+    }
+
+    get invBindPtr(): WasmPtr {
+        this.assertAlive();
+        return this._invBindPtr;
+    }
+
+    private assertAlive(): void {
+        if (this._disposed) throw new Error(`Skin '${this.name}' is disposed (use-after-dispose).`);
     }
 
     createInstance(meshTransform: Transform): SkinInstance {
+        this.assertAlive();
         return new SkinInstance(this, meshTransform);
     }
 
     dispose(): void {
         if (this._disposed) return;
+        if (this._jointIndicesPtr) wasm.freeU32(this._jointIndicesPtr, this.jointCount);
+        if (this._invBindPtr) wasm.freeF32(this._invBindPtr, this.jointCount * 16);
         this._disposed = true;
-        if (this.jointIndicesPtr) wasm.freeU32(this.jointIndicesPtr, this.jointCount);
-        if (this.invBindPtr) wasm.freeF32(this.invBindPtr, this.jointCount * 16);
     }
 }
 
 export class SkinInstance {
     readonly skin: Skin;
     readonly meshTransform: Transform;
-    bindMatrixPtr: WasmPtr = 0;
+    private _bindMatrixPtr: WasmPtr = 0;
+    private _disposed: boolean = false;
     boneBuffer: GPUBuffer | null = null;
     bindGroup: GPUBindGroup | null = null;
 
     constructor(skin: Skin, meshTransform: Transform) {
+        if (skin.disposed) throw new Error(`Skin '${skin.name}' is disposed (use-after-dispose).`);
         this.skin = skin;
         this.meshTransform = meshTransform;
-        this.bindMatrixPtr = wasm.allocF32(16) as WasmPtr;
-        const dst = wasm.f32view(this.bindMatrixPtr, 16);
         const m = meshTransform.worldMatrix;
-        for (let i = 0; i < 16; i++) dst[i] = (m[i] ?? (i % 5 === 0 ? 1 : 0)) as number;
+        const bindMatrixPtr = wasm.allocF32(16) as WasmPtr;
+        if (!bindMatrixPtr) throw new Error(`SkinInstance '${skin.name}': bind matrix allocation failed.`);
+        try {
+            const dst = wasm.f32view(bindMatrixPtr, 16);
+            for (let i = 0; i < 16; i++) dst[i] = (m[i] ?? (i % 5 === 0 ? 1 : 0)) as number;
+        } catch (error) {
+            wasm.freeF32(bindMatrixPtr, 16);
+            throw error;
+        }
+        this._bindMatrixPtr = bindMatrixPtr;
+    }
+
+    get disposed(): boolean {
+        return this._disposed;
+    }
+
+    get bindMatrixPtr(): WasmPtr {
+        this.assertAlive();
+        return this._bindMatrixPtr;
+    }
+
+    private assertAlive(): void {
+        if (this._disposed) throw new Error(`SkinInstance '${this.skin.name}' is disposed (use-after-dispose).`);
+        if (this.skin.disposed) throw new Error(`Skin '${this.skin.name}' is disposed (use-after-dispose).`);
     }
 
     get jointCount(): number {
+        this.assertAlive();
         return this.skin.jointCount;
     }
 
     ensureGpuResources(device: GPUDevice, layout: GPUBindGroupLayout): void {
+        this.assertAlive();
         if (this.boneBuffer && this.bindGroup) return;
         const byteSize = this.skin.jointCount * 16 * 4;
         this.boneBuffer = device.createBuffer({
@@ -314,12 +389,12 @@ export class SkinInstance {
     }
 
     dispose(): void {
+        if (this._disposed) return;
         this.boneBuffer?.destroy();
         this.boneBuffer = null;
         this.bindGroup = null;
-        if (this.bindMatrixPtr) {
-            wasm.freeF32(this.bindMatrixPtr, 16);
-            this.bindMatrixPtr = 0;
-        }
+        if (this._bindMatrixPtr) wasm.freeF32(this._bindMatrixPtr, 16);
+        this._bindMatrixPtr = 0;
+        this._disposed = true;
     }
 }

@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: Thursday, July 16, 2026.
+Last updated: Friday, July 17, 2026.
 
-Last commit: Wednesday, July 15, 2026, [**`2b68e5b`**](https://www.github.com/Zushah/WasmGPU/commit/2b68e5b).
+Last commit: Thursday, July 16, 2026, [**`7b0debf`**](https://www.github.com/Zushah/WasmGPU/commit/7b0debf).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -292,13 +292,13 @@ The transform store mutates:
 - parent indices and ordered traversal data;
 - dirty sets and free-list state.
 
-The renderer calls `Transform.updateAll()` before gathering draw lists. Cameras, scene objects, controls, animation clips, and glTF import all write transform data. Contributors changing transform behavior should preserve parent cycle checks, dirty marking, disposal checks, and the index mapping between TypeScript objects and WebAssembly slots.
+Capacity growth allocates and copies replacement structure-of-arrays blocks before releasing the superseded WebAssembly allocations. Capacity-independent temporary vector and quaternion blocks remain attached to the active global store rather than being reallocated during growth. The renderer calls `Transform.updateAll()` before gathering draw lists. Cameras, scene objects, controls, animation clips, and glTF import all write transform data. Contributors changing transform behavior should preserve parent cycle checks, dirty marking, disposal checks, allocation replacement ordering, and the index mapping between TypeScript objects and WebAssembly slots.
 
 ### 1.7. Geometry, materials, textures, and colormaps
 
 Graphics data is implemented under `./src/graphics/`.
 
-`./src/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It can also borrow external `WasmMemoryView` sources for mesh vertex attributes and indices, explicitly refresh them, and upload active ranges into geometry-owned GPU buffers without owning or freeing the external WebAssembly memory. It calls Rust bounds and normal-generation functions through `./src/wasm/index.ts`. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry.
+`./src/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It can also borrow external `WasmMemoryView` sources for mesh vertex attributes and indices, explicitly refresh them, and upload active ranges into geometry-owned GPU buffers without owning or freeing the external WebAssembly memory. It calls Rust bounds and normal-generation functions through `./src/wasm/index.ts`; these synchronous operations use scoped WebAssembly heap scratch that is released after results are copied into JavaScript-owned arrays. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry.
 
 `./src/graphics/material.ts` implements `Material`, `UnlitMaterial`, `StandardMaterial`, `DataMaterial`, and `CustomMaterial`. Materials own uniform buffers, bind groups, texture references, WebGPU state flags, and dirty state. `StandardMaterial` currently includes glTF-style properties for base color, metallic roughness, normal maps, occlusion, emissive maps, clearcoat, transmission, volume, diffuse transmission, dispersion, specular, sheen, iridescence, anisotropy, index of refraction, and emissive strength.
 
@@ -396,7 +396,7 @@ The main compute files are:
 - `./src/compute/ndarray.ts`: CPU and GPU ndarray layout, dtype, stride, offset, upload, and readback logic.
 - `./src/compute/blit.ts`: RGBA8 storage-buffer-to-canvas blitting.
 
-The compute subsystem reads WGSL from `./src/wgsl/compute/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory.
+The compute subsystem reads WGSL from `./src/wgsl/compute/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory. `CPUndarray` owns its backing bytes plus shape, stride, and indexing allocations; `destroy()` releases them idempotently and later memory access throws. `GPUndarray` destroys only buffers it owns and continues to borrow buffers supplied through `wrap()`.
 
 Contributors changing compute code should check buffer usage flags, copy alignment, dispatch dimensions, shader bindings, readback slot reuse, and tests that assert kernel results.
 
@@ -446,7 +446,7 @@ Interop changes should preserve allocator ownership, frame arena lifetime checks
 
 WebAssembly driver initialization is implemented in `./src/wasm/driver.ts` and exported through `./src/wasm/index.ts`. It imports the generated loader from `./build/wasm.js`, creates an eight-mebibyte (8,388,608 bytes) frame arena, and exposes grouped Rust functions for accessors, animation, bounds, culling, matrix math, mesh normals, ndarray indexing, quaternion math, transforms, and vector math.
 
-`WasmSlice`, `WasmHeapArena`, `frameArena`, `wasm`, and the `driver` namespace are part of the WebAssembly driver. `WasmSlice` records pointer, length, dtype, allocation kind, and epoch. Frame arena and heap arena slices check epochs so callers do not reuse memory after a reset or destroyed arena. `WasmHeapArena` allocates a WebAssembly heap block and provides bump allocation within that block.
+`WasmSlice`, `WasmHeapArena`, `frameArena`, `wasm`, and the `driver` namespace are part of the WebAssembly driver. `WasmSlice` records pointer, length, dtype, allocation kind, and epoch. Frame arena and heap arena slices check epochs so callers do not reuse memory after a reset or destroyed arena, and freed slices reject later view or handle creation. `WasmHeapArena` allocates a WebAssembly heap block and provides bump allocation within that block. Explicit release remains retryable if its allocator call throws; garbage-collection finalization is only a fallback for abandoned heap slices.
 
 WebAssembly interop with external modules lives in `./src/wasm/interop.ts`. It wraps foreign `WebAssembly.Instance` or exports objects, resolves explicit memory and export descriptors, validates byte ranges and alignment, constructs typed views or raw byte/DataView accessors over external linear memory, and provides small shared validation helpers for object-owned uploads from borrowed `WasmMemoryView` sources.
 
@@ -498,7 +498,10 @@ These invariants are visible in the current code:
 - Frame arena memory is valid only for the current frame arena epoch.
 - `WasmHeapArena` slices are invalid after the arena is reset or destroyed.
 - Python interop heap ndarray handles reject memory access after their idempotent free operation.
+- Destroyed `CPUndarray` objects reject WebAssembly pointer and data access, and repeated destruction is harmless.
+- Disposed animation clips, skins, and skin instances reject operations that would consume their released WebAssembly allocations.
 - Rust heap allocations remain valid until their matching one-time free; freed storage is reusable, but WebAssembly memory pages do not shrink.
+- Transform and renderer culling capacity growth releases superseded WebAssembly blocks only after replacement allocation succeeds; renderer destruction releases its final culling blocks.
 - Transform indices map TypeScript `Transform` objects to WebAssembly transform slots.
 - Disposed transforms throw on later use.
 - Transform parenting rejects cycles.
@@ -635,7 +638,7 @@ Important files:
 - `./src/compute/kernels.ts`: built-in compute kernels.
 - `./src/compute/readback.ts`: asynchronous readback ring.
 - `./src/compute/scratch.ts`: scratch GPU buffer pool.
-- `./src/compute/ndarray.ts`: CPU and GPU ndarray classes, dtype handling, shape and stride validation, WebAssembly-backed CPU allocation, upload, and readback.
+- `./src/compute/ndarray.ts`: CPU and GPU ndarray classes, dtype handling, shape and stride validation, deterministic WebAssembly-backed CPU allocation lifetime, upload, and readback.
 - `./src/compute/blit.ts`: RGBA8 compute output blitting.
 - `./src/scaling/service.ts`: cached statistics requests over GPU data.
 - `./src/scaling/transform.ts`: scale transform packing and CPU-side helpers.
@@ -947,6 +950,8 @@ Reason explicitly about data ownership and lifetime:
 - WebAssembly heap slices remain valid until explicitly freed; their storage may be reused immediately afterward, while the grown WebAssembly memory pages remain allocated to the instance.
 - `WasmHeapArena` slices expire when the arena resets or is destroyed, and destroying the arena releases its backing heap allocation for reuse.
 - Python interop heap ndarray handles and `WasmGPUArray` wrappers reject memory access after free; repeated frees of the same handle object are harmless.
+- `CPUndarray`, animation, skin, renderer culling, geometry scratch, and glTF import paths release the WebAssembly allocations they own; borrowed external WebAssembly views are never freed by those consumers.
+- The active global transform store and frame arena retain their current backing storage for the WebAssembly module lifetime, while superseded transform capacity and scoped scratch blocks are reclaimed.
 - GPU buffers need correct usage flags for writes, copies, storage binding, vertex binding, index binding, uniform binding, or readback.
 - Textures may be pending upload while render paths use fallback resources.
 - Pick attribute records may require CPU data retention.

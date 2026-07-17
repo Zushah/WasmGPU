@@ -6,7 +6,7 @@
 
 import assert from "assert";
 import { readFile } from "node:fs/promises";
-import { WasmGPU, WasmMemoryView, WasmModule, driver, initWebAssembly, pythonInterop, webassemblyInterop } from "../dist/WasmGPU.js";
+import { WasmGPU, WasmMemoryView, WasmModule, driver, initWebAssembly, pythonInterop, wasm, webassemblyInterop } from "../dist/WasmGPU.js";
 import * as generatedWasm from "../build/wasm.js";
 
 const encoder = new TextEncoder();
@@ -452,7 +452,21 @@ const makeFixture = () => {
     slice.free();
     assert.strictEqual(slice.isAlive(), false, "Explicitly freed heap slices must become invalid immediately");
     assert.throws(() => slice.view(), /freed/i, "Freed heap slices must reject later views");
+    assert.throws(() => slice.handle(), /freed/i, "Freed heap slices must reject later handle creation");
     assert.doesNotThrow(() => slice.free(), "Heap slice free must remain idempotent");
+
+    const retrySlice = driver.heap.allocF32(4);
+    retrySlice.write([5, 6, 7, 8]);
+    const originalFreeF32 = wasm.freeF32;
+    wasm.freeF32 = () => { throw new Error("injected free failure"); };
+    try {
+        assert.throws(() => retrySlice.free(), /injected free failure/i, "A failed heap release must be reported");
+        assert.strictEqual(retrySlice.isAlive(), true, "A failed heap release must leave the slice retryable");
+        assert.deepStrictEqual(Array.from(retrySlice.view()), [5, 6, 7, 8]);
+    } finally {
+        wasm.freeF32 = originalFreeF32;
+    }
+    retrySlice.free();
 
     const ndarrayHandle = pythonInterop.sendNdarray(new Float32Array([1, 2, 3, 4]), { shape: [2, 2] });
     assert.deepStrictEqual(Array.from(pythonInterop.view(ndarrayHandle)), [1, 2, 3, 4]);
@@ -475,6 +489,20 @@ const makeFixture = () => {
     assert.throws(() => arenaSlice.view(), /epoch changed/i, "Destroyed-arena slices must reject later views");
     assert.throws(() => arena.alloc(1), /destroyed/i, "Destroyed heap arenas must reject new allocations");
     assert.doesNotThrow(() => arena.destroy(), "Heap arena destruction must remain idempotent");
+
+    const retryArena = driver.createHeapArena(256);
+    const retryArenaSlice = retryArena.allocU8(4);
+    retryArenaSlice.write([1, 2, 3, 4]);
+    const originalFreeBytes = wasm.freeBytes;
+    wasm.freeBytes = () => { throw new Error("injected arena destroy failure"); };
+    try {
+        assert.throws(() => retryArena.destroy(), /injected arena destroy failure/i, "A failed arena release must be reported");
+        assert.strictEqual(retryArenaSlice.isAlive(), true, "A failed arena release must leave its slices valid and retryable");
+    } finally {
+        wasm.freeBytes = originalFreeBytes;
+    }
+    retryArena.destroy();
+    assert.strictEqual(retryArenaSlice.isAlive(), false);
 
     const arenaChurn = () => {
         const current = driver.createHeapArena(256 * 1024);

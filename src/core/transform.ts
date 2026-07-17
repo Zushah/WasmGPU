@@ -8,6 +8,20 @@ import { wasm, quatf, vec3f, transformf, WasmPtr } from "../wasm";
 
 const NO_PARENT = 0xFFFFFFFF;
 
+const allocF32Checked = (len: number, label: string): WasmPtr => {
+    const length = len >>> 0;
+    const ptr = wasm.allocF32(length);
+    if (!ptr && length !== 0) throw new Error(`${label}: WebAssembly f32 allocation failed (${length} elements).`);
+    return ptr;
+};
+
+const allocU32Checked = (len: number, label: string): WasmPtr => {
+    const length = len >>> 0;
+    const ptr = wasm.allocU32(length);
+    if (!ptr && length !== 0) throw new Error(`${label}: WebAssembly u32 allocation failed (${length} elements).`);
+    return ptr;
+};
+
 export class TransformStore {
     private static _global: TransformStore | null = null;
     static global(): TransformStore {
@@ -46,19 +60,44 @@ export class TransformStore {
     }
 
     private allocateArrays(cap: number): void {
-        this.posPtr = wasm.allocF32(cap * 3);
-        this.rotPtr = wasm.allocF32(cap * 4);
-        this.sclPtr = wasm.allocF32(cap * 3);
-        this.localPtr = wasm.allocF32(cap * 16);
-        this.worldPtr = wasm.allocF32(cap * 16);
-        this.parentPtr = wasm.allocU32(cap);
-        this.orderPtr = wasm.allocU32(cap); 
-        this.tmpAxisPtr = wasm.allocF32(4);
-        this.tmpQuatPtr = wasm.allocF32(4);
-        this.ensureViews();
-        const u32 = this.u32();
-        const parentBase = this.parentPtr >>> 2;
-        for (let i = 0; i < cap; i++) u32[parentBase + i] = NO_PARENT;
+        const f32Allocs: { ptr: WasmPtr; len: number }[] = [];
+        const u32Allocs: { ptr: WasmPtr; len: number }[] = [];
+        const allocF32 = (len: number, name: string): WasmPtr => {
+            const ptr = allocF32Checked(len, `TransformStore.${name}`);
+            if (ptr) f32Allocs.push({ ptr, len });
+            return ptr;
+        };
+        const allocU32 = (len: number, name: string): WasmPtr => {
+            const ptr = allocU32Checked(len, `TransformStore.${name}`);
+            if (ptr) u32Allocs.push({ ptr, len });
+            return ptr;
+        };
+        try {
+            const posPtr = allocF32(cap * 3, "positions");
+            const rotPtr = allocF32(cap * 4, "rotations");
+            const sclPtr = allocF32(cap * 3, "scales");
+            const localPtr = allocF32(cap * 16, "localMatrices");
+            const worldPtr = allocF32(cap * 16, "worldMatrices");
+            const parentPtr = allocU32(cap, "parents");
+            const orderPtr = allocU32(cap, "order");
+            const tmpAxisPtr = this.tmpAxisPtr || allocF32(4, "temporaryAxis");
+            const tmpQuatPtr = this.tmpQuatPtr || allocF32(4, "temporaryQuaternion");
+            wasm.u32view(parentPtr, cap).fill(NO_PARENT);
+            this.posPtr = posPtr;
+            this.rotPtr = rotPtr;
+            this.sclPtr = sclPtr;
+            this.localPtr = localPtr;
+            this.worldPtr = worldPtr;
+            this.parentPtr = parentPtr;
+            this.orderPtr = orderPtr;
+            this.tmpAxisPtr = tmpAxisPtr;
+            this.tmpQuatPtr = tmpQuatPtr;
+            this._buf = null;
+        } catch (error) {
+            for (let i = u32Allocs.length - 1; i >= 0; i--) wasm.freeU32(u32Allocs[i]!.ptr, u32Allocs[i]!.len);
+            for (let i = f32Allocs.length - 1; i >= 0; i--) wasm.freeF32(f32Allocs[i]!.ptr, f32Allocs[i]!.len);
+            throw error;
+        }
     }
 
     private ensureViews(): void {
@@ -91,8 +130,12 @@ export class TransformStore {
         if (this.dirtyIndicesCap >= minLen) return;
         let cap = Math.max(1, this.dirtyIndicesCap | 0);
         while (cap < minLen) cap *= 2;
-        this.dirtyIndicesPtr = wasm.allocU32(cap);
+        const nextPtr = allocU32Checked(cap, "TransformStore.dirtyIndices");
+        const oldPtr = this.dirtyIndicesPtr;
+        const oldCap = this.dirtyIndicesCap;
+        this.dirtyIndicesPtr = nextPtr;
         this.dirtyIndicesCap = cap;
+        if (oldPtr) wasm.freeU32(oldPtr, oldCap);
     }
 
     private clearDirtyList(): void {
@@ -293,6 +336,7 @@ export class TransformStore {
     private growTo(minCap: number): void {
         let newCap = this.cap;
         while (newCap < minCap) newCap *= 2;
+        const oldCap = this.cap;
         const oldCount = this.count;
         const oldPosPtr = this.posPtr;
         const oldRotPtr = this.rotPtr;
@@ -301,8 +345,8 @@ export class TransformStore {
         const oldWorldPtr = this.worldPtr;
         const oldParentPtr = this.parentPtr;
         const oldOrderPtr = this.orderPtr;
-        this.cap = newCap;
         this.allocateArrays(newCap);
+        this.cap = newCap;
         this.ensureViews();
         const f32 = this.f32();
         const u32 = this.u32();
@@ -313,6 +357,13 @@ export class TransformStore {
         f32.set(f32.subarray(oldWorldPtr >>> 2, (oldWorldPtr >>> 2) + oldCount * 16), this.worldPtr >>> 2);
         u32.set(u32.subarray(oldParentPtr >>> 2, (oldParentPtr >>> 2) + oldCount), this.parentPtr >>> 2);
         u32.set(u32.subarray(oldOrderPtr >>> 2, (oldOrderPtr >>> 2) + oldCount), this.orderPtr >>> 2);
+        wasm.freeF32(oldPosPtr, oldCap * 3);
+        wasm.freeF32(oldRotPtr, oldCap * 4);
+        wasm.freeF32(oldSclPtr, oldCap * 3);
+        wasm.freeF32(oldLocalPtr, oldCap * 16);
+        wasm.freeF32(oldWorldPtr, oldCap * 16);
+        wasm.freeU32(oldParentPtr, oldCap);
+        wasm.freeU32(oldOrderPtr, oldCap);
         this._orderDirty = true;
         this._dirty = true;
         this._dirtyAll = true;

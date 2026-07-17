@@ -6,7 +6,7 @@
 
 import assert from "assert";
 import { create, globals } from "webgpu";
-import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, BlendMode, CullMode, PointCloud, GlyphField, NodeLink } from "../dist/WasmGPU.js";
+import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, BlendMode, CullMode, PointCloud, GlyphField, NodeLink, wasm } from "../dist/WasmGPU.js";
 
 Object.assign(globalThis, globals);
 
@@ -613,4 +613,47 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(canvas.currentTextureCount, 1);
     scene.destroy();
     wgpu.destroy();
+}
+
+// 14) Renderer culling growth and destruction release retained WebAssembly scratch blocks.
+{
+    const canvas = makeCanvas(160, 120);
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: true, canvasFormat: "rgba8unorm" });
+    const scene = new Scene();
+    const camera = createCamera(160 / 120);
+    const meshes = [
+        new Mesh(Geometry.triangle(), new UnlitMaterial()),
+        new Mesh(Geometry.triangle(), new UnlitMaterial()),
+        new Mesh(Geometry.triangle(), new UnlitMaterial())
+    ];
+    const originalFreeF32 = wasm.freeF32;
+    const freedF32 = [];
+    wasm.freeF32 = (ptr, len) => { freedF32.push([ptr, len]); originalFreeF32(ptr, len); };
+    try {
+        scene.add(meshes[0]);
+        renderer.render(scene, camera);
+        const first = { centersPtr: renderer.cullCentersPtr, radiiPtr: renderer.cullRadiiPtr, cap: renderer.cullCapacity };
+        assert.ok(first.centersPtr > 0 && first.radiiPtr > 0 && first.cap >= 1);
+
+        scene.add(meshes[1]).add(meshes[2]);
+        renderer.render(scene, camera);
+        assert.ok(renderer.cullCapacity >= 3);
+        assert.ok(freedF32.some(([ptr, len]) => ptr === first.centersPtr && len === first.cap * 3), "Culling growth must free the replaced center block");
+        assert.ok(freedF32.some(([ptr, len]) => ptr === first.radiiPtr && len === first.cap), "Culling growth must free the replaced radius block");
+
+        const final = { centersPtr: renderer.cullCentersPtr, radiiPtr: renderer.cullRadiiPtr, cap: renderer.cullCapacity };
+        scene.destroy();
+        camera.destroy();
+        renderer.destroy();
+        assert.ok(freedF32.some(([ptr, len]) => ptr === final.centersPtr && len === final.cap * 3), "Renderer.destroy() must free the final center block");
+        assert.ok(freedF32.some(([ptr, len]) => ptr === final.radiiPtr && len === final.cap), "Renderer.destroy() must free the final radius block");
+        assert.equal(renderer.cullCentersPtr, 0);
+        assert.equal(renderer.cullRadiiPtr, 0);
+        assert.equal(renderer.cullCapacity, 0);
+    } finally {
+        wasm.freeF32 = originalFreeF32;
+        scene.destroy();
+        camera.destroy();
+        renderer.destroy();
+    }
 }

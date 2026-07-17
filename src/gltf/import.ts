@@ -324,24 +324,24 @@ const isMaterialUnlit = (mat: GltfMaterial): boolean => {
     return !!exts?.["KHR_materials_unlit"];
 };
 
-let _tmpMat4Ptr: WasmPtr = 0;
-let _tmpTRSPtr: WasmPtr = 0;
-
-const ensureDecomposeScratch = (): void => {
-    if (_tmpMat4Ptr !== 0 && _tmpTRSPtr !== 0) return;
-    _tmpMat4Ptr = wasm.allocF32(16);
-    _tmpTRSPtr = wasm.allocF32(10);
-};
-
 const applyNodeMatrixViaWasmDecompose = (t: { setPosition(x:number,y:number,z:number): any; setRotation(x:number,y:number,z:number,w:number): any; setScale(x:number,y:number,z:number): any }, m: ArrayLike<number>): void => {
-    ensureDecomposeScratch();
-    const mat = wasm.f32view(_tmpMat4Ptr, 16);
-    for (let i = 0; i < 16; i++) mat[i] = (m[i] ?? (i % 5 === 0 ? 1 : 0)) as number;
-    mat4f.decomposeTRS(_tmpTRSPtr, _tmpMat4Ptr);
-    const out = wasm.f32view(_tmpTRSPtr, 10);
-    t.setPosition(out[0]!, out[1]!, out[2]!);
-    t.setRotation(out[3]!, out[4]!, out[5]!, out[6]!);
-    t.setScale(out[7]!, out[8]!, out[9]!);
+    const matPtr = wasm.allocF32(16) as WasmPtr;
+    if (!matPtr) throw new Error("applyNodeMatrixViaWasmDecompose: matrix scratch allocation failed.");
+    let trsPtr = 0 as WasmPtr;
+    try {
+        trsPtr = wasm.allocF32(10) as WasmPtr;
+        if (!trsPtr) throw new Error("applyNodeMatrixViaWasmDecompose: TRS scratch allocation failed.");
+        const mat = wasm.f32view(matPtr, 16);
+        for (let i = 0; i < 16; i++) mat[i] = (m[i] ?? (i % 5 === 0 ? 1 : 0)) as number;
+        mat4f.decomposeTRS(trsPtr, matPtr);
+        const out = wasm.f32view(trsPtr, 10);
+        t.setPosition(out[0]!, out[1]!, out[2]!);
+        t.setRotation(out[3]!, out[4]!, out[5]!, out[6]!);
+        t.setScale(out[7]!, out[8]!, out[9]!);
+    } finally {
+        if (trsPtr) wasm.freeF32(trsPtr, 10);
+        wasm.freeF32(matPtr, 16);
+    }
 };
 
 type GltfMetadataSource = {
@@ -1856,176 +1856,176 @@ const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedN
             default: return -1;
         }
     };
-    for (let i = 0; i < anims.length; i++) {
-        const a: GltfAnimation = anims[i]!;
-        const samplers: ImportedAnimationSampler[] = [];
-        const valueSamplers: Array<{ interpolation: "LINEAR" | "STEP" | "CUBICSPLINE"; input: Float32Array; output: Float32Array; valueSize: number }> = [];
-        const pointerChannels: AnimationPointerChannel[] = [];
-        const channels: ImportedAnimationChannel[] = [];
-        const seenTargets = new Set<string>();
-        const animationName = a.name ?? `anim_${i}`;
-        const samplerCount = a.samplers.length | 0;
-        const samplerTablePtr = samplerCount > 0 ? (wasm.allocU32(samplerCount * 5) as WasmPtr) : (0 as WasmPtr);
-        const ownedF32Allocs: { ptr: WasmPtr; len: number }[] = [];
-        const ownedU32Allocs: { ptr: WasmPtr; len: number }[] = [];
-        if (samplerCount > 0) ownedU32Allocs.push({ ptr: samplerTablePtr, len: samplerCount * 5 });
-        let startTime = Number.POSITIVE_INFINITY;
-        let endTime = Number.NEGATIVE_INFINITY;
-        for (let si = 0; si < a.samplers.length; si++) {
-            const s: GltfAnimationSampler = a.samplers[si]!;
-            const input = readAccessorAsFloat32(doc, s.input);
-            const outView = readAccessor(doc, s.output);
-            const output = readAccessorAsFloat32(doc, s.output);
-            samplers.push({
-                interpolation: (s.interpolation ?? "LINEAR") as ImportedAnimationSampler["interpolation"],
-                input,
-                output,
-            });
-            const interpolation = (s.interpolation ?? "LINEAR") as ImportedAnimationSampler["interpolation"];
-            const denom = interpolation === "CUBICSPLINE" ? Math.max(1, (input.length | 0) * 3) : Math.max(1, input.length | 0);
-            const valueSize = Math.max(0, Math.floor(output.length / denom));
-            valueSamplers.push({ interpolation, input, output, valueSize });
-            if (input.length > 0) {
-                startTime = Math.min(startTime, input[0]!);
-                endTime = Math.max(endTime, input[input.length - 1]!);
-            }
-            if (samplerCount > 0) {
-                const timesPtr = wasm.allocF32(input.length) as WasmPtr;
-                wasm.f32view(timesPtr, input.length).set(input);
-                ownedF32Allocs.push({ ptr: timesPtr, len: input.length });
-                const valuesPtr = wasm.allocF32(output.length) as WasmPtr;
-                wasm.f32view(valuesPtr, output.length).set(output);
-                ownedF32Allocs.push({ ptr: valuesPtr, len: output.length });
-                const samplerTable = wasm.u32view(samplerTablePtr, samplerCount * 5);
-                const base = si * 5;
-                samplerTable[base + 0] = timesPtr >>> 0;
-                samplerTable[base + 1] = (input.length | 0) >>> 0;
-                samplerTable[base + 2] = valuesPtr >>> 0;
-                samplerTable[base + 3] = (outView.numComponents | 0) >>> 0;
-                samplerTable[base + 4] = interpToCode(s.interpolation ?? "LINEAR") >>> 0;
-            }
-        }
-        const runtimeChannels: { sampler: number; targetIndex: number; pathCode: number }[] = [];
-        const runtimeWeightChannels: { sampler: number; meshes: Mesh[] }[] = [];
-        const pointerContext: AnimationPointerContext = { json, nodes, materialCache, cameraRuntimeMap, lightRuntimeMap, opts };
-        for (let ci = 0; ci < a.channels.length; ci++) {
-            const c: GltfAnimationChannel = a.channels[ci]!;
-            const nodeIndex = c.target.node;
-            const importedNode = nodeIndex !== undefined ? nodes[nodeIndex] ?? null : null;
-            const t = importedNode?.transform ?? null;
-            const chan: ImportedAnimationChannel = {
-                sampler: c.sampler | 0,
-                targetNode: t,
-                path: c.target.path,
+    try {
+        for (let i = 0; i < anims.length; i++) {
+            const a: GltfAnimation = anims[i]!;
+            const samplers: ImportedAnimationSampler[] = [];
+            const valueSamplers: Array<{ interpolation: "LINEAR" | "STEP" | "CUBICSPLINE"; input: Float32Array; output: Float32Array; valueSize: number }> = [];
+            const pointerChannels: AnimationPointerChannel[] = [];
+            const channels: ImportedAnimationChannel[] = [];
+            const seenTargets = new Set<string>();
+            const animationName = a.name ?? `anim_${i}`;
+            const samplerCount = a.samplers.length | 0;
+            const ownedF32Allocs: { ptr: WasmPtr; len: number }[] = [];
+            const ownedU32Allocs: { ptr: WasmPtr; len: number }[] = [];
+            const allocOwnedF32 = (len: number, label: string): WasmPtr => {
+                const length = len >>> 0;
+                const ptr = wasm.allocF32(length) as WasmPtr;
+                if (!ptr && length !== 0) throw new Error(`${label}: WebAssembly f32 allocation failed (${length} elements).`);
+                if (ptr) ownedF32Allocs.push({ ptr, len: length });
+                return ptr;
             };
-            if (c.target.path === "pointer") chan.targetPointer = getChannelPointer(c) ?? undefined;
-            channels.push(chan);
-            if (c.target.path === "pointer") {
-                if (nodeIndex !== undefined) {
-                    warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} sets target.node; skipping pointer channel.`);
-                    continue;
+            const allocOwnedU32 = (len: number, label: string): WasmPtr => {
+                const length = len >>> 0;
+                const ptr = wasm.allocU32(length) as WasmPtr;
+                if (!ptr && length !== 0) throw new Error(`${label}: WebAssembly u32 allocation failed (${length} elements).`);
+                if (ptr) ownedU32Allocs.push({ ptr, len: length });
+                return ptr;
+            };
+            let samplerTablePtr = 0 as WasmPtr;
+            let allocationsTransferred = false;
+            try {
+                if (samplerCount > 0) samplerTablePtr = allocOwnedU32(samplerCount * 5, `animation '${animationName}' samplers`);
+                let startTime = Number.POSITIVE_INFINITY;
+                let endTime = Number.NEGATIVE_INFINITY;
+                for (let si = 0; si < a.samplers.length; si++) {
+                    const s: GltfAnimationSampler = a.samplers[si]!;
+                    const input = readAccessorAsFloat32(doc, s.input);
+                    const outView = readAccessor(doc, s.output);
+                    const output = readAccessorAsFloat32(doc, s.output);
+                    samplers.push({ interpolation: (s.interpolation ?? "LINEAR") as ImportedAnimationSampler["interpolation"], input, output });
+                    const interpolation = (s.interpolation ?? "LINEAR") as ImportedAnimationSampler["interpolation"];
+                    const denom = interpolation === "CUBICSPLINE" ? Math.max(1, (input.length | 0) * 3) : Math.max(1, input.length | 0);
+                    const valueSize = Math.max(0, Math.floor(output.length / denom));
+                    valueSamplers.push({ interpolation, input, output, valueSize });
+                    if (input.length > 0) {
+                        startTime = Math.min(startTime, input[0]!);
+                        endTime = Math.max(endTime, input[input.length - 1]!);
+                    }
+                    if (samplerCount > 0) {
+                        const timesPtr = allocOwnedF32(input.length, `animation '${animationName}' sampler ${si} times`);
+                        wasm.f32view(timesPtr, input.length).set(input);
+                        const valuesPtr = allocOwnedF32(output.length, `animation '${animationName}' sampler ${si} values`);
+                        wasm.f32view(valuesPtr, output.length).set(output);
+                        const samplerTable = wasm.u32view(samplerTablePtr, samplerCount * 5);
+                        const base = si * 5;
+                        samplerTable[base + 0] = timesPtr >>> 0;
+                        samplerTable[base + 1] = (input.length | 0) >>> 0;
+                        samplerTable[base + 2] = valuesPtr >>> 0;
+                        samplerTable[base + 3] = (outView.numComponents | 0) >>> 0;
+                        samplerTable[base + 4] = interpToCode(s.interpolation ?? "LINEAR") >>> 0;
+                    }
                 }
-                const pointer = getChannelPointer(c);
-                if (!pointer) {
-                    warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} is missing extensions.KHR_animation_pointer.pointer.`);
-                    continue;
+                const runtimeChannels: { sampler: number; targetIndex: number; pathCode: number }[] = [];
+                const runtimeWeightChannels: { sampler: number; meshes: Mesh[] }[] = [];
+                const pointerContext: AnimationPointerContext = { json, nodes, materialCache, cameraRuntimeMap, lightRuntimeMap, opts };
+                for (let ci = 0; ci < a.channels.length; ci++) {
+                    const c: GltfAnimationChannel = a.channels[ci]!;
+                    const nodeIndex = c.target.node;
+                    const importedNode = nodeIndex !== undefined ? nodes[nodeIndex] ?? null : null;
+                    const t = importedNode?.transform ?? null;
+                    const chan: ImportedAnimationChannel = {
+                        sampler: c.sampler | 0,
+                        targetNode: t,
+                        path: c.target.path
+                    };
+                    if (c.target.path === "pointer") chan.targetPointer = getChannelPointer(c) ?? undefined;
+                    channels.push(chan);
+                    if (c.target.path === "pointer") {
+                        if (nodeIndex !== undefined) { warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} sets target.node; skipping pointer channel.`); continue; }
+                        const pointer = getChannelPointer(c);
+                        if (!pointer) { warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} is missing extensions.KHR_animation_pointer.pointer.`); continue; }
+                        const resolved = resolveAnimationPointer(pointerContext, pointer);
+                        if (!resolved) { warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} pointer '${pointer}' is not supported by this importer.`); continue; }
+                        trackAnimationTarget(seenTargets, resolved.canonical, animationName, opts, resolved.kind === "pointer" && resolved.allowDuplicateTarget === true);
+                        if (resolved.kind === "trs") {
+                            runtimeChannels.push({
+                                sampler: chan.sampler | 0,
+                                targetIndex: resolved.targetIndex,
+                                pathCode: resolved.pathCode
+                            });
+                            continue;
+                        }
+                        if (resolved.kind === "weights") {
+                            runtimeWeightChannels.push({ sampler: chan.sampler | 0, meshes: resolved.meshes });
+                            continue;
+                        }
+                        const sampler = valueSamplers[chan.sampler];
+                        if (!sampler) { warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} references missing sampler ${chan.sampler}.`); continue; }
+                        if (resolved.requiresStep && sampler.interpolation !== "STEP") { warn(opts, `KHR_animation_pointer: boolean pointer '${resolved.canonical}' requires STEP interpolation; skipping channel.`); continue; }
+                        if ((sampler.valueSize | 0) !== (resolved.valueSize | 0)) { warn(opts, `KHR_animation_pointer: pointer '${resolved.canonical}' expects ${resolved.valueSize} output component(s), got ${sampler.valueSize}; skipping channel.`); continue; }
+                        pointerChannels.push({
+                            sampler: chan.sampler | 0,
+                            scratch: new Float32Array(resolved.valueSize),
+                            setValue: resolved.setValue
+                        });
+                        continue;
+                    }
+                    const pathCode = pathToCode(chan.path);
+                    if (t && pathCode >= 0) {
+                        if (nodeIndex !== undefined) trackAnimationTarget(seenTargets, `/nodes/${nodeIndex}/${chan.path}`, animationName, opts, false);
+                        runtimeChannels.push({
+                            sampler: chan.sampler | 0,
+                            targetIndex: t.index >>> 0,
+                            pathCode
+                        });
+                    } else if (chan.path === "weights" && nodeIndex !== undefined) {
+                        trackAnimationTarget(seenTargets, `/nodes/${nodeIndex}/weights`, animationName, opts, false);
+                        const meshes = (nodes[nodeIndex]?.meshes ?? []).filter((mesh) => mesh.geometry.morphTargets.length > 0);
+                        if (meshes.length > 0) runtimeWeightChannels.push({ sampler: chan.sampler | 0, meshes });
+                    }
                 }
-                const resolved = resolveAnimationPointer(pointerContext, pointer);
-                if (!resolved) {
-                    warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} pointer '${pointer}' is not supported by this importer.`);
-                    continue;
-                }
-                trackAnimationTarget(seenTargets, resolved.canonical, animationName, opts, resolved.kind === "pointer" && resolved.allowDuplicateTarget === true);
-                if (resolved.kind === "trs") {
-                    runtimeChannels.push({
-                        sampler: chan.sampler | 0,
-                        targetIndex: resolved.targetIndex,
-                        pathCode: resolved.pathCode
+                let clip: AnimationClip | null = null;
+                const channelCount = runtimeChannels.length | 0;
+                const weightChannelCount = runtimeWeightChannels.length | 0;
+                const pointerChannelCount = pointerChannels.length | 0;
+                if (samplerCount > 0 && (channelCount > 0 || weightChannelCount > 0 || pointerChannelCount > 0)) {
+                    let channelsPtr = 0 as WasmPtr;
+                    if (channelCount > 0) {
+                        channelsPtr = allocOwnedU32(channelCount * 3, `animation '${animationName}' channels`);
+                        const ch = wasm.u32view(channelsPtr, channelCount * 3);
+                        for (let ci = 0; ci < channelCount; ci++) {
+                            const rc = runtimeChannels[ci]!;
+                            const base = ci * 3;
+                            ch[base + 0] = rc.sampler >>> 0;
+                            ch[base + 1] = rc.targetIndex >>> 0;
+                            ch[base + 2] = rc.pathCode >>> 0;
+                        }
+                    }
+                    if (!Number.isFinite(startTime)) startTime = 0;
+                    if (!Number.isFinite(endTime)) endTime = 0;
+                    clip = new AnimationClip({
+                        name: a.name ?? `anim_${i}`,
+                        samplerCount,
+                        channelCount,
+                        samplersPtr: samplerTablePtr,
+                        channelsPtr,
+                        startTime,
+                        endTime,
+                        ownedF32Allocs,
+                        ownedU32Allocs,
+                        weightSamplers: valueSamplers,
+                        weightChannels: runtimeWeightChannels.map((channel) => ({
+                            sampler: channel.sampler,
+                            meshes: channel.meshes,
+                            scratch: new Float32Array(valueSamplers[channel.sampler]?.valueSize ?? 0)
+                        })),
+                        pointerSamplers: valueSamplers as AnimationPointerSampler[],
+                        pointerChannels
                     });
-                    continue;
                 }
-                if (resolved.kind === "weights") {
-                    runtimeWeightChannels.push({ sampler: chan.sampler | 0, meshes: resolved.meshes });
-                    continue;
+                out.push({ name: a.name, samplers, channels, clip });
+                allocationsTransferred = clip !== null;
+            } finally {
+                if (!allocationsTransferred) {
+                    for (let ai = ownedF32Allocs.length - 1; ai >= 0; ai--) wasm.freeF32(ownedF32Allocs[ai]!.ptr, ownedF32Allocs[ai]!.len);
+                    for (let ai = ownedU32Allocs.length - 1; ai >= 0; ai--) wasm.freeU32(ownedU32Allocs[ai]!.ptr, ownedU32Allocs[ai]!.len);
                 }
-                const sampler = valueSamplers[chan.sampler];
-                if (!sampler) {
-                    warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} references missing sampler ${chan.sampler}.`);
-                    continue;
-                }
-                if (resolved.requiresStep && sampler.interpolation !== "STEP") {
-                    warn(opts, `KHR_animation_pointer: boolean pointer '${resolved.canonical}' requires STEP interpolation; skipping channel.`);
-                    continue;
-                }
-                if ((sampler.valueSize | 0) !== (resolved.valueSize | 0)) {
-                    warn(opts, `KHR_animation_pointer: pointer '${resolved.canonical}' expects ${resolved.valueSize} output component(s), got ${sampler.valueSize}; skipping channel.`);
-                    continue;
-                }
-                pointerChannels.push({
-                    sampler: chan.sampler | 0,
-                    scratch: new Float32Array(resolved.valueSize),
-                    setValue: resolved.setValue
-                });
-                continue;
-            }
-            const pathCode = pathToCode(chan.path);
-            if (t && pathCode >= 0) {
-                if (nodeIndex !== undefined) trackAnimationTarget(seenTargets, `/nodes/${nodeIndex}/${chan.path}`, animationName, opts, false);
-                runtimeChannels.push({
-                    sampler: chan.sampler | 0,
-                    targetIndex: t.index >>> 0,
-                    pathCode,
-                });
-            } else if (chan.path === "weights" && nodeIndex !== undefined) {
-                trackAnimationTarget(seenTargets, `/nodes/${nodeIndex}/weights`, animationName, opts, false);
-                const meshes = (nodes[nodeIndex]?.meshes ?? []).filter((mesh) => mesh.geometry.morphTargets.length > 0);
-                if (meshes.length > 0) runtimeWeightChannels.push({ sampler: chan.sampler | 0, meshes });
             }
         }
-        let clip: AnimationClip | null = null;
-        const channelCount = runtimeChannels.length | 0;
-        const weightChannelCount = runtimeWeightChannels.length | 0;
-        const pointerChannelCount = pointerChannels.length | 0;
-        if (samplerCount > 0 && (channelCount > 0 || weightChannelCount > 0 || pointerChannelCount > 0)) {
-            let channelsPtr = 0 as WasmPtr;
-            if (channelCount > 0) {
-                channelsPtr = wasm.allocU32(channelCount * 3) as WasmPtr;
-                const ch = wasm.u32view(channelsPtr, channelCount * 3);
-                ownedU32Allocs.push({ ptr: channelsPtr, len: channelCount * 3 });
-                for (let ci = 0; ci < channelCount; ci++) {
-                    const rc = runtimeChannels[ci]!;
-                    const base = ci * 3;
-                    ch[base + 0] = rc.sampler >>> 0;
-                    ch[base + 1] = rc.targetIndex >>> 0;
-                    ch[base + 2] = rc.pathCode >>> 0;
-                }
-            }
-            if (!Number.isFinite(startTime)) startTime = 0;
-            if (!Number.isFinite(endTime)) endTime = 0;
-            clip = new AnimationClip({
-                name: a.name ?? `anim_${i}`,
-                samplerCount,
-                channelCount,
-                samplersPtr: samplerTablePtr,
-                channelsPtr,
-                startTime,
-                endTime,
-                ownedF32Allocs,
-                ownedU32Allocs,
-                weightSamplers: valueSamplers,
-                weightChannels: runtimeWeightChannels.map((channel) => ({
-                    sampler: channel.sampler,
-                    meshes: channel.meshes,
-                    scratch: new Float32Array(valueSamplers[channel.sampler]?.valueSize ?? 0)
-                })),
-                pointerSamplers: valueSamplers as AnimationPointerSampler[],
-                pointerChannels
-            });
-        } else {
-            for (const a of ownedF32Allocs) wasm.freeF32(a.ptr, a.len);
-            for (const a of ownedU32Allocs) wasm.freeU32(a.ptr, a.len);
-        }
-        out.push({ name: a.name, samplers, channels, clip });
+    } catch (error) {
+        for (const animation of out) animation.clip?.dispose();
+        throw error;
     }
     return out;
 };

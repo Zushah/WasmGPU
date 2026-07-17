@@ -139,62 +139,70 @@ export type GeometryBoundsDescriptor = {
     sphereRadius: number;
 };
 
-let _boundsPosPtr = 0;
-let _boundsPosCap = 0;
-let _boundsBoxMinPtr = 0;
-let _boundsBoxMaxPtr = 0;
-let _boundsSphereCenterPtr = 0;
-let _boundsSphereRadiusPtr = 0;
-let _normPosPtr = 0;
-let _normPosCap = 0;
-let _normIdxPtr = 0;
-let _normIdxCap = 0;
-let _normOutPtr = 0;
-let _normOutCap = 0;
+type GeometryScratchAllocation = { ptr: number; len: number };
 
-const ensureBoundsScratch = (posLenF32: number): void => {
-    if (_boundsPosCap < posLenF32) { _boundsPosCap = growWasmCapacity(posLenF32, _boundsPosCap); _boundsPosPtr = wasm.allocF32(_boundsPosCap); }
-    if (_boundsBoxMinPtr === 0) _boundsBoxMinPtr = wasm.allocF32(3);
-    if (_boundsBoxMaxPtr === 0) _boundsBoxMaxPtr = wasm.allocF32(3);
-    if (_boundsSphereCenterPtr === 0) _boundsSphereCenterPtr = wasm.allocF32(3);
-    if (_boundsSphereRadiusPtr === 0) _boundsSphereRadiusPtr = wasm.allocF32(1);
+const allocGeometryScratchF32 = (allocations: GeometryScratchAllocation[], len: number, label: string): number => {
+    const length = len >>> 0;
+    const ptr = wasm.allocF32(length);
+    if (!ptr && length !== 0) throw new Error(`${label}: WebAssembly f32 allocation failed (${length} elements).`);
+    if (ptr) allocations.push({ ptr, len: length });
+    return ptr;
 };
 
-const ensureNormalScratch = (posLenF32: number, idxLenU32: number): void => {
-    if (_normPosCap < posLenF32) { _normPosCap = growWasmCapacity(posLenF32, _normPosCap); _normPosPtr = wasm.allocF32(_normPosCap); }
-    if (_normOutCap < posLenF32) { _normOutCap = growWasmCapacity(posLenF32, _normOutCap); _normOutPtr = wasm.allocF32(_normOutCap); }
-    if (idxLenU32 > 0 && _normIdxCap < idxLenU32) { _normIdxCap = growWasmCapacity(idxLenU32, _normIdxCap); _normIdxPtr = wasm.allocU32(_normIdxCap); }
+const allocGeometryScratchU32 = (allocations: GeometryScratchAllocation[], len: number, label: string): number => {
+    const length = len >>> 0;
+    const ptr = wasm.allocU32(length);
+    if (!ptr && length !== 0) throw new Error(`${label}: WebAssembly u32 allocation failed (${length} elements).`);
+    if (ptr) allocations.push({ ptr, len: length });
+    return ptr;
 };
 
 export const computeGeometryBounds = (positions: Float32Array): GeometryBoundsDescriptor => {
     const vertexCount = Math.floor(positions.length / 3);
     if (vertexCount <= 0) return { boxMin: [0, 0, 0], boxMax: [0, 0, 0], sphereCenter: [0, 0, 0], sphereRadius: 0 };
-    ensureBoundsScratch(positions.length);
-    wasm.f32view(_boundsPosPtr, positions.length).set(positions);
-    boundsf.geometryPositions(_boundsBoxMinPtr, _boundsBoxMaxPtr, _boundsSphereCenterPtr, _boundsSphereRadiusPtr, _boundsPosPtr, vertexCount);
-    const boxMin = wasm.f32view(_boundsBoxMinPtr, 3);
-    const boxMax = wasm.f32view(_boundsBoxMaxPtr, 3);
-    const sphereCenter = wasm.f32view(_boundsSphereCenterPtr, 3);
-    const sphereRadius = wasm.f32view(_boundsSphereRadiusPtr, 1);
-    return {
-        boxMin: [boxMin[0], boxMin[1], boxMin[2]],
-        boxMax: [boxMax[0], boxMax[1], boxMax[2]],
-        sphereCenter: [sphereCenter[0], sphereCenter[1], sphereCenter[2]],
-        sphereRadius: sphereRadius[0]
-    };
+    const allocations: GeometryScratchAllocation[] = [];
+    try {
+        const positionsPtr = allocGeometryScratchF32(allocations, positions.length, "computeGeometryBounds.positions");
+        const boxMinPtr = allocGeometryScratchF32(allocations, 3, "computeGeometryBounds.boxMin");
+        const boxMaxPtr = allocGeometryScratchF32(allocations, 3, "computeGeometryBounds.boxMax");
+        const sphereCenterPtr = allocGeometryScratchF32(allocations, 3, "computeGeometryBounds.sphereCenter");
+        const sphereRadiusPtr = allocGeometryScratchF32(allocations, 1, "computeGeometryBounds.sphereRadius");
+        wasm.f32view(positionsPtr, positions.length).set(positions);
+        boundsf.geometryPositions(boxMinPtr, boxMaxPtr, sphereCenterPtr, sphereRadiusPtr, positionsPtr, vertexCount);
+        const boxMin = wasm.f32view(boxMinPtr, 3);
+        const boxMax = wasm.f32view(boxMaxPtr, 3);
+        const sphereCenter = wasm.f32view(sphereCenterPtr, 3);
+        const sphereRadius = wasm.f32view(sphereRadiusPtr, 1);
+        return {
+            boxMin: [boxMin[0], boxMin[1], boxMin[2]],
+            boxMax: [boxMax[0], boxMax[1], boxMax[2]],
+            sphereCenter: [sphereCenter[0], sphereCenter[1], sphereCenter[2]],
+            sphereRadius: sphereRadius[0]
+        };
+    } finally {
+        for (let i = allocations.length - 1; i >= 0; i--) wasm.freeF32(allocations[i]!.ptr, allocations[i]!.len);
+    }
 };
 
 export const computeGeometryVertexNormals = (positions: Float32Array, indices: Uint32Array | null): Float32Array => {
     const vertexCount = Math.floor(positions.length / 3);
     const idxLen = indices ? indices.length : 0;
-    ensureNormalScratch(positions.length, idxLen);
-    wasm.f32view(_normPosPtr, positions.length).set(positions);
-    const idxPtr = (indices && idxLen > 0) ? _normIdxPtr : 0;
-    if (indices && idxLen > 0) wasm.u32view(_normIdxPtr, idxLen).set(indices);
-    meshf.computeVertexNormals(_normOutPtr, _normPosPtr, vertexCount, idxPtr, idxLen);
-    const out = new Float32Array(positions.length);
-    out.set(wasm.f32view(_normOutPtr, positions.length));
-    return out;
+    const f32Allocations: GeometryScratchAllocation[] = [];
+    const u32Allocations: GeometryScratchAllocation[] = [];
+    try {
+        const positionsPtr = allocGeometryScratchF32(f32Allocations, positions.length, "computeGeometryVertexNormals.positions");
+        const outputPtr = allocGeometryScratchF32(f32Allocations, positions.length, "computeGeometryVertexNormals.output");
+        const indicesPtr = idxLen > 0 ? allocGeometryScratchU32(u32Allocations, idxLen, "computeGeometryVertexNormals.indices") : 0;
+        wasm.f32view(positionsPtr, positions.length).set(positions);
+        if (indices && idxLen > 0) wasm.u32view(indicesPtr, idxLen).set(indices);
+        meshf.computeVertexNormals(outputPtr, positionsPtr, vertexCount, indicesPtr, idxLen);
+        const out = new Float32Array(positions.length);
+        out.set(wasm.f32view(outputPtr, positions.length));
+        return out;
+    } finally {
+        for (let i = u32Allocations.length - 1; i >= 0; i--) wasm.freeU32(u32Allocations[i]!.ptr, u32Allocations[i]!.len);
+        for (let i = f32Allocations.length - 1; i >= 0; i--) wasm.freeF32(f32Allocations[i]!.ptr, f32Allocations[i]!.len);
+    }
 };
 
 const normalizeVec3At = (data: Float32Array, offset: number, fallback: [number, number, number]): [number, number, number] => {

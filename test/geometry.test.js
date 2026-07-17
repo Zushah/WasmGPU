@@ -6,7 +6,7 @@
 
 import assert from "assert";
 import { create, globals } from "webgpu";
-import { initWebAssembly, Geometry, webassemblyInterop, WasmMemoryView } from "../dist/WasmGPU.js";
+import { initWebAssembly, Geometry, wasm, webassemblyInterop, WasmMemoryView } from "../dist/WasmGPU.js";
 
 Object.assign(globalThis, globals);
 const navigator = { gpu: create([]) };
@@ -272,6 +272,29 @@ device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured 
         { message: "Invalid derived wasmPositions vertexCount should throw", error: /wasmPositions length must be a multiple of 3/i, create: () => new Geometry({ wasmPositions: invalidPositions.view }) },
         { message: "Short wasmNormals should throw", error: /wasmNormals length must be at least vertexCount\*3/i, create: () => new Geometry({ wasmPositions: positions.view, wasmNormals: shortNormals.view, vertexCount: 3 }) }
     ]) assert.throws(create, error, message);
+}
+
+// 8) Geometry bounds generation releases every scoped WebAssembly scratch allocation.
+{
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const indices = new Uint32Array([0, 1, 2]);
+    const originalFreeF32 = wasm.freeF32;
+    const originalFreeU32 = wasm.freeU32;
+    const freedF32 = [];
+    const freedU32 = [];
+    wasm.freeF32 = (ptr, len) => { freedF32.push([ptr, len]); originalFreeF32(ptr, len); };
+    wasm.freeU32 = (ptr, len) => { freedU32.push([ptr, len]); originalFreeU32(ptr, len); };
+    try {
+        for (let i = 0; i < 16; i++) {
+            const geometry = new Geometry({ positions, indices });
+            geometry.destroy();
+        }
+    } finally {
+        wasm.freeF32 = originalFreeF32;
+        wasm.freeU32 = originalFreeU32;
+    }
+    assert.equal(freedF32.length, 16 * 5, "Each geometry must release its five bounds scratch allocations");
+    assert.equal(freedU32.length, 0, "Geometry construction must not allocate persistent u32 scratch");
 }
 
 device.destroy();

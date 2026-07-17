@@ -121,6 +121,7 @@ export class WasmSlice<T extends WasmTypedArray> {
     }
 
     handle(): WasmSliceHandle {
+        this.assertAlive();
         const h: WasmSliceHandle = { kind: this.kind, dtype: this.dtype, ptr: this.ptr >>> 0, length: this.length >>> 0 };
         if (this.epochProvider) h.epoch = this.epoch >>> 0;
         return h;
@@ -129,8 +130,6 @@ export class WasmSlice<T extends WasmTypedArray> {
     free(): void {
         if (this.kind !== "heap") throw new Error(`WasmSlice.free(): cannot free a ${this.kind} allocation. Use reset() for arena-like allocators (frameArena.reset() / WasmHeapArena.reset()).`);
         if (this.freed) return;
-        this.freed = true;
-        HEAP_SLICE_FINALIZER?.unregister(this);
         const { wasm } = ensureHost();
         const ptr = this.ptr >>> 0;
         const len = this.length >>> 0;
@@ -140,6 +139,8 @@ export class WasmSlice<T extends WasmTypedArray> {
             case "i32": wasm.freeU32(ptr, len); break;
             case "u8": wasm.freeBytes(ptr, len); break;
         }
+        this.freed = true;
+        HEAP_SLICE_FINALIZER?.unregister(this);
         this._buf = null;
         this._view = null;
     }
@@ -165,7 +166,7 @@ export class WasmHeapArena {
         const base = wasm.allocBytes(cap);
         if (!base) throw new Error(`WasmHeapArena(${capBytes}): wasm.allocBytes failed`);
         const a = align >>> 0;
-        if (a !== 0 && (base & (a - 1)) !== 0) throw new Error(`WasmHeapArena(${capBytes}): basePtr 0x${base.toString(16)} is not ${align}-byte aligned`);
+        if (a !== 0 && (base & (a - 1)) !== 0) { wasm.freeBytes(base, cap); throw new Error(`WasmHeapArena(${capBytes}): basePtr 0x${base.toString(16)} is not ${align}-byte aligned`); }
         this.basePtr = base >>> 0;
         this.capBytes = cap >>> 0;
     }
@@ -191,11 +192,11 @@ export class WasmHeapArena {
         if (this.destroyed) return;
         const base = this.basePtr >>> 0;
         const cap = this.capBytes >>> 0;
+        ensureHost().wasm.freeBytes(base, cap);
         this.destroyed = true;
         this.headBytes = 0;
         this._epoch = (this._epoch + 1) >>> 0;
         if (this._epoch === 0) this._epoch = 1;
-        ensureHost().wasm.freeBytes(base, cap);
     }
 
     alloc(bytes: number, alignBytes: number = 16): WasmPtr {

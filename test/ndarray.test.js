@@ -5,7 +5,7 @@
  */
 
 import assert from "assert";
-import { initWebAssembly, Compute } from "../dist/WasmGPU.js";
+import { initWebAssembly, Compute, wasm } from "../dist/WasmGPU.js";
 import { create, globals } from "webgpu";
 
 await initWebAssembly(new URL("../dist/", import.meta.url).toString());
@@ -36,6 +36,7 @@ const compute = new Compute(device, device.queue);
 
     a.set(123, 1, 1);
     assert.strictEqual(a.get(1, 1), 123);
+    a.destroy();
 }
 
 // CPU: custom stride (interleaved / gapped layout)
@@ -63,6 +64,7 @@ const compute = new Compute(device, device.queue);
     assert.strictEqual(a.get(1, 0), 20);
     assert.strictEqual(a.get(1, 1), 21);
     assert.strictEqual(a.get(1, 2), 22);
+    a.destroy();
 }
 
 // Contiguous roundtrip
@@ -76,7 +78,9 @@ const compute = new Compute(device, device.queue);
     assert.strictEqual(b.isContiguousC, true);
 
     assert.deepStrictEqual(Array.from(b.data()), [1, 2, 3, 4, 5, 6]);
+    b.destroy();
     ga.destroy();
+    a.destroy();
 }
 
 // Gapped/interleaved roundtrip
@@ -104,7 +108,9 @@ const compute = new Compute(device, device.queue);
     assert.strictEqual(b.get(1, 0), 20);
     assert.strictEqual(b.get(1, 1), 21);
     assert.strictEqual(b.get(1, 2), 22);
+    b.destroy();
     ga.destroy();
+    a.destroy();
 }
 
 // Readback requires copySrc: true
@@ -120,6 +126,43 @@ const compute = new Compute(device, device.queue);
     }
     assert.strictEqual(threw, true, "Expected readbackToCPU() to throw when copySrc is not enabled");
     ga.destroy();
+    a.destroy();
+}
+
+// CPU: owned WebAssembly allocations have deterministic, guarded lifetimes.
+{
+    const a = compute.CPUndarray.fromArray("f32", [2, 2], [1, 2, 3, 4]);
+    assert.strictEqual(a.destroyed, false);
+    assert.ok(a.basePtrBytes > 0);
+    assert.ok(a.shapePtr > 0);
+    assert.ok(a.stridesPtr > 0);
+    a.destroy();
+    assert.strictEqual(a.destroyed, true);
+    assert.throws(() => a.basePtrBytes, /destroyed/i);
+    assert.throws(() => a.shapePtr, /destroyed/i);
+    assert.throws(() => a.stridesPtr, /destroyed/i);
+    assert.throws(() => a.backingBytes(), /destroyed/i);
+    assert.throws(() => a.data(), /destroyed/i);
+    assert.throws(() => a.get(0, 0), /destroyed/i);
+    assert.throws(() => a.set(5, 0, 0), /destroyed/i);
+    assert.throws(() => a.zero_(), /destroyed/i);
+    assert.throws(() => a.uploadToGPU(compute), /destroyed/i);
+    assert.doesNotThrow(() => a.destroy(), "CPUndarray.destroy() must be idempotent");
+}
+
+// CPU: repeated allocation/destruction reuses heap storage instead of growing linearly.
+{
+    const churn = () => {
+        const a = compute.CPUndarray.zeros("u8", { shape: [256 * 1024] });
+        const bytes = a.backingBytes();
+        bytes[0] = 0x35;
+        bytes[bytes.length - 1] = 0x79;
+        a.destroy();
+    };
+    churn();
+    const stabilizedHeapBytes = wasm.memory().buffer.byteLength;
+    for (let i = 0; i < 64; i++) churn();
+    assert.strictEqual(wasm.memory().buffer.byteLength, stabilizedHeapBytes, "Destroyed CPUndarray storage must be reusable under fixed-size churn");
 }
 
 compute.destroy();

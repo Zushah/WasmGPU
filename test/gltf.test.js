@@ -5,7 +5,7 @@
  */
 
 import assert from "assert";
-import { initWebAssembly, readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32, parseGLB, loadGltf, importGltf, Scene, TransformStore, UnlitMaterial, StandardMaterial, SplatField } from "../dist/WasmGPU.js";
+import { initWebAssembly, readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32, parseGLB, loadGltf, importGltf, Scene, TransformStore, UnlitMaterial, StandardMaterial, SplatField, wasm } from "../dist/WasmGPU.js";
 
 const pad4 = (n) => (n + 3) & ~3;
 const makeGLB = (gltfJson, binBytes) => {
@@ -364,23 +364,44 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
         scene: 0
     };
 
-    const res = importGltf(await loadGltf(makeGLB(gltfJson, bin.buffer)), { addToScene: false, computeMissingNormals: true });
+    const originalFreeF32 = wasm.freeF32;
+    const freedF32 = [];
+    let res;
+    wasm.freeF32 = (ptr, len) => { freedF32.push([ptr, len]); originalFreeF32(ptr, len); };
+    try {
+        res = importGltf(await loadGltf(makeGLB(gltfJson, bin.buffer)), { addToScene: false, computeMissingNormals: true });
 
-    assert.equal(res.skins.length, 1);
-    assert.ok(res.skins[0].runtime);
-    assert.equal(res.meshes.length, 1);
-    assert.ok(res.meshes[0].skin);
-    assert.equal(res.meshes[0].skin.jointCount, 1);
-    assert.equal(res.meshes[0].geometry.morphTargets.length, 1);
-    assert.equal(res.clips.length, 1);
+        assert.equal(res.skins.length, 1);
+        assert.ok(res.skins[0].runtime);
+        assert.equal(res.meshes.length, 1);
+        assert.ok(res.meshes[0].skin);
+        assert.equal(res.meshes[0].skin.jointCount, 1);
+        assert.equal(res.meshes[0].geometry.morphTargets.length, 1);
+        assert.equal(res.clips.length, 1);
 
-    const before = res.meshes[0].getLocalBounds();
-    approxEqual(before.boxMax[1], 1);
-    res.clips[0].sample(1);
-    const after = res.meshes[0].getLocalBounds();
-    approxEqual(after.boxMax[1], 2);
+        const before = res.meshes[0].getLocalBounds();
+        approxEqual(before.boxMax[1], 1);
+        res.clips[0].sample(1);
+        const after = res.meshes[0].getLocalBounds();
+        approxEqual(after.boxMax[1], 2);
+    } finally {
+        wasm.freeF32 = originalFreeF32;
+    }
+    assert.ok(freedF32.filter(([, len]) => len === positions.length).length >= 9, "Imported and morphed geometry must release position, normal-output, and bounds scratch after every recomputation");
 
+    const clip = res.clips[0];
+    const skin = res.skins[0].runtime;
+    const skinInstance = res.meshes[0].skin;
     res.destroy();
+    assert.equal(clip.disposed, true);
+    assert.equal(skin.disposed, true);
+    assert.equal(skinInstance.disposed, true);
+    assert.throws(() => clip.sample(0), /disposed/i, "Disposed animation clips must reject sampling");
+    assert.throws(() => clip.samplersPtr, /disposed/i, "Disposed animation clips must reject Wasm pointer access");
+    assert.throws(() => skin.jointIndicesPtr, /disposed/i, "Disposed skins must reject Wasm pointer access");
+    assert.throws(() => skin.createInstance(res.nodes[1].transform), /disposed/i, "Disposed skins must reject new instances");
+    assert.throws(() => skinInstance.bindMatrixPtr, /disposed/i, "Disposed skin instances must reject Wasm pointer access");
+    assert.doesNotThrow(() => res.destroy(), "Imported resource destruction must remain idempotent");
     assert.equal(TransformStore.global().count, baseTransformCount);
 }
 
@@ -718,4 +739,45 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
         baseUrl: ""
     };
     assert.throws(() => readAccessorAsFloat32(meshoptDoc, 0), /EXT_meshopt_compression is not supported yet/);
+}
+
+// 9) Failed animation import releases allocations accumulated before the error.
+{
+    const times = new Float32Array([0, 1]);
+    const values = new Float32Array([0, 1]);
+    const bin = new Uint8Array(times.byteLength + values.byteLength);
+    copyBytes(bin, 0, times);
+    copyBytes(bin, times.byteLength, values);
+    const doc = await loadGltf(makeGLB({
+        asset: { version: "2.0" },
+        buffers: [{ byteLength: bin.byteLength }],
+        bufferViews: [
+            { buffer: 0, byteOffset: 0, byteLength: times.byteLength },
+            { buffer: 0, byteOffset: times.byteLength, byteLength: values.byteLength }
+        ],
+        accessors: [
+            { bufferView: 0, componentType: 5126, count: 2, type: "SCALAR" },
+            { bufferView: 1, componentType: 5126, count: 2, type: "SCALAR" }
+        ],
+        animations: [{
+            samplers: [{ input: 0, output: 1 }, { input: 99, output: 1 }],
+            channels: []
+        }],
+        scenes: [{ nodes: [] }],
+        scene: 0
+    }, bin.buffer));
+    const originalFreeF32 = wasm.freeF32;
+    const originalFreeU32 = wasm.freeU32;
+    const freedF32 = [];
+    const freedU32 = [];
+    wasm.freeF32 = (ptr, len) => { freedF32.push([ptr, len]); originalFreeF32(ptr, len); };
+    wasm.freeU32 = (ptr, len) => { freedU32.push([ptr, len]); originalFreeU32(ptr, len); };
+    try {
+        assert.throws(() => importGltf(doc, { addToScene: false }), /Invalid accessor index: 99/);
+    } finally {
+        wasm.freeF32 = originalFreeF32;
+        wasm.freeU32 = originalFreeU32;
+    }
+    assert.equal(freedF32.filter(([, len]) => len === 2).length, 2, "Failed animation import must free its uploaded times and values");
+    assert.ok(freedU32.some(([, len]) => len === 10), "Failed animation import must free its sampler table");
 }

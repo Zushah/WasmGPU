@@ -98,9 +98,29 @@ export const ensureCullingCapacity = (ctx: RendererContext, count: number): void
     if (count <= ctx.cullCapacity) return;
     let cap = Math.max(1, ctx.cullCapacity);
     while (cap < count) cap *= 2;
-    ctx.cullCentersPtr = wasm.allocF32(cap * 3) as WasmPtr;
-    ctx.cullRadiiPtr = wasm.allocF32(cap) as WasmPtr;
+    const centersPtr = wasm.allocF32(cap * 3) as WasmPtr;
+    if (!centersPtr) throw new Error(`Renderer culling center allocation failed (${cap * 3} f32 elements).`);
+    const radiiPtr = wasm.allocF32(cap) as WasmPtr;
+    if (!radiiPtr) { wasm.freeF32(centersPtr, cap * 3); throw new Error(`Renderer culling radius allocation failed (${cap} f32 elements).`); }
+    const oldCentersPtr = ctx.cullCentersPtr;
+    const oldRadiiPtr = ctx.cullRadiiPtr;
+    const oldCap = ctx.cullCapacity;
+    ctx.cullCentersPtr = centersPtr;
+    ctx.cullRadiiPtr = radiiPtr;
     ctx.cullCapacity = cap;
+    if (oldCentersPtr) wasm.freeF32(oldCentersPtr, oldCap * 3);
+    if (oldRadiiPtr) wasm.freeF32(oldRadiiPtr, oldCap);
+};
+
+export const destroyCullingScratch = (ctx: RendererContext): void => {
+    const centersPtr = ctx.cullCentersPtr;
+    const radiiPtr = ctx.cullRadiiPtr;
+    const cap = ctx.cullCapacity;
+    if (centersPtr) wasm.freeF32(centersPtr, cap * 3);
+    if (radiiPtr) wasm.freeF32(radiiPtr, cap);
+    ctx.cullCentersPtr = 0;
+    ctx.cullRadiiPtr = 0;
+    ctx.cullCapacity = 0;
 };
 
 export const recordFrustumCounts = (ctx: RendererContext, tested: number, visible: number): void => {

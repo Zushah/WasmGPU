@@ -81,6 +81,7 @@ import {
     buildNodeLinkDrawLists as buildNodeLinkDrawListsImpl,
     buildPointCloudDrawLists as buildPointCloudDrawListsImpl,
     buildSplatFieldDrawLists as buildSplatFieldDrawListsImpl,
+    destroyCullingScratch as destroyCullingScratchImpl,
     ensureCullingCapacity as ensureCullingCapacityImpl,
     executeTransparentMergedDrawList as executeTransparentMergedDrawListImpl,
     getNodeLinkLinkGeometry as getNodeLinkLinkGeometryImpl,
@@ -739,6 +740,7 @@ export class Renderer {
 
     destroy(): void {
         if (this.destroyed) return;
+        destroyCullingScratchImpl(this);
         this.destroyed = true;
         this.destroyOcclusionTextures();
         this.depthTexture?.destroy();
