@@ -91,7 +91,7 @@ pub(crate) fn mat4_invert_from(m: &[f32; 16]) -> [f32; 16] {
     ]
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_abs(out: u32, m: u32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 16);
@@ -103,7 +103,7 @@ pub extern "C" fn mat4_abs(out: u32, m: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_add(out: u32, m1: u32, m2: u32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 16);
@@ -116,7 +116,7 @@ pub extern "C" fn mat4_add(out: u32, m1: u32, m2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_copy(out: u32, m: u32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 16);
@@ -128,7 +128,7 @@ pub extern "C" fn mat4_copy(out: u32, m: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_decompose_trs(out_trs: u32, m: u32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -188,7 +188,7 @@ pub extern "C" fn mat4_decompose_trs(out_trs: u32, m: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_det(m: u32) -> f32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -198,7 +198,7 @@ pub extern "C" fn mat4_det(m: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_identity(out: u32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 16);
@@ -222,7 +222,7 @@ pub extern "C" fn mat4_identity(out: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_init(
     out: u32,
     m0: f32,
@@ -264,7 +264,7 @@ pub extern "C" fn mat4_init(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_invert(out: u32, m: u32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -279,7 +279,7 @@ pub extern "C" fn mat4_invert(out: u32, m: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_isEqual(m1: u32, m2: u32) -> u32 {
     unsafe {
         let a = f32_slice(m1, 16);
@@ -293,7 +293,7 @@ pub extern "C" fn mat4_isEqual(m1: u32, m2: u32) -> u32 {
     1
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_isIdentity(m: u32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -320,7 +320,7 @@ pub extern "C" fn mat4_isIdentity(m: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_isInverse(m1: u32, m2: u32) -> u32 {
     unsafe {
         let a = f32_slice(m1, 16);
@@ -337,7 +337,7 @@ pub extern "C" fn mat4_isInverse(m1: u32, m2: u32) -> u32 {
     1
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_isZero(m: u32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -350,7 +350,7 @@ pub extern "C" fn mat4_isZero(m: u32) -> u32 {
     1
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_lookAt(out: u32, eye: u32, center: u32, up: u32) -> u32 {
     unsafe {
         let eye = f32_slice(eye, 3);
@@ -396,7 +396,7 @@ pub extern "C" fn mat4_lookAt(out: u32, eye: u32, center: u32, up: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_mul(out: u32, m1: u32, m2: u32) -> u32 {
     unsafe {
         let a = f32_slice(m1, 16);
@@ -426,7 +426,7 @@ pub extern "C" fn mat4_mul(out: u32, m1: u32, m2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_mul_vec4(out: u32, m: u32, v4: u32) -> u32 {
     unsafe {
         let m = f32_slice(m, 16);
@@ -440,7 +440,7 @@ pub extern "C" fn mat4_mul_vec4(out: u32, m: u32, v4: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_neg(out: u32, m: u32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 16);
@@ -452,7 +452,7 @@ pub extern "C" fn mat4_neg(out: u32, m: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_norm(m: u32) -> f32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -464,7 +464,7 @@ pub extern "C" fn mat4_norm(m: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_normalize(out: u32, m: u32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -489,7 +489,7 @@ pub extern "C" fn mat4_normalize(out: u32, m: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_normsq(m: u32) -> f32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -501,7 +501,7 @@ pub extern "C" fn mat4_normsq(m: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_perspective(out: u32, fov_y: f32, aspect: f32, near: f32, far: f32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 16);
@@ -527,7 +527,7 @@ pub extern "C" fn mat4_perspective(out: u32, fov_y: f32, aspect: f32, near: f32,
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_random(out: u32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 16);
@@ -538,7 +538,7 @@ pub extern "C" fn mat4_random(out: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_random_range(out: u32, a: f32, b: f32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 16);
@@ -549,7 +549,7 @@ pub extern "C" fn mat4_random_range(out: u32, a: f32, b: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_rotateX(out: u32, m: u32, angle: f32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -580,7 +580,7 @@ pub extern "C" fn mat4_rotateX(out: u32, m: u32, angle: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_rotateY(out: u32, m: u32, angle: f32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -611,7 +611,7 @@ pub extern "C" fn mat4_rotateY(out: u32, m: u32, angle: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_rotateZ(out: u32, m: u32, angle: f32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -642,7 +642,7 @@ pub extern "C" fn mat4_rotateZ(out: u32, m: u32, angle: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_round(out: u32, m: u32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -654,7 +654,7 @@ pub extern "C" fn mat4_round(out: u32, m: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_scl(out: u32, m: u32, n: f32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -666,7 +666,7 @@ pub extern "C" fn mat4_scl(out: u32, m: u32, n: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_sub(out: u32, m1: u32, m2: u32) -> u32 {
     unsafe {
         let a = f32_slice(m1, 16);
@@ -679,7 +679,7 @@ pub extern "C" fn mat4_sub(out: u32, m1: u32, m2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_trace(m: u32) -> f32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -687,7 +687,7 @@ pub extern "C" fn mat4_trace(m: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_translate(out: u32, m: u32, v: u32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -713,7 +713,7 @@ pub extern "C" fn mat4_translate(out: u32, m: u32, v: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_transpose(out: u32, m: u32) -> u32 {
     unsafe {
         let a = f32_slice(m, 16);
@@ -742,7 +742,7 @@ pub extern "C" fn mat4_transpose(out: u32, m: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mat4_print(_m: u32) {
     // Printing is handled in JavaScript.
 }

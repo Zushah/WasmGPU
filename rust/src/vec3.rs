@@ -31,7 +31,7 @@ pub(crate) fn vec3_cross_from(a: &[f32; 3], b: &[f32; 3]) -> [f32; 3] {
     ]
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_abs(out: u32, v: u32) -> u32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -43,7 +43,7 @@ pub extern "C" fn vec3_abs(out: u32, v: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_add(out: u32, v1: u32, v2: u32) -> u32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -56,7 +56,7 @@ pub extern "C" fn vec3_add(out: u32, v1: u32, v2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_ang(out: u32, v: u32) -> u32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -70,7 +70,7 @@ pub extern "C" fn vec3_ang(out: u32, v: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_angBetween(v1: u32, v2: u32) -> f32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -87,7 +87,7 @@ pub extern "C" fn vec3_angBetween(v1: u32, v2: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_copy(out: u32, v: u32) -> u32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -99,7 +99,7 @@ pub extern "C" fn vec3_copy(out: u32, v: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_cross(out: u32, v1: u32, v2: u32) -> u32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -115,7 +115,7 @@ pub extern "C" fn vec3_cross(out: u32, v1: u32, v2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_dist(v1: u32, v2: u32) -> f32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -127,7 +127,7 @@ pub extern "C" fn vec3_dist(v1: u32, v2: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_distsq(v1: u32, v2: u32) -> f32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -139,7 +139,7 @@ pub extern "C" fn vec3_distsq(v1: u32, v2: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_dot(v1: u32, v2: u32) -> f32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -148,7 +148,7 @@ pub extern "C" fn vec3_dot(v1: u32, v2: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_init(out: u32, x: f32, y: f32, z: f32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 3);
@@ -159,7 +159,7 @@ pub extern "C" fn vec3_init(out: u32, x: f32, y: f32, z: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_interp(out: u32, v: u32, a: f32, b: f32, c: f32) -> u32 {
     unsafe {
         let v = f32_slice(v, 3);
@@ -173,7 +173,7 @@ pub extern "C" fn vec3_interp(out: u32, v: u32, a: f32, b: f32, c: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_isEqual(v1: u32, v2: u32) -> u32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -185,7 +185,7 @@ pub extern "C" fn vec3_isEqual(v1: u32, v2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_isNormalized(v: u32) -> u32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -196,7 +196,7 @@ pub extern "C" fn vec3_isNormalized(v: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_isOrthogonal(v1: u32, v2: u32) -> u32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -208,7 +208,7 @@ pub extern "C" fn vec3_isOrthogonal(v1: u32, v2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_isParallel(v1: u32, v2: u32) -> u32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -225,7 +225,7 @@ pub extern "C" fn vec3_isParallel(v1: u32, v2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_isZero(v: u32) -> u32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -236,7 +236,7 @@ pub extern "C" fn vec3_isZero(v: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_neg(out: u32, v: u32) -> u32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -248,7 +248,7 @@ pub extern "C" fn vec3_neg(out: u32, v: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_norm(v: u32) -> f32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -256,7 +256,7 @@ pub extern "C" fn vec3_norm(v: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_normalize(out: u32, v: u32) -> u32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -276,7 +276,7 @@ pub extern "C" fn vec3_normalize(out: u32, v: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_normscl(out: u32, v: u32, n: f32) -> u32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -297,7 +297,7 @@ pub extern "C" fn vec3_normscl(out: u32, v: u32, n: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_normsq(v: u32) -> f32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -305,7 +305,7 @@ pub extern "C" fn vec3_normsq(v: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_oproj(out: u32, v1: u32, v2: u32) -> u32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -328,7 +328,7 @@ pub extern "C" fn vec3_oproj(out: u32, v1: u32, v2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_proj(out: u32, v1: u32, v2: u32) -> u32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -351,7 +351,7 @@ pub extern "C" fn vec3_proj(out: u32, v1: u32, v2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_random(out: u32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 3);
@@ -362,7 +362,7 @@ pub extern "C" fn vec3_random(out: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_random_range(out: u32, a: f32, b: f32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 3);
@@ -373,7 +373,7 @@ pub extern "C" fn vec3_random_range(out: u32, a: f32, b: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_reflect(out: u32, v1: u32, v2: u32) -> u32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -396,7 +396,7 @@ pub extern "C" fn vec3_reflect(out: u32, v1: u32, v2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_refract(out: u32, v1: u32, v2: u32, n: f32) -> u32 {
     unsafe {
         if n <= 0.0 {
@@ -432,7 +432,7 @@ pub extern "C" fn vec3_refract(out: u32, v1: u32, v2: u32, n: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_round(out: u32, v: u32) -> u32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -444,7 +444,7 @@ pub extern "C" fn vec3_round(out: u32, v: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_scl(out: u32, v: u32, n: f32) -> u32 {
     unsafe {
         let a = f32_slice(v, 3);
@@ -456,7 +456,7 @@ pub extern "C" fn vec3_scl(out: u32, v: u32, n: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_sub(out: u32, v1: u32, v2: u32) -> u32 {
     unsafe {
         let a = f32_slice(v1, 3);
@@ -469,7 +469,7 @@ pub extern "C" fn vec3_sub(out: u32, v1: u32, v2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn vec3_print(_v: u32) {
     // Printing is handled in JavaScript.
 }

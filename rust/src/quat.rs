@@ -65,7 +65,7 @@ pub(crate) fn quat_from_rotation_mat3(
     [x * inv_len, y * inv_len, z * inv_len, w * inv_len]
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_abs(out: u32, q: u32) -> u32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -78,7 +78,7 @@ pub extern "C" fn quat_abs(out: u32, q: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_add(out: u32, q1: u32, q2: u32) -> u32 {
     unsafe {
         let a = f32_slice(q1, 4);
@@ -92,7 +92,7 @@ pub extern "C" fn quat_add(out: u32, q1: u32, q2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_copy(out: u32, q: u32) -> u32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -104,7 +104,7 @@ pub extern "C" fn quat_copy(out: u32, q: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_dist(q1: u32, q2: u32) -> f32 {
     unsafe {
         let a = f32_slice(q1, 4);
@@ -117,7 +117,7 @@ pub extern "C" fn quat_dist(q1: u32, q2: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_distsq(q1: u32, q2: u32) -> f32 {
     unsafe {
         let a = f32_slice(q1, 4);
@@ -130,7 +130,7 @@ pub extern "C" fn quat_distsq(q1: u32, q2: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_fromAxisAngle(out: u32, axis: u32, angle: f32) -> u32 {
     unsafe {
         let a = f32_slice(axis, 3);
@@ -146,7 +146,7 @@ pub extern "C" fn quat_fromAxisAngle(out: u32, axis: u32, angle: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_init(out: u32, a: f32, b: f32, c: f32, d: f32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 4);
@@ -158,7 +158,7 @@ pub extern "C" fn quat_init(out: u32, a: f32, b: f32, c: f32, d: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_invert(out: u32, q: u32) -> u32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -180,7 +180,7 @@ pub extern "C" fn quat_invert(out: u32, q: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_isEqual(q1: u32, q2: u32) -> u32 {
     unsafe {
         let a = f32_slice(q1, 4);
@@ -192,7 +192,7 @@ pub extern "C" fn quat_isEqual(q1: u32, q2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_isNormalized(q: u32) -> u32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -203,7 +203,7 @@ pub extern "C" fn quat_isNormalized(q: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_isZero(q: u32) -> u32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -214,7 +214,7 @@ pub extern "C" fn quat_isZero(q: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_mul(out: u32, q1: u32, q2: u32) -> u32 {
     unsafe {
         let a = f32_slice(q1, 4);
@@ -232,7 +232,7 @@ pub extern "C" fn quat_mul(out: u32, q1: u32, q2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_neg(out: u32, q: u32) -> u32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -245,7 +245,7 @@ pub extern "C" fn quat_neg(out: u32, q: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_norm(q: u32) -> f32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -253,7 +253,7 @@ pub extern "C" fn quat_norm(q: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_normalize(out: u32, q: u32) -> u32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -276,7 +276,7 @@ pub extern "C" fn quat_normalize(out: u32, q: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_normscl(out: u32, q: u32, n: f32) -> u32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -291,7 +291,7 @@ pub extern "C" fn quat_normscl(out: u32, q: u32, n: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_normsq(q: u32) -> f32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -299,7 +299,7 @@ pub extern "C" fn quat_normsq(q: u32) -> f32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_random(out: u32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 4);
@@ -310,7 +310,7 @@ pub extern "C" fn quat_random(out: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_random_range(out: u32, a: f32, b: f32) -> u32 {
     unsafe {
         let o = f32_slice_mut(out, 4);
@@ -321,7 +321,7 @@ pub extern "C" fn quat_random_range(out: u32, a: f32, b: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_round(out: u32, q: u32) -> u32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -333,7 +333,7 @@ pub extern "C" fn quat_round(out: u32, q: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_scl(out: u32, q: u32, n: f32) -> u32 {
     unsafe {
         let a = f32_slice(q, 4);
@@ -345,7 +345,7 @@ pub extern "C" fn quat_scl(out: u32, q: u32, n: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_slerp(out: u32, q1: u32, q2: u32, t: f32) -> u32 {
     unsafe {
         let a = f32_slice(q1, 4);
@@ -391,7 +391,7 @@ pub extern "C" fn quat_slerp(out: u32, q1: u32, q2: u32, t: f32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_sub(out: u32, q1: u32, q2: u32) -> u32 {
     unsafe {
         let a = f32_slice(q1, 4);
@@ -404,7 +404,7 @@ pub extern "C" fn quat_sub(out: u32, q1: u32, q2: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_toRotation(out: u32, q: u32, v: u32) -> u32 {
     unsafe {
         let q = f32_slice(q, 4);
@@ -420,7 +420,7 @@ pub extern "C" fn quat_toRotation(out: u32, q: u32, v: u32) -> u32 {
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn quat_print(_q: u32) {
     // Printing is handled in JavaScript.
 }

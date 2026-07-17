@@ -5,8 +5,8 @@
  */
 
 use crate::anim::{
-    clamp01, find_keyframe, hermite, mat4_mul_to, quat_normalize, quat_slerp, sample_quat,
-    sample_vec, INTERP_CUBIC, INTERP_LINEAR, INTERP_STEP,
+    INTERP_CUBIC, INTERP_LINEAR, INTERP_STEP, clamp01, find_keyframe, hermite, mat4_mul_to,
+    quat_normalize, quat_slerp, sample_quat, sample_vec,
 };
 use crate::mat4::mat4_identity_arr;
 use crate::tests::common::{assert_approx, assert_slice_approx};

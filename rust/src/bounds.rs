@@ -66,10 +66,12 @@ unsafe fn write_bounds(
     out_sphere_radius_ptr: u32,
     bounds: BoundsResult,
 ) {
-    f32_slice_mut(out_box_min_ptr, 3).copy_from_slice(&bounds.min);
-    f32_slice_mut(out_box_max_ptr, 3).copy_from_slice(&bounds.max);
-    f32_slice_mut(out_sphere_center_ptr, 3).copy_from_slice(&bounds.center);
-    f32_slice_mut(out_sphere_radius_ptr, 1)[0] = bounds.radius;
+    unsafe {
+        f32_slice_mut(out_box_min_ptr, 3).copy_from_slice(&bounds.min);
+        f32_slice_mut(out_box_max_ptr, 3).copy_from_slice(&bounds.max);
+        f32_slice_mut(out_sphere_center_ptr, 3).copy_from_slice(&bounds.center);
+        f32_slice_mut(out_sphere_radius_ptr, 1)[0] = bounds.radius;
+    }
 }
 
 #[inline(always)]
@@ -79,13 +81,15 @@ unsafe fn write_zero_bounds(
     out_sphere_center_ptr: u32,
     out_sphere_radius_ptr: u32,
 ) {
-    write_bounds(
-        out_box_min_ptr,
-        out_box_max_ptr,
-        out_sphere_center_ptr,
-        out_sphere_radius_ptr,
-        BoundsResult::ZERO,
-    );
+    unsafe {
+        write_bounds(
+            out_box_min_ptr,
+            out_box_max_ptr,
+            out_sphere_center_ptr,
+            out_sphere_radius_ptr,
+            BoundsResult::ZERO,
+        );
+    }
 }
 
 #[inline(always)]
@@ -99,23 +103,27 @@ unsafe fn compute_bounds_positions_stride(
     stride_f32: usize,
 ) {
     if count == 0 {
-        write_zero_bounds(
+        unsafe {
+            write_zero_bounds(
+                out_box_min_ptr,
+                out_box_max_ptr,
+                out_sphere_center_ptr,
+                out_sphere_radius_ptr,
+            );
+        }
+        return;
+    }
+    let points = unsafe { f32_slice(points_ptr, count * stride_f32) };
+    let bounds = bounds_positions_stride(points, count, stride_f32);
+    unsafe {
+        write_bounds(
             out_box_min_ptr,
             out_box_max_ptr,
             out_sphere_center_ptr,
             out_sphere_radius_ptr,
+            bounds,
         );
-        return;
     }
-    let points = f32_slice(points_ptr, count * stride_f32);
-    let bounds = bounds_positions_stride(points, count, stride_f32);
-    write_bounds(
-        out_box_min_ptr,
-        out_box_max_ptr,
-        out_sphere_center_ptr,
-        out_sphere_radius_ptr,
-        bounds,
-    );
 }
 
 #[inline(always)]
@@ -200,7 +208,7 @@ pub(crate) fn bounds_glyphs(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bounds_pointcloud_xyzs(
     out_box_min_ptr: u32,
     out_box_max_ptr: u32,
@@ -252,7 +260,7 @@ pub extern "C" fn bounds_pointcloud_xyzs(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bounds_geometry_positions(
     out_box_min_ptr: u32,
     out_box_max_ptr: u32,
@@ -283,7 +291,7 @@ pub extern "C" fn bounds_geometry_positions(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn bounds_glyph_instances(
     out_box_min_ptr: u32,
     out_box_max_ptr: u32,

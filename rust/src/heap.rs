@@ -4,14 +4,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use std::alloc::{alloc, dealloc, Layout};
+use std::alloc::{Layout, alloc, dealloc};
 
 #[inline(always)]
 unsafe fn alloc_layout(layout: Layout) -> u32 {
     if layout.size() == 0 {
         return 0;
     }
-    let ptr = alloc(layout);
+    let ptr = unsafe { alloc(layout) };
     if ptr.is_null() {
         return 0;
     }
@@ -23,7 +23,7 @@ unsafe fn free_layout(ptr: u32, layout: Layout) {
     if ptr == 0 || layout.size() == 0 {
         return;
     }
-    dealloc(ptr as usize as *mut u8, layout);
+    unsafe { dealloc(ptr as usize as *mut u8, layout) };
 }
 
 #[inline(always)]
@@ -32,7 +32,7 @@ pub(crate) unsafe fn alloc_raw(bytes: usize, align: usize) -> u32 {
         Ok(layout) => layout,
         Err(_) => return 0,
     };
-    alloc_layout(layout)
+    unsafe { alloc_layout(layout) }
 }
 
 #[inline(always)]
@@ -41,7 +41,7 @@ unsafe fn free_raw(ptr: u32, bytes: usize, align: usize) {
         Ok(layout) => layout,
         Err(_) => return,
     };
-    free_layout(ptr, layout);
+    unsafe { free_layout(ptr, layout) };
 }
 
 #[inline(always)]
@@ -50,7 +50,7 @@ unsafe fn alloc_array<T>(len: u32) -> u32 {
         Ok(layout) => layout,
         Err(_) => return 0,
     };
-    alloc_layout(layout)
+    unsafe { alloc_layout(layout) }
 }
 
 #[inline(always)]
@@ -59,35 +59,35 @@ unsafe fn free_array<T>(ptr: u32, len: u32) {
         Ok(layout) => layout,
         Err(_) => return,
     };
-    free_layout(ptr, layout);
+    unsafe { free_layout(ptr, layout) };
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_alloc(bytes: u32) -> u32 {
     unsafe { alloc_raw(bytes as usize, 16) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_free(ptr: u32, bytes: u32) {
     unsafe { free_raw(ptr, bytes as usize, 16) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_alloc_f32(len: u32) -> u32 {
     unsafe { alloc_array::<f32>(len) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_free_f32(ptr: u32, len: u32) {
     unsafe { free_array::<f32>(ptr, len) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_alloc_u32(len: u32) -> u32 {
     unsafe { alloc_array::<u32>(len) }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_free_u32(ptr: u32, len: u32) {
     unsafe { free_array::<u32>(ptr, len) }
 }

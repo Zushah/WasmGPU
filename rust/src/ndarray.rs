@@ -81,7 +81,7 @@ pub(crate) fn offset_bytes(
     off as u32
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn ndarray_numel(shape_ptr: u32, ndim: u32) -> u32 {
     let n = ndim as usize;
     if n == 0 {
@@ -91,7 +91,7 @@ pub extern "C" fn ndarray_numel(shape_ptr: u32, ndim: u32) -> u32 {
     numel(shape)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn ndarray_strides_row_major(
     out_strides_ptr: u32,
     shape_ptr: u32,
@@ -107,7 +107,7 @@ pub extern "C" fn ndarray_strides_row_major(
     strides_row_major(out, shape, elem_bytes)
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn ndarray_offset_bytes(
     shape_ptr: u32,
     strides_ptr: u32,

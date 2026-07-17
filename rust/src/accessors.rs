@@ -208,7 +208,7 @@ pub(crate) fn deinterleave(
     true
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn accessor_deinterleave(
     out_ptr: u32,
     src_ptr: u32,
@@ -241,7 +241,7 @@ pub extern "C" fn accessor_deinterleave(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn accessor_apply_sparse(
     out_ptr: u32,
     out_component_count: u32,
@@ -283,7 +283,7 @@ pub extern "C" fn accessor_apply_sparse(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn accessor_convert_to_f32(
     out_ptr: u32,
     src_ptr: u32,
@@ -312,7 +312,7 @@ pub extern "C" fn accessor_convert_to_f32(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn accessor_convert_to_u16(
     out_ptr: u32,
     src_ptr: u32,
@@ -344,7 +344,7 @@ pub extern "C" fn accessor_convert_to_u16(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn accessor_convert_to_u32(
     out_ptr: u32,
     src_ptr: u32,

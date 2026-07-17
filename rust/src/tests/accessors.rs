@@ -5,9 +5,9 @@
  */
 
 use crate::accessors::{
-    component_bits, component_bytes, component_signed, component_to_f32, component_to_u16,
-    deinterleave, js_to_u32, read_component_as_f64, read_sparse_index, CT_F32, CT_I16, CT_I32,
-    CT_I8, CT_U16, CT_U32, CT_U8,
+    CT_F32, CT_I8, CT_I16, CT_I32, CT_U8, CT_U16, CT_U32, component_bits, component_bytes,
+    component_signed, component_to_f32, component_to_u16, deinterleave, js_to_u32,
+    read_component_as_f64, read_sparse_index,
 };
 use crate::tests::common::assert_approx;
 

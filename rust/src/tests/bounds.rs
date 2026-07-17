@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::bounds::{bounds_glyphs, bounds_positions_stride, rotate_vector_by_quat, BoundsResult};
+use crate::bounds::{BoundsResult, bounds_glyphs, bounds_positions_stride, rotate_vector_by_quat};
 use crate::tests::common::{assert_approx, assert_slice_approx};
 
 #[test]

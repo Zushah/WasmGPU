@@ -1,9 +1,13 @@
 [package]
 name = "wasmgpu"
 version = "0.8.0"
-edition = "2021"
+edition = "2024"
+rust-version = "1.85.1"
 license = "MPL-2.0"
 publish = false
+
+[package.metadata]
+development-rust-version = "1.97.1"
 
 [lib]
 crate-type = ["cdylib"]

@@ -260,7 +260,7 @@ pub(crate) fn sample_quat(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn anim_sample_clip_trs(
     pos_ptr: u32,
     rot_ptr: u32,
@@ -369,7 +369,7 @@ pub(crate) fn mat4_mul_to(out: &mut [f32; 16], a: &[f32; 16], b: &[f32; 16]) {
     out[15] = a[3] * b[12] + a[7] * b[13] + a[11] * b[14] + a[15] * b[15];
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn anim_compute_joint_matrices_to(
     out_ptr: u32,
     joint_indices_ptr: u32,

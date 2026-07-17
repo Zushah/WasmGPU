@@ -13,7 +13,7 @@ static mut FRAME_ARENA_CAP: usize = 0;
 static mut FRAME_ARENA_HEAD: usize = 0;
 static mut FRAME_ARENA_EPOCH: u32 = 0;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_frame_arena_init(cap_bytes: u32) -> u32 {
     unsafe {
         if FRAME_ARENA_BASE != 0 {
@@ -37,7 +37,7 @@ pub extern "C" fn wasmgpu_frame_arena_init(cap_bytes: u32) -> u32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_frame_arena_reset() {
     unsafe {
         if FRAME_ARENA_BASE == 0 {
@@ -51,22 +51,22 @@ pub extern "C" fn wasmgpu_frame_arena_reset() {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_frame_arena_epoch() -> u32 {
     unsafe { FRAME_ARENA_EPOCH }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_frame_arena_used() -> u32 {
     unsafe { FRAME_ARENA_HEAD as u32 }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_frame_arena_cap() -> u32 {
     unsafe { FRAME_ARENA_CAP as u32 }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_frame_alloc(bytes: u32, align: u32) -> u32 {
     unsafe {
         if FRAME_ARENA_BASE == 0 || FRAME_ARENA_CAP == 0 {
@@ -92,7 +92,7 @@ pub extern "C" fn wasmgpu_frame_alloc(bytes: u32, align: u32) -> u32 {
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_frame_alloc_f32(len: u32) -> u32 {
     let bytes = match len.checked_mul(mem::size_of::<f32>() as u32) {
         Some(v) => v,

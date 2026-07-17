@@ -69,7 +69,7 @@ pub(crate) fn compute_vertex_normals(out: &mut [f32], positions: &[f32], indices
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn mesh_compute_vertex_normals(
     out_normals: u32,
     positions: u32,

@@ -59,7 +59,7 @@ pub(crate) fn compose_local_many(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn transform_compose_local_many(
     out_local: u32,
     pos: u32,
@@ -78,7 +78,7 @@ pub extern "C" fn transform_compose_local_many(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn transform_update_world_ordered(
     out_world: u32,
     local: u32,
@@ -182,7 +182,7 @@ pub extern "C" fn transform_update_world_ordered(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn transform_update_partial_ordered(
     out_world: u32,
     out_local: u32,
@@ -333,7 +333,7 @@ pub extern "C" fn transform_update_partial_ordered(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn transform_pack_model_normal_mat4_from_ptrs(
     out: u32,
     mat_ptrs_u32: u32,

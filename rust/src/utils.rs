@@ -6,7 +6,7 @@
 
 static mut RNG_STATE: u32 = 0x1234_5678;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_seed(seed: u32) {
     unsafe {
         RNG_STATE = if seed == 0 { 0x1234_5678 } else { seed };

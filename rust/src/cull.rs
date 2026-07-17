@@ -61,7 +61,7 @@ pub(crate) fn mul_clip(m: &[f32], x: f32, y: f32, z: f32) -> [f32; 4] {
     ]
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cull_write_planes_from_view_projection(
     out_planes_ptr: u32,
     view_proj_ptr: u32,
@@ -130,7 +130,7 @@ pub extern "C" fn cull_write_planes_from_view_projection(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cull_prepare_world_spheres_from_ptrs(
     out_centers_ptr: u32,
     out_radii_ptr: u32,
@@ -186,7 +186,7 @@ pub extern "C" fn cull_prepare_world_spheres_from_ptrs(
     0
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cull_spheres_frustum(
     out_indices_ptr: u32,
     centers_ptr: u32,
@@ -251,7 +251,7 @@ pub extern "C" fn cull_spheres_frustum(
     }
 }
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn cull_spheres_occlusion(
     out_indices_ptr: u32,
     out_stats_ptr: u32,
