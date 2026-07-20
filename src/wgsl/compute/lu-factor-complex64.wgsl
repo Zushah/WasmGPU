@@ -16,6 +16,14 @@ struct LuBatchedParams {
     _pad: u32,
 }
 
+@group(0) @binding(0) var<uniform> params: LuBatchedParams;
+@group(0) @binding(1) var<storage, read_write> matrices: array<vec2<f32>>;
+@group(0) @binding(2) var<storage, read_write> ipiv: array<u32>;
+
+var<workgroup> wg_abs: array<f32, 128>;
+var<workgroup> wg_row: array<u32, 128>;
+var<workgroup> pivot_row: u32;
+
 fn cx_mul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
 }
@@ -29,23 +37,16 @@ fn cx_magsq(z: vec2<f32>) -> f32 {
     return z.x * z.x + z.y * z.y;
 }
 
-@group(0) @binding(0) var<uniform> params: LuBatchedParams;
-@group(0) @binding(1) var<storage, read_write> matrices: array<vec2<f32>>;
-@group(0) @binding(2) var<storage, read_write> ipiv: array<u32>;
-
-var<workgroup> wg_abs: array<f32, 128>;
-var<workgroup> wg_row: array<u32, 128>;
-var<workgroup> pivot_row: u32;
-
 @compute @workgroup_size(128, 1, 1)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
     let b = wg_id.x;
-    if (b >= params.batch_count) { return; }
+    if (b >= params.batch_count) {
+        return;
+    }
     let n = params.n;
     let stride = params.elems_per_matrix;
     let base = b * stride;
     let base_ipiv = b * n;
-
     for (var kk = 0u; kk < n; kk = kk + 1u) {
         var pv = -1.0;
         var pr = kk;
@@ -62,7 +63,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_index
         wg_abs[lid] = pv;
         wg_row[lid] = pr;
         workgroupBarrier();
-
         var s = 64u;
         while (s > 0u) {
             if (lid < s) {
@@ -81,14 +81,12 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_index
             workgroupBarrier();
             s = s >> 1u;
         }
-
         if (lid == 0u) {
             pivot_row = wg_row[0];
             ipiv[base_ipiv + kk] = pivot_row;
         }
         workgroupBarrier();
         let piv = pivot_row;
-
         var jj = lid;
         while (jj < n) {
             let ia = base + kk * n + jj;
@@ -100,7 +98,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_index
             jj = jj + 128u;
         }
         workgroupBarrier();
-
         let p = matrices[base + kk * n + kk];
         let col_len = n - kk - 1u;
         var t = lid;
@@ -111,7 +108,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_index
             t = t + 128u;
         }
         workgroupBarrier();
-
         let dim = n - kk - 1u;
         let total = dim * dim;
         t = lid;

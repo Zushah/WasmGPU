@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: Friday, July 17, 2026.
+Last updated: Monday, July 20, 2026.
 
-Last commit: Thursday, July 16, 2026, [**`7b0debf`**](https://www.github.com/Zushah/WasmGPU/commit/7b0debf).
+Last commit: Friday, July 17, 2026, [**`b2a7ad2`**](https://www.github.com/Zushah/WasmGPU/commit/b2a7ad2).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 

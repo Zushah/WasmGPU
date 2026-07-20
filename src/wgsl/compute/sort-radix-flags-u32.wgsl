@@ -13,8 +13,10 @@ override BIT: u32 = 0u;
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     let n = arrayLength(&keys);
-    if (i >= n) { return; }
+    if (i >= n) {
+        return;
+    }
     let k = keys[i];
-    let isZero = ((k >> BIT) & 1u) == 0u;
-    flags[i] = select(0u, 1u, isZero);
+    let is_zero = ((k >> BIT) & 1u) == 0u;
+    flags[i] = select(0u, 1u, is_zero);
 }

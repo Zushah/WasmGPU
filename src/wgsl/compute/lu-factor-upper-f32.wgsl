@@ -32,15 +32,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let kk = params.kk;
     let pw = params.pw;
     let trail_n = n - (kk + pw);
-    if (trail_n == 0u || pw == 0u) { return; }
-
+    if (trail_n == 0u || pw == 0u) {
+        return;
+    }
     let idx = gid.x;
     let b = idx / trail_n;
-    if (b >= params.batch_count) { return; }
+    if (b >= params.batch_count) {
+        return;
+    }
     let j = idx - b * trail_n;
     let col = (kk + pw) + j;
     let base = b * params.elems_per_matrix;
-
     var u_col: array<f32, MAX_PANEL_B>;
     for (var i: u32 = 0u; i < pw; i = i + 1u) {
         let row = kk + i;

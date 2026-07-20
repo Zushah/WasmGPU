@@ -13,7 +13,9 @@
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     let n = arrayLength(&flags);
-    if (i >= n) { return; }
+    if (i >= n) {
+        return;
+    }
     if (flags[i] != 0u) {
         let dst = prefix[i];
         output[dst] = input[i];

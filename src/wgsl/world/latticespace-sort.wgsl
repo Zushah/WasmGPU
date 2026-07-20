@@ -5,55 +5,60 @@
  */
 
 struct SortTransform {
-    mvp: mat4x4f
-};
+    mvp: mat4x4<f32>,
+}
 
 struct LatticeUniforms {
-    dimensions: vec4f,
-    origin: vec4f,
-    spacing: vec4f,
-    cellScale: vec4f,
-    rangeMin: vec4f,
-    rangeMax: vec4f,
-    dataConfig: vec4f,
-    visual: vec4f,
-    filters: vec4f,
-    solidColor: vec4f,
-    scaleSource: vec4f,
-    scaleDomain: vec4f,
-    scaleClamp: vec4f,
-    scaleParams: vec4f,
-    scaleFlags: vec4f,
-    colors: array<vec4f, 8>
-};
+    dimensions: vec4<f32>,
+    origin: vec4<f32>,
+    spacing: vec4<f32>,
+    cell_scale: vec4<f32>,
+    range_min: vec4<f32>,
+    range_max: vec4<f32>,
+    data_config: vec4<f32>,
+    visual: vec4<f32>,
+    filters: vec4<f32>,
+    solid_color: vec4<f32>,
+    scale_source: vec4<f32>,
+    scale_domain: vec4<f32>,
+    scale_clamp: vec4<f32>,
+    scale_params: vec4<f32>,
+    scale_flags: vec4<f32>,
+    colors: array<vec4<f32>, 8>,
+}
 
 @group(0) @binding(0) var<uniform> lattice: LatticeUniforms;
-@group(0) @binding(1) var<uniform> sortTransform: SortTransform;
-@group(0) @binding(2) var<storage, read_write> keysOut: array<u32>;
-@group(0) @binding(3) var<storage, read_write> indicesOut: array<u32>;
+@group(0) @binding(1) var<uniform> sort_transform: SortTransform;
+@group(0) @binding(2) var<storage, read_write> keys_out: array<u32>;
+@group(0) @binding(3) var<storage, read_write> indices_out: array<u32>;
 
-fn ordinalToCell(ordinal: u32) -> vec3<u32> {
-    let size = vec3u(lattice.rangeMax.xyz - lattice.rangeMin.xyz);
-    return vec3u(lattice.rangeMin.xyz) + vec3u(ordinal % size.x, (ordinal / size.x) % size.y, ordinal / max(1u, size.x * size.y));
+fn ordinal_to_cell(ordinal: u32) -> vec3<u32> {
+    let size = vec3<u32>(lattice.range_max.xyz - lattice.range_min.xyz);
+    return vec3<u32>(lattice.range_min.xyz)
+        + vec3<u32>(
+            ordinal % size.x,
+            (ordinal / size.x) % size.y,
+            ordinal / max(1u, size.x * size.y),
+        );
 }
 
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let ordinal = gid.x;
-    if (ordinal >= arrayLength(&keysOut)) {
+    if (ordinal >= arrayLength(&keys_out)) {
         return;
     }
-    let cell = ordinalToCell(ordinal);
+    let cell = ordinal_to_cell(ordinal);
     let dims = vec3<u32>(lattice.dimensions.xyz);
     let index = cell.x + dims.x * (cell.y + dims.y * cell.z);
-    let center = lattice.origin.xyz + vec3f(cell) * lattice.spacing.xyz;
-    let clip = sortTransform.mvp * vec4f(center, 1.0);
+    let center = lattice.origin.xyz + vec3<f32>(cell) * lattice.spacing.xyz;
+    let clip = sort_transform.mvp * vec4<f32>(center, 1.0);
     if (clip.w <= 1e-6 || clip.z < -1e-6 || clip.z > clip.w + 1e-6) {
-        keysOut[ordinal] = 0xffffffffu;
-        indicesOut[ordinal] = index;
+        keys_out[ordinal] = 0xffffffffu;
+        indices_out[ordinal] = index;
         return;
     }
     let depth = clamp(clip.z / max(clip.w, 1e-6), 0.0, 1.0);
-    keysOut[ordinal] = u32(round((1.0 - depth) * 4294967040.0));
-    indicesOut[ordinal] = index;
+    keys_out[ordinal] = u32(round((1.0 - depth) * 4294967040.0));
+    indices_out[ordinal] = index;
 }

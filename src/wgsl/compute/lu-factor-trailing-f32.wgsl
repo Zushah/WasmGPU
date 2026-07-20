@@ -22,62 +22,58 @@ struct LuBlockedParams {
     _pad2: u32,
 }
 
-@group(0) @binding(0) var<uniform>             params:   LuBlockedParams;
+@group(0) @binding(0) var<uniform> params: LuBlockedParams;
 @group(0) @binding(1) var<storage, read_write> matrices: array<f32>;
 
-var<workgroup> L_tile: array<f32, TILE_M>;
-var<workgroup> U_tile: array<f32, TILE_N>;
+var<workgroup> l_tile: array<f32, TILE_M>;
+var<workgroup> u_tile: array<f32, TILE_N>;
 
 @compute @workgroup_size(TILE_M, TILE_N, 1)
 fn main(
-    @builtin(workgroup_id)            wg_id:   vec3<u32>,
-    @builtin(local_invocation_id)     lid:     vec3<u32>,
-    @builtin(local_invocation_index)  lid_idx: u32,
+    @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(local_invocation_id) lid: vec3<u32>,
+    @builtin(local_invocation_index) lid_idx: u32,
 ) {
     let b = wg_id.z;
-    if (b >= params.batch_count) { return; }
-
+    if (b >= params.batch_count) {
+        return;
+    }
     let n  = params.n;
     let kk = params.kk;
     let pw = params.pw;
     let base = b * params.elems_per_matrix;
-
     let m_dim = n - (kk + pw);
     let n_dim = n - (kk + pw);
-    if (m_dim == 0u || n_dim == 0u || pw == 0u) { return; }
-
+    if (m_dim == 0u || n_dim == 0u || pw == 0u) {
+        return;
+    }
     let global_i = wg_id.y * TILE_M + lid.x;
     let global_j = wg_id.x * TILE_N + lid.y;
     let valid = (global_i < m_dim) && (global_j < n_dim);
-
     var acc = 0.0;
-
     for (var k: u32 = 0u; k < pw; k = k + 1u) {
         if (lid_idx < TILE_M) {
             let i_g = wg_id.y * TILE_M + lid_idx;
             if (i_g < m_dim) {
                 let row = (kk + pw) + i_g;
-                L_tile[lid_idx] = matrices[base + row * n + (kk + k)];
+                l_tile[lid_idx] = matrices[base + row * n + (kk + k)];
             } else {
-                L_tile[lid_idx] = 0.0;
+                l_tile[lid_idx] = 0.0;
             }
         } else if (lid_idx < TILE_M + TILE_N) {
             let j_local = lid_idx - TILE_M;
             let j_g = wg_id.x * TILE_N + j_local;
             if (j_g < n_dim) {
                 let col = (kk + pw) + j_g;
-                U_tile[j_local] = matrices[base + (kk + k) * n + col];
+                u_tile[j_local] = matrices[base + (kk + k) * n + col];
             } else {
-                U_tile[j_local] = 0.0;
+                u_tile[j_local] = 0.0;
             }
         }
         workgroupBarrier();
-
-        acc = acc + L_tile[lid.x] * U_tile[lid.y];
-
+        acc = acc + l_tile[lid.x] * u_tile[lid.y];
         workgroupBarrier();
     }
-
     if (valid) {
         let row = (kk + pw) + global_i;
         let col = (kk + pw) + global_j;

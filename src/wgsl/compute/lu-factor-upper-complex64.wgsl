@@ -23,12 +23,12 @@ struct LuBlockedParams {
     _pad2: u32,
 }
 
+@group(0) @binding(0) var<uniform> params: LuBlockedParams;
+@group(0) @binding(1) var<storage, read_write> matrices: array<vec2<f32>>;
+
 fn cx_mul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
 }
-
-@group(0) @binding(0) var<uniform> params: LuBlockedParams;
-@group(0) @binding(1) var<storage, read_write> matrices: array<vec2<f32>>;
 
 @compute @workgroup_size(256, 1, 1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -36,15 +36,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let kk = params.kk;
     let pw = params.pw;
     let trail_n = n - (kk + pw);
-    if (trail_n == 0u || pw == 0u) { return; }
-
+    if (trail_n == 0u || pw == 0u) {
+        return;
+    }
     let idx = gid.x;
     let b = idx / trail_n;
-    if (b >= params.batch_count) { return; }
+    if (b >= params.batch_count) {
+        return;
+    }
     let j = idx - b * trail_n;
     let col = (kk + pw) + j;
     let base = b * params.elems_per_matrix;
-
     var u_col: array<vec2<f32>, MAX_PANEL_B>;
     for (var i: u32 = 0u; i < pw; i = i + 1u) {
         let row = kk + i;

@@ -11,7 +11,9 @@
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
     let n = arrayLength(&keys);
-    if (i >= n) { return; }
+    if (i >= n) {
+        return;
+    }
     let k = keys[i];
     let b = arrayLength(&bins);
     if (k < b) {

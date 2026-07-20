@@ -5,47 +5,55 @@
  */
 
 struct CameraUniforms {
-    viewProj: mat4x4f,
-    position: vec3f,
-    viewportHeight: f32
-};
+    view_proj: mat4x4<f32>,
+    position: vec3<f32>,
+    viewport_height: f32,
+}
 
 struct ModelUniforms {
-    model: mat4x4f,
-    normal: mat4x4f
-};
+    model: mat4x4<f32>,
+    normal: mat4x4<f32>,
+}
 
 struct LatticeUniforms {
-    dimensions: vec4f,
-    origin: vec4f,
-    spacing: vec4f,
-    cellScale: vec4f,
-    rangeMin: vec4f,
-    rangeMax: vec4f,
-    dataConfig: vec4f,
-    visual: vec4f,
-    filters: vec4f,
-    solidColor: vec4f,
-    scaleSource: vec4f,
-    scaleDomain: vec4f,
-    scaleClamp: vec4f,
-    scaleParams: vec4f,
-    scaleFlags: vec4f,
-    colors: array<vec4f, 8>
-};
+    dimensions: vec4<f32>,
+    origin: vec4<f32>,
+    spacing: vec4<f32>,
+    cell_scale: vec4<f32>,
+    range_min: vec4<f32>,
+    range_max: vec4<f32>,
+    data_config: vec4<f32>,
+    visual: vec4<f32>,
+    filters: vec4<f32>,
+    solid_color: vec4<f32>,
+    scale_source: vec4<f32>,
+    scale_domain: vec4<f32>,
+    scale_clamp: vec4<f32>,
+    scale_params: vec4<f32>,
+    scale_flags: vec4<f32>,
+    colors: array<vec4<f32>, 8>,
+}
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) local_position: vec3<f32>,
+    @location(1) @interpolate(flat) cell: vec3<u32>,
+    @location(2) @interpolate(flat) cell_index: u32,
+    @location(3) @interpolate(flat) face: u32,
+}
 
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
 @group(0) @binding(1) var<uniform> model: ModelUniforms;
-@group(1) @binding(0) var<storage, read> cellData: array<f32>;
-@group(1) @binding(1) var<storage, read> cellMask: array<u32>;
-@group(1) @binding(2) var<storage, read> sortedIndices: array<u32>;
+@group(1) @binding(0) var<storage, read> cell_data: array<f32>;
+@group(1) @binding(1) var<storage, read> cell_mask: array<u32>;
+@group(1) @binding(2) var<storage, read> sorted_indices: array<u32>;
 @group(1) @binding(3) var<uniform> lattice: LatticeUniforms;
 
-fn finiteValue(value: f32) -> bool {
+fn finite_value(value: f32) -> bool {
     return (bitcast<u32>(value) & 0x7f800000u) != 0x7f800000u;
 }
 
-fn component(value: vec4f, index: u32) -> f32 {
+fn component(value: vec4<f32>, index: u32) -> f32 {
     if (index == 0u) {
         return value.x;
     }
@@ -58,14 +66,14 @@ fn component(value: vec4f, index: u32) -> f32 {
     return value.w;
 }
 
-fn cellToLinear(cell: vec3u) -> u32 {
-    let dims = vec3u(lattice.dimensions.xyz);
+fn cell_to_linear(cell: vec3<u32>) -> u32 {
+    let dims = vec3<u32>(lattice.dimensions.xyz);
     return cell.x + dims.x * (cell.y + dims.y * cell.z);
 }
 
-fn selectScalar(value: vec4f) -> f32 {
-    let count = max(1u, min(4u, u32(lattice.scaleSource.x + 0.5)));
-    if (u32(lattice.scaleSource.z + 0.5) == 1u) {
+fn select_scalar(value: vec4<f32>) -> f32 {
+    let count = max(1u, min(4u, u32(lattice.scale_source.x + 0.5)));
+    if (u32(lattice.scale_source.z + 0.5) == 1u) {
         if (count == 1u) {
             return abs(value.x);
         }
@@ -77,109 +85,90 @@ fn selectScalar(value: vec4f) -> f32 {
         }
         return length(value);
     }
-    return component(value, min(3u, u32(lattice.scaleSource.y + 0.5)));
+    return component(value, min(3u, u32(lattice.scale_source.y + 0.5)));
 }
-fn cellVisible(index: u32) -> bool {
-    if (lattice.dataConfig.w > 0.5 && cellMask[index] == 0u) {
+
+fn cell_visible(index: u32) -> bool {
+    if (lattice.data_config.w > 0.5 && cell_mask[index] == 0u) {
         return false;
     }
-    let mode = u32(lattice.dataConfig.y + 0.5);
+    let mode = u32(lattice.data_config.y + 0.5);
     if (mode == 2u) {
         return true;
     }
-    let count = u32(lattice.dataConfig.x + 0.5);
+    let count = u32(lattice.data_config.x + 0.5);
     let base = index * count;
-    var value = vec4f(0);
+    var value = vec4<f32>(0);
     if (count > 0u) {
-        value.x = cellData[base];
+        value.x = cell_data[base];
     }
     if (count > 1u) {
-        value.y = cellData[base + 1u];
+        value.y = cell_data[base + 1u];
     }
     if (count > 2u) {
-        value.z = cellData[base + 2u];
+        value.z = cell_data[base + 2u];
     }
     if (count > 3u) {
-        value.w = cellData[base + 3u];
+        value.w = cell_data[base + 3u];
     }
     if (mode == 1u) {
-        return finiteValue(value.x) && finiteValue(value.y) && finiteValue(value.z) && finiteValue(value.w);
+        return finite_value(value.x)
+                && finite_value(value.y)
+                && finite_value(value.z)
+                && finite_value(value.w);
     }
-    let scalar = selectScalar(value);
-    if (!finiteValue(scalar)) {
+    let scalar = select_scalar(value);
+    if (!finite_value(scalar)) {
         return false;
     }
     return lattice.filters.x < 0.5 || (scalar >= lattice.visual.z && scalar <= lattice.visual.w);
 }
 
-fn ordinalToCell(ordinal: u32) -> vec3u {
-    let size = vec3u(lattice.rangeMax.xyz - lattice.rangeMin.xyz);
-    return vec3u(lattice.rangeMin.xyz) + vec3u(ordinal % size.x, (ordinal / size.x) % size.y, ordinal / max(1u, size.x * size.y));
+fn ordinal_to_cell(ordinal: u32) -> vec3<u32> {
+    let size = vec3<u32>(lattice.range_max.xyz - lattice.range_min.xyz);
+    return vec3<u32>(lattice.range_min.xyz)
+        + vec3<u32>(
+            ordinal % size.x,
+            (ordinal / size.x) % size.y,
+            ordinal / max(1u, size.x * size.y),
+        );
 }
 
-fn cubeVertex(vertexIndex: u32) -> vec3f {
-    let face = vertexIndex / 6u;
-    let uv = array<vec2f, 6>(vec2f(-1, -1), vec2f(-1, 1), vec2f(1, -1), vec2f(-1, 1), vec2f(1, 1), vec2f(1, -1))[vertexIndex % 6u] * 0.5;
+fn cube_vertex(vertex_index: u32) -> vec3<f32> {
+    let face = vertex_index / 6u;
+    let uv = array<vec2<f32>, 6>(
+            vec2<f32>(-1, -1),
+            vec2<f32>(-1, 1),
+            vec2<f32>(1, -1),
+            vec2<f32>(-1, 1),
+            vec2<f32>(1, 1),
+            vec2<f32>(1, -1),
+        )[vertex_index % 6u]
+            * 0.5;
     if (face == 0u) {
-        return vec3f(-0.5, uv.y, -uv.x);
+        return vec3<f32>(-0.5, uv.y, -uv.x);
     }
     if (face == 1u) {
-        return vec3f(0.5, uv.y, uv.x);
+        return vec3<f32>(0.5, uv.y, uv.x);
     }
     if (face == 2u) {
-        return vec3f(uv.x, -0.5, -uv.y);
+        return vec3<f32>(uv.x, -0.5, -uv.y);
     }
     if (face == 3u) {
-        return vec3f(uv.x, 0.5, uv.y);
+        return vec3<f32>(uv.x, 0.5, uv.y);
     }
     if (face == 4u) {
-        return vec3f(uv.x, uv.y, -0.5);
+        return vec3<f32>(uv.x, uv.y, -0.5);
     }
-    return vec3f(-uv.x, uv.y, 0.5);
+    return vec3<f32>(-uv.x, uv.y, 0.5);
 }
 
-struct VertexOutput {
-    @builtin(position) position: vec4f,
-    @location(0) localPosition: vec3f,
-    @location(1) @interpolate(flat) cell: vec3u,
-    @location(2) @interpolate(flat) cellIndex: u32,
-    @location(3) @interpolate(flat) face: u32
-};
-
-@vertex
-fn vs_2d(@builtin(vertex_index) vertexIndex: u32) -> VertexOutput {
-    let uv = array<vec2f, 6>(vec2f(0, 0), vec2f(1, 0), vec2f(0, 1), vec2f(0, 1), vec2f(1, 0), vec2f(1, 1))[vertexIndex];
-    let first = lattice.origin.xy + lattice.rangeMin.xy * lattice.spacing.xy - 0.5 * lattice.spacing.xy;
-    let last = lattice.origin.xy + lattice.rangeMax.xy * lattice.spacing.xy - 0.5 * lattice.spacing.xy;
-    let local = vec3f(mix(first, last, uv), lattice.origin.z);
-    var out: VertexOutput;
-    out.position = camera.viewProj * model.model * vec4f(local, 1);
-    out.localPosition = local;
-    out.cell = vec3u(0);
-    out.cellIndex = 0u;
-    out.face = 5u;
-    return out;
-}
-
-@vertex
-fn vs_3d(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> VertexOutput {
-    let cell = ordinalToCell(instanceIndex);
-    let local = lattice.origin.xyz + vec3f(cell) * lattice.spacing.xyz + cubeVertex(vertexIndex) * lattice.spacing.xyz * lattice.cellScale.xyz;
-    var out: VertexOutput;
-    out.position = camera.viewProj * model.model * vec4f(local, 1);
-    out.localPosition = local;
-    out.cell = cell;
-    out.cellIndex = cellToLinear(cell);
-    out.face = vertexIndex / 6u;
-    return out;
-}
-
-fn internalFace(cell: vec3u, face: u32) -> bool {
-    if (any(lattice.cellScale.xyz < vec3f(0.999999))) {
+fn internal_face(cell: vec3<u32>, face: u32) -> bool {
+    if (any(lattice.cell_scale.xyz < vec3<f32>(0.999999))) {
         return false;
     }
-    let dims = vec3u(lattice.dimensions.xyz);
-    var neighbor = vec3i(cell);
+    let dims = vec3<u32>(lattice.dimensions.xyz);
+    var neighbor = vec3<i32>(cell);
     if (face == 0u) {
         neighbor.x -= 1;
     } else if (face == 1u) {
@@ -193,34 +182,88 @@ fn internalFace(cell: vec3u, face: u32) -> bool {
     } else {
         neighbor.z += 1;
     }
-    if (any(neighbor < vec3i(0)) || any(neighbor >= vec3i(dims))) {
+    if (any(neighbor < vec3<i32>(0)) || any(neighbor >= vec3<i32>(dims))) {
         return false;
     }
-    if (any(neighbor < vec3i(lattice.rangeMin.xyz)) || any(neighbor >= vec3i(lattice.rangeMax.xyz))) {
+    if (
+        any(neighbor < vec3<i32>(lattice.range_min.xyz))
+            || any(neighbor >= vec3<i32>(lattice.range_max.xyz))
+    ) {
         return false;
     }
-    return cellVisible(cellToLinear(vec3u(neighbor)));
+    return cell_visible(cell_to_linear(vec3<u32>(neighbor)));
+}
+
+@vertex
+fn vs_2d(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+    let uv = array<vec2<f32>, 6>(
+        vec2<f32>(0, 0),
+        vec2<f32>(1, 0),
+        vec2<f32>(0, 1),
+        vec2<f32>(0, 1),
+        vec2<f32>(1, 0),
+        vec2<f32>(1, 1),
+    )[vertex_index];
+    let first =
+        lattice.origin.xy + lattice.range_min.xy * lattice.spacing.xy - 0.5 * lattice.spacing.xy;
+    let last =
+        lattice.origin.xy + lattice.range_max.xy * lattice.spacing.xy - 0.5 * lattice.spacing.xy;
+    let local = vec3<f32>(mix(first, last, uv), lattice.origin.z);
+    var out: VertexOutput;
+    out.position = camera.view_proj * model.model * vec4<f32>(local, 1);
+    out.local_position = local;
+    out.cell = vec3<u32>(0);
+    out.cell_index = 0u;
+    out.face = 5u;
+    return out;
+}
+
+@vertex
+fn vs_3d(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+) -> VertexOutput {
+    let cell = ordinal_to_cell(instance_index);
+    let local = lattice.origin.xyz
+            + vec3<f32>(cell) * lattice.spacing.xyz
+            + cube_vertex(vertex_index) * lattice.spacing.xyz * lattice.cell_scale.xyz;
+    var out: VertexOutput;
+    out.position = camera.view_proj * model.model * vec4<f32>(local, 1);
+    out.local_position = local;
+    out.cell = cell;
+    out.cell_index = cell_to_linear(cell);
+    out.face = vertex_index / 6u;
+    return out;
 }
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) f32 {
     var cell = in.cell;
-    var index = in.cellIndex;
+    var index = in.cell_index;
     if (u32(lattice.dimensions.w + 0.5) == 2u) {
-        let relative = (in.localPosition.xy - (lattice.origin.xy - 0.5 * lattice.spacing.xy)) / lattice.spacing.xy;
-        cell = vec3u(vec2u(floor(relative)), 0u);
-        if (any(cell.xy < vec2u(lattice.rangeMin.xy)) || any(cell.xy >= vec2u(lattice.rangeMax.xy))) {
+        let relative = (in.local_position.xy - (lattice.origin.xy - 0.5 * lattice.spacing.xy))
+                / lattice.spacing.xy;
+        cell = vec3<u32>(vec2<u32>(floor(relative)), 0u);
+        if (
+            any(cell.xy < vec2<u32>(lattice.range_min.xy))
+                || any(cell.xy >= vec2<u32>(lattice.range_max.xy))
+        ) {
             discard;
         }
-        index = cellToLinear(cell);
-        let center = lattice.origin.xy + vec2f(cell.xy) * lattice.spacing.xy;
-        if (any(abs((in.localPosition.xy - center) / lattice.spacing.xy) > 0.5 * lattice.cellScale.xy)) {
+        index = cell_to_linear(cell);
+        let center = lattice.origin.xy + vec2<f32>(cell.xy) * lattice.spacing.xy;
+        if (
+            any(
+                abs((in.local_position.xy - center) / lattice.spacing.xy)
+                    > 0.5 * lattice.cell_scale.xy,
+            )
+        ) {
             discard;
         }
-    } else if (internalFace(cell, in.face)) {
+    } else if (internal_face(cell, in.face)) {
         discard;
     }
-    if (!cellVisible(index)) {
+    if (!cell_visible(index)) {
         discard;
     }
     return in.position.z;

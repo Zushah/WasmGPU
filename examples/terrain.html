@@ -222,7 +222,7 @@
             @fragment
             fn fs_main(in: VertexOutput) -> @location(0) vec4f {
                 let n = normalize(in.normal);
-                let h = in.worldPos.y;
+                let h = in.world_pos.y;
                 let slope = 1.0 - clamp(n.y, 0.0, 1.0);
                 let sun = normalize(vec3f(-0.42, 0.80, 0.43));
                 let diffuse = max(dot(n, sun), 0.0);
@@ -237,13 +237,13 @@
                 let high = smoothstep(4.2, 8.2, h);
                 let rockMix = clamp(smoothstep(0.25, 0.70, slope) + smoothstep(5.4, 8.5, h) * 0.45, 0.0, 1.0);
                 let snowMix = clamp(smoothstep(6.0, 9.4, h) + smoothstep(0.58, 0.85, slope) * smoothstep(4.4, 7.2, h), 0.0, 1.0);
-                let stripe = 0.5 + 0.5 * sin(in.worldPos.x * 1.7 + in.worldPos.z * 2.1 + h * 0.8);
+                let stripe = 0.5 + 0.5 * sin(in.world_pos.x * 1.7 + in.world_pos.z * 2.1 + h * 0.8);
                 var base = mix(forest, meadow, low);
                 base = mix(base, dryGrass, high * 0.38);
                 base = mix(base, mix(rock, darkRock, stripe * 0.32), rockMix);
                 base = mix(base, snow, snowMix);
                 let light = ambient + diffuse * 0.74;
-                let haze = 0.05 * smoothstep(12.0, 25.0, length(in.worldPos.xz));
+                let haze = 0.05 * smoothstep(12.0, 25.0, length(in.world_pos.xz));
                 return vec4f(base * light + vec3f(haze), 1.0);
             }`;
 

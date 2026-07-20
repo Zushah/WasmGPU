@@ -5,174 +5,186 @@
  */
 
 struct CameraUniforms {
-    viewProj: mat4x4f,
-    position: vec3f,
-    _pad0: f32
-};
+    view_proj: mat4x4<f32>,
+    position: vec3<f32>,
+    _pad0: f32,
+}
 
 struct ModelUniforms {
-    model: mat4x4f,
-    normal: mat4x4f
-};
+    model: mat4x4<f32>,
+    normal: mat4x4<f32>,
+}
 
 struct PickUniforms {
-    objectId: u32,
-    elementBase: u32,
+    object_id: u32,
+    element_base: u32,
     _pad0: u32,
-    _pad1: u32
-};
+    _pad1: u32,
+}
 
 struct NodeLinkUniforms {
-    global: vec4f,
-    nodeScaleSource: vec4f,
-    nodeScaleDomain: vec4f,
-    nodeScaleClamp: vec4f,
-    nodeScaleParams: vec4f,
-    nodeScaleFlags: vec4f,
-    nodeVisual: vec4f,
-    edgeScaleSource: vec4f,
-    edgeScaleDomain: vec4f,
-    edgeScaleClamp: vec4f,
-    edgeScaleParams: vec4f,
-    edgeScaleFlags: vec4f,
-    edgeVisual: vec4f,
-    nodeSolid: vec4f,
-    edgeSolid: vec4f,
-    pointParams: vec4f,
-    nodeStops: array<vec4f, 8>,
-    edgeStops: array<vec4f, 8>
-};
+    global: vec4<f32>,
+    node_scale_source: vec4<f32>,
+    node_scale_domain: vec4<f32>,
+    node_scale_clamp: vec4<f32>,
+    node_scale_params: vec4<f32>,
+    node_scale_flags: vec4<f32>,
+    node_visual: vec4<f32>,
+    edge_scale_source: vec4<f32>,
+    edge_scale_domain: vec4<f32>,
+    edge_scale_clamp: vec4<f32>,
+    edge_scale_params: vec4<f32>,
+    edge_scale_flags: vec4<f32>,
+    edge_visual: vec4<f32>,
+    node_solid: vec4<f32>,
+    edge_solid: vec4<f32>,
+    point_params: vec4<f32>,
+    node_stops: array<vec4<f32>, 8>,
+    edge_stops: array<vec4<f32>, 8>,
+}
 
-@group(0) @binding(0) var<uniform> camera: CameraUniforms;
-@group(0) @binding(1) var<uniform> model: ModelUniforms;
-@group(1) @binding(0) var<storage, read> nodePositions: array<vec4f>;
-@group(1) @binding(3) var<storage, read> nodeRadii: array<vec4f>;
-@group(1) @binding(4) var<storage, read> edges: array<vec2u>;
-@group(1) @binding(7) var<uniform> nl: NodeLinkUniforms;
-@group(2) @binding(0) var<uniform> pick: PickUniforms;
-
-struct PickOut {
-    @builtin(position) position: vec4f,
+struct PickOutput {
+    @builtin(position) position: vec4<f32>,
     @location(0) @interpolate(flat) index: u32,
-    @location(1) pointCoord: vec2f,
-    @location(2) @interpolate(flat) isPoint: f32
-};
+    @location(1) point_coord: vec2<f32>,
+    @location(2) @interpolate(flat) is_point: f32,
+}
 
 struct FragmentOutput {
     @location(0) id: vec2<u32>,
-    @location(1) depth: f32
-};
+    @location(1) depth: f32,
+}
 
-fn buildEdgeFrame(src: vec3f, dst: vec3f) -> mat3x3f {
-    let yAxis = normalize(dst - src);
-    var fallbackAxis = vec3f(0.0, 0.0, 1.0);
-    if (abs(dot(fallbackAxis, yAxis)) > 0.99) {
-        fallbackAxis = vec3f(1.0, 0.0, 0.0);
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(0) @binding(1) var<uniform> model: ModelUniforms;
+@group(1) @binding(0) var<storage, read> node_positions: array<vec4<f32>>;
+@group(1) @binding(3) var<storage, read> node_radii: array<vec4<f32>>;
+@group(1) @binding(4) var<storage, read> edges: array<vec2<u32>>;
+@group(1) @binding(7) var<uniform> nl: NodeLinkUniforms;
+@group(2) @binding(0) var<uniform> pick: PickUniforms;
+
+fn build_edge_frame(src: vec3<f32>, dst: vec3<f32>) -> mat3x3<f32> {
+    let y_axis = normalize(dst - src);
+    var fallback_axis = vec3<f32>(0.0, 0.0, 1.0);
+    if (abs(dot(fallback_axis, y_axis)) > 0.99) {
+        fallback_axis = vec3<f32>(1.0, 0.0, 0.0);
     }
-    let xAxis = normalize(cross(fallbackAxis, yAxis));
-    let zAxis = normalize(cross(yAxis, xAxis));
-    return mat3x3f(xAxis, yAxis, zAxis);
+    let x_axis = normalize(cross(fallback_axis, y_axis));
+    let z_axis = normalize(cross(y_axis, x_axis));
+    return mat3x3<f32>(x_axis, y_axis, z_axis);
 }
 
 @vertex
-fn vs_pick_node_points(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> PickOut {
-    let p = nodePositions[instanceIndex].xyz;
-    let worldPos4 = model.model * vec4f(p, 1.0);
-    let clip = camera.viewProj * worldPos4;
-    let baseSize = nl.global.x;
-    let minSize = nl.pointParams.x;
-    let maxSize = nl.pointParams.y;
-    let atten = nl.pointParams.z;
-    var sizePx = baseSize;
+fn vs_pick_node_points(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+) -> PickOutput {
+    let p = node_positions[instance_index].xyz;
+    let world_pos4 = model.model * vec4<f32>(p, 1.0);
+    let clip = camera.view_proj * world_pos4;
+    let base_size = nl.global.x;
+    let min_size = nl.point_params.x;
+    let max_size = nl.point_params.y;
+    let atten = nl.point_params.z;
+    var size_px = base_size;
     if (atten > 0.0) {
-        let dist = distance(camera.position, worldPos4.xyz);
-        sizePx = baseSize * (atten / max(dist, 1e-6));
+        let dist = distance(camera.position, world_pos4.xyz);
+        size_px = base_size * (atten / max(dist, 1e-6));
     }
-    sizePx = clamp(sizePx, minSize, maxSize);
-    let uv = vec2f(f32((vertexIndex + 2u) / 3u % 2u), f32((vertexIndex + 1u) / 3u % 2u));
-    let row0 = vec3f(camera.viewProj[0][0], camera.viewProj[1][0], camera.viewProj[2][0]);
-    let row1 = vec3f(camera.viewProj[0][1], camera.viewProj[1][1], camera.viewProj[2][1]);
+    size_px = clamp(size_px, min_size, max_size);
+    let uv = vec2<f32>(f32((vertex_index + 2u) / 3u % 2u), f32((vertex_index + 1u) / 3u % 2u));
+    let row0 = vec3<f32>(camera.view_proj[0][0], camera.view_proj[1][0], camera.view_proj[2][0]);
+    let row1 = vec3<f32>(camera.view_proj[0][1], camera.view_proj[1][1], camera.view_proj[2][1]);
     let aspect = length(row1) / max(length(row0), 1e-6);
-    let ndcSize = (sizePx * 2.0) / max(camera._pad0, 1.0);
-    let offsetX = (uv.x - 0.5) * ndcSize / aspect * clip.w;
-    let offsetY = -(uv.y - 0.5) * ndcSize * clip.w;
-    var out: PickOut;
-    out.position = clip + vec4f(offsetX, offsetY, 0.0, 0.0);
-    out.index = instanceIndex;
-    out.pointCoord = uv * 2.0 - vec2f(1.0, 1.0);
-    out.isPoint = 1.0;
+    let ndc_size = (size_px * 2.0) / max(camera._pad0, 1.0);
+    let offset_x = (uv.x - 0.5) * ndc_size / aspect * clip.w;
+    let offset_y = -(uv.y - 0.5) * ndc_size * clip.w;
+    var out: PickOutput;
+    out.position = clip + vec4<f32>(offset_x, offset_y, 0.0, 0.0);
+    out.index = instance_index;
+    out.point_coord = uv * 2.0 - vec2<f32>(1.0, 1.0);
+    out.is_point = 1.0;
     return out;
 }
 
 @vertex
-fn vs_pick_node_solid(@location(0) position: vec3f, @builtin(instance_index) instanceIndex: u32) -> PickOut {
-    let center = nodePositions[instanceIndex].xyz;
-    let mode = u32(round(nl.nodeVisual.z));
-    let useRadii = nl.nodeVisual.w > 0.5;
-    var scaleVec = vec3f(max(nl.global.x, 1e-6));
-    if (useRadii) {
-        let rv = max(nodeRadii[instanceIndex].xyz, vec3f(1e-6));
+fn vs_pick_node_solid(
+    @location(0) position: vec3<f32>,
+    @builtin(instance_index) instance_index: u32,
+) -> PickOutput {
+    let center = node_positions[instance_index].xyz;
+    let mode = u32(round(nl.node_visual.z));
+    let use_radii = nl.node_visual.w > 0.5;
+    var scale_vec = vec3<f32>(max(nl.global.x, 1e-6));
+    if (use_radii) {
+        let rv = max(node_radii[instance_index].xyz, vec3<f32>(1e-6));
         if (mode == 2u) {
-            scaleVec = rv * max(nl.global.x, 1e-6);
+            scale_vec = rv * max(nl.global.x, 1e-6);
         } else {
-            scaleVec = vec3f(rv.x * max(nl.global.x, 1e-6));
+            scale_vec = vec3<f32>(rv.x * max(nl.global.x, 1e-6));
         }
     }
-    let objPos = center + (position * scaleVec);
-    let worldPos4 = model.model * vec4f(objPos, 1.0);
-    var out: PickOut;
-    out.position = camera.viewProj * worldPos4;
-    out.index = instanceIndex;
-    out.pointCoord = vec2f(0.0, 0.0);
-    out.isPoint = 0.0;
+    let obj_pos = center + (position * scale_vec);
+    let world_pos4 = model.model * vec4<f32>(obj_pos, 1.0);
+    var out: PickOutput;
+    out.position = camera.view_proj * world_pos4;
+    out.index = instance_index;
+    out.point_coord = vec2<f32>(0.0, 0.0);
+    out.is_point = 0.0;
     return out;
 }
 
 @vertex
-fn vs_pick_edge_lines(@builtin(vertex_index) vertexIndex: u32, @builtin(instance_index) instanceIndex: u32) -> PickOut {
-    let edge = edges[instanceIndex];
-    let src = nodePositions[edge.x].xyz;
-    let dst = nodePositions[edge.y].xyz;
-    let objPos = select(src, dst, (vertexIndex & 1u) == 1u);
-    let worldPos4 = model.model * vec4f(objPos, 1.0);
-    var out: PickOut;
-    out.position = camera.viewProj * worldPos4;
-    out.index = instanceIndex;
-    out.pointCoord = vec2f(0.0, 0.0);
-    out.isPoint = 0.0;
+fn vs_pick_edge_lines(
+    @builtin(vertex_index) vertex_index: u32,
+    @builtin(instance_index) instance_index: u32,
+) -> PickOutput {
+    let edge = edges[instance_index];
+    let src = node_positions[edge.x].xyz;
+    let dst = node_positions[edge.y].xyz;
+    let obj_pos = select(src, dst, (vertex_index & 1u) == 1u);
+    let world_pos4 = model.model * vec4<f32>(obj_pos, 1.0);
+    var out: PickOutput;
+    out.position = camera.view_proj * world_pos4;
+    out.index = instance_index;
+    out.point_coord = vec2<f32>(0.0, 0.0);
+    out.is_point = 0.0;
     return out;
 }
 
 @vertex
-fn vs_pick_edge_cylinders(@location(0) position: vec3f, @builtin(instance_index) instanceIndex: u32) -> PickOut {
-    let edge = edges[instanceIndex];
-    let src = nodePositions[edge.x].xyz;
-    let dst = nodePositions[edge.y].xyz;
+fn vs_pick_edge_cylinders(
+    @location(0) position: vec3<f32>,
+    @builtin(instance_index) instance_index: u32,
+) -> PickOutput {
+    let edge = edges[instance_index];
+    let src = node_positions[edge.x].xyz;
+    let dst = node_positions[edge.y].xyz;
     let seg = dst - src;
-    let segLen = max(length(seg), 1e-6);
-    let basis = buildEdgeFrame(src, dst);
+    let seg_len = max(length(seg), 1e-6);
+    let basis = build_edge_frame(src, dst);
     let radius = max(nl.global.y, 1e-6);
-    let local = vec3f(position.x * radius, position.y * segLen, position.z * radius);
-    let objPos = ((src + dst) * 0.5) + (basis * local);
-    let worldPos4 = model.model * vec4f(objPos, 1.0);
-    var out: PickOut;
-    out.position = camera.viewProj * worldPos4;
-    out.index = instanceIndex;
-    out.pointCoord = vec2f(0.0, 0.0);
-    out.isPoint = 0.0;
+    let local = vec3<f32>(position.x * radius, position.y * seg_len, position.z * radius);
+    let obj_pos = ((src + dst) * 0.5) + (basis * local);
+    let world_pos4 = model.model * vec4<f32>(obj_pos, 1.0);
+    var out: PickOutput;
+    out.position = camera.view_proj * world_pos4;
+    out.index = instance_index;
+    out.point_coord = vec2<f32>(0.0, 0.0);
+    out.is_point = 0.0;
     return out;
 }
 
 @fragment
-fn fs_pick(in: PickOut) -> FragmentOutput {
-    if (in.isPoint > 0.5) {
-        let r2 = dot(in.pointCoord, in.pointCoord);
+fn fs_pick(in: PickOutput) -> FragmentOutput {
+    if (in.is_point > 0.5) {
+        let r2 = dot(in.point_coord, in.point_coord);
         if (r2 > 1.0) {
             discard;
         }
     }
     var out: FragmentOutput;
-    out.id = vec2<u32>(pick.objectId, pick.elementBase + in.index);
+    out.id = vec2<u32>(pick.object_id, pick.element_base + in.index);
     out.depth = in.position.z;
     return out;
 }

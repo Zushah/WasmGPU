@@ -5,19 +5,19 @@
  */
 
 struct SortTransform {
-    mvp: mat4x4f
-};
+    mvp: mat4x4<f32>,
+}
 
-@group(0) @binding(0) var<storage, read> centerOpacity: array<vec4f>;
-@group(0) @binding(1) var<uniform> sortTransform: SortTransform;
-@group(0) @binding(2) var<storage, read_write> keysOut: array<u32>;
-@group(0) @binding(3) var<storage, read_write> indicesOut: array<u32>;
+@group(0) @binding(0) var<storage, read> center_opacity: array<vec4<f32>>;
+@group(0) @binding(1) var<uniform> sort_transform: SortTransform;
+@group(0) @binding(2) var<storage, read_write> keys_out: array<u32>;
+@group(0) @binding(3) var<storage, read_write> indices_out: array<u32>;
 
-fn safeClipW(w: f32) -> f32 {
+fn safe_clip_w(w: f32) -> f32 {
     return select(1e-6, w, abs(w) > 1e-6);
 }
 
-fn splatCenterRenderable(clip: vec4f) -> bool {
+fn splat_center_renderable(clip: vec4<f32>) -> bool {
     let eps = 1e-6;
     return (clip.w > eps) && (clip.z >= -eps) && (clip.z <= clip.w + eps);
 }
@@ -25,18 +25,18 @@ fn splatCenterRenderable(clip: vec4f) -> bool {
 @compute @workgroup_size(256)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let i = gid.x;
-    let n = arrayLength(&centerOpacity);
+    let n = arrayLength(&center_opacity);
     if (i >= n) {
         return;
     }
-    let clip = sortTransform.mvp * vec4f(centerOpacity[i].xyz, 1.0);
-    if (!splatCenterRenderable(clip)) {
-        keysOut[i] = 0xffffffffu;
-        indicesOut[i] = i;
+    let clip = sort_transform.mvp * vec4<f32>(center_opacity[i].xyz, 1.0);
+    if (!splat_center_renderable(clip)) {
+        keys_out[i] = 0xffffffffu;
+        indices_out[i] = i;
         return;
     }
-    let depth = clamp(clip.z / safeClipW(clip.w), 0.0, 1.0);
-    let farToNear = 1.0 - depth;
-    keysOut[i] = u32(round(farToNear * 4294967040.0));
-    indicesOut[i] = i;
+    let depth = clamp(clip.z / safe_clip_w(clip.w), 0.0, 1.0);
+    let far_to_near = 1.0 - depth;
+    keys_out[i] = u32(round(far_to_near * 4294967040.0));
+    indices_out[i] = i;
 }

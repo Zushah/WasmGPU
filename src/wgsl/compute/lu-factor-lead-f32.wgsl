@@ -32,30 +32,34 @@ var<workgroup> pivot_row: u32;
 @compute @workgroup_size(WG_SIZE, 1, 1)
 fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
     let b = wg_id.x;
-    if (b >= params.batch_count) { return; }
+    if (b >= params.batch_count) {
+        return;
+    }
     let n = params.n;
     let base = b * params.elems_per_matrix;
     let base_ipiv = b * n;
     let kk = params.kk;
     let pw = params.pw;
-
     for (var j: u32 = 0u; j < pw; j = j + 1u) {
         let col = kk + j;
-        if (col >= n) { break; }
-
+        if (col >= n) {
+            break;
+        }
         var pv: f32 = -1.0;
         var pr: u32 = col;
         var ii = col + lid;
         while (ii < n) {
             let aik = matrices[base + ii * n + col];
             let av = abs(aik);
-            if (av > pv || (av == pv && ii < pr)) { pv = av; pr = ii; }
+            if (av > pv || (av == pv && ii < pr)) {
+                pv = av;
+                pr = ii;
+            }
             ii = ii + WG_SIZE;
         }
         wg_abs[lid] = pv;
         wg_row[lid] = pr;
         workgroupBarrier();
-
         var s: u32 = WG_SIZE >> 1u;
         while (s > 0u) {
             if (lid < s) {
@@ -72,14 +76,12 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_index
             workgroupBarrier();
             s = s >> 1u;
         }
-
         if (lid == 0u) {
             pivot_row = wg_row[0];
             ipiv[base_ipiv + col] = pivot_row;
         }
         workgroupBarrier();
         let piv = pivot_row;
-
         var jj: u32 = lid;
         while (jj < n) {
             let ia = base + col * n + jj;
@@ -91,7 +93,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_index
             jj = jj + WG_SIZE;
         }
         workgroupBarrier();
-
         let pivval = matrices[base + col * n + col];
         var t: u32 = col + 1u + lid;
         while (t < n) {
@@ -100,7 +101,6 @@ fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_index
             t = t + WG_SIZE;
         }
         workgroupBarrier();
-
         let endc = min(n, kk + pw);
         let inner_cols = endc - (col + 1u);
         if (inner_cols > 0u) {

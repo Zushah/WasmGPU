@@ -30,36 +30,32 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let n = params.n;
     let stride = params.elems_per_matrix;
     let base = b * stride;
-    let baseRhs = b * n;
-    let baseIpiv = b * n;
-
+    let base_rhs = b * n;
+    let base_ipiv = b * n;
     for (var i = 0u; i < n; i = i + 1u) {
-        x[baseRhs + i] = rhs[baseRhs + i];
+        x[base_rhs + i] = rhs[base_rhs + i];
     }
-
     for (var kk = 0u; kk < n - 1u; kk = kk + 1u) {
-        let p = ipiv[baseIpiv + kk];
+        let p = ipiv[base_ipiv + kk];
         if (p != kk) {
-            let t = x[baseRhs + kk];
-            x[baseRhs + kk] = x[baseRhs + p];
-            x[baseRhs + p] = t;
+            let t = x[base_rhs + kk];
+            x[base_rhs + kk] = x[base_rhs + p];
+            x[base_rhs + p] = t;
         }
     }
-
     for (var i = 0u; i < n; i = i + 1u) {
-        var sum = x[baseRhs + i];
+        var sum = x[base_rhs + i];
         for (var j = 0u; j < i; j = j + 1u) {
-            sum = sum - lu[base + i * n + j] * x[baseRhs + j];
+            sum = sum - lu[base + i * n + j] * x[base_rhs + j];
         }
-        x[baseRhs + i] = sum;
+        x[base_rhs + i] = sum;
     }
-
     for (var ii = n; ii > 0u; ii = ii - 1u) {
         let i = ii - 1u;
-        var sum = x[baseRhs + i];
+        var sum = x[base_rhs + i];
         for (var j = i + 1u; j < n; j = j + 1u) {
-            sum = sum - lu[base + i * n + j] * x[baseRhs + j];
+            sum = sum - lu[base + i * n + j] * x[base_rhs + j];
         }
-        x[baseRhs + i] = sum / lu[base + i * n + i];
+        x[base_rhs + i] = sum / lu[base + i * n + i];
     }
 }

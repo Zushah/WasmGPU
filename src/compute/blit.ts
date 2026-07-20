@@ -6,7 +6,7 @@
 
 import { alignTo, assert, isNonNegativeInt, resolveGPUBuffer } from "../utils";
 import type { StorageBuffer } from "./buffer";
-import blitRGBA8WGSL from "../wgsl/compute/blitRGBA8.wgsl";
+import blitRGBA8WGSL from "../wgsl/compute/blit-rgba8.wgsl";
 
 export type RGBA8BufferSource = GPUBuffer | StorageBuffer;
 

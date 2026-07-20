@@ -4,6 +4,45 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+struct GlyphFieldUniforms {
+    scale_source: vec4<f32>,
+    scale_domain: vec4<f32>,
+    scale_clamp: vec4<f32>,
+    scale_params: vec4<f32>,
+    scale_flags: vec4<f32>,
+    visual: vec4<f32>,
+    solid_color: vec4<f32>,
+    colors: array<vec4<f32>, 8>,
+}
+
+struct CameraUniforms {
+    view_proj: mat4x4<f32>,
+    position: vec3<f32>,
+    _pad0: f32,
+}
+
+struct ModelUniforms {
+    model: mat4x4<f32>,
+    normal: mat4x4<f32>,
+}
+
+struct VertexInput {
+    @location(0) position: vec3<f32>,
+}
+
+struct VertexOutput {
+    @builtin(position) position: vec4<f32>,
+    @location(0) @interpolate(flat) attrib: vec4<f32>,
+}
+
+@group(0) @binding(0) var<uniform> camera: CameraUniforms;
+@group(0) @binding(1) var<uniform> model: ModelUniforms;
+@group(1) @binding(0) var<storage, read> positions: array<vec4<f32>>;
+@group(1) @binding(1) var<storage, read> rotations: array<vec4<f32>>;
+@group(1) @binding(2) var<storage, read> scales: array<vec4<f32>>;
+@group(1) @binding(3) var<storage, read> attributes: array<vec4<f32>>;
+@group(1) @binding(4) var<uniform> glyph: GlyphFieldUniforms;
+
 fn scale_is_nan(v: f32) -> bool {
     let u = bitcast<u32>(v);
     return (u & 0x7F800000u) == 0x7F800000u && (u & 0x007FFFFFu) != 0u;
@@ -18,79 +57,66 @@ fn scale_is_finite(v: f32) -> bool {
     return !scale_is_nan(v) && !scale_is_inf(v);
 }
 
-fn scale_select_value(v: vec4f, componentCountIn: u32, componentIndexIn: u32, valueMode: u32) -> f32 {
-    let componentCount = max(1u, min(4u, componentCountIn));
-    let componentIndex = min(3u, componentIndexIn);
-    if (valueMode == 1u) {
-        if (componentCount == 1u) { return abs(v.x); }
-        if (componentCount == 2u) { return length(v.xy); }
-        if (componentCount == 3u) { return length(v.xyz); }
+fn scale_select_value(
+    v: vec4<f32>,
+    component_count_in: u32,
+    component_index_in: u32,
+    value_mode: u32,
+) -> f32 {
+    let component_count = max(1u, min(4u, component_count_in));
+    let component_index = min(3u, component_index_in);
+    if (value_mode == 1u) {
+        if (component_count == 1u) {
+            return abs(v.x);
+        }
+        if (component_count == 2u) {
+            return length(v.xy);
+        }
+        if (component_count == 3u) {
+            return length(v.xyz);
+        }
         return length(v);
     }
-    if (componentIndex == 0u) { return v.x; }
-    if (componentIndex == 1u) { return v.y; }
-    if (componentIndex == 2u) { return v.z; }
+    if (component_index == 0u) {
+        return v.x;
+    }
+    if (component_index == 1u) {
+        return v.y;
+    }
+    if (component_index == 2u) {
+        return v.z;
+    }
     return v.w;
 }
 
-fn vec4Component(v: vec4f, idx: u32) -> f32 {
-    if (idx == 0u) { return v.x; }
-    if (idx == 1u) { return v.y; }
-    if (idx == 2u) { return v.z; }
+fn vec4_component(v: vec4<f32>, idx: u32) -> f32 {
+    if (idx == 0u) {
+        return v.x;
+    }
+    if (idx == 1u) {
+        return v.y;
+    }
+    if (idx == 2u) {
+        return v.z;
+    }
     return v.w;
 }
 
-fn shiftedValueVector(v: vec4f, offsetFloats: f32) -> vec4f {
-    let o = min(3u, u32(offsetFloats + 0.5));
+fn shifted_value_vector(v: vec4<f32>, offset_floats: f32) -> vec4<f32> {
+    let o = min(3u, u32(offset_floats + 0.5));
     let i0 = min(3u, o + 0u);
     let i1 = min(3u, o + 1u);
     let i2 = min(3u, o + 2u);
     let i3 = min(3u, o + 3u);
-    return vec4f(vec4Component(v, i0), vec4Component(v, i1), vec4Component(v, i2), vec4Component(v, i3));
+    return vec4<f32>(
+        vec4_component(v, i0),
+        vec4_component(v, i1),
+        vec4_component(v, i2),
+        vec4_component(v, i3),
+    );
 }
 
-@group(1) @binding(0) var<storage, read> positions: array<vec4<f32>>;
-@group(1) @binding(1) var<storage, read> rotations: array<vec4<f32>>;
-@group(1) @binding(2) var<storage, read> scales: array<vec4<f32>>;
-@group(1) @binding(3) var<storage, read> attributes: array<vec4<f32>>;
-
-struct GlyphFieldUniforms {
-    scaleSource: vec4f,
-    scaleDomain: vec4f,
-    scaleClamp: vec4f,
-    scaleParams: vec4f,
-    scaleFlags: vec4f,
-    visual: vec4f,
-    solidColor: vec4f,
-    colors: array<vec4f, 8>
-};
-
-@group(1) @binding(4) var<uniform> glyph: GlyphFieldUniforms;
-
-struct CameraUniforms {
-    viewProj: mat4x4<f32>,
-    position: vec3<f32>,
-    _pad0: f32
-};
-
-struct ModelUniforms {
-    model: mat4x4<f32>,
-    normal: mat4x4<f32>
-};
-
-@group(0) @binding(0) var<uniform> camera: CameraUniforms;
-@group(0) @binding(1) var<uniform> model: ModelUniforms;
-
-struct VertexInput {
-    @location(0) position: vec3<f32>
-};
-
-struct VertexOutput {
-    @builtin(position) position: vec4<f32>,
-    @location(0) @interpolate(flat) attrib: vec4f
-};
-
-fn rotateByQuat(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
+fn rotate_by_quat(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
     let u = q.xyz;
     let s = q.w;
     let t = 2.0 * cross(u, v);
@@ -98,30 +124,30 @@ fn rotateByQuat(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
 }
 
 @vertex
-fn vs_main(in: VertexInput, @builtin(instance_index) instanceIndex: u32) -> VertexOutput {
-    let p4 = positions[instanceIndex];
-    let q = rotations[instanceIndex];
-    let s4 = scales[instanceIndex];
-    let localPos = rotateByQuat(in.position * s4.xyz, q) + p4.xyz;
-    let worldPos = model.model * vec4<f32>(localPos, 1.0);
+fn vs_main(in: VertexInput, @builtin(instance_index) instance_index: u32) -> VertexOutput {
+    let p4 = positions[instance_index];
+    let q = rotations[instance_index];
+    let s4 = scales[instance_index];
+    let local_pos = rotate_by_quat(in.position * s4.xyz, q) + p4.xyz;
+    let world_pos = model.model * vec4<f32>(local_pos, 1.0);
     var out: VertexOutput;
-    out.position = camera.viewProj * worldPos;
-    out.attrib = attributes[instanceIndex];
+    out.position = camera.view_proj * world_pos;
+    out.attrib = attributes[instance_index];
     return out;
 }
 
 @fragment
-fn fs_main(in: VertexOutput, @builtin(position) fragCoord: vec4<f32>) -> @location(0) f32 {
-    let colorMode = u32(round(glyph.visual.z));
-    if (colorMode == 1u) {
-        let shifted = shiftedValueVector(in.attrib, glyph.scaleDomain.z);
-        let componentCount = u32(glyph.scaleSource.x + 0.5);
-        let componentIndex = u32(glyph.scaleSource.y + 0.5);
-        let valueMode = u32(glyph.scaleSource.z + 0.5);
-        let rawValue = scale_select_value(shifted, componentCount, componentIndex, valueMode);
-        if (!scale_is_finite(rawValue)) {
+fn fs_main(in: VertexOutput) -> @location(0) f32 {
+    let color_mode = u32(round(glyph.visual.z));
+    if (color_mode == 1u) {
+        let shifted = shifted_value_vector(in.attrib, glyph.scale_domain.z);
+        let component_count = u32(glyph.scale_source.x + 0.5);
+        let component_index = u32(glyph.scale_source.y + 0.5);
+        let value_mode = u32(glyph.scale_source.z + 0.5);
+        let raw_value = scale_select_value(shifted, component_count, component_index, value_mode);
+        if (!scale_is_finite(raw_value)) {
             discard;
         }
     }
-    return fragCoord.z;
+    return in.position.z;
 }

@@ -6,7 +6,7 @@
 
 @group(0) @binding(0) var<storage, read> flags: array<u32>;
 @group(0) @binding(1) var<storage, read> prefix: array<u32>;
-@group(0) @binding(2) var<storage, read_write> zerosCount: array<u32>;
+@group(0) @binding(2) var<storage, read_write> zeros_count: array<u32>;
 
 @compute @workgroup_size(1)
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -15,9 +15,9 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let n = arrayLength(&flags);
     if (n == 0u) {
-        zerosCount[0u] = 0u;
+        zeros_count[0u] = 0u;
         return;
     }
     let last = n - 1u;
-    zerosCount[0u] = prefix[last] + flags[last];
+    zeros_count[0u] = prefix[last] + flags[last];
 }
