@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: Monday, July 20, 2026.
+Last updated: Tuesday, July 21, 2026.
 
-Last commit: Friday, July 17, 2026, [**`b2a7ad2`**](https://www.github.com/Zushah/WasmGPU/commit/b2a7ad2).
+Last commit: Monday, July 20, 2026, [**`d3d6192`**](https://www.github.com/Zushah/WasmGPU/commit/d3d6192).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -819,6 +819,7 @@ Important files:
 - `./rust/src/tests/*.rs`: native Rust conformance tests run by `npm run test:rs`.
 - `./test/*.test.js`: Node test files run by `npm run test:js`.
 - `./test/wasm.test.js`: WebAssembly ABI, generated-binding, heap, frame-arena, and external-module interop coverage.
+- `./test/wgsl.test.js`: extracts every minified WGSL module from the freshly built `./dist/WasmGPU.js` bundle and checks shader-module compilation, required optional features, and diagnostics through Node WebGPU. It does not construct pipelines or validate shader interfaces against TypeScript bind group, vertex, override-constant, or render-target descriptors; focused subsystem tests cover those integration contracts.
 - `./.github/workflows/test.yaml`: GitHub Actions workflow for automatically running tests on every push and pull request.
 
 `npm run test` runs both the native Rust and Node suites. Tests use generated or bundled files when needed. If a change modifies Rust exports, generated WebAssembly bindings, renderer behavior, glTF import, shader layouts, or public descriptors, add or update focused tests where the current test setup can exercise the behavior.
