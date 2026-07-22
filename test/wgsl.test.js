@@ -17,7 +17,7 @@ const extractBundledShaders = (bundle) => {
     const shaderPattern = /^\/\/ (src\/wgsl\/[^\r\n]+\.wgsl)\r?\nvar [A-Za-z_$][\w$]* = ("(?:[^"\\]|\\.)*");\r?$/gm;
     const markerPaths = Array.from(bundle.matchAll(markerPattern), (match) => match[1]);
     const shaders = Array.from(bundle.matchAll(shaderPattern), (match) => ({ path: match[1], code: JSON.parse(match[2]) }));
-    assert.ok(markerPaths.length > 0, "No bundled WGSL modules found in dist/WasmGPU.js");
+    assert.ok(markerPaths.length > 0, "No bundled WGSL modules found in ./dist/WasmGPU.js");
     assert.equal(shaders.length, markerPaths.length, `Expected to extract ${markerPaths.length} bundled WGSL modules, extracted ${shaders.length}`);
     assert.deepEqual(shaders.map((shader) => shader.path), markerPaths, "Bundled WGSL extraction must preserve every esbuild shader section");
     assert.equal(new Set(markerPaths).size, markerPaths.length, "Bundled WGSL module paths must be unique");
@@ -32,14 +32,17 @@ const gpu = navigator.gpu;
 assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
 const adapter = await gpu.requestAdapter();
 assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-assert.ok(adapter.features.has("primitive-index"), "The WebGPU adapter must support the 'primitive-index' feature required by WasmGPU picking shaders");
-const device = await adapter.requestDevice({ requiredFeatures: ["primitive-index"] });
+const requirements = ["primitive-index"];
+const primitiveIndexSupported = adapter.features.has(requirements[0]);
+const device = await adapter.requestDevice({ requiredFeatures: primitiveIndexSupported ? ["primitive-index"] : [] });
 assert.ok(device, "Failed to acquire a WebGPU device");
 
 const errors = [];
 const warnings = [];
+const skipped = [];
 try {
     for (const shader of shaders) {
+        if (!primitiveIndexSupported && /\benable\s+primitive_index\s*;/.test(shader.code)) { skipped.push(shader.path); continue; }
         device.pushErrorScope("validation");
         let compilationInfo;
         let validationError;
@@ -55,6 +58,7 @@ try {
         for (const message of compilationInfo.messages.filter((entry) => entry.type === "warning")) warnings.push(formatDiagnostic(shader.path, message));
         if (validationError && moduleErrors.length === 0) errors.push(`${shader.path}: ${validationError.message}`);
     }
+    if (skipped.length > 0) console.warn(`[wgsl] skipped ${skipped.length} modules requiring the unavailable '${requirements[0]}' feature:\n${skipped.join("\n")}`);
     for (const warning of warnings) console.warn(`[wgsl] warning: ${warning}`);
     assert.equal(errors.length, 0, errors.join("\n"));
 } finally {
