@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Last updated: Wednesday, July 22, 2026.
+Last updated: Thursday, July 23, 2026.
 
-Last commit: Tuesday, July 21, 2026, [**`c4c205c`**](https://www.github.com/Zushah/WasmGPU/commit/c4c205c).
+Last commit: Wednesday, July 22, 2026, [**`0ac72c5`**](https://www.github.com/Zushah/WasmGPU/commit/0ac72c5).
 
 Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
 
@@ -840,11 +840,14 @@ Important files and directories:
 - `./website/build/`: generated website output.
 - `./mkdocs.yaml`: MkDocs configuration for documentation pages.
 - `./scripts/build_website.py`: website build script. It copies website files, assets, examples, and `./dist/WasmGPU.min.js`, rewrites example imports to a versioned CDN URL, and runs MkDocs.
+- `./.agents/skills/maintain-docs/`: OpenAI Codex skill for auditing, writing, maintaining, and verifying Markdown documentation under `./website/src/docs/`.
 - `./.github/workflows/deploy-website.yaml`: GitHub Pages workflow for website changes.
 
 `./scripts/build_website.py` writes generated website output under `./website/build/`. That directory is not present in the codebase unless the website build has been run locally.
 
 `./website/src/`, `./README.md`, and `./CHANGELOG.md` are release-facing sources. They are often updated significantly during release work, not for every source change.
+
+The `maintain-docs` skill exists to keep the large Markdown reference aligned with the current public API without replacing source inspection or human review. Invoke `$maintain-docs` in `release` mode for a versioned documentation delta, `maintain` mode for a focused documentation change, or `verify` mode for a read-only accuracy and integrity pass. Release mode writes an audit ledger under the gitignored `./.cache/` directory, stops for approval before editing, normalizes all files under `./website/src/docs/` to LF line endings during approved implementation, writes in source-backed subsystem batches, and performs final coverage and link validation. The skill does not update this file or run the website build.
 
 ### 2.14. Build, generated, and release files
 
@@ -973,6 +976,8 @@ Release-update convention:
 - `./ARCHITECTURE.md` is different: update it whenever there is a significant source-code architecture change, not only when preparing a release.
 
 Do not update `./README.md`, `./CHANGELOG.md`, `./website/src/`, `./dist/`, or `./build/` for every source change. Update `./ARCHITECTURE.md` for significant architecture changes. Update release-facing files when preparing a release or when a specific small fix requires it.
+
+Use the OpenAI Codex `$maintain-docs` skill for work under `./website/src/docs/`. Its `release` mode requires an audit and approval checkpoint before documentation changes, its `maintain` mode keeps focused updates narrowly scoped, and its `verify` mode checks source accuracy and documentation integrity without editing by default. The skill keeps release audit ledgers under `./.cache/` and reserves repository-wide LF normalization of the documentation tree for approved release implementation.
 
 ### 3.9. Generated files and release artifacts
 

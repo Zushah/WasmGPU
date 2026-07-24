@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prepare Release"
+  short_description: "Prepare a new WasmGPU release"
+  default_prompt: "Use $prepare-release in release mode to audit the source delta and stop at the approval checkpoint."

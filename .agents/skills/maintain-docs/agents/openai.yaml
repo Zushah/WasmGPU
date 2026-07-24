@@ -1,0 +1,4 @@
+interface:
+  display_name: "Maintain Docs"
+  short_description: "Maintain WasmGPU website documentation"
+  default_prompt: "Use $maintain-docs in release mode to audit the documentation delta and stop at the approval checkpoint."
