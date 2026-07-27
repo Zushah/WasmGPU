@@ -3,6 +3,7 @@
 ## Summary
 WasmGPU.python.receiveNdarray materializes handle data into a transfer object containing dtype, shape, and typed data.
 By default it returns a direct view; with `copy: true` it returns an owned copy.
+The call rejects heap handles freed through `WasmGPU.python.free`. With the default `copy: false`, `data` remains borrowed and must not outlive the handle; a `copy: true` result remains usable after the handle is released. Frame and arena handles are epoch-scoped, but this method does not validate their epochs.
 
 ## Syntax
 ```ts

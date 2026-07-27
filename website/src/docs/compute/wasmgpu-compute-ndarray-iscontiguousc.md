@@ -25,6 +25,7 @@ const wgpu = await WasmGPU.create(canvas);
 
 const a = wgpu.compute.CPUndarray.empty("f32", { shape: [8, 8] });
 console.log(a.isContiguousC);
+a.destroy();
 ```
 
 ## See Also
@@ -33,3 +34,4 @@ console.log(a.isContiguousC);
 - [WasmGPU.compute.CPUndarray.backingBytes](./wasmgpu-compute-cpundarray-backingbytes.md)
 - [WasmGPU.compute.ndarray.ndim](./wasmgpu-compute-ndarray-ndim.md)
 - [WasmGPU.compute.ndarray.residency](./wasmgpu-compute-ndarray-residency.md)
+- [WasmGPU.compute.CPUndarray.destroy](./wasmgpu-compute-cpundarray-destroy.md)

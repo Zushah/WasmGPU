@@ -1,7 +1,7 @@
 # WasmGPU.animation.createClip
 
 ## Summary
-WasmGPU.animation.createClip creates animation runtime objects used for clip sampling, playback, and skinning.
+WasmGPU.animation.createClip creates a clip over packed Wasm sampler and transform-channel tables. The optional owned-allocation lists transfer responsibility for those exact allocations to the clip; `dispose()` releases them.
 
 ## Syntax
 ```ts
@@ -22,25 +22,15 @@ const result = wgpu.animation.createClip(descriptor);
 
 ```ts
 type AnimationClipDescriptor = {
-
     name: string;
-
     samplerCount: number;
-
     channelCount: number;
-
     samplersPtr: WasmPtr;
-
     channelsPtr: WasmPtr;
-
     startTime: number;
-
     endTime: number;
-
     ownedF32Allocs?: ReadonlyArray<{ ptr: WasmPtr; len: number }>;
-
     ownedU32Allocs?: ReadonlyArray<{ ptr: WasmPtr; len: number }>;
-
 };
 ```
 
@@ -54,8 +44,8 @@ type AnimationClipDescriptor = {
 | `channelsPtr` | `WasmPtr` | Yes | Wasm pointer to packed animation channel table data. |
 | `startTime` | `number` | Yes | Clip start time in seconds. |
 | `endTime` | `number` | Yes | Clip end time in seconds. |
-| `ownedF32Allocs` | `ReadonlyArray<{ ptr: WasmPtr; len: number }>` | No | Float32 Wasm allocations owned by the clip and freed when the clip is destroyed. |
-| `ownedU32Allocs` | `ReadonlyArray<{ ptr: WasmPtr; len: number }>` | No | Uint32 Wasm allocations owned by the clip and freed when the clip is destroyed. |
+| `ownedF32Allocs` | `ReadonlyArray<{ ptr: WasmPtr; len: number }>` | No | Float32 Wasm allocations transferred to the clip and freed by `dispose()`. |
+| `ownedU32Allocs` | `ReadonlyArray<{ ptr: WasmPtr; len: number }>` | No | Uint32 Wasm allocations transferred to the clip and freed by `dispose()`. |
 
 ### WasmPtr
 
@@ -71,8 +61,11 @@ const wgpu = await WasmGPU.create(canvas);
 const descriptor = { name: "walk", samplerCount: 0, channelCount: 0, samplersPtr: 0, channelsPtr: 0, startTime: 0, endTime: 1 };
 const result = wgpu.animation.createClip(descriptor);
 console.log(result);
+result.dispose();
 ```
 
 ## See Also
 - [WasmGPU.animation.createPlayer](./wasmgpu-animation-createplayer.md)
 - [WasmGPU.animation.createSkin](./wasmgpu-animation-createskin.md)
+- [AnimationClip.dispose](./wasmgpu-objects-animationclip-dispose.md)
+- [AnimationClip.disposed](./wasmgpu-objects-animationclip-disposed.md)

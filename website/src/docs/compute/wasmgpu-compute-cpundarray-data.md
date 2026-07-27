@@ -36,6 +36,7 @@ const a = wgpu.compute.CPUndarray.fromArray("f32", [2, 2], new Float32Array([1, 
 const data = a.data();
 data[0] = 10;
 console.log(Array.from(data), a.get(0, 0));
+a.destroy();
 ```
 
 ## See Also
@@ -44,3 +45,4 @@ console.log(Array.from(data), a.get(0, 0));
 - [WasmGPU.compute.CPUndarray.set](./wasmgpu-compute-cpundarray-set.md)
 - [WasmGPU.compute.ndarray.isContiguousC](./wasmgpu-compute-ndarray-iscontiguousc.md)
 - [WasmGPU.compute.CPUndarray.fromArray](./wasmgpu-compute-cpundarray-fromarray.md)
+- [WasmGPU.compute.CPUndarray.destroy](./wasmgpu-compute-cpundarray-destroy.md)

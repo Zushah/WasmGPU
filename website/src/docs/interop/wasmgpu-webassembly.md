@@ -120,6 +120,12 @@ console.log(copy);
 ```
 
 ## See Also
+- [Geometry.setWasmAttributes](../objects/wasmgpu-objects-geometry-setwasmattributes.md)
+- [PointCloud.setData](../objects/wasmgpu-objects-pointcloud-setdata.md)
+- [GlyphField.setWasmPositions](../objects/wasmgpu-objects-glyphfield-setwasmpositions.md)
+- [NodeLink.setNodeData](../objects/wasmgpu-objects-nodelink-setnodedata.md)
+- [SplatField.setWasmPackedData](../objects/wasmgpu-objects-splatfield-setwasmpackeddata.md)
+- [LatticeSpace.setData](../objects/wasmgpu-objects-latticespace-setdata.md)
 - [WasmGPU.webassembly.fromInstance](./wasmgpu-webassembly-frominstance.md)
 - [WasmGPU.webassembly.fromExports](./wasmgpu-webassembly-fromexports.md)
 - [WasmGPU.webassembly.fromMemory](./wasmgpu-webassembly-frommemory.md)

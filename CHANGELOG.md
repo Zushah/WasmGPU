@@ -1,6 +1,19 @@
 # WasmGPU changelog
 All release notes of WasmGPU are recorded in this file.
 
+## [v0.9.0](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0) - 07/27/2026
+The tenth release of WasmGPU. Commits: [`v0.8.0...v0.9.0`](https://www.github.com/Zushah/WasmGPU/compare/v0.8.0...v0.9.0)
+- Added Gaussian splatfields with camera-distance sorting, covariance-based projection, spherical harmonic colors through degree three, scene integration, typed picking, and glTF import support, enabling rich point-based radiance-field assets to participate in WasmGPU workflows alongside its existing scientific primitives.
+- Added 2D/3D latticespaces for structured grids, including scalar, explicit color, and solid color modes, cell masks, colormaps, GPU sorting, scene integration, occlusion culling, and picking, extending WasmGPU into arranged volumetric visualization.
+- Added direct uploads from external WebAssembly memory for geometry, pointclouds, glyphfields, nodelinks, splatfields, and latticespaces, with stable handling when foreign memories grow, so data produced by other WebAssembly modules can reach render paths without first being reorganized through ordinary JavaScript arrays.
+- Changed externally supplied GPU buffer handling for pointclouds, glyphfields, and nodelinks to match the new handling convention set by splatfields and latticespaces, by allowing applications to transfer ownership to WasmGPU, giving callers explicit control over whether object destruction also destroys the supplied resources.
+- Fixed WebAssembly resource management by reclaiming freed heap allocations and adding deterministic disposal for allocation-backed objects, reducing long-running memory growth and making resource lifetimes predictable instead of dependent on garbage collection.
+- Added fly camera controls with pointer-look and keyboard movement for freely navigating scenes from a first-person perspective.
+- Added key-value pair radix sorting to the compute kernels library, which complements the already-existing key-only radix sorting.
+- Changed the renderer to be split into smaller modules for drawlist construction, materials, objects, occlusion, picking, postprocessing, resources, timing, transmission, and shared types, making the rendering pipeline easier to maintain and extend as new object families are added.
+- Added automated Node testing across Windows, MacOS, and Linux, as well as full Rust testing coverage, and WGSL compilation testing.
+- Added terrain, lego, and quantum examples showcasing a procedurally-generated terrain with fly controls, an imported glTF splatfield asset, and a latticespace quantum orbitals visualization.
+
 ## [v0.8.0](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0) - 05/24/2026
 The ninth release of WasmGPU. Commits: [`v0.7.0...v0.8.0`](https://www.github.com/Zushah/WasmGPU/compare/v0.7.0...v0.8.0)
 - Added substantially broader glTF 2.0 runtime fidelity with morph-target import, base and per-node morph weights, morph-weight animation playback, imported node records, extension metadata, safe imported-asset shutdown, texture transforms, material variants, XMP metadata, bound punctual lights, spot lights, node visibility, and animation pointers.

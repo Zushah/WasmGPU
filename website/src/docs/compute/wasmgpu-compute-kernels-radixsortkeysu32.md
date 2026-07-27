@@ -45,6 +45,7 @@ console.log(Array.from(await wgpu.compute.readback.readU32(sorted)));
 ```
 
 ## See Also
+- [WasmGPU.compute.kernels.radixSortPairsU32](./wasmgpu-compute-kernels-radixsortpairsu32.md)
 - [WasmGPU.compute.kernels.copyU32](./wasmgpu-compute-kernels-copyu32.md)
 - [WasmGPU.compute.kernels.scanExclusiveU32](./wasmgpu-compute-kernels-scanexclusiveu32.md)
 - [WasmGPU.compute.kernels.histogramU32](./wasmgpu-compute-kernels-histogramu32.md)

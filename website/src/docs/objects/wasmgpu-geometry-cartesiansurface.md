@@ -21,17 +21,28 @@ const result = wgpu.geometry.cartesianSurface(descriptor);
 ### CartesianSurfaceDescriptor
 
 ```ts
-type CartesianSurfaceDescriptor = {
-    f: (x: number, z: number) => number;
-    xMin?: number;
-    xMax?: number;
-    zMin?: number;
-    zMax?: number;
-    xSegments?: number;
-    zSegments?: number;
-    plane?: "xy" | "xz" | "yz";
-    skipInvalid?: boolean;
-    doubleSided?: boolean;
+type CartesianSurfaceDescriptor = {
+
+    f: (x: number, z: number) => number;
+
+    xMin?: number;
+
+    xMax?: number;
+
+    zMin?: number;
+
+    zMax?: number;
+
+    xSegments?: number;
+
+    zSegments?: number;
+
+    plane?: "xy" | "xz" | "yz";
+
+    skipInvalid?: boolean;
+
+    doubleSided?: boolean;
+
 };
 ```
 

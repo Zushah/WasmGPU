@@ -1,10 +1,10 @@
 # WasmGPU Architecture
 
-Last updated: Thursday, July 23, 2026.
+Last updated: Monday, July 27, 2026.
 
-Last commit: Wednesday, July 22, 2026, [**`0ac72c5`**](https://www.github.com/Zushah/WasmGPU/commit/0ac72c5).
+Last commit: Thursday, July 23, 2026, [**`11098fc`**](https://www.github.com/Zushah/WasmGPU/commit/11098fc).
 
-Last release: Sunday, May 24, 2026, [**`v0.8.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0).
+Last release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
 ## Contents
 
@@ -223,7 +223,7 @@ flowchart LR
     WFRAME -.-> RES
 ```
 
-This diagram describes the current source tree, including [unreleased work](https://www.github.com/Zushah/WasmGPU/compare/v0.8.0...main) after [v0.8.0](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0). Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
+This diagram describes the current source tree, including [unreleased work](https://www.github.com/Zushah/WasmGPU/compare/v0.9.0...main) after [v0.9.0](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0). Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
 
 ### 1.2. Public API surface
 
@@ -833,7 +833,7 @@ Architectural role:
 
 Important files and directories:
 
-- `./README.md`: release-facing project overview. It currently describes v0.8.0.
+- `./README.md`: release-facing project overview. It currently describes v0.9.0.
 - `./CHANGELOG.md`: release notes through the latest documented release.
 - `./CONTRIBUTING.md`: shorter contributor guide for questions, issues, feature requests, and code contributions.
 - `./website/src/`: website source files, pages, and documentation.
@@ -1015,17 +1015,20 @@ Recent history mostly follows Conventional Commits:
 - common types: `feat`, `fix`, `test`, `docs`, `chore`, `refactor`, and `perf`;
 - scopes are file or folder names without extensions, such as `renderer`, `gltf`, `material`, `nodelink`, `examples`, or `rust`;
 - subjects are usually lowercase, concise, and have no final period;
-- release commits use a pattern like `chore(release): v0.8.0`.
+- release commits use a pattern like `chore(release): v0.9.0`.
 
 Examples from repository history include:
 
-- `feat(nodelink): add WebGPU nodelink rendering`
-- `feat(renderer): add configurable WebGPU device limits`
+- `feat(latticespace): add WebGPU lattice space rendering`
+- `feat(compute): add optimized batched LU factor and solve kernels`
+- `refactor(renderer): split into modules`
 - `fix(gltf): stabilize variants, skins, geometry, & morph rendering`
+- `fix(wasm): add deterministic resource lifetimes`
 - `test(material): cover defaults, uniforms, shaders, data, colormaps, & cleanup`
-- `docs(examples): update protein example with nodelink`
-- `perf(rust): move transform, culling, bounds, & glTF hot paths to WebAssembly`
-- `chore(release): v0.8.0`
+- `docs(examples): update terrain with fly controls`
+- `feat(rust): reclaim freed WebAssembly heap allocations`
+- `chore(build): bump Rust from v1.93.0-2021 to v1.97.1-2024`
+- `chore(release): v0.9.0`
 
 Use a commit body when the subject cannot explain the change, especially for API behavior, memory ownership, generated artifacts, release work, or changes that touch multiple subsystems.
 

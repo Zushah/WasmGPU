@@ -1,7 +1,9 @@
 # AnimationClip.dispose
 
 ## Summary
-AnimationClip.dispose releases GPU resources and clears owned runtime state for this AnimationClip. Call it when the object is no longer needed.
+AnimationClip.dispose deterministically releases every `ownedF32Allocs` and `ownedU32Allocs` Wasm allocation supplied when the clip was created, then clears weight and pointer-channel runtime state. The call is idempotent.
+
+After disposal, `sample`, `samplersPtr`, and `channelsPtr` reject access. `disposed` remains available for checking state.
 
 ## Syntax
 ```ts
@@ -27,9 +29,12 @@ const wgpu = await WasmGPU.create(canvas);
 
 const clip = wgpu.animation.createClip({ name: "clip", samplerCount: 0, channelCount: 0, samplersPtr: 0, channelsPtr: 0, startTime: 0, endTime: 1 });
 clip.dispose();
-console.log("updated");
+console.log(clip.disposed); // true
 ```
 
 ## See Also
 - [AnimationClip.duration](./wasmgpu-objects-animationclip-duration.md)
 - [AnimationClip.sample](./wasmgpu-objects-animationclip-sample.md)
+- [AnimationClip.disposed](./wasmgpu-objects-animationclip-disposed.md)
+- [AnimationClip.samplersPtr](./wasmgpu-objects-animationclip-samplersptr.md)
+- [AnimationClip.channelsPtr](./wasmgpu-objects-animationclip-channelsptr.md)

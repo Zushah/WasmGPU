@@ -1,6 +1,6 @@
 {
   "name": "@zushah/wasmgpu",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "author": "Zushah",
   "license": "MPL-2.0",
   "description": "WebGPU × WebAssembly rendering and computing engine for scientific workloads in the browser.",
@@ -30,8 +30,8 @@
     "test": "npm run test:rs && npm run test:js",
     "dev": "npm run build && npm run test",
     "restore": "git restore build dist",
-    "website": "py ./scripts/build_website.py",
-    "logo": "py ./scripts/rasterize_logo.py",
+    "website": "python ./scripts/build_website.py",
+    "logo": "python ./scripts/rasterize_logo.py",
     "start": "npx serve ."
   },
   "repository": {
@@ -80,6 +80,9 @@
     "ndarray",
     "pointcloud",
     "glyph",
+    "graph",
+    "splat",
+    "lattice",
     "colormap",
     "gltf",
     "pbr",

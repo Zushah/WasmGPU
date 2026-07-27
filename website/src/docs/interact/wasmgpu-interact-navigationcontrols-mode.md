@@ -15,11 +15,11 @@ const mode = controls.mode;
 This accessor does not take call parameters.
 
 ## Returns
-`NavigationMode` - Current mode (`"orbit"` or `"trackball"`).
+`NavigationMode` - Current mode (`"orbit"`, `"trackball"`, or `"fly"`).
 
 ## Type Details
 ```ts
-type NavigationMode = "orbit" | "trackball";
+type NavigationMode = "orbit" | "trackball" | "fly";
 ```
 
 ## Example
@@ -37,3 +37,4 @@ console.log(controls.mode);
 - [WasmGPU.createControls.navigation().setMode](./wasmgpu-interact-navigationcontrols-setmode.md)
 - [WasmGPU.createControls.orbit](./wasmgpu-createcontrols-orbit.md)
 - [WasmGPU.createControls.trackball](./wasmgpu-createcontrols-trackball.md)
+- [WasmGPU.createControls.fly](./wasmgpu-createcontrols-fly.md)

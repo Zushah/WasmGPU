@@ -56,6 +56,7 @@ type RendererCullingStats = {
 - `frustum.*` values stay `0` when `frustumCullingStats` is disabled.
 - `occlusion.*` values stay `0` when `occlusionCulling` is disabled, when `occlusionCullingStats` is disabled, or when the renderer does not have a valid previous-frame occlusion hierarchy to apply.
 - These counters describe the render path only. They are not pick statistics.
+- Opaque latticespaces can contribute to both frustum and occlusion counters. Splatfields are depth-sorted transparent objects and do not participate in occlusion filtering.
 
 ## Example
 ```js

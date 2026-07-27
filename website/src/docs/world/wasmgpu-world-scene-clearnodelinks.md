@@ -1,7 +1,7 @@
 # Scene.clearNodeLinks
 
 ## Summary
-Scene.clearNodeLinks removes only nodelink objects from the scene. Meshes, point clouds, glyph fields, and lights remain unchanged. Use it when graph-style content is updated independently of the rest of the scene.
+Scene.clearNodeLinks removes only node-link objects from the scene. Meshes, point clouds, glyph fields, splat fields, lattice spaces, and lights remain unchanged. Use it when graph-style content is updated independently of the rest of the scene.
 
 ## Syntax
 ```ts

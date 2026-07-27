@@ -1,7 +1,7 @@
 # LegendLayer.setSource
 
 ## Summary
-LegendLayer.setSource switches the legend data source and marks legend state dirty for redraw. The layer unsubscribes from previous source signals and subscribes to the new source when available. Use this when changing point-cloud scalar fields, glyph mappings, or nodelink node/edge scalar views interactively.
+LegendLayer.setSource switches the legend data source and marks legend state dirty for redraw. Use this when changing point-cloud, glyph, nodelink, or latticespace scalar mappings interactively.
 
 ## Syntax
 ```ts
@@ -40,10 +40,11 @@ type OverlayLegendNodeLinkSource = {
 ### OverlayLegendSource
 
 ```ts
-type OverlayLegendSource = PointCloud | GlyphField | NodeLink | OverlayLegendNodeLinkSource | DataMaterial | OverlayLegendExplicitSource;
+type OverlayLegendSource = PointCloud | GlyphField | NodeLink | LatticeSpace | OverlayLegendNodeLinkSource | DataMaterial | OverlayLegendExplicitSource;
 ```
 
 Passing a `NodeLink` directly binds to node scalars. Use `{ nodelink, component: "edge" }` when the legend should track edge scale and edge colormap state.
+Passing a `LatticeSpace` binds to its scale transform and colormap.
 
 ## Example
 ```js

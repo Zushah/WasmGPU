@@ -1,7 +1,7 @@
 # AnimationClip.sample
 
 ## Summary
-AnimationClip.sample operates on a AnimationClip runtime object to update state, query data, or manage lifecycle.
+AnimationClip.sample evaluates transform, morph-weight, and animation-pointer channels at `timeSeconds`. It throws after the clip is disposed.
 
 ## Syntax
 ```ts
@@ -28,9 +28,11 @@ const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
 
 const clip = wgpu.animation.createClip({ name: "clip", samplerCount: 0, channelCount: 0, samplersPtr: 0, channelsPtr: 0, startTime: 0, endTime: 1 });
-const timeSeconds = 1;
-clip.sample(timeSeconds);
-console.log("updated");
+try {
+    clip.sample(0.5);
+} finally {
+    clip.dispose();
+}
 ```
 
 ## See Also

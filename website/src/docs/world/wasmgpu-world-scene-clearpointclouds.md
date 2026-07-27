@@ -1,7 +1,7 @@
 # Scene.clearPointClouds
 
 ## Summary
-Scene.clearPointClouds removes only point cloud objects from the scene. Meshes, glyph fields, nodelinks, and lights remain unchanged. Use it when streaming or reloading point cloud data independently.
+Scene.clearPointClouds removes only point cloud objects from the scene. Meshes, glyph fields, node links, splat fields, lattice spaces, and lights remain unchanged. Use it when streaming or reloading point cloud data independently.
 
 ## Syntax
 ```ts

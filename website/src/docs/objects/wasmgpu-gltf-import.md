@@ -50,6 +50,7 @@ type ImportGltfOptions = {
 type GltfImportResult = {
     scene: Scene;
     meshes: Mesh[];
+    splatFields: SplatField[];
     nodes: GltfImportedNode[];
     lights: Light[];
     cameras: Camera[];
@@ -66,14 +67,15 @@ type GltfImportResult = {
 | --- | --- | --- | --- |
 | `scene` | `Scene` | Yes | Destination scene used by the import. This is either `targetScene` or a new scene created for the import. |
 | `meshes` | `Mesh[]` | Yes | Imported runtime meshes. Each glTF primitive becomes one WasmGPU mesh. |
-| `nodes` | `GltfImportedNode[]` | Yes | Imported node wrappers for hierarchy traversal, visibility control, and access to attached meshes, cameras, and lights. |
+| `splatFields` | `SplatField[]` | Yes | Native Gaussian splat fields imported from supported `KHR_gaussian_splatting` point primitives. |
+| `nodes` | `GltfImportedNode[]` | Yes | Imported node wrappers for hierarchy traversal, visibility control, and access to attached meshes, splat fields, cameras, and lights. |
 | `lights` | `Light[]` | Yes | Imported punctual lights when `importLights` is enabled. |
 | `cameras` | `Camera[]` | Yes | Imported cameras when `importCameras` is enabled. |
 | `skins` | `ImportedSkin[]` | Yes | Imported skin definitions and their runtime `Skin` objects. |
 | `animations` | `ImportedAnimation[]` | Yes | Imported animation descriptions. `clip` is `null` when the importer could not build a runtime clip for that entry. |
 | `clips` | `AnimationClip[]` | Yes | Convenience list of the non-null runtime clips from `animations`. |
 | `metadata` | `GltfImportMetadata` | Yes | Preserved glTF provenance, extension support states, XMP packets, and material-variant controls. |
-| `destroy` | `() => void` | Yes | Releases imported meshes, cameras, textures, skin runtimes, clips, and imported transforms. If the import added objects to a scene, `destroy()` also removes them. |
+| `destroy` | `() => void` | Yes | Deterministically disposes imported animation clips and skin runtimes and releases meshes, splat fields, cameras, textures, and imported transforms. If the import added objects to a scene, `destroy()` also removes them. |
 
 ### GltfImportedNode
 
@@ -85,6 +87,7 @@ class GltfImportedNode {
     parentIndex: number | null;
     children: number[];
     meshes: Mesh[];
+    splatFields: SplatField[];
     camera: Camera | null;
     light: Light | null;
     visible: boolean;
@@ -101,6 +104,7 @@ class GltfImportedNode {
 | `parentIndex` | `number \| null` | Yes | Parent glTF node index, or `null` for roots. |
 | `children` | `number[]` | Yes | Child node indices from the imported hierarchy. |
 | `meshes` | `Mesh[]` | Yes | Runtime meshes attached to this node. |
+| `splatFields` | `SplatField[]` | Yes | Runtime Gaussian splat fields attached to this node. |
 | `camera` | `Camera \| null` | Yes | Imported runtime camera attached to this node, if camera import is enabled and the node references one. |
 | `light` | `Light \| null` | Yes | Imported runtime light bound to this node, if light import is enabled and the node references one. |
 | `visible` | `boolean` | Yes | Local node visibility. This comes from `KHR_node_visibility` when present and can be edited at runtime. |
@@ -234,7 +238,8 @@ type GltfImportVariantsMetadata = {
 | `KHR_materials_anisotropy` | `supported` | Maps into `extensions.anisotropy`. |
 | `KHR_materials_ior` | `supported` | Maps into `extensions.ior`. |
 | `KHR_materials_variants` | `supported` | Populates `result.metadata.variants` and swaps registered mesh materials at runtime. |
-| `KHR_node_visibility` | `supported` | Seeds `GltfImportedNode.visible` and drives imported mesh or light visibility propagation. |
+| `KHR_gaussian_splatting` | `supported` | Imports supported point primitives as native `SplatField` objects, including direct color or complete SH coefficient sets through degree 3. |
+| `KHR_node_visibility` | `supported` | Seeds `GltfImportedNode.visible` and drives imported mesh, splatfield, or light visibility propagation. |
 | `KHR_animation_pointer` | `supported` | Supports selected node, material, camera, and punctual-light targets, plus morph-weight and visibility pointers described below. |
 | `KHR_xmp_json_ld` | `supported` | Preserves asset-level and per-record XMP packets in `result.metadata`. |
 | `KHR_texture_transform` | `supported` | Maps texture transforms and UV-set selection into WasmGPU material descriptors. |
@@ -259,12 +264,14 @@ Any extension name not recognized by the importer appears as `unsupported` in `r
 - Texture transforms: the importer carries `KHR_texture_transform` into `baseColorTextureTransform`, `metallicRoughnessTextureTransform`, `normalTextureTransform`, `occlusionTextureTransform`, `emissiveTextureTransform`, and the matching extension texture-transform fields. WasmGPU supports `TEXCOORD_0` and `TEXCOORD_1`; unsupported UV-set indices warn and fall back to `TEXCOORD_0`.
 - Cameras: `importCameras` creates perspective and orthographic WasmGPU cameras and parents them to the imported node transform, so camera motion continues to follow the glTF hierarchy.
 - Punctual lights: `importLights` creates directional, point, and spot lights from `KHR_lights_punctual`. Imported lights are bound to the source node transform, including spot direction and point or spot position updates from the bound transform.
-- Node visibility: `KHR_node_visibility` initializes imported-node visibility. Changing `node.visible` later recomputes `effectiveVisible`, updates attached meshes, updates attached lights, and propagates to descendants.
+- Gaussian splatting: supported point primitives require position, rotation, scale, and opacity attributes. Optional indices reorder splats. Direct colors and complete SH coefficient sets through degree 3 import natively; unsupported primitives are skipped with a warning because sparse point-cloud fallback conversion is not implemented.
+- Node visibility: `KHR_node_visibility` initializes imported-node visibility. Changing `node.visible` later recomputes `effectiveVisible`, updates attached meshes and splat fields, updates attached lights, and propagates to descendants.
 - Morph targets: POSITION and NORMAL morph target deltas import into geometry morph targets. Tangent morph deltas are currently ignored. Base weights come from `node.weights` when present and otherwise fall back to `mesh.weights`.
 - Morph-weight playback: imported meshes with morph targets get initialized runtime morph weights, and returned clips drive morph-weight channels. Per-node morph-weight overrides are applied before playback starts.
 - Skins and influence count: skinning binds when the mesh has usable `JOINTS_0` and `WEIGHTS_0`. When `JOINTS_1` and `WEIGHTS_1` are present, WasmGPU keeps the extra four influences for 8-influence skinning paths. If required joint or weight data is missing, the mesh stays unskinned and the importer emits a warning.
 - Animation pointer channels: `KHR_animation_pointer` supports selected node TRS targets, node visibility, node morph weights, material factors and supported texture-transform fields, camera projection properties, and punctual-light properties such as color, intensity, range, and spot cones.
 - Metadata and variants: names, `extras`, extension payloads, XMP packets, extension support states, and material variants stay accessible through `result.metadata` after import.
+- Lifetime: call `result.destroy()` when the import is no longer needed. The importer also releases partially created clip and skin allocations if import fails before returning a result.
 
 ## Example
 ```js
@@ -292,12 +299,17 @@ const clip = result.clips[0];
 if (clip) {
     clip.sample(0.5);
 }
+
+result.destroy();
 ```
 
 ## See Also
 - [WasmGPU.gltf.load](./wasmgpu-gltf-load.md)
 - [WasmGPU.gltf.loadAndImport](./wasmgpu-gltf-loadandimport.md)
 - [WasmGPU.gltf.parseGLB](./wasmgpu-gltf-parseglb.md)
+- [WasmGPU.createSplatField](./wasmgpu-createsplatfield.md)
 - [WasmGPU.animation.createPlayer](./wasmgpu-animation-createplayer.md)
 - [WasmGPU.animation.createSkin](./wasmgpu-animation-createskin.md)
+- [AnimationClip.dispose](./wasmgpu-objects-animationclip-dispose.md)
+- [Skin.dispose](./wasmgpu-objects-skin-dispose.md)
 - [WasmGPU.material.standard](./wasmgpu-material-standard.md)

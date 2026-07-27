@@ -1,7 +1,8 @@
 # WasmGPU.python.free
 
 ## Summary
-WasmGPU.python.free releases memory for handles allocated with `kind: "heap"`.
+WasmGPU.python.free returns the allocation for a `kind: "heap"` handle to the Wasm heap.
+Repeated calls with the same handle are safe and do not release the allocation twice. After the first call, `view`, `bytes`, `copyInto`, and `receiveNdarray` reject that freed handle; previously returned direct views must no longer be used.
 Calling free on `frame` or `arena` handles throws because those lifetimes are reset-driven.
 
 ## Syntax

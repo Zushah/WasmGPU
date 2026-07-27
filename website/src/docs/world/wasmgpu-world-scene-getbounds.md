@@ -1,7 +1,7 @@
 # Scene.getBounds
 
 ## Summary
-Scene.getBounds computes an aggregate bounding volume from meshes, point clouds, glyph fields, and nodelinks. By default it only considers visible objects, so visible nodelinks are included automatically and hidden ones are skipped unless you pass `visibleOnly: false`. The result includes box and sphere bounds plus empty/partial flags.
+Scene.getBounds computes an aggregate bounding volume from meshes, point clouds, glyph fields, node links, splat fields, and lattice spaces. By default it only considers visible objects. The result includes box and sphere bounds plus empty/partial flags.
 
 ## Syntax
 ```ts
@@ -29,7 +29,7 @@ type SceneBoundsOptions = {
 #### SceneBoundsOptions Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `visibleOnly` | `boolean` | No | When true (default), ignore objects with `visible === false` across meshes, point clouds, glyph fields, and nodelinks. |
+| `visibleOnly` | `boolean` | No | When true (default), ignore hidden objects across every renderable family. |
 
 ### Vec3
 
@@ -77,4 +77,6 @@ console.log(visibleBounds, allBounds);
 - [Scene.visiblePointClouds](./wasmgpu-world-scene-visiblepointclouds.md)
 - [Scene.visibleGlyphFields](./wasmgpu-world-scene-visibleglyphfields.md)
 - [Scene.visibleNodeLinks](./wasmgpu-world-scene-visiblenodelinks.md)
+- [Scene.splatFields and related APIs](./wasmgpu-world-scene-splatfields.md)
+- [Scene.latticeSpaces and related APIs](./wasmgpu-world-scene-latticespaces.md)
 - [Scene.traverseVisibleNodeLinks](./wasmgpu-world-scene-traversevisiblenodelinks.md)

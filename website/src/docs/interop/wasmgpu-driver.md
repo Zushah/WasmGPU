@@ -93,7 +93,7 @@ type WasmSlice<T extends ArrayBufferView> = {
 - `buffer()` and `view()` return live access to the current internal driver memory.
 - `write()` copies source data into the slice and can zero-fill the unused tail when needed.
 - `handle()` serializes the slice pointer, element layout, and epoch metadata for later reconstruction.
-- `free()` is only valid for heap-owned slices. Frame and arena slices are invalidated by reset-driven lifetime changes instead.
+- `free()` is only valid for heap-owned slices. It returns the allocation to the Wasm heap, is idempotent, and makes `buffer()`, `view()`, `write()`, and `handle()` reject later access. Frame and arena slices are invalidated by reset-driven lifetime changes instead.
 
 ## Notes
 - `WasmGPU.create()` initializes the built-in WebAssembly driver automatically. If you use the module-level `driver` export before creating a `WasmGPU` instance, initialize WebAssembly first.

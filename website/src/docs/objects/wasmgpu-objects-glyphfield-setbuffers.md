@@ -1,12 +1,13 @@
 # GlyphField.setBuffers
 
 ## Summary
-GlyphField.setBuffers updates buffers state on this GlyphField and marks dependent GPU data for refresh.
+The supplied instance buffers are borrowed by default. Pass `{ ownBuffers: true }` to transfer destruction responsibility to the glyphfield.
+The call replaces CPU and Wasm instance sources, sets `instanceCount`, and clears retained instance records.
 
 ## Syntax
 ```ts
-GlyphField.setBuffers(positions: GPUBuffer, rotations: GPUBuffer, scales: GPUBuffer, attributes: GPUBuffer | null, instanceCount: number): void
-glyphField.setBuffers(positions, rotations, scales, attributes, instanceCount);
+GlyphField.setBuffers(positions: GPUBuffer, rotations: GPUBuffer, scales: GPUBuffer, attributes: GPUBuffer | null, instanceCount: number, opts?: { ownBuffers?: boolean }): void
+glyphField.setBuffers(positions, rotations, scales, attributes, instanceCount, opts);
 ```
 
 ## Parameters
@@ -17,6 +18,7 @@ glyphField.setBuffers(positions, rotations, scales, attributes, instanceCount);
 | `scales` | `GPUBuffer` | Yes | Packed per-instance scales. |
 | `attributes` | `GPUBuffer \| null` | Yes | Packed per-instance attribute values. |
 | `instanceCount` | `number` | Yes | Number of instances represented by supplied data inputs. |
+| `opts` | `{ ownBuffers?: boolean }` | No | Set `ownBuffers: true` to transfer destruction responsibility for every non-null supplied buffer. |
 
 ## Returns
 `void` - No return value. The call applies side effects to runtime state and/or GPU resources.
@@ -32,13 +34,15 @@ const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
 
 const glyphField = wgpu.createGlyphField({ instanceCount: 1, positions: new Float32Array([0, 0, 0, 0]), rotations: new Float32Array([0, 0, 0, 1]), scales: new Float32Array([1, 1, 1, 0]), attributes: new Float32Array([0.5, 0, 0, 0]), scaleTransform: { mode: "linear", domainMin: 0, domainMax: 1 } });
-const positions = new Float32Array([0, 0, 0, 0]);
-const rotations = new Float32Array([0, 0, 0, 1]);
-const scales = new Float32Array([1, 1, 1, 0]);
-const attributes = new Float32Array([0.5, 0, 0, 0]);
-const instanceCount = 1;
-glyphField.setBuffers(positions, rotations, scales, attributes, instanceCount);
-console.log("updated");
+// GPUBuffer objects prepared by the application:
+glyphField.setBuffers(
+    positionsBuffer,
+    rotationsBuffer,
+    scalesBuffer,
+    attributesBuffer,
+    1,
+    { ownBuffers: false }
+);
 ```
 
 ## See Also

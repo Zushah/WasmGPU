@@ -21,14 +21,22 @@ pointCloud.applyScaleStats(stats);
 ### ScaleStatsResult
 
 ```ts
-type ScaleStatsResult = {
-    count: number;
-    finiteCount: number;
-    min: number;
-    max: number;
-    percentileMin: number | null;
-    percentileMax: number | null;
-    histogramBins: number | null;
+type ScaleStatsResult = {
+
+    count: number;
+
+    finiteCount: number;
+
+    min: number;
+
+    max: number;
+
+    percentileMin: number | null;
+
+    percentileMax: number | null;
+
+    histogramBins: number | null;
+
 };
 ```
 

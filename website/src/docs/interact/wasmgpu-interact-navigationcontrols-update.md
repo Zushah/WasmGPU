@@ -1,6 +1,7 @@
 # WasmGPU.createControls.navigation().update
 
 ## Summary
+In fly mode, `dtSeconds` drives keyboard translation and roll, while accumulated pointer input updates camera orientation. Orbit and trackball behavior remains target-centric.
 WasmGPU.createControls.navigation().update advances interaction state, damping, zoom/pan deltas, and camera transitions.
 Call this once per frame before rendering.
 If controls are disabled, the method exits without mutating the camera.

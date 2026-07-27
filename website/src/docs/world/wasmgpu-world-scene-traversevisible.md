@@ -1,7 +1,7 @@
 # Scene.traverseVisible
 
 ## Summary
-Scene.traverseVisible iterates only over meshes with `visible === true`. This avoids manual filtering when applying per-frame logic to rendered meshes only. Traversal order is insertion order within the mesh list.
+Scene.traverseVisible iterates over meshes whose `visible` property is true. It remains mesh-specific; other renderable families have their own visible traversal methods.
 
 ## Syntax
 ```ts
@@ -39,3 +39,5 @@ scene.traverseVisible((mesh) => mesh.transform.translate(0.02, 0, 0));
 - [Scene.traverse](./wasmgpu-world-scene-traverse.md)
 - [Scene.visibleMeshes](./wasmgpu-world-scene-visiblemeshes.md)
 - [Scene.getBounds](./wasmgpu-world-scene-getbounds.md)
+- [Scene splat-field traversal](./wasmgpu-world-scene-splatfields.md)
+- [Scene lattice-space traversal](./wasmgpu-world-scene-latticespaces.md)

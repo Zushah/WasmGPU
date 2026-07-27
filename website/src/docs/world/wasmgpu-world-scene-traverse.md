@@ -1,7 +1,7 @@
 # Scene.traverse
 
 ## Summary
-Scene.traverse iterates over every mesh in the scene and invokes a callback for each. Traversal order follows mesh insertion order. Use this for batch updates and mesh-side analysis operations.
+Scene.traverse iterates over every mesh in insertion order. It remains the mesh-specific traversal method; use the family-specific traversal methods for point clouds, glyph fields, NodeLink objects, splat fields, or lattice spaces.
 
 ## Syntax
 ```ts
@@ -12,7 +12,7 @@ scene.traverse(callback);
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `callback` | `(mesh: Mesh) => void` | Yes | Function executed once per mesh in `scene.meshes`. |
+| `callback` | `(mesh: Mesh) => void` | Yes | Function executed once per mesh. |
 
 ## Returns
 `void` - No value is returned; callback side effects drive behavior.
@@ -40,3 +40,5 @@ scene.traverse((mesh) => {
 - [Scene.traverseVisible](./wasmgpu-world-scene-traversevisible.md)
 - [Scene.meshes](./wasmgpu-world-scene-meshes.md)
 - [Scene.findByName](./wasmgpu-world-scene-findbyname.md)
+- [Scene splat-field traversal](./wasmgpu-world-scene-splatfields.md)
+- [Scene lattice-space traversal](./wasmgpu-world-scene-latticespaces.md)

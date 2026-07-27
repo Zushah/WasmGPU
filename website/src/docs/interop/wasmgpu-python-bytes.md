@@ -3,6 +3,7 @@
 ## Summary
 WasmGPU.python.bytes returns a byte view of a Python interop handle region.
 Use this for raw serialization, hashing, and binary transport tasks.
+The call rejects heap handles freed through `WasmGPU.python.free`. The byte view is borrowed and must not be used after the handle is freed or its allocator is reset. Frame and arena handles are epoch-scoped, but this method does not validate their epochs.
 
 ## Syntax
 ```ts

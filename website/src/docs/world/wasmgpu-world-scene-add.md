@@ -1,7 +1,7 @@
 # Scene.add
 
 ## Summary
-Scene.add inserts a renderable object into the scene. The method accepts `Mesh`, `PointCloud`, `GlyphField`, or `NodeLink` and ignores duplicate insertions of the same instance. It returns the same scene to support fluent setup code.
+Scene.add inserts a `Mesh`, `PointCloud`, `GlyphField`, `NodeLink`, `SplatField`, or `LatticeSpace`. Duplicate insertion of the same instance is ignored. The method returns the same scene to support fluent setup code.
 
 ## Syntax
 ```ts
@@ -9,6 +9,8 @@ Scene.add(mesh: Mesh): Scene
 Scene.add(pointCloud: PointCloud): Scene
 Scene.add(glyphField: GlyphField): Scene
 Scene.add(nodeLink: NodeLink): Scene
+Scene.add(splatField: SplatField): Scene
+Scene.add(latticeSpace: LatticeSpace): Scene
 const result = scene.add(object);
 ```
 
@@ -19,13 +21,21 @@ const result = scene.add(object);
 | `pointCloud` | `PointCloud` | Conditional | Point cloud object for particle or sampled-data rendering. |
 | `glyphField` | `GlyphField` | Conditional | Glyph field object for vector/tensor style visualization. |
 | `nodeLink` | `NodeLink` | Conditional | Graph-style node/edge object for networks, molecular connectivity, and related structures. |
+| `splatField` | `SplatField` | Conditional | Gaussian splat object. |
+| `latticeSpace` | `LatticeSpace` | Conditional | Regular 2D or 3D cell lattice. |
 
 ## Returns
 `Scene` - The same scene instance after insertion.
 
 ## Type Details
 ```ts
-type SceneObject = Mesh | PointCloud | GlyphField | NodeLink;
+type SceneObject =
+    | Mesh
+    | PointCloud
+    | GlyphField
+    | NodeLink
+    | SplatField
+    | LatticeSpace;
 ```
 
 ## Example
@@ -56,3 +66,5 @@ scene.add(mesh).add(graph);
 - [Scene.pointClouds](./wasmgpu-world-scene-pointclouds.md)
 - [Scene.glyphFields](./wasmgpu-world-scene-glyphfields.md)
 - [Scene.nodeLinks](./wasmgpu-world-scene-nodelinks.md)
+- [Scene splat-field APIs](./wasmgpu-world-scene-splatfields.md)
+- [Scene lattice-space APIs](./wasmgpu-world-scene-latticespaces.md)

@@ -1,7 +1,7 @@
 # Scene.remove
 
 ## Summary
-Scene.remove removes a `Mesh`, `PointCloud`, `GlyphField`, or `NodeLink` instance from the scene if it exists. Removing a missing object is a no-op. The method returns the same scene for chaining.
+Scene.remove detaches a `Mesh`, `PointCloud`, `GlyphField`, `NodeLink`, `SplatField`, or `LatticeSpace` if present. It does not destroy the object, and removing a missing object is a no-op. The method returns the same scene for chaining.
 
 ## Syntax
 ```ts
@@ -9,6 +9,8 @@ Scene.remove(mesh: Mesh): Scene
 Scene.remove(pointCloud: PointCloud): Scene
 Scene.remove(glyphField: GlyphField): Scene
 Scene.remove(nodeLink: NodeLink): Scene
+Scene.remove(splatField: SplatField): Scene
+Scene.remove(latticeSpace: LatticeSpace): Scene
 const result = scene.remove(object);
 ```
 
@@ -19,13 +21,21 @@ const result = scene.remove(object);
 | `pointCloud` | `PointCloud` | Conditional | Point cloud instance to remove from `scene.pointClouds`. |
 | `glyphField` | `GlyphField` | Conditional | Glyph field instance to remove from `scene.glyphFields`. |
 | `nodeLink` | `NodeLink` | Conditional | NodeLink instance to remove from `scene.nodeLinks`. |
+| `splatField` | `SplatField` | Conditional | SplatField instance to detach without destroying it. |
+| `latticeSpace` | `LatticeSpace` | Conditional | LatticeSpace instance to detach without destroying it. |
 
 ## Returns
 `Scene` - The same scene instance after removal attempt.
 
 ## Type Details
 ```ts
-type SceneObject = Mesh | PointCloud | GlyphField | NodeLink;
+type SceneObject =
+    | Mesh
+    | PointCloud
+    | GlyphField
+    | NodeLink
+    | SplatField
+    | LatticeSpace;
 ```
 
 ## Example

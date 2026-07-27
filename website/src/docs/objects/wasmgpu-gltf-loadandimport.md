@@ -71,6 +71,7 @@ type ImportGltfOptions = {
 type GltfImportResult = {
     scene: Scene;
     meshes: Mesh[];
+    splatFields: SplatField[];
     nodes: GltfImportedNode[];
     lights: Light[];
     cameras: Camera[];
@@ -82,7 +83,7 @@ type GltfImportResult = {
 };
 ```
 
-`result.nodes` exposes the imported hierarchy, visibility state, and attached meshes, lights, or cameras. `result.metadata` preserves names, `extras`, extensions, XMP metadata, extension support states, and material variants from the source asset. `result.destroy()` releases imported runtime resources and removes imported meshes or lights from the destination scene when they were added during import.
+`result.nodes` exposes the imported hierarchy, visibility state, and attached meshes, splat fields, lights, or cameras. `result.splatFields` contains native objects imported from supported `KHR_gaussian_splatting` primitives. `result.metadata` preserves names, `extras`, extensions, XMP metadata, extension support states, and material variants from the source asset. `result.destroy()` releases imported runtime resources and removes imported meshes, splat fields, or lights from the destination scene when they were added during import.
 
 For the full `LoadGltfOptions`, `ImportGltfOptions`, `GltfImportedNode`, `GltfImportMetadata`, material-variant controls, and extension-support details, use the dedicated [WasmGPU.gltf.load](./wasmgpu-gltf-load.md) and [WasmGPU.gltf.import](./wasmgpu-gltf-import.md) pages.
 

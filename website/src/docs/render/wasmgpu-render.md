@@ -14,7 +14,7 @@ wgpu.render(scene, camera);
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `scene` | `Scene` | Yes | Scene contents containing meshes, point clouds, glyph fields, nodelinks, and lights used for the frame. |
+| `scene` | `Scene` | Yes | Scene contents containing meshes, point clouds, glyph fields, nodelinks, splatfields, latticespaces, and lights used for the frame. |
 | `camera` | `Camera` | Yes | Active camera supplying the view and projection transforms for this frame. |
 
 ## Returns
@@ -22,9 +22,9 @@ wgpu.render(scene, camera);
 
 ## Frame Behavior
 1. `render()` checks the canvas size and device-pixel-ratio-backed render targets, then resizes depth, picking, transmission, and SMAA resources when needed.
-2. It updates the camera aspect ratio, runs transform propagation, writes camera and lighting uniforms, and builds draw lists for meshes, point clouds, glyph fields, and nodelinks.
-3. It applies frustum culling when enabled. If occlusion culling is enabled and a valid previous-frame hierarchy is available, it can further filter eligible opaque draw items for the current render only.
-4. It renders opaque content first. When transmissive `StandardMaterial` objects are present, the renderer prepares an internal scene-color source/copy path and uses transmission-aware shader variants before drawing the remaining transparent or transmissive content.
+2. It updates the camera aspect ratio, runs transform propagation, writes camera and lighting uniforms, and builds draw lists for meshes, point clouds, glyph fields, nodelinks, splatfields, and latticespaces.
+3. It applies frustum culling when enabled. If occlusion culling is enabled and a valid previous-frame hierarchy is available, it can further filter eligible opaque meshes, point clouds, glyph fields, nodelinks, and latticespaces for the current render only. Splatfields are excluded from occlusion culling.
+4. It renders opaque content first. When transmissive `StandardMaterial` objects are present, the renderer prepares an internal scene-color source/copy path and uses transmission-aware shader variants. Before transparent drawing, each visible splatfield is sorted by camera depth, as are the visible cells of each transparent 3D latticespace.
 5. If `antialias` was enabled during `WasmGPU.create(...)`, SMAA runs after the main render passes.
 
 Render-time occlusion filtering is separate from picking and warmup. It is not used to answer picks or to prewarm resources.

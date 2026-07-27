@@ -1,7 +1,7 @@
 # Scene.findByName
 
 ## Summary
-Scene.findByName returns the first mesh whose `name` exactly matches the input string. It searches only mesh objects, not point clouds or glyph fields. Use this for fast single-match lookup when names are unique.
+Scene.findByName returns the first mesh whose `name` exactly matches the input string. It is mesh-specific; point clouds, glyph fields, NodeLink objects, splat fields, and lattice spaces have family-specific lookup methods.
 
 ## Syntax
 ```ts
@@ -39,3 +39,5 @@ console.log(scene.findByName("roi"));
 - [Scene.findAllByName](./wasmgpu-world-scene-findallbyname.md)
 - [Scene.findPointCloudByName](./wasmgpu-world-scene-findpointcloudbyname.md)
 - [Scene.findGlyphFieldByName](./wasmgpu-world-scene-findglyphfieldbyname.md)
+- [Scene.splatFields and splat-field lookup](./wasmgpu-world-scene-splatfields.md)
+- [Scene.latticeSpaces and lattice-space lookup](./wasmgpu-world-scene-latticespaces.md)

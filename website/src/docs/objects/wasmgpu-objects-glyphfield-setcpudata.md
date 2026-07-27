@@ -1,11 +1,12 @@
 # GlyphField.setCPUData
 
 ## Summary
-GlyphField.setCPUData updates cpudata state on this GlyphField and marks dependent GPU data for refresh.
+`GlyphField.setCPUData()` installs all four CPU channel arrays. `setWasmInstances()` is its memory-safe WebAssembly counterpart for attaching several `WasmMemoryView` channels at once.
 
 ## Syntax
 ```ts
 GlyphField.setCPUData(positions: Float32Array | null, rotations: Float32Array | null, scales: Float32Array | null, attributes: Float32Array | null, opts?: { keepCPUData?: boolean; instanceCount?: number }): void
+GlyphField.setWasmInstances(sources: GlyphFieldWasmSources, options?: GlyphFieldWasmInstancesOptions): void
 glyphField.setCPUData(positions, rotations, scales, attributes, opts);
 ```
 
@@ -17,6 +18,8 @@ glyphField.setCPUData(positions, rotations, scales, attributes, opts);
 | `scales` | `Float32Array \| null` | Yes | Packed per-instance scales. |
 | `attributes` | `Float32Array \| null` | Yes | Packed per-instance attribute values. |
 | `opts` | `{ keepCPUData?: boolean; instanceCount?: number }` | No | Optional configuration object that customizes behavior for this call. |
+| `sources` | `GlyphFieldWasmSources` | Yes | Optional `positions`, `rotations`, `scales`, and `attributes` views; explicit `null` detaches a channel. |
+| `options` | `GlyphFieldWasmInstancesOptions` | No | Active count, capacity hint, CPU retention, and bounds-recomputation controls. |
 
 ## Returns
 `void` - No return value. The call applies side effects to runtime state and/or GPU resources.
@@ -56,6 +59,13 @@ console.log("updated");
 ```
 
 ## See Also
+- [GlyphField.setWasmPositions](./wasmgpu-objects-glyphfield-setwasmpositions.md)
+- [GlyphField.setWasmRotations](./wasmgpu-objects-glyphfield-setwasmrotations.md)
+- [GlyphField.setWasmScales](./wasmgpu-objects-glyphfield-setwasmscales.md)
+- [GlyphField.setWasmAttributes](./wasmgpu-objects-glyphfield-setwasmattributes.md)
+- [GlyphField.setWasmSoA](./wasmgpu-objects-glyphfield-setwasmsoa.md)
+- [GlyphField.refreshFromWasm](./wasmgpu-objects-glyphfield-refreshfromwasm.md)
+- [GlyphField.clearWasmSources](./wasmgpu-objects-glyphfield-clearwasmsources.md)
 - [GlyphField.applyScaleStats](./wasmgpu-objects-glyphfield-applyscalestats.md)
 - [GlyphField.colormap](./wasmgpu-objects-glyphfield-colormap.md)
 - [GlyphField.colormapStops](./wasmgpu-objects-glyphfield-colormapstops.md)

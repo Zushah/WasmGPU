@@ -1,7 +1,7 @@
 # WasmGPU.createControls.navigation
 
 ## Summary
-WasmGPU.createControls.navigation creates a `NavigationControls` instance that can operate in orbit or trackball mode.
+WasmGPU.createControls.navigation creates a `NavigationControls` instance that can operate in orbit, trackball, or fly mode.
 The controls attach pointer and wheel handlers to the provided canvas and mutate the camera transform directly.
 Use this factory when you need one control object that can switch modes at runtime.
 
@@ -24,7 +24,7 @@ const controls = wgpu.createControls.navigation(camera, domElement, options);
 ## Type Details
 ```ts
 type NavigationControlsDescriptor = {
-    mode?: "orbit" | "trackball"; // default: "orbit"
+    mode?: "orbit" | "trackball" | "fly"; // default: "orbit"
     axisConvention?: "y-up-rh" | "z-up-rh" | "x-up-rh" | { right?: Vec3; up: Vec3; forward: Vec3 };
     target?: Vec3;
     enabled?: boolean;
@@ -46,10 +46,43 @@ type NavigationControlsDescriptor = {
     minAzimuthAngle?: number;
     maxAzimuthAngle?: number;
     mouseButtons?: { rotate?: number; pan?: number; zoom?: number }; // button ids: 0 left, 1 middle, 2 right
+    enableKeyboard?: boolean;
+    enablePointer?: boolean;
+    enableWheel?: boolean;
+    moveSpeed?: number;
+    lookSpeed?: number;
+    rollSpeed?: number;
+    fastMultiplier?: number;
+    slowMultiplier?: number;
+    wheelSpeedFactor?: number;
+    minMoveSpeed?: number;
+    maxMoveSpeed?: number;
+    invertY?: boolean;
+    yawMode?: "global" | "local";
+    mouseButton?: number;
+    pointerLock?: boolean | "on-click" | "on-drag";
+    keyMap?: FlyControlsKeyMap;
+    keyboardTarget?: HTMLElement | Window | Document | null;
+    preventDefaultKeys?: boolean;
+};
+
+type FlyControlsKeyMap = {
+    forward?: readonly string[];
+    backward?: readonly string[];
+    left?: readonly string[];
+    right?: readonly string[];
+    up?: readonly string[];
+    down?: readonly string[];
+    rollLeft?: readonly string[];
+    rollRight?: readonly string[];
+    fast?: readonly string[];
+    slow?: readonly string[];
 };
 
 type Vec3 = [number, number, number];
 ```
+
+The keyboard, pointer-lock, and movement fields apply while `mode` is `"fly"`. Their defaults and key bindings are listed on [WasmGPU.createControls.fly](./wasmgpu-createcontrols-fly.md).
 
 ## Example
 ```js
@@ -77,5 +110,6 @@ wgpu.run((dt) => {
 ## See Also
 - [WasmGPU.createControls.orbit](./wasmgpu-createcontrols-orbit.md)
 - [WasmGPU.createControls.trackball](./wasmgpu-createcontrols-trackball.md)
+- [WasmGPU.createControls.fly](./wasmgpu-createcontrols-fly.md)
 - [WasmGPU.createControls.navigation().setMode](./wasmgpu-interact-navigationcontrols-setmode.md)
 - [WasmGPU.createControls.navigation().fitScene](./wasmgpu-interact-navigationcontrols-fitscene.md)

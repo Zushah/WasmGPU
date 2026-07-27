@@ -30,6 +30,8 @@ const cpu = wgpu.compute.CPUndarray.fromArray("f32", [4], new Float32Array([1, 2
 const gpu = cpu.uploadToGPU(wgpu.gpu, { copySrc: true, label: "cpu-upload" });
 
 console.log(cpu.residency, gpu.residency);
+cpu.destroy();
+gpu.destroy();
 ```
 
 ## See Also
@@ -38,3 +40,4 @@ console.log(cpu.residency, gpu.residency);
 - [WasmGPU.compute.GPUndarray.wrap](./wasmgpu-compute-gpundarray-wrap.md)
 - [WasmGPU.compute.CPUndarray.empty](./wasmgpu-compute-cpundarray-empty.md)
 - [WasmGPU.compute.createStorageBuffer](./wasmgpu-compute-createstoragebuffer.md)
+- [WasmGPU.compute.CPUndarray.destroy](./wasmgpu-compute-cpundarray-destroy.md)

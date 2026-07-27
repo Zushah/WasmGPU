@@ -43,7 +43,7 @@ type WasmHeapArena = {
 - `capBytes` is the total capacity in bytes.
 - `usedBytes()` reports how much of that capacity is currently consumed.
 - `reset()` rewinds the arena head and bumps the arena epoch.
-- `destroy()` invalidates the arena permanently.
+- `destroy()` returns the arena's entire backing block to the Wasm heap and invalidates the arena permanently. It is idempotent; if heap release throws, the arena remains live so release can be retried.
 - `alloc(bytes, alignBytes?)` returns a raw Wasm pointer for custom layouts.
 - `allocF32`, `allocU32`, `allocI32`, and `allocU8` return `WasmSlice` wrappers with epoch-aware lifetime checks.
 
@@ -52,6 +52,7 @@ type WasmHeapArena = {
 - `WasmSlice.isAlive()` and `assertAlive()` use the arena epoch to catch stale access.
 - `WasmSlice.free()` is only for heap-owned slices. Arena slices end their lifetime through arena reset or destroy.
 - This is a staging arena, not a general-purpose per-slice free list. Use `reset()` to reuse its storage as a block.
+- `reset()` reuses the already allocated block; it does not return memory to the heap. Call `destroy()` when the arena is no longer needed.
 
 ## Example
 ```js

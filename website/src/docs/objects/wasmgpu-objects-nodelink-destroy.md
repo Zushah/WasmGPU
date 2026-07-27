@@ -4,8 +4,8 @@ This page documents the `NodeLink.destroy` method.
 
 ## Summary
 `NodeLink.destroy` releases the nodelink's stored GPU buffers and clears runtime state. That includes pending writes, listeners, retained CPU records, counts, `ndShape`, and transform state.
-
-Be careful with externally supplied buffers: the current `NodeLink.destroy` implementation destroys the stored node, edge, and uniform buffer fields rather than preserving them automatically.
+Externally supplied node or edge buffers are destroyed only when ownership was transferred with descriptor `ownBuffers: true` or setter option `ownBuffer: true`.
+Borrowed external buffers are detached without being destroyed; the internally created uniform buffer is always object-owned.
 
 ## Syntax
 ```ts

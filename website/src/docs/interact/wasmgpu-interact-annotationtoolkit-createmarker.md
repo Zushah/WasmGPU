@@ -24,7 +24,7 @@ const record = toolkit.createMarker(anchor, opts);
 type AnnotationAnchor = {
     position: [number, number, number];
     pick: {
-        kind: "mesh" | "pointcloud" | "glyphfield" | "nodelink";
+        kind: "mesh" | "pointcloud" | "glyphfield" | "nodelink" | "splatfield" | "latticespace";
         objectId: number;
         elementIndex: number;
         ndIndex: number[] | null;
@@ -33,7 +33,7 @@ type AnnotationAnchor = {
 };
 ```
 
-Markers created from picked nodelinks keep the same pick payload shape. When attributes are available, `attributes.component` can preserve whether the marker came from a node or an edge.
+Markers preserve pick provenance for every `PickKind`, including splatfields and latticespaces. Object-specific `PickAttributes` remain attached when they were requested.
 
 ## Example
 ```js

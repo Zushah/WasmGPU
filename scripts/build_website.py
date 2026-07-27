@@ -1,8 +1,6 @@
-"""
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, You can obtain one at http://mozilla.org/MPL/2.0/.
-"""
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
 
 from __future__ import annotations
 import shutil
@@ -23,9 +21,9 @@ DOCS_ASSETS_BUILD_DIR = BUILD_DIR / "docs" / "assets"
 DIST_MINIFIED_SOURCE = ROOT_DIR / "dist" / "WasmGPU.min.js"
 DIST_MINIFIED_BUILD = BUILD_DIR / "WasmGPU.min.js"
 IIFE_SCRIPT_OLD = '<script src="../dist/WasmGPU.iife.min.js"></script>'
-IIFE_SCRIPT_NEW = '<script src="https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.8.0/dist/WasmGPU.iife.min.js"></script>'
+IIFE_SCRIPT_NEW = '<script src="https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.iife.min.js"></script>'
 ESM_IMPORT_OLD = 'import { WasmGPU } from "../dist/WasmGPU.min.js";'
-ESM_IMPORT_NEW = 'import { WasmGPU } from "https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.8.0/dist/WasmGPU.min.js";'
+ESM_IMPORT_NEW = 'import { WasmGPU } from "https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.min.js";'
 
 def ensure_required_paths() -> None:
     required_paths = [

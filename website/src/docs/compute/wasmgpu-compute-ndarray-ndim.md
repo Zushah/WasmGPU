@@ -25,6 +25,7 @@ const wgpu = await WasmGPU.create(canvas);
 
 const a = wgpu.compute.CPUndarray.empty("f32", { shape: [64, 32, 8] });
 console.log(a.ndim);
+a.destroy();
 ```
 
 ## See Also
@@ -33,3 +34,4 @@ console.log(a.ndim);
 - [WasmGPU.compute.CPUndarray.empty](./wasmgpu-compute-cpundarray-empty.md)
 - [WasmGPU.compute.GPUndarray.empty](./wasmgpu-compute-gpundarray-empty.md)
 - [WasmGPU.compute.ndarray.residency](./wasmgpu-compute-ndarray-residency.md)
+- [WasmGPU.compute.CPUndarray.destroy](./wasmgpu-compute-cpundarray-destroy.md)

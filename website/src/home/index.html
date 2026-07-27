@@ -40,34 +40,29 @@
                 <img class="hero-logo" data-theme-logo="true" src="./assets/logo-darkmode.png" alt="WasmGPU logo" data-dark-logo="./assets/logo-darkmode.png" data-light-logo="./assets/logo-lightmode.png"><br>
                 <p class="eyebrow"><b>WebGPU × WebAssembly</b></p>
                 <h1>Rendering and computing engine for scientific workloads in the browser.</h1>
-                <p class="hero-copy">WasmGPU combines a TypeScript WebGPU engine with a Rust WebAssembly driver to support high-throughput rendering and computing workflows in a single browser-first runtime.</p>
+                <p class="hero-copy">WasmGPU combines a TypeScript WebGPU engine with a Rust WebAssembly driver to support high-throughput rendering and computing workflows in a single browser runtime.</p>
                 <div class="hero-actions">
-                    <a class="btn btn-primary" href="./docs/">
-                        <span class="material-icons-outlined">menu_book</span>
-                        Read docs
-                    </a>
-                    <a class="btn btn-secondary" href="./examples/">
-                        <span class="material-icons-outlined">play_circle</span>
-                        Run demos
-                    </a>
+                    <a class="btn btn-secondary" href="./examples/"><span class="material-icons-outlined">play_circle</span>Run demos</a>
+                    <a class="btn btn-primary" href="./docs/"><span class="material-icons-outlined">rocket_launch</span>Get started</a>
+                    <a class="btn btn-secondary" href="https://www.github.com/Zushah/WasmGPU" target="_blank" rel="noreferrer"><span class="material-icons-outlined">star_border</span>Star code</a>
                 </div>
                 <p class="license-note">Available under the <a href="https://www.mozilla.org/en-US/MPL/2.0/" target="_blank" rel="noreferrer">Mozilla Public License 2.0</a>.</p>
             </section>
             <section class="release reveal">
                 <div class="section-head">
                     <p class="eyebrow">Latest release</p>
-                    <h2>v0.8.0 <span class="release-date">Released Sunday, May 24, 2026</span></h2>
+                    <h2>v0.9.0 <span class="release-date">Released Monday, July 27, 2026</span></h2>
                 </div>
                 <div class="release-grid">
                     <article class="panel release-panel">
                         <h3>Highlights</h3>
                         <ul class="release-highlights">
-                            <li>Added broader glTF 2.0 compatibility with full support for over a dozen official extensions.</li>
-                            <li>Added the nodelink scientific visualization primitive.</li>
-                            <li>Added compute kernels for real/complex LU factoring and solving.</li>
-                            <li>Added external WebAssembly interop for typed views over foreign modules.</li>
-                            <li>Added renderer warmup and occlusion culling.</li>
-                            <li>Fixed glTF animation robustness by refreshing animation sampler views after WebAssembly allocations.</li>
+                            <li>Added the Gaussian splatfield scientific visualization primitive with support for glTF assets.</li>
+                            <li>Added the 2D/3D latticespace scientific visualization primitive.</li>
+                            <li>Added direct WebAssembly memory uploads across geometric and scientific visualization primitives.</li>
+                            <li>Added fly camera controls for first-person navigation.</li>
+                            <li>Fixed WebAssembly memory with reclaimed allocations and deterministic resource lifetimes.</li>
+                            <li>Added automated cross-platform, Rust, and WGSL testing.</li>
                         </ul>
                     </article>
                     <div class="release-badges">
@@ -75,17 +70,17 @@
                             <span class="material-icons-outlined">download</span>
                             <span><strong>Manual installation</strong><small>Download WasmGPU.min.js</small></span>
                         </a>
-                        <a class="release-chip" href="https://raw.githubusercontent.com/Zushah/WasmGPU/v0.8.0/dist/WasmGPU.js" target="_blank" rel="noreferrer" aria-label="Minified JavaScript bundle size">
+                        <a class="release-chip" href="https://raw.githubusercontent.com/Zushah/WasmGPU/v0.9.0/dist/WasmGPU.js" target="_blank" rel="noreferrer" aria-label="Minified JavaScript bundle size">
                             <span class="material-icons-outlined">data_object</span>
-                            <span><strong>JavaScript bundle</strong><small>22.9k lines of code in 838.7k bytes</small></span>
+                            <span><strong>JavaScript bundle</strong><small>30.38k lines of code packaged into 1.105mb</small></span>
                         </a>
-                        <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/releases/tag/v0.8.0" target="_blank" rel="noreferrer" aria-label="Release notes">
+                        <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0" target="_blank" rel="noreferrer" aria-label="Release notes">
                             <span class="material-icons-outlined">article</span>
-                            <span><strong>Release notes</strong><small>Full details of the updates</small></span>
+                            <span><strong>Release notes</strong><small>Full details of the recent updates</small></span>
                         </a>
-                        <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/compare/v0.7.0...v0.8.0" target="_blank" rel="noreferrer" aria-label="Compare changes">
+                        <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/compare/v0.8.0...v0.9.0" target="_blank" rel="noreferrer" aria-label="Compare changes">
                             <span class="material-icons-outlined">insights</span>
-                            <span><strong>Compare changes</strong><small>44.9k additions and 16.7k deletions across 274 files</small></span>
+                            <span><strong>Compare changes</strong><small>65.96k additions and 36.95k deletions across 310 files</small></span>
                         </a>
                         <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/issues" target="_blank" rel="noreferrer" aria-label="Give feedback">
                             <span class="material-icons-outlined">bug_report</span>
@@ -116,7 +111,7 @@
                             <span class="material-icons-outlined">cloud_download</span>
                             <h3>CDN bundle</h3>
                         </header>
-                        <pre id="install-cdn"><code>https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.8.0/dist/WasmGPU.iife.min.js</code></pre>
+                        <pre id="install-cdn"><code>https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.iife.min.js</code></pre>
                         <button class="copy-btn" type="button" data-copy-target="install-cdn">
                             <span class="material-icons-outlined">content_copy</span>
                             Copy link
@@ -147,8 +142,8 @@
                     </article>
                     <article class="panel reveal" style="--delay: 120ms;">
                         <span class="material-icons-outlined">account_tree</span>
-                        <h3>Data-oriented design</h3>
-                        <p>Scene and transform systems are organized to keep memory access predictable at scale.</p>
+                        <h3>Rich rendering</h3>
+                        <p>Render APIs include pointclouds, glyphfields, nodelinks, splatfields, latticespaces, and far more.</p>
                     </article>
                     <article class="panel reveal" style="--delay: 160ms;">
                         <span class="material-icons-outlined">source</span>

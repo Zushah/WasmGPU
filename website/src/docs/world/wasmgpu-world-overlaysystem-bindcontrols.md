@@ -31,7 +31,7 @@ const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
 
 const camera = wgpu.createCamera.perspective({ aspect: canvas.clientWidth / canvas.clientHeight });
-const controls = wgpu.createControls.orbit(camera, canvas, { enableDamping: true });
+const controls = wgpu.createControls.fly(camera, canvas, { moveSpeed: 8 });
 const overlay = wgpu.createOverlay.system({ camera });
 overlay.bindControls(controls);
 ```
@@ -40,3 +40,4 @@ overlay.bindControls(controls);
 - [OverlaySystem.setView](./wasmgpu-world-overlaysystem-setview.md)
 - [OverlaySystem.setInteractionActive](./wasmgpu-world-overlaysystem-setinteractionactive.md)
 - [OverlaySystem.update](./wasmgpu-world-overlaysystem-update.md)
+- [WasmGPU.createControls.fly](../interact/wasmgpu-createcontrols-fly.md)

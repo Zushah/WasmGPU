@@ -20,7 +20,7 @@ This accessor does not take parameters.
 ```ts
 type AnnotationProbeReadout = {
     hit: boolean;
-    kind: "mesh" | "pointcloud" | "glyphfield" | "nodelink" | null;
+    kind: "mesh" | "pointcloud" | "glyphfield" | "nodelink" | "splatfield" | "latticespace" | null;
     objectId: number | null;
     elementIndex: number | null;
     worldPosition: [number, number, number] | null;
@@ -29,7 +29,7 @@ type AnnotationProbeReadout = {
 };
 ```
 
-For `NodeLink` hits, `attributes.component` can tell you whether the hover target is a node or an edge when pick attributes are present.
+For `NodeLink` hits, `attributes.component` can tell you whether the hover target is a node or an edge. Splat hits can expose packed center, opacity, rotation, scale, and color/SH attributes; lattice hits can expose the selected cell and component values.
 
 ## Example
 ```js

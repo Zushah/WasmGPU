@@ -1,7 +1,7 @@
 # WasmGPU.createOverlay.legend
 
 ## Summary
-WasmGPU.createOverlay.legend creates a `LegendLayer` for scale-to-color interpretation. The source can be a point cloud, glyph field, nodelink node or edge mapping, data material, or an explicit colormap/scale descriptor. Add the layer to an `OverlaySystem` to display a synchronized legend during interaction.
+WasmGPU.createOverlay.legend creates a `LegendLayer` for scale-to-color interpretation. The source can be a point cloud, glyph field, nodelink node or edge mapping, latticespace, data material, or an explicit colormap/scale descriptor.
 
 ## Syntax
 ```ts
@@ -52,10 +52,11 @@ type OverlayLegendNodeLinkSource = {
 ### OverlayLegendSource
 
 ```ts
-type OverlayLegendSource = PointCloud | GlyphField | NodeLink | OverlayLegendNodeLinkSource | DataMaterial | OverlayLegendExplicitSource;
+type OverlayLegendSource = PointCloud | GlyphField | NodeLink | LatticeSpace | OverlayLegendNodeLinkSource | DataMaterial | OverlayLegendExplicitSource;
 ```
 
 Passing a `NodeLink` directly binds the legend to node scalars. Use `OverlayLegendNodeLinkSource` when you want the legend to follow edge scalars instead.
+Passing a `LatticeSpace` follows its scalar scale transform and colormap. GPU-only colormaps cannot be sampled in strict CPU-parity mode.
 
 ### LegendLayerDescriptor
 
@@ -97,4 +98,5 @@ overlay.addLayer(legend);
 - [LegendLayer.update](./wasmgpu-world-legendlayer-update.md)
 - [WasmGPU.createPointCloud](../objects/wasmgpu-createpointcloud.md)
 - [WasmGPU.createNodeLink](../objects/wasmgpu-createnodelink.md)
+- [WasmGPU.createLatticeSpace](../objects/wasmgpu-createlatticespace.md)
 - [OverlaySystem.addLayer](./wasmgpu-world-overlaysystem-addlayer.md)

@@ -1,7 +1,7 @@
 # Scene.destroy
 
 ## Summary
-Scene.destroy releases resources for all scene objects and clears all collections, including lights. It calls `destroy()` on meshes, point clouds, glyph fields, and nodelinks currently in the scene. After destruction, the scene can be reused but will be empty.
+Scene.destroy releases resources for all scene objects and clears all collections, including lights. It calls `destroy()` on meshes, point clouds, glyph fields, node links, splat fields, and lattice spaces currently in the scene. After destruction, the scene can be reused but will be empty.
 
 ## Syntax
 ```ts

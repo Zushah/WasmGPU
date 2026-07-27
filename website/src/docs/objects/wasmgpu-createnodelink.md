@@ -33,6 +33,11 @@ type NodeLinkDescriptor = {
     nodeScalarsBuffer?: GPUBuffer | { buffer: GPUBuffer };
     nodeColorsBuffer?: GPUBuffer | { buffer: GPUBuffer };
     nodeRadiiBuffer?: GPUBuffer | { buffer: GPUBuffer };
+    wasmNodePositions?: WasmMemoryView<Float32Array>;
+    wasmNodeScalars?: WasmMemoryView<Float32Array>;
+    wasmNodeColors?: WasmMemoryView<Float32Array>;
+    wasmNodeRadii?: WasmMemoryView<Float32Array>;
+    wasmNodeCapacity?: number;
     edgeCount?: number;
     edges?: Uint16Array | Uint32Array;
     edgeScalars?: Float32Array;
@@ -40,6 +45,10 @@ type NodeLinkDescriptor = {
     edgesBuffer?: GPUBuffer | { buffer: GPUBuffer };
     edgeScalarsBuffer?: GPUBuffer | { buffer: GPUBuffer };
     edgeColorsBuffer?: GPUBuffer | { buffer: GPUBuffer };
+    wasmEdges?: WasmMemoryView<Uint32Array>;
+    wasmEdgeScalars?: WasmMemoryView<Float32Array>;
+    wasmEdgeColors?: WasmMemoryView<Float32Array>;
+    wasmEdgeCapacity?: number;
     nodeGeometryMode?: NodeLinkNodeGeometryMode;
     edgeGeometryMode?: NodeLinkEdgeGeometryMode;
     nodeColorMode?: NodeLinkColorMode;
@@ -70,9 +79,12 @@ type NodeLinkDescriptor = {
     visible?: boolean;
     name?: string;
     keepCPUData?: boolean;
+    ownBuffers?: boolean;
     ndShape?: number[];
 };
 ```
+
+External node and edge GPU buffers are borrowed by default. `ownBuffers: true` transfers their destruction responsibility to the nodelink. Setter-level `ownBuffer: true` can transfer an individual replacement buffer.
 
 #### Node Data Fields
 | Name | Type | Required | Description |
@@ -88,6 +100,8 @@ type NodeLinkDescriptor = {
 | `nodeColorsBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | External GPU buffer with packed RGBA float tuples per node. |
 | `nodeRadiiBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | External GPU buffer for node radii or axis scales, authored as packed vec4 float tuples per node. |
 | `nodeCount` | `number` | No | Node count for external-buffer workflows. It is required when `nodePositionsBuffer` is supplied. |
+| `wasmNodePositions`, `wasmNodeScalars`, `wasmNodeColors`, `wasmNodeRadii` | `WasmMemoryView<Float32Array>` | No | Borrowed node channels refreshed explicitly after producer writes. |
+| `wasmNodeCapacity` | `number` | No | Initial grow-only GPU capacity hint for Wasm-backed node channels. |
 
 #### Edge Data Fields
 | Name | Type | Required | Description |
@@ -99,6 +113,9 @@ type NodeLinkDescriptor = {
 | `edgeScalarsBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | External GPU buffer with one float scalar per edge. |
 | `edgeColorsBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | External GPU buffer with packed RGBA float tuples per edge. |
 | `edgeCount` | `number` | No | Edge count for external-buffer workflows. This counts edge pairs, not raw buffer elements. |
+| `wasmEdges` | `WasmMemoryView<Uint32Array>` | No | Borrowed packed source/destination index pairs. |
+| `wasmEdgeScalars`, `wasmEdgeColors` | `WasmMemoryView<Float32Array>` | No | Borrowed edge scalar or RGBA channels. |
+| `wasmEdgeCapacity` | `number` | No | Initial grow-only GPU capacity hint for Wasm-backed edge channels. |
 
 #### Visual Fields
 | Name | Type | Required | Description |
@@ -122,6 +139,7 @@ type NodeLinkDescriptor = {
 | `visible` | `boolean` | No | Scene visibility flag. |
 | `name` | `string` | No | Optional scene lookup name. |
 | `keepCPUData` | `boolean` | No | Retains CPU-side arrays after upload. This is the simplest way to keep richer picking payloads available for nodes and edges. |
+| `ownBuffers` | `boolean` | No | Transfers destruction responsibility for caller-supplied node and edge GPU buffers. Wasm views remain borrowed. |
 | `ndShape` | `number[]` | No | Optional multidimensional shape used to decode node picks into `ndIndex` values. Edge hits keep `ndIndex: null`. |
 
 ### NodeLinkNodeGeometryMode
@@ -226,6 +244,9 @@ const graph = wgpu.createNodeLink({
 ```
 
 ## See Also
+- [NodeLink.setNodeData](./wasmgpu-objects-nodelink-setnodedata.md)
+- [NodeLink.setEdgeData](./wasmgpu-objects-nodelink-setedgedata.md)
+- [NodeLink.refreshFromWasm](./wasmgpu-objects-nodelink-refreshfromwasm.md)
 - [NodeLink.count](./wasmgpu-objects-nodelink-count.md)
 - [NodeLink.geometryMode](./wasmgpu-objects-nodelink-geometrymode.md)
 - [NodeLink.colorMode](./wasmgpu-objects-nodelink-colormode.md)

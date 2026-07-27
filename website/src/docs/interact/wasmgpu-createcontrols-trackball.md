@@ -1,7 +1,7 @@
 # WasmGPU.createControls.trackball
 
 ## Summary
-WasmGPU.createControls.trackball creates `TrackballControls`, a `NavigationControls` specialization for free-form trackball rotation.
+WasmGPU.createControls.trackball creates `TrackballControls`, a `NavigationControls` specialization that starts in free-form trackball mode.
 Trackball mode rotates camera eye and up vectors together, which is useful for data that benefits from unconstrained orientation.
 Use this when strict world-up orbit behavior is too limiting.
 
@@ -23,27 +23,10 @@ const controls = wgpu.createControls.trackball(camera, domElement, options);
 
 ## Type Details
 ```ts
-type TrackballControlsDescriptor = {
-    mode?: "orbit" | "trackball"; // forced to trackball by this factory
-    axisConvention?: "y-up-rh" | "z-up-rh" | "x-up-rh" | { right?: Vec3; up: Vec3; forward: Vec3 };
-    target?: Vec3;
-    enabled?: boolean;
-    enableRotate?: boolean;
-    enablePan?: boolean;
-    enableZoom?: boolean;
-    rotateSpeed?: number;
-    panSpeed?: number;
-    zoomSpeed?: number;
-    zoomOnCursor?: boolean;
-    enableDamping?: boolean;
-    dampingFactor?: number;
-    minDistance?: number;
-    maxDistance?: number;
-    minZoom?: number;
-    maxZoom?: number;
-    mouseButtons?: { rotate?: number; pan?: number; zoom?: number };
-};
+type TrackballControlsDescriptor = NavigationControlsDescriptor;
 ```
+
+The factory overrides the descriptor's initial `mode` with `"trackball"`. The returned controller still inherits `setMode()` and can switch to orbit or fly behavior later. See [WasmGPU.createControls.navigation](./wasmgpu-createcontrols-navigation.md) for the complete descriptor.
 
 ## Example
 ```js

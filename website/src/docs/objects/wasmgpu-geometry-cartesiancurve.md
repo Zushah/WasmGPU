@@ -21,17 +21,28 @@ const result = wgpu.geometry.cartesianCurve(descriptor);
 ### CartesianCurveDescriptor
 
 ```ts
-type CartesianCurveDescriptor = {
-    f: (x: number) => number;
-    xMin?: number;
-    xMax?: number;
-    segments?: number;
-    radius?: number;
-    radialSegments?: number;
-    closed?: boolean;
-    plane?: "xy" | "xz" | "yz";
-    up?: [number, number, number];
-    breakOnInvalid?: boolean;
+type CartesianCurveDescriptor = {
+
+    f: (x: number) => number;
+
+    xMin?: number;
+
+    xMax?: number;
+
+    segments?: number;
+
+    radius?: number;
+
+    radialSegments?: number;
+
+    closed?: boolean;
+
+    plane?: "xy" | "xz" | "yz";
+
+    up?: [number, number, number];
+
+    breakOnInvalid?: boolean;
+
 };
 ```
 

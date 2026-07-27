@@ -21,24 +21,42 @@ glyphField.setScaleTransform(transform);
 ### ScaleTransformDescriptor
 
 ```ts
-type ScaleTransformDescriptor = {
-    mode?: ScaleMode;
-    clampMode?: ScaleClampMode;
-    valueMode?: ScaleValueMode;
-    componentCount?: number;
-    componentIndex?: number;
-    stride?: number;
-    offset?: number;
-    domainMin?: number;
-    domainMax?: number;
-    clampMin?: number;
-    clampMax?: number;
-    percentileLow?: number;
-    percentileHigh?: number;
-    logBase?: number;
-    symlogLinThresh?: number;
-    gamma?: number;
-    invert?: boolean;
+type ScaleTransformDescriptor = {
+
+    mode?: ScaleMode;
+
+    clampMode?: ScaleClampMode;
+
+    valueMode?: ScaleValueMode;
+
+    componentCount?: number;
+
+    componentIndex?: number;
+
+    stride?: number;
+
+    offset?: number;
+
+    domainMin?: number;
+
+    domainMax?: number;
+
+    clampMin?: number;
+
+    clampMax?: number;
+
+    percentileLow?: number;
+
+    percentileHigh?: number;
+
+    logBase?: number;
+
+    symlogLinThresh?: number;
+
+    gamma?: number;
+
+    invert?: boolean;
+
 };
 ```
 
@@ -61,24 +79,42 @@ type ScaleTransformDescriptor = {
 ### ScaleTransform
 
 ```ts
-type ScaleTransform = {
-    mode: ScaleMode;
-    clampMode: ScaleClampMode;
-    valueMode: ScaleValueMode;
-    componentCount: number;
-    componentIndex: number;
-    stride: number;
-    offset: number;
-    domainMin: number;
-    domainMax: number;
-    clampMin: number;
-    clampMax: number;
-    percentileLow: number;
-    percentileHigh: number;
-    logBase: number;
-    symlogLinThresh: number;
-    gamma: number;
-    invert: boolean;
+type ScaleTransform = {
+
+    mode: ScaleMode;
+
+    clampMode: ScaleClampMode;
+
+    valueMode: ScaleValueMode;
+
+    componentCount: number;
+
+    componentIndex: number;
+
+    stride: number;
+
+    offset: number;
+
+    domainMin: number;
+
+    domainMax: number;
+
+    clampMin: number;
+
+    clampMax: number;
+
+    percentileLow: number;
+
+    percentileHigh: number;
+
+    logBase: number;
+
+    symlogLinThresh: number;
+
+    gamma: number;
+
+    invert: boolean;
+
 };
 ```
 

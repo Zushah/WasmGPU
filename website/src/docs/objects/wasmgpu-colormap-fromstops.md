@@ -28,10 +28,14 @@ type ColormapStop = Color4 | { t: number; color: Color4; };
 ### ColormapDescriptor
 
 ```ts
-type ColormapDescriptor = {
-    resolution?: number;
-    filter?: ColormapFilter;
-    colorSpace?: "srgb" | "linear";
+type ColormapDescriptor = {
+
+    resolution?: number;
+
+    filter?: ColormapFilter;
+
+    colorSpace?: "srgb" | "linear";
+
 };
 ```
 

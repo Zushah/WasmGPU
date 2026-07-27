@@ -21,43 +21,51 @@ const result = wgpu.createGlyphField(descriptor);
 ### GlyphFieldDescriptor
 
 ```ts
-type GlyphFieldDescriptor = {
-    shape?: GlyphShape;
-    geometry?: Geometry;
-    instanceCount?: number;
-    positions?: Float32Array;
-    rotations?: Float32Array;
-    scales?: Float32Array;
-    attributes?: Float32Array;
-    positionsPtr?: WasmPtr;
-    rotationsPtr?: WasmPtr;
-    scalesPtr?: WasmPtr;
-    attributesPtr?: WasmPtr;
-    positionsBuffer?: GPUBuffer | { buffer: GPUBuffer };
-    rotationsBuffer?: GPUBuffer | { buffer: GPUBuffer };
-    scalesBuffer?: GPUBuffer | { buffer: GPUBuffer };
-    attributesBuffer?: GPUBuffer | { buffer: GPUBuffer };
-    boundsMin?: [number, number, number];
-    boundsMax?: [number, number, number];
-    boundsCenter?: [number, number, number];
-    boundsRadius?: number;
-    blendMode?: BlendMode;
-    cullMode?: CullMode;
-    depthWrite?: boolean;
-    depthTest?: boolean;
-    colorMode?: GlyphColorMode;
-    colormap?: GlyphColormap | Colormap;
-    colormapStops?: Color4[];
-    scaleTransform: ScaleTransformDescriptor;
-    opacity?: number;
-    lit?: boolean;
-    solidColor?: Color4;
-    visible?: boolean;
-    name?: string;
-    keepCPUData?: boolean;
-    ndShape?: number[];
+type GlyphFieldDescriptor = {
+    shape?: GlyphShape;
+    geometry?: Geometry;
+    instanceCount?: number;
+    positions?: Float32Array;
+    rotations?: Float32Array;
+    scales?: Float32Array;
+    attributes?: Float32Array;
+    wasmPositions?: WasmMemoryView<Float32Array>;
+    wasmRotations?: WasmMemoryView<Float32Array>;
+    wasmScales?: WasmMemoryView<Float32Array>;
+    wasmAttributes?: WasmMemoryView<Float32Array> | null;
+    wasmCapacity?: number;
+    positionsPtr?: WasmPtr;
+    rotationsPtr?: WasmPtr;
+    scalesPtr?: WasmPtr;
+    attributesPtr?: WasmPtr;
+    positionsBuffer?: GPUBuffer | { buffer: GPUBuffer };
+    rotationsBuffer?: GPUBuffer | { buffer: GPUBuffer };
+    scalesBuffer?: GPUBuffer | { buffer: GPUBuffer };
+    attributesBuffer?: GPUBuffer | { buffer: GPUBuffer };
+    boundsMin?: [number, number, number];
+    boundsMax?: [number, number, number];
+    boundsCenter?: [number, number, number];
+    boundsRadius?: number;
+    blendMode?: BlendMode;
+    cullMode?: CullMode;
+    depthWrite?: boolean;
+    depthTest?: boolean;
+    colorMode?: GlyphColorMode;
+    colormap?: GlyphColormap | Colormap;
+    colormapStops?: Color4[];
+    scaleTransform: ScaleTransformDescriptor;
+    opacity?: number;
+    lit?: boolean;
+    solidColor?: Color4;
+    visible?: boolean;
+    name?: string;
+    keepCPUData?: boolean;
+    ownBuffers?: boolean;
+    ndShape?: number[];
 };
 ```
+
+External GPU buffers are borrowed by default. `ownBuffers: true` transfers responsibility for destroying the supplied instance buffers. Borrowed WebAssembly sources and their explicit-refresh contract are documented separately.
 
 #### GlyphFieldDescriptor Fields
 | Name | Type | Required | Description |
@@ -69,11 +77,14 @@ type GlyphFieldDescriptor = {
 | `rotations` | `Float32Array` | No | Packed per-instance quaternion rotations. |
 | `scales` | `Float32Array` | No | Packed per-instance scales. |
 | `attributes` | `Float32Array` | No | Packed per-instance attribute values. |
+| `wasmPositions`, `wasmRotations`, `wasmScales`, `wasmAttributes` | `WasmMemoryView<Float32Array>` | No | Borrowed packed vec4 channels. They are mutually exclusive with CPU, legacy-pointer, and GPU-buffer sources for the same data family. |
+| `wasmCapacity` | `number` | No | Initial grow-only GPU capacity hint for Wasm-backed channels. |
 | `positionsPtr` | `WasmPtr` | No | Wasm pointer to positions SoA data. |
 | `rotationsPtr` | `WasmPtr` | No | Wasm pointer to rotations SoA data. |
 | `scalesPtr` | `WasmPtr` | No | Wasm pointer to scales SoA data. |
 | `attributesPtr` | `WasmPtr` | No | Wasm pointer to attributes SoA data. |
 | `positionsBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | GPU buffer handle used by this operation. |
+| `ownBuffers` | `boolean` | No | Transfers destruction responsibility for supplied GPU instance buffers. Wasm views remain borrowed. |
 
 ### GlyphShape
 
@@ -108,24 +119,24 @@ type Color4 = [number, number, number, number];
 ### ScaleTransformDescriptor
 
 ```ts
-type ScaleTransformDescriptor = {
-    mode?: ScaleMode;
-    clampMode?: ScaleClampMode;
-    valueMode?: ScaleValueMode;
-    componentCount?: number;
-    componentIndex?: number;
-    stride?: number;
-    offset?: number;
-    domainMin?: number;
-    domainMax?: number;
-    clampMin?: number;
-    clampMax?: number;
-    percentileLow?: number;
-    percentileHigh?: number;
-    logBase?: number;
-    symlogLinThresh?: number;
-    gamma?: number;
-    invert?: boolean;
+type ScaleTransformDescriptor = {
+    mode?: ScaleMode;
+    clampMode?: ScaleClampMode;
+    valueMode?: ScaleValueMode;
+    componentCount?: number;
+    componentIndex?: number;
+    stride?: number;
+    offset?: number;
+    domainMin?: number;
+    domainMax?: number;
+    clampMin?: number;
+    clampMax?: number;
+    percentileLow?: number;
+    percentileHigh?: number;
+    logBase?: number;
+    symlogLinThresh?: number;
+    gamma?: number;
+    invert?: boolean;
 };
 ```
 
@@ -175,6 +186,9 @@ console.log(result);
 ```
 
 ## See Also
+- [GlyphField.setCPUData](./wasmgpu-objects-glyphfield-setcpudata.md)
+- [GlyphField.setWasmPositions](./wasmgpu-objects-glyphfield-setwasmpositions.md)
+- [GlyphField.refreshFromWasm](./wasmgpu-objects-glyphfield-refreshfromwasm.md)
 - [WasmGPU.animation.createClip](./wasmgpu-animation-createclip.md)
 - [WasmGPU.animation.createPlayer](./wasmgpu-animation-createplayer.md)
 - [WasmGPU.animation.createSkin](./wasmgpu-animation-createskin.md)

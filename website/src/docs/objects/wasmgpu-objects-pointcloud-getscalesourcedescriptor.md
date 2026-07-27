@@ -21,15 +21,24 @@ const result = pointCloud.getScaleSourceDescriptor(revision);
 ### ScaleSourceDescriptor
 
 ```ts
-type ScaleSourceDescriptor = {
-    buffer: ScaleBufferSource;
-    count: number;
-    componentCount?: number;
-    componentIndex?: number;
-    valueMode?: ScaleValueMode;
-    stride?: number;
-    offset?: number;
-    revision?: number;
+type ScaleSourceDescriptor = {
+
+    buffer: ScaleBufferSource;
+
+    count: number;
+
+    componentCount?: number;
+
+    componentIndex?: number;
+
+    valueMode?: ScaleValueMode;
+
+    stride?: number;
+
+    offset?: number;
+
+    revision?: number;
+
 };
 ```
 

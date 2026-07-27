@@ -1,7 +1,7 @@
 # WasmGPU.animation.createSkin
 
 ## Summary
-WasmGPU.animation.createSkin creates animation runtime objects used for clip sampling, playback, and skinning.
+WasmGPU.animation.createSkin creates a runtime skin, copying joint transform indices and inverse-bind matrices into owned Wasm allocations.
 
 ## Syntax
 ```ts
@@ -15,6 +15,8 @@ const result = wgpu.animation.createSkin(name, joints, inverseBindMatrices);
 | `name` | `string` | Yes | Human-readable identifier used for labels, debugging, or lookup keys. |
 | `joints` | `Transform[]` | Yes | Joint transforms in skin order. |
 | `inverseBindMatrices` | `Float32Array \| null` | Yes | Optional packed inverse bind matrices (`jointCount * 16`) or `null`. |
+
+When `inverseBindMatrices` is `null` or does not contain exactly `jointCount * 16` values, the skin initializes identity inverse-bind matrices.
 
 ## Returns
 `Skin` - Skin runtime object created for animation workflows.
@@ -35,8 +37,11 @@ const joints = [joint0];
 const inverseBindMatrices = null;
 const result = wgpu.animation.createSkin(name, joints, inverseBindMatrices);
 console.log(result);
+result.dispose();
 ```
 
 ## See Also
 - [WasmGPU.animation.createClip](./wasmgpu-animation-createclip.md)
 - [WasmGPU.animation.createPlayer](./wasmgpu-animation-createplayer.md)
+- [Skin.dispose](./wasmgpu-objects-skin-dispose.md)
+- [Skin.disposed](./wasmgpu-objects-skin-disposed.md)

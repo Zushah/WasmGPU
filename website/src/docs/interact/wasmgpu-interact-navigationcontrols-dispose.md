@@ -1,6 +1,7 @@
 # WasmGPU.createControls.navigation().dispose
 
 ## Summary
+Disposal also releases fly-mode keyboard, pointer-lock, and document-level mouse listeners and exits pointer lock owned by the controls.
 WasmGPU.createControls.navigation().dispose detaches event listeners, clears callbacks, and ends any active transition.
 Call this before discarding controls to avoid leaked DOM listeners.
 

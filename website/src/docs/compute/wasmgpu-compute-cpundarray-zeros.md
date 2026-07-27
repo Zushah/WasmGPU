@@ -28,6 +28,7 @@ const wgpu = await WasmGPU.create(canvas);
 
 const a = wgpu.compute.CPUndarray.zeros("u32", { shape: [8] });
 console.log(Array.from(a.data()));
+a.destroy();
 ```
 
 ## See Also
@@ -36,3 +37,4 @@ console.log(Array.from(a.data()));
 - [WasmGPU.compute.CPUndarray.fromArray](./wasmgpu-compute-cpundarray-fromarray.md)
 - [WasmGPU.compute.CPUndarray.data](./wasmgpu-compute-cpundarray-data.md)
 - [WasmGPU.compute.CPUndarray.uploadToGPU](./wasmgpu-compute-cpundarray-uploadtogpu.md)
+- [WasmGPU.compute.CPUndarray.destroy](./wasmgpu-compute-cpundarray-destroy.md)

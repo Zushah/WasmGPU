@@ -19,13 +19,20 @@ This API does not take parameters.
 ### Bounds3
 
 ```ts
-type Bounds3 = {
-    boxMin: Vec3;
-    boxMax: Vec3;
-    sphereCenter: Vec3;
-    sphereRadius: number;
-    empty: boolean;
-    partial: boolean;
+type Bounds3 = {
+
+    boxMin: Vec3;
+
+    boxMax: Vec3;
+
+    sphereCenter: Vec3;
+
+    sphereRadius: number;
+
+    empty: boolean;
+
+    partial: boolean;
+
 };
 ```
 

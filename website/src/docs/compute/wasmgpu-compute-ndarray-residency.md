@@ -32,6 +32,8 @@ const cpu = wgpu.compute.CPUndarray.empty("f32", { shape: [4, 4] });
 const gpu = cpu.uploadToGPU(wgpu.gpu, { copySrc: true });
 
 console.log(cpu.residency, gpu.residency);
+cpu.destroy();
+gpu.destroy();
 ```
 
 ## See Also
@@ -40,3 +42,4 @@ console.log(cpu.residency, gpu.residency);
 - [WasmGPU.compute.ndarray.layout](./wasmgpu-compute-ndarray-layout.md)
 - [WasmGPU.compute.ndarray.wgslScalarType](./wasmgpu-compute-ndarray-wgslscalartype.md)
 - [WasmGPU.compute.ndarray.ndim](./wasmgpu-compute-ndarray-ndim.md)
+- [WasmGPU.compute.CPUndarray.destroy](./wasmgpu-compute-cpundarray-destroy.md)

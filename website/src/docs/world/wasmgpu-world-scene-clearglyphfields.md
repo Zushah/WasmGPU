@@ -1,7 +1,7 @@
 # Scene.clearGlyphFields
 
 ## Summary
-Scene.clearGlyphFields removes only glyph field objects from the scene. Meshes, point clouds, nodelinks, and lights are left intact. This is useful when glyph visualizations are updated independently of other world content.
+Scene.clearGlyphFields removes only glyph field objects from the scene. Meshes, point clouds, node links, splat fields, lattice spaces, and lights are left intact. This is useful when glyph visualizations are updated independently of other world content.
 
 ## Syntax
 ```ts

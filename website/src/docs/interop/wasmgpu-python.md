@@ -5,6 +5,7 @@ WasmGPU.python provides ndarray-oriented data transfer utilities for Python-JS i
 It supports sending arrays into Wasm memory, receiving typed views/copies back, in-place updates, and freeing heap-owned transfers.
 This API is designed to pair with Pyodide or any bridge that exposes Python buffers.
 It is separate from [WasmGPU.webassembly](./wasmgpu-webassembly.md), which reads directly from foreign WebAssembly modules.
+Heap handles must be passed to `free()` when no longer needed. Freeing is idempotent, and all later access through that handle is rejected.
 
 ## Syntax
 ```ts

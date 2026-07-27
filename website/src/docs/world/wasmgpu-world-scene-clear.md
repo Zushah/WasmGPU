@@ -1,7 +1,7 @@
 # Scene.clear
 
 ## Summary
-Scene.clear removes all meshes, point clouds, glyph fields, and nodelinks from the scene in one call. Light objects are not affected by this method. Use this when rebuilding object content while preserving lighting setup.
+Scene.clear removes all meshes, point clouds, glyph fields, node links, splat fields, and lattice spaces from the scene in one call. Light objects are not affected. Removed objects are not destroyed.
 
 ## Syntax
 ```ts
@@ -43,5 +43,7 @@ console.log(scene.meshes.length, scene.nodeLinks.length);
 - [Scene.clearPointClouds](./wasmgpu-world-scene-clearpointclouds.md)
 - [Scene.clearGlyphFields](./wasmgpu-world-scene-clearglyphfields.md)
 - [Scene.clearNodeLinks](./wasmgpu-world-scene-clearnodelinks.md)
+- [Scene.splatFields and related APIs](./wasmgpu-world-scene-splatfields.md)
+- [Scene.latticeSpaces and related APIs](./wasmgpu-world-scene-latticespaces.md)
 - [Scene.clearLights](./wasmgpu-world-scene-clearlights.md)
 - [Scene.destroy](./wasmgpu-world-scene-destroy.md)

@@ -1,12 +1,13 @@
 # PointCloud.setPointsBuffer
 
 ## Summary
-PointCloud.setPointsBuffer updates points buffer state on this PointCloud and marks dependent GPU data for refresh.
+The replacement buffer is borrowed by default. Pass `{ ownBuffer: true }` to transfer destruction responsibility to the pointcloud; replacing or destroying the object then destroys that owned buffer exactly once.
+The call replaces CPU and Wasm point sources, sets `pointCount`, and clears retained point records.
 
 ## Syntax
 ```ts
-PointCloud.setPointsBuffer(buffer: GPUBuffer, pointCount: number): void
-pointCloud.setPointsBuffer(buffer, pointCount);
+PointCloud.setPointsBuffer(buffer: GPUBuffer, pointCount: number, opts?: { ownBuffer?: boolean }): void
+pointCloud.setPointsBuffer(buffer, pointCount, opts);
 ```
 
 ## Parameters
@@ -14,6 +15,7 @@ pointCloud.setPointsBuffer(buffer, pointCount);
 | --- | --- | --- | --- |
 | `buffer` | `GPUBuffer` | Yes | GPUBuffer handle used as an external data source. |
 | `pointCount` | `number` | Yes | Number of points represented by the supplied data source. |
+| `opts` | `{ ownBuffer?: boolean }` | No | Set `ownBuffer: true` to transfer buffer destruction responsibility. |
 
 ## Returns
 `void` - No return value. The call applies side effects to runtime state and/or GPU resources.
@@ -32,7 +34,6 @@ const pointCloud = wgpu.createPointCloud({ data: new Float32Array([0, 0, 0, 0.1,
 const buffer = somePointBuffer;
 const pointCount = 2;
 pointCloud.setPointsBuffer(buffer, pointCount);
-console.log("updated");
 ```
 
 ## See Also
@@ -48,3 +49,4 @@ console.log("updated");
 - [PointCloud.getColormapForBinding](./wasmgpu-objects-pointcloud-getcolormapforbinding.md)
 - [PointCloud.getColormapKey](./wasmgpu-objects-pointcloud-getcolormapkey.md)
 - [PointCloud.getLocalBounds](./wasmgpu-objects-pointcloud-getlocalbounds.md)
+- [PointCloud.setColorsBuffer](./wasmgpu-objects-pointcloud-setcolorsbuffer.md)

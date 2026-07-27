@@ -25,6 +25,7 @@ const wgpu = await WasmGPU.create(canvas);
 
 const a = wgpu.compute.CPUndarray.empty("f32", { shape: [16] });
 console.log(a.wgslScalarType);
+a.destroy();
 ```
 
 ## See Also
@@ -33,3 +34,4 @@ console.log(a.wgslScalarType);
 - [WasmGPU.compute.GPUndarray.empty](./wasmgpu-compute-gpundarray-empty.md)
 - [WasmGPU.compute.ndarray.layout](./wasmgpu-compute-ndarray-layout.md)
 - [WasmGPU.compute.ndarray.ndim](./wasmgpu-compute-ndarray-ndim.md)
+- [WasmGPU.compute.CPUndarray.destroy](./wasmgpu-compute-cpundarray-destroy.md)

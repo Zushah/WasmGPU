@@ -14,7 +14,7 @@ const result = await wgpu.pickRect(scene, camera, x0, y0, x1, y1, opts);
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `scene` | `Scene` | Yes | Scene to query for pickable mesh, point cloud, glyph field, and nodelink elements. |
+| `scene` | `Scene` | Yes | Scene to query for pickable mesh, point cloud, glyph field, nodelink, splatfield, and latticespace elements. |
 | `camera` | `Camera` | Yes | Camera used for the region query projection. |
 | `x0` | `number` | Yes | First corner X coordinate in CSS pixel space. |
 | `y0` | `number` | Yes | First corner Y coordinate in CSS pixel space. |
@@ -41,7 +41,7 @@ type PickRegionResult = {
 };
 ```
 
-Each hit in `result.hits` uses the same `PickHit` contract as [WasmGPU.pick](./wasmgpu-pick.md), including nodelink node-versus-edge payloads when attributes are requested.
+Each hit uses the same `PickHit` contract as [WasmGPU.pick](./wasmgpu-pick.md). Lattice hits always decode the exact cell index into `ndIndex`; retained CPU records are needed only for optional cell-value attributes. Splat attributes likewise depend on retained records.
 
 ## Example
 ```js

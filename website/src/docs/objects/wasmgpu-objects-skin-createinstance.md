@@ -1,7 +1,7 @@
 # Skin.createInstance
 
 ## Summary
-Skin.createInstance operates on a Skin runtime object to update state, query data, or manage lifecycle.
+Skin.createInstance creates a per-mesh skin binding, including an owned Wasm bind-matrix allocation and lazily created GPU bone resources. It throws when the parent skin is disposed.
 
 ## Syntax
 ```ts
@@ -29,10 +29,13 @@ const wgpu = await WasmGPU.create(canvas);
 
 const joint0 = wgpu.createTransform();
 const skin = wgpu.animation.createSkin("skin", [joint0], null);
-const meshTransform = {};
+const meshTransform = wgpu.createTransform();
 const result = skin.createInstance(meshTransform);
 console.log(result);
+result.dispose();
+skin.dispose();
 ```
 
 ## See Also
 - [Skin.dispose](./wasmgpu-objects-skin-dispose.md)
+- [SkinInstance.dispose](./wasmgpu-objects-skininstance-dispose.md)

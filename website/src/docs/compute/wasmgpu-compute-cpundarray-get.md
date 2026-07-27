@@ -27,6 +27,7 @@ const wgpu = await WasmGPU.create(canvas);
 
 const a = wgpu.compute.CPUndarray.fromArray("u32", [2, 3], new Uint32Array([10, 20, 30, 40, 50, 60]));
 console.log(a.get(0, 2), a.get(1, 1));
+a.destroy();
 ```
 
 ## See Also
@@ -35,3 +36,4 @@ console.log(a.get(0, 2), a.get(1, 1));
 - [WasmGPU.compute.CPUndarray.empty](./wasmgpu-compute-cpundarray-empty.md)
 - [WasmGPU.compute.ndarray.layout](./wasmgpu-compute-ndarray-layout.md)
 - [WasmGPU.compute.CPUndarray.fromArray](./wasmgpu-compute-cpundarray-fromarray.md)
+- [WasmGPU.compute.CPUndarray.destroy](./wasmgpu-compute-cpundarray-destroy.md)

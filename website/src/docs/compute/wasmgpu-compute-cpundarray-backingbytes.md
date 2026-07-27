@@ -27,6 +27,7 @@ const a = wgpu.compute.CPUndarray.zeros("u16", { shape: [4] });
 const bytes = a.backingBytes();
 bytes[0] = 255;
 console.log(bytes.byteLength, a.get(0));
+a.destroy();
 ```
 
 ## See Also
@@ -35,3 +36,4 @@ console.log(bytes.byteLength, a.get(0));
 - [WasmGPU.compute.CPUndarray.empty](./wasmgpu-compute-cpundarray-empty.md)
 - [WasmGPU.compute.ndarray.layout](./wasmgpu-compute-ndarray-layout.md)
 - [WasmGPU.compute.CPUndarray.uploadToGPU](./wasmgpu-compute-cpundarray-uploadtogpu.md)
+- [WasmGPU.compute.CPUndarray.destroy](./wasmgpu-compute-cpundarray-destroy.md)

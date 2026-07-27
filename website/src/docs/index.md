@@ -1,10 +1,19 @@
-# WasmGPU v0.8.0
+# WasmGPU v0.9.0
 
 WebGPU × WebAssembly rendering and computing engine for scientific workloads in the browser.
 
-The WebGPU engine is written in TypeScript, spanning **scene & assets** (meshes, pointclouds, glyphfields, nodelinks, data materials, lights, cameras, glTF 2.0 assets with over a dozen extensions, metadata, and animation-extension coverage, mipmapped texture sampling, transparency including transmission rendering, animations, 4- or 8-influence skinning, and rich built-in geometry including cartesian and parametric curves and surfaces for mathematics); **rendering architecture** (WebAssembly-powered frustum culling, previous-frame occlusion culling, opaque draw batching with automatic instanced rendering, optional subpixel morphological anti-aliasing, configurable canvas format selection, and GPU ID-pass picking for both single-hit queries and rectangular or lasso region queries with typed results); **interaction, overlays, & diagnostics** (orbit/trackball orthographic/perspective camera navigation with bounds-based scene framing, inspection views, and a composable overlay and annotation toolkit with triads, grids, legends, markers, probes, and measurements); and **compute & interop** (a first-class compute subsystem with reusable pipelines and buffers, an extensive kernels library, an ndarray abstraction, asynchronous readback utilities, a unified scale-transform model shared across rendering and computing workflows, external WebAssembly module interoperability, and Python-in-the-browser interoperability).
+* ⚙️ WebGPU engine in TypeScript.
+    - 🌐 **Scene & assets**: Meshes, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, data materials, lights, cameras, glTF 2.0 assets with support for over a dozen extensions, mipmapped texture sampling, transparency including transmission rendering, animations, 4- or 8-influence skinning, and rich built-in geometry including cartesian and parametric curves and surfaces for mathematics.
+    - 🖼️ **Rendering architecture**: WebAssembly-powered frustum culling, previous-frame occlusion culling, opaque draw batching with automatic instanced rendering, GPU sorting for order-dependent scientific primitives, optional subpixel morphological anti-aliasing, configurable canvas format selection, and GPU ID-pass picking across meshes and scientific primitives for individual or regional queries with typed results.
+    - 🧭 **Interaction, overlays, & diagnostics**: Orbit, trackball, and fly controls for orthographic and perspective cameras with bounds-based scene framing and inspection views, plus a composable overlay and annotation toolkit with triads, grids, legends, markers, probes, and measurements.
+    - 🧮 **Compute & interop**: Compute subsystem with reusable pipelines and buffers, an extensive kernels library spanning parallel primitives, sorting, scaling, statistics, and linear algebra, an ndarray abstraction, asynchronous readback utilities, a unified scale-transform model shared across rendering and computing workflows, direct uploads from external WebAssembly memory, and Python-in-the-browser interoperability.
 
-The WebAssembly driver is written in Rust, spanning **data layout & transforms** (transforms stored in SoA memory with per-index dirty tracking and partial local or world propagation plus model and normal matrix packing); **animation & asset hot paths** (animation sampling and joint-matrix generation executed in WebAssembly together with glTF accessor deinterleaving, sparse patch application, numeric conversion, richer import-side data preparation, and mesh normal generation); **bounds, culling, & visibility** (world-space bounds computation for geometry, pointclouds, glyphfields, and nodelinks together with frustum plane extraction, sphere-frustum culling kernels, and CPU-side support for render-only occlusion filtering); **array semantics & zero-copy staging** (ndarray indexing utilities for explicit shape-and-stride byte-offset math plus uniforms and instance data staged as zero-copy views into WebAssembly memory with explicit typed-slice handles and module-facing views for external WebAssembly interoperability); and **performance envelope** (hot-path allocations avoided via cached pipelines and bind-group layouts plus a frame arena and user heap arenas, with builds optimized via LLVM and Binaryen and SIMD128 enabled for even higher throughput).
+* 🦀 WebAssembly driver in Rust.
+    - 🧱 **Data layout & transforms**: Transforms stored in structure-of-arrays memory with per-index dirty tracking and partial local or world propagation plus model and normal matrix packing.
+    - 🎞️ **Animation & asset hot paths**: Animation sampling and joint-matrix generation executed in WebAssembly together with glTF accessor deinterleaving, sparse patch application, numeric conversion, richer import-side data preparation, and mesh normal generation.
+    - 👁️ **Bounds, culling, & visibility**: World-space bounds computation for geometry, pointclouds, glyphfields, nodelinks, splatfields, and latticespaces together with frustum plane extraction, sphere-frustum culling kernels, and CPU-side support for render-only occlusion filtering.
+    - 🔗 **Array semantics & zero-copy staging**: Ndarray indexing utilities for explicit shape-and-stride byte-offset math plus uniforms and instance data staged as zero-copy views into WebAssembly memory with explicit typed-slice handles and refreshable views over external WebAssembly memories.
+    - ⚡ **Performance envelope**: Transient work uses a frame arena while persistent allocations use reclaimable heap arenas with deterministic owning-object disposal, and builds are optimized through LLVM, Binaryen, and SIMD128 for higher throughput.
 
 ## Install
 
@@ -12,8 +21,8 @@ The WebAssembly driver is written in Rust, spanning **data layout & transforms**
 npm install @zushah/wasmgpu
 ```
 
-```text
-https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.8.0/dist/WasmGPU.iife.min.js
+```html
+<script src="https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.iife.min.js"></script>
 ```
 
 ## Quick Links
@@ -24,18 +33,18 @@ https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.8.0/dist/WasmGPU.iife.min.js
 
 ## Architecture Diagram
 
-The diagram below reflects the implemented architecture of WasmGPU v0.8.0.
+The diagram below reflects the implemented architecture of WasmGPU v0.9.0.
 
 Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
 
-Click [here](https://mermaid.live/view#pako:eNqNWFlv4zgS_iuEBugnJvAVXwMsIF9pI_EB25mgd7MPtEzbmuhakkriafR_3ypSVkQ6nl2_xPpULFbVV5fz0wvSHff63j5K34MjE4o8rl4SAh-Zbw-CZUfiL6f_evGW-TYKA3x48f5tJPDjL5fw8klyQfwsAwmmwjSxRMbzexB5ZjK-Xz6Rt9pt97ZmCUz8IQhMWKBScYJ7xZ4FvE9kwBNOScBiLhj8TRMl0khScuBpzJU4URIzxUXIIkoU_1C5APGYyyMlWRomKojSfAfi0Sk77kMewfcEvI3C5JWSKDwcFSVMSq5IGGepwKckjLUDlKRvXETshFiSqgIEpVykWWk9T3YviROuZ_AS_eVbdHecHMKEW-4-LhYYs4kAx0iUVtThZzWej-DtClRzwYX1bj30H8fwch0wcOJAIOpvYWBrX_wxXoHIwphP9njLeypebdbm8wUI-aVrRKVp9BoqS2o5HT4g82HwirflKoxCdbJEhosZ-jJM4yxXHIMgT1Lx2BYaPE1AaJDv95Amgss0FwEH8hJ2cDwcLqdLfWWGNPEz6ZErNpquQWwUyoyp4EjQwYNI84xkEfDlSj_okDxwkfBIAvNbwYTjhw76_GYXxjyREBAWESYEBDDGjCH7VIBtT-QbQVJjHqeugtXYRxW-PCXBUaRJmktwle22LHglAuJni6-HK02k0PZvTWgyIOFvc2vkb3wkd_snDxQYM2KKkRla6OTJXCvnTuZt1pvFChNoI1giwaeYSKg5DnlN1qn_lV-z8fo7HJhBVZH3UB3_R_GlIjuCrxRsk5A0iev38h4tW16pzm9lfdrBmvkmySKwmGWZq3T9MNX-FheCN1KxBDJsB-Gx8_4cgErm6wjYUo8LzeVjyqAGNfeHaDMhjdta0S8uFY_G2MP8IOBSgvyOQ19FW75pWcxjKEjptkZ_qstnqtsPXiXSuHIFVKXpgmXRSPv4bKzzoTi_0-GT2AMVw_OUvDFgKFHy3EYlBlm3PlvT83S-MU3Lh9vjbXS66HWavh_I3kkdIW7_Vy_01zNH7UiEb059Pn8fa4K_c5YRFkWpGSI68BlGDTpKoog6ZeDiFzn6PFlBJMqWygRPmD6sMM3Dvz-7WfnztVUSGXjFDpdz7Hnmb3QtMCXCD4gtx4GFAf1PjqWQoM1QFEeOMyRwAny1wYTQ6D9MqkhQvOM36X4PGaDcNH-eL1azcy0mWAoRVCM0uy9MvX_cYMvVacvcpKQE2qaQnOjmWZRrkkN-wIC_kqnP_nw604VTTEgiWZxFxu4_sZ7RdYjLVZMGi6f5CCM9SPNkJ-EinBlfCA6fHh81mblUeUyCPIqqofgqz8zIHYj0HReR1ZfFMhr_ATL3KA_kQDBwdGryeG7X_9Affh9bU4gFRxTdAldmzGjEmdvrcsbJsiXqetORAtSWX_rrdTnogQooEKmzFrIPbEIdmJIZprM6P8WhRGokbjhS3UCqIrcFhTk6r8sSVik3rMPivvOorlz4agbjVxEOIhAb8T20I_G6jXJO9mEU9X9rjTu9yYRCwqavvP9bbdAYdM-PN-_hTh37jeyDBtiy4XW7ftcc_e6oPAjOk0JfozFqdkaf-vz2qDm8rq_VrNd9V59uaxUb652hZWPtbtytXdfZaLSaTVfniUM7ei8UTiaDRrNbKuz5rVHtusI7vzGs1VyFWS4gFwqFg3rXr1gIJyZ--6rCxrjevhtfKIRpWdp3N_ar9jXG7cZVda0RkNL43WIa13kK-zqFlbykvHqjXl4p7qhUL6MU102K6yTFbdFwah3ADZHiBkhxt6O4uVFcyCisXFRvTRSXoU_2rNOwyVCztVDcRCjsDxTXAYozn5pxTvW8pjiCKQ5UqscixZFGlz8KCi2teuBQMzaomQBUd3cKbZrqPkt1C6W67dGid1HdmgoKLYXQW6juGhCaNdWlTXXBaXrKGEN0yc3NP_AXkQHgiwYg3DaAYbYRjLmNYGRtRFNiQ8iPjSBZBkGSzbG5DZiI2xiG30aACxvQPDjQ9GzjGUFaHD0_zvEBQ5y7zkh5F766sBHeXmCYII4ybZ8xC3KlwOCbYyl-s-NSIhVdpRDc40A6_wyGueqcLKHSJ02boRTeuZgWMyBmhZMMJWSy2YD4WoOQlw6is9TBIGddBHPXwbC-HagMUIlUGShBXTYuZkqq4A9bh3MvJq7DAiSuiW_lkhL8NK-E9Mki6IuCG-xELgR9yYWgS7nQw7mQPqEzCZ8I9jMXg-5WQHC3HXC8urChdBzvvsAeimBUsTOjnx7h7c4F2FqdK7EtlclhQEMbublFZnQ_rFabRrEpXoAWiViEF6ipLw1jQ63Wpgaxv1b8MVeNqsly-2VyaxRbdjXaGsTebkBsNQb8jBEMhBtb6oxUrtBvzckybuZ9CXrUO8Cy7vWVyDn1YHeOGT56P1H8xcNfAbAg9uErztEX7yX5BWcylvwzTePzMdglD0evv2eRhKc8gx9tfBQyWGo_RfR-OISdWXn9ntbg9X96H_BwW-u06q1OvdbtNLutJvVOXr9x2-v1OnedXq3T63bazUbrF_X-0lfWbnuwN7W6tXq71-i1G-076vFdCL9hZuZ_gPpfgb_-C-Os4DI) to interactively view the diagram if it doesn't properly appear below.
+Click [here](https://mermaid.live/view#pako:eNqVWFtz4rgS_isqb9U8KSliSEKYqq0yGDJUwqWAbGp2cx6EEeCNb0eSk7BT89-3W74ES3D2bF4Gf261uvvrm-eHE6Qb7vScbZS-B3smFHlcvIiXhMCfzNc7wbI98ebjP16ceb6OwgAfXpz_VDL4583n8PpJckG8LAMZpsI0MYSG03sQemYyvp8_kbfW5d1lyxAZeQMQGbFApeIAt4stC3iPyIAnnJKAxVww-DdNlEgjScmOpzFX4kBJzBQXIYsoUfxD5QLEYy73lGRpmKggSvMNiEeHbL8NeQS_E_A6CpNXSmQWMVWi8EuFAZcZ3AtP4W6vKGFSckXCOEsFPiVhrN2jJH3jImIHxJJUlSBcx0WaHXnGkw3-tIL6DHHAiPA1BmSY7MKEGwF5nM0wsiMBrpMobajFv8Vw6sP7BVzBBRfG2-XAexzC62XAwNUdAX7ewDtDavbbcAFCs8IZssW73lPxanI8nc5AzKtdJSpNo9dQGXLz8eABcyUMXvHOXIVRqA6G0GA2Qb8GaZzlimNI5EEqHpti_acRiPXz7RZSS3CZ5iLgQHbCdpa3g_l4ri_OkFhepUlkC_rjJQj6IdCsgj1BZ3cizTMCmZAktvyDDtADFwmPJGTFWjBheaSJmF5swpgnEsLDIsKEgIDGmGlkmwqw8Il8IUh2zOPUVrEYeqjEk4ck2Is0SXMJTrPNmgWvREA0zQPLwULTK7Qf6yJMGdDyf2Sf7608pH39Jw8UmOUzxcgEbbWyaKov4VZ2rpar2QITbCVYIsHDmEioXA41QJapd9rLyXD5DY5MoDrJe6j2_1DEqcj24DkFCyUkVGJHYX6P9s3_VZ1_aVS6GdaJVyRnBB6xLLOvXD6MdUxKg8BfqVgCmbmBIJp1UwXpqHJ0lEy5x5lm_zFlUMs6X3bRakTcy1bZgU4p94fYMb0APJFwYsOhm6NFX7Q01gCUtbSbsTfWBTjWTQ2vE2l8dA3UdtF166KTpoLJUOdPqWGjAy2x6yqGGih5Y8BlomTVuKUOO7ZUU9fzeLoqGqEHFsTr6HCii2qqvyPTB7WHGP6LPustJ4Z6X4RvVp0_fxtq4r9xlhEWRWkxxjQVGUYROlSiiDpk4O7J3H4eLSAudcNmgidMH1dYIOE_nV4tvOmyUU4ZeMh2p6bp88Rb6TpiSoQfEG2OQxND_N8cyyhBy6Gg9hynVWCF_Gy7CmGUfBQpJEH1hl-k2y3khbLL4Hk6W0yqWk6wWCKoZmigJw2-f1xhM9dJzcyExfJkQnKiW3JZ8EkOeQMLx9ksfvam44kurXImE8niLCqs_xM7AoYA4vM_zOrPnqY-Rr2f5slGwmU4k06KDp4eHzW5uVR5TII8ippBOZeBxaDvi_QdV6TFmZLyh7-B1D2eAMIgNDisNaE8t3qUN_g2bEw7FuxReA38FcNMI9a-sKznqazbrK5MHTlAzRNzb7msVwygB0pI6pyGzATLUAuma4bJrqqnOJRIl8T9S6oLSGPku6Q1xyDo8oVFzw7zoLyxWg6OrnwtRvD5iAcRCPt8C01MvK6jnJNtGEW9XzrD27vRiEJCp6-890ur7_a71ePFe7hR-56bfdAAWz68vrm6bvtfLaU7wXlSanRdv33rf2r0bvz24LzGTvvqyrM16nZ4ZOfV7aBhZ-t62G2d1-q6nXbb1nrg0LzeS5WjUd9td2uVd17Hb51Xee25g1bLVpnlArKjVNm_6npHVsKZkXdzVqU7vLq5Hp5QCVO5tvF66B3b6A5v3LMKOz7Q4361eMfPEApfGRQ-I-oEaN6rF2qKWzPVyzHF5Zfiaktxby0YNo7grkpxE6W4YVLcHimuhBRWPqp3NoqL2CeXxnnYn2ixKVHcfSjsKxRXDIpbBC3WA6qnP8VxTnE0Uz1eKQ5GOv9eEmro1eOKFiOHFrOD6qlAoblT3ZupbrpUt0ladjqq21hJqKESOhDVnQVCtKS69KkuR01WI-IQa3Jx8St-1VUQ_NQQhN-EMOwmhiyYGMbaxDRRJoi8mRjSWGGYAsXhqQkVXJgoUmNiwJQJaZ4scPxpdYUhdZa-78cRBNOsmyvs6GZ8fcJukDiBYkpZSrXNhaGQXzUKvy3r8bcZtxpr6KwF4UYL1NlboZjr1vkaPPJUE12kAby10VK0eoE5ZSVSDRZ1UcEoomHIcAvTGW-hUAE2hrVgodg5LPAogDXW5KqGdUHaaFGuNd_YniwbsAwsvqAMChYa19Xwsbk1WJ6v6ZmVTGLfs0HogzYIfdEGHz7L9BP8pOsTwz5qo9BXaxAsMYlBQ0qLjoKClpxAH8pQNdEqB479RFusq7DFW9djazxKq-pFQTS5uEQedWduVrPGsUGfgA3ascxP4EX16hfY4pv1r2Hs-Q0vi0v9ZqJdnikVjeMwaXKiYZw7FYxtroCPIwgj68KUrLDGZVqiOH8U10KmATvU2cHHiNNTIufUge-CmOGj8wOPvDj4nQPLbg9-4uR_cV6Sn3AmY8nvaRpXx2Av3u2d3pZFEp7yDD5UuR8yWNI_RfSeO4BvAeX0rrUGp_fD-XB6V1330m133NbNXbvdvXNd6hycXqdz2WnfXrdaN-1O17277f6kzl_6ytZl9xYU8E0IH2aT4j9Z9f-1_vwbrm9vLg) to interactively view the diagram if it doesn't properly appear below.
 
 ```mermaid
 flowchart LR
     subgraph API["Public API"]
         APP["User Application"]
-        ENG["WasmGPU v0.8.0"]
-        FAC["Factory surface: scene, camera, controls, geometry, material, texture, mesh, pointcloud, glyphfield, nodelink, light, asset import, animation, overlay, annotation, interop"]
+        ENG["WasmGPU v0.9.0"]
+        FAC["Factory surface: scene, camera, controls, geometry, material, texture, mesh, pointcloud, glyphfield, nodelink, splatfield, latticespace, light, asset import, animation, overlay, annotation, interop"]
     end
 
     subgraph WGPU["WebGPU Engine"]
@@ -59,7 +68,7 @@ flowchart LR
         SCN["Scene"]
         TSTORE["Transform store in SoA memory"]
         MESH["Mesh with geometry, material, texture, morphing, & skinning"]
-        PGN["Pointcloud, glyphfield, & nodelink"]
+        PGN["Pointcloud, glyphfield, nodelink, splatfield, & latticespace"]
         CMAP["Colormapping"]
         SKIN["Skinning instance data"]
         ASTORE["Annotation store"]
@@ -191,72 +200,50 @@ flowchart LR
 
 ## Architecture Video
 
-The video below was AI-generated by [Google NotebookLM](https://notebooklm.google/) based on the [WasmGPU codebase](https://www.github.com/Zushah/WasmGPU/tree/main/src) and then double-checked by its [developer](https://www.github.com/Zushah).
+The video below was AI-generated by [Google NotebookLM](https://notebooklm.google/) based on the [WasmGPU codebase](https://www.github.com/Zushah/WasmGPU/tree/main/src) and was double-checked by the [developer](https://www.github.com/Zushah).
 
 <video controls><source src="./assets/videos/architecture.mp4" type="video/mp4"></video>
 
-## Architecture Comparison Tables
+## Platform Compatibility
 
-### 1. Platform and Toolchain
-|  | **WebGL / WebGPU** | **Three.js / Babylon.js** | **WasmGPU** |
-| :--- | :--- | :--- | :--- |
-| **Origin** | 2011 / 2023 | 2010 / 2013 | 2026 |
-| **Implementation Language** | JavaScript & C++ | JavaScript / TypeScript | TypeScript & Rust |
-| **Application Language** | JavaScript & GLSL / WGSL | JavaScript / TypeScript & GLSL / WGSL | JavaScript / TypeScript & WGSL (& Python via Pyodide) |
-| **Buildtime Optimization** | Not available | Transpilation, tree-shaking, minification | Transpilation & LLVM, tree-shaking & Binaryen, minification |
-| **Graphics Engine** | WebGL / WebGPU | WebGL-native & WebGPU-adoptive | WebGPU-native |
-| **Vectorization** | Not available | Scalar | SIMD128 |
-| **API Ergonomics** | Verbose | Streamlined | Streamlined |
+The two tables below reflect the fundamental requirements (as of July 27, 2026) for properly running the latest release of WasmGPU. They have been fact-checked against official online sources from the respective publishers of the web browsers, operating systems, runtimes, and hardware, but they are not a claim that WasmGPU has been tested on all combinations of them.
 
-### 2. Execution Model and Memory Layout
-|  | **WebGL / WebGPU** | **Three.js / Babylon.js** | **WasmGPU** |
-| :--- | :--- | :--- | :--- |
-| **Scene Graph Memory** | Not available | Object-oriented (AoS) | Data-oriented (SoA) |
-| **Math Execution** | JavaScript | JavaScript | WebAssembly |
-| **Transform Updates** | Not available | Recursive traversal | Linear iteration |
-| **Bounds Computation** | Manual | JavaScript | WebAssembly |
-| **View Framing** | Manual | Helper-based fitting | Bounds-based scene/object fitting |
-| **Garbage Collection** | Manual & low/high pressure via JavaScript engine | Automatic & high pressure via JavaScript engine | Automatic & low pressure via WebAssembly driver |
-| **Render Loop** | Run by JavaScript | Run by JavaScript | Run by JavaScript & WebAssembly |
+Browser and driver support naturally changes over time. Therefore, if an entry in the two tables below is inaccurate or misleading, please [open an issue](https://www.github.com/Zushah/WasmGPU/issues) with as much relevant information as possible, including the web browser, operating system, runtime, hardware devices and drivers, and a minimal reproduction.
 
-### 3. Rendering Pipeline Infrastructure
-|  | **WebGL / WebGPU** | **Three.js / Babylon.js** | **WasmGPU** |
-| :--- | :--- | :--- | :--- |
-| **Uniform Uploads** | Manual packing | Extraction & packing | Zero-copy views & no packing |
-| **Render State Caching** | Manual | State filtering | Pipeline caching |
-| **Instancing** | Manual | Manual | Automatic |
-| **Visibility Culling** | Not available | Frustum culling in JavaScript | Frustum & occlusion culling in WebAssembly |
-| **Picking** | Manual GPU / CPU picking | Often CPU-centered | GPU ID-pass with typed hits |
-| **Skinning** | Not available | Data textures | Storage buffers |
-| **Anti-aliasing** | Not available | MSAA | SMAA |
-| **Textures** | Manual | Managed objects | Managed objects |
-| **Animation System** | Not available | Executed in JavaScript | Executed in WebAssembly |
-| **Asset Importing** | Not available | glTF 2.0 | glTF 2.0 |
-| **Camera Controls** | Not available | Built-in | Built-in |
+### Browser and System Requirements
 
-### 4. Compute Workloads and Scientific Visualizations
-|  | **WebGL / WebGPU** | **Three.js / Babylon.js** | **WasmGPU** |
-| :--- | :--- | :--- | :--- |
-| **GPGPU** | Manual, low-level, high-boilerplate | Integrated, renderer-adjacent, framework-specific | Automated, kernel-driven, compute-optimized |
-| **Ndarray Abstraction** | Not available | Not available | CPU & GPU ndarrays |
-| **GPU Readback** | Manual | Manual | Async readback ring |
-| **Python Interoperability** | Not available | Not available | With Pyodide |
-| **Scientific Primitives** | Manual | Manual | Pointclouds, glyphfields, & nodelinks |
-| **Mathematical Geometry** | Manual | Manual | Cartesian & parametric curves & surfaces |
-| **Scaling Statistics** | Manual | Manual | Min/max & percentile analysis |
-| **Colormap Support** | Manual | Manual | Built-ins & custom |
-| **Data-driven Materials** | Manual | Manual | Data material |
-| **Scientific Overlays** | Manual | Manual | Grids, triads, & legends |
-| **Annotation & Measurement** | Manual | Manual | Markers, probes, distance, & angle toolkit |
+| Browser | Platform | Status | WebGPU availability |
+| :--- | :--- | :---: | :--- |
+| Chromium | Windows (AMD64), MacOS, ChromeOS | ✅ | Available by default from Chromium 113 on Windows with a Direct3D 12 adapter, MacOS, and ChromeOS devices with Vulkan support. Use the latest stable browser and current graphics drivers. |
+| Chromium | Windows (ARM64) | 🧪 | Disabled by default and available only through an unsafe WebGPU flag. |
+| Chromium | Android | ⚠️ | Available from Chromium 121 on Android 12 or newer for supported ARM Mali, Qualcomm Adreno, and Intel GPUs, and from Chromium 139 on Android 16 or newer for supported Imagination GPUs. Samsung Xclipse and other GPU families are not yet generally supported. |
+| Chromium | Linux | ⚠️ | Available by default from Chromium 144 on Intel Gen12 or newer GPUs, and from Chromium 147 on NVIDIA driver 535.183.01 or newer under Wayland. Other Linux configurations remain experimental and probably require unsafe browser flags. |
+| Firefox | Windows | ✅ | Available by default from Firefox 141. |
+| Firefox | MacOS | ⚠️ | Available by default on Apple Silicon from Firefox 145 on MacOS 26 and from Firefox 147 across supported MacOS versions. Other MacOS configurations remain limited to Firefox Nightly. |
+| Firefox | Linux | 🧪 | Enabled in Firefox Nightly, but not in stable or beta releases. |
+| Firefox | Android | 🧪 | Disabled by default, and current beta or Nightly builds require an advanced configuration flag. |
+| Safari | MacOS 26, iOS 26, iPadOS 26 | ✅ | Available by default from Safari 26 through WebKit's Metal implementation. |
+| Other browsers and embedded webviews | Any | ⚠️ | Compatible only when the runtime exposes WebGPU, WebAssembly, and the required browser APIs. Engine support does not guarantee that a particular browser distribution or webview enables WebGPU. |
+
+### Runtime and Hardware Requirements
+
+| Requirement | Compatibility rule |
+| :--- | :--- |
+| **Secure context** | WebGPU is exposed only in a secure context, so deploy through HTTPS or use a browser-recognized local development origin such as `localhost`. |
+| **Browser environment** | Rendering requires a main-thread browser page with `navigator.gpu`, `window`, and a DOM-backed `HTMLCanvasElement`. Offscreen worker rendering is not currently a supported WasmGPU entry point. |
+| **WebGPU adapter** | A core WebGPU adapter must be available. WasmGPU does not request WebGPU compatibility mode. The `timestamp-query` and `primitive-index` features are requested only when advertised, as GPU timing needs the former, while mesh-element picking needs the latter. |
+| **WebAssembly** | The distributed WebAssembly driver requires WebAssembly with SIMD128 support. Shared WebAssembly memory and cross-origin isolation are not required by the default build. |
+| **Graphics card and driver** | Compatibility ultimately depends on the browser accepting the installed graphics card and driver. Unsupported, outdated, remotely virtualized, or browser-blocklisted adapters may cause adapter acquisition to fail even on an operating system marked as available above. |
+| **Workload limits** | The adapter must satisfy the buffer and binding limits requested by the application. Large pointcloud, glyphfield, nodelink, splatfield, latticespace, texture, or compute workloads can exceed the resources of otherwise compatible devices. |
 
 ## Getting Started
 
 Check out the examples [here](../examples/index.html).
 
-Super basic example to render a cube:
+Here's a super basic example to render a cube:
 ```js
 // Setup
-import { WasmGPU } from "@zushah/wasmgpu";
+import { WasmGPU } from "@zushah/wasmgpu"; // or from "https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.min.js"
 const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas, { antialias: true});
 

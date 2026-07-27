@@ -20,7 +20,7 @@ This accessor does not take parameters.
 ```ts
 type AnnotationSelectionReadout = {
     hit: boolean;
-    kind: "mesh" | "pointcloud" | "glyphfield" | "nodelink" | null;
+    kind: "mesh" | "pointcloud" | "glyphfield" | "nodelink" | "splatfield" | "latticespace" | null;
     objectId: number | null;
     elementIndex: number | null;
     worldPosition: [number, number, number] | null;
@@ -32,7 +32,7 @@ type AnnotationSelectionReadout = {
 };
 ```
 
-When the current selection comes from a `NodeLink`, `attributes.component` can distinguish node hits from edge hits if pick attributes were included.
+The readout preserves splat and lattice pick kinds and their object-specific `PickAttributes`, just as it does for mesh, point, glyph, and nodelink hits.
 
 ## Example
 ```js

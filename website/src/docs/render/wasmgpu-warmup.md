@@ -39,7 +39,7 @@ type WasmGPUWarmupDescriptor = {
 
 ## Notes
 - When render warmup is enabled, both `scene` and `camera` are required.
-- Warmup resizes internal render targets, updates transforms and uniforms, builds the current draw lists, and pre-creates the render-side resources needed by the visible mesh, point cloud, glyph field, and nodelink content in that scene.
+- Warmup resizes internal render targets, updates transforms and uniforms, builds the current draw lists, and pre-creates render-side resources for visible meshes, point clouds, glyph fields, nodelinks, splatfields, and latticespaces.
 - Warmup can also prepare the transmission resource path when the scene contains transmissive `StandardMaterial` content.
 - Warmup does not apply previous-frame occlusion filtering. It prepares resources without using the render-only occlusion path.
 - Warmup does not present a visible frame to the swapchain, and it does not advertise any compute-side preparation.

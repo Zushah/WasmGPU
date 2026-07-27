@@ -1,7 +1,7 @@
 # Scene.findAllByName
 
 ## Summary
-Scene.findAllByName returns all meshes whose `name` exactly matches the given string. This is useful when one logical label maps to multiple mesh instances. The returned array may be empty.
+Scene.findAllByName returns all meshes whose `name` exactly matches the given string. It is mesh-specific; other renderable families have their own lookup methods. The returned array may be empty.
 
 ## Syntax
 ```ts
@@ -40,3 +40,5 @@ console.log(scene.findAllByName("cell").length);
 - [Scene.findByName](./wasmgpu-world-scene-findbyname.md)
 - [Scene.traverse](./wasmgpu-world-scene-traverse.md)
 - [Scene.meshes](./wasmgpu-world-scene-meshes.md)
+- [Scene.splatFields and splat-field lookup](./wasmgpu-world-scene-splatfields.md)
+- [Scene.latticeSpaces and lattice-space lookup](./wasmgpu-world-scene-latticespaces.md)

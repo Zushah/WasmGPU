@@ -21,17 +21,28 @@ const result = wgpu.geometry.parametricCurve(descriptor);
 ### ParametricCurveDescriptor
 
 ```ts
-type ParametricCurveDescriptor = {
-    f: (t: number) => [number, number] | [number, number, number];
-    tMin?: number;
-    tMax?: number;
-    segments?: number;
-    radius?: number;
-    radialSegments?: number;
-    closed?: boolean;
-    plane?: "xy" | "xz" | "yz";
-    up?: [number, number, number];
-    breakOnInvalid?: boolean;
+type ParametricCurveDescriptor = {
+
+    f: (t: number) => [number, number] | [number, number, number];
+
+    tMin?: number;
+
+    tMax?: number;
+
+    segments?: number;
+
+    radius?: number;
+
+    radialSegments?: number;
+
+    closed?: boolean;
+
+    plane?: "xy" | "xz" | "yz";
+
+    up?: [number, number, number];
+
+    breakOnInvalid?: boolean;
+
 };
 ```
 

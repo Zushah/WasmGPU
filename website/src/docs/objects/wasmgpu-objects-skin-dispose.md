@@ -1,7 +1,9 @@
 # Skin.dispose
 
 ## Summary
-Skin.dispose releases GPU resources and clears owned runtime state for this Skin. Call it when the object is no longer needed.
+Skin.dispose releases the owned joint-index and inverse-bind-matrix Wasm allocations. The call is idempotent.
+
+After disposal, `jointIndicesPtr`, `invBindPtr`, and `createInstance` throw. Dispose existing `SkinInstance` objects separately to release their bind matrices and GPU buffers.
 
 ## Syntax
 ```ts
@@ -28,8 +30,12 @@ const wgpu = await WasmGPU.create(canvas);
 const joint0 = wgpu.createTransform();
 const skin = wgpu.animation.createSkin("skin", [joint0], null);
 skin.dispose();
-console.log("updated");
+console.log(skin.disposed); // true
 ```
 
 ## See Also
 - [Skin.createInstance](./wasmgpu-objects-skin-createinstance.md)
+- [Skin.disposed](./wasmgpu-objects-skin-disposed.md)
+- [Skin.jointIndicesPtr](./wasmgpu-objects-skin-jointindicesptr.md)
+- [Skin.invBindPtr](./wasmgpu-objects-skin-invbindptr.md)
+- [SkinInstance.dispose](./wasmgpu-objects-skininstance-dispose.md)

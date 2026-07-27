@@ -27,6 +27,8 @@ const gpu = wgpu.compute.GPUndarray.empty(wgpu.gpu, "f32", { shape: [4] }, { cop
 const cpu = await gpu.readbackToCPU();
 
 console.log(cpu.residency, cpu.layout());
+cpu.destroy();
+gpu.destroy();
 ```
 
 ## See Also
@@ -35,3 +37,4 @@ console.log(cpu.residency, cpu.layout());
 - [WasmGPU.compute.GPUndarray.empty](./wasmgpu-compute-gpundarray-empty.md)
 - [WasmGPU.compute.GPUndarray.wrap](./wasmgpu-compute-gpundarray-wrap.md)
 - [WasmGPU.compute.ndarray.residency](./wasmgpu-compute-ndarray-residency.md)
+- [WasmGPU.compute.CPUndarray.destroy](./wasmgpu-compute-cpundarray-destroy.md)

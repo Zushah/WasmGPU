@@ -1,7 +1,9 @@
 # Geometry.destroy
 
 ## Summary
-Geometry.destroy releases GPU resources and clears owned runtime state for this Geometry. Call it when the object is no longer needed.
+Geometry.destroy delegates to the reference-counted `release()` lifecycle. When the final reference is released, it destroys geometry-owned GPU buffers and marks the geometry destroyed. It never frees borrowed external Wasm allocations.
+
+Call `clearWasmSources()` separately if a still-live shared geometry should detach its external sources before the final release. Calling `destroy()` after the geometry has already reached zero references throws.
 
 ## Syntax
 ```ts
@@ -27,7 +29,6 @@ const wgpu = await WasmGPU.create(canvas);
 
 const geometry = wgpu.geometry.sphere(1, 24, 16);
 geometry.destroy();
-console.log("updated");
 ```
 
 ## See Also
@@ -43,3 +44,4 @@ console.log("updated");
 - [Geometry.jointsBuffer](./wasmgpu-objects-geometry-jointsbuffer.md)
 - [Geometry.normalBuffer](./wasmgpu-objects-geometry-normalbuffer.md)
 - [Geometry.positionBuffer](./wasmgpu-objects-geometry-positionbuffer.md)
+- [Geometry.clearWasmSources](./wasmgpu-objects-geometry-clearwasmsources.md)

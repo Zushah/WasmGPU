@@ -3,6 +3,7 @@
 ## Summary
 WasmGPU.python.view returns a typed-array view for a Python interop handle.
 The returned array points directly into Wasm memory and reflects in-place changes.
+The call rejects heap handles freed through `WasmGPU.python.free`. A returned view is borrowed and must not be used after the handle is freed or its allocator is reset. Frame and arena handles are epoch-scoped, but this method does not validate their epochs.
 
 ## Syntax
 ```ts

@@ -36,12 +36,16 @@ type PickHit = {
         | "mesh"
         | "pointcloud"
         | "glyphfield"
-        | "nodelink";
+        | "nodelink"
+        | "splatfield"
+        | "latticespace";
     object:
         | Mesh
         | PointCloud
         | GlyphField
-        | NodeLink;
+        | NodeLink
+        | SplatField
+        | LatticeSpace;
     objectId: number;
     elementIndex: number;
     worldPosition: [number, number, number];
@@ -50,6 +54,13 @@ type PickHit = {
         scalar?: number | null;
         vector?: [number, number, number, number] | null;
         packedPoint?: [number, number, number, number] | null;
+        position?: [number, number, number] | null;
+        rotation?: [number, number, number, number] | null;
+        scale?: [number, number, number] | null;
+        opacity?: number | null;
+        packedSplat?: [number, number, number, number] | null;
+        sphericalHarmonicsDegree?: 0 | 1 | 2 | 3 | null;
+        sphericalHarmonics?: number[] | null;
         component?: "node" | "edge" | null;
         componentIndex?: number | null;
         color?: [number, number, number, number] | null;
@@ -60,6 +71,8 @@ type PickHit = {
 ```
 
 Nodelink hits use the same `PickHit` envelope as meshes, point clouds, and glyph fields. When `includeAttributes` is true, `attributes.component` and `attributes.componentIndex` tell you whether the hit came from a node or an edge. Node hits can expose scalar/color data, and edge hits can expose scalar/color plus edge endpoints and endpoint positions when matching CPU-side nodelink records are still available. Node hits can also decode `ndIndex` from `ndShape`; edge hits return `ndIndex: null`.
+
+Splatfield hits use the nearest rendered footprint and can return position, rotation, scale, opacity, direct color, and SH data when CPU records were retained. Latticespace hits identify the exact cell, return its spatial index as `ndIndex`, and can expose scalar, four-component vector, and color data. Missing retained records produce `attributes: null` or nullable fields without preventing the geometric hit.
 
 ## Example
 ```js
@@ -88,4 +101,6 @@ canvas.addEventListener("click", async (event) => {
 - [WasmGPU.pickLasso](./wasmgpu-picklasso.md)
 - [WasmGPU.createSelectionStore](./wasmgpu-createselectionstore.md)
 - [WasmGPU.createNodeLink](../objects/wasmgpu-createnodelink.md)
+- [WasmGPU.createSplatField](../objects/wasmgpu-createsplatfield.md)
+- [WasmGPU.createLatticeSpace](../objects/wasmgpu-createlatticespace.md)
 - [WasmGPU.createAnnotation.toolkit](./wasmgpu-createannotation-toolkit.md)

@@ -26,6 +26,7 @@ const wgpu = await WasmGPU.create(canvas);
 const a = wgpu.compute.CPUndarray.empty("u32", { shape: [16, 8] });
 const layout = a.layout();
 console.log(layout.shape, layout.stridesBytes, layout.offsetBytes);
+a.destroy();
 ```
 
 ## See Also
@@ -34,3 +35,4 @@ console.log(layout.shape, layout.stridesBytes, layout.offsetBytes);
 - [WasmGPU.compute.CPUndarray.empty](./wasmgpu-compute-cpundarray-empty.md)
 - [WasmGPU.compute.GPUndarray.wrap](./wasmgpu-compute-gpundarray-wrap.md)
 - [WasmGPU.compute.ndarray.residency](./wasmgpu-compute-ndarray-residency.md)
+- [WasmGPU.compute.CPUndarray.destroy](./wasmgpu-compute-cpundarray-destroy.md)

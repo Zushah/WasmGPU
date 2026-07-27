@@ -21,17 +21,28 @@ const result = wgpu.geometry.parametricSurface(descriptor);
 ### ParametricSurfaceDescriptor
 
 ```ts
-type ParametricSurfaceDescriptor = {
-    f: (u: number, v: number) => [number, number, number];
-    uMin?: number;
-    uMax?: number;
-    vMin?: number;
-    vMax?: number;
-    uSegments?: number;
-    vSegments?: number;
-    plane?: "xy" | "xz" | "yz";
-    skipInvalid?: boolean;
-    doubleSided?: boolean;
+type ParametricSurfaceDescriptor = {
+
+    f: (u: number, v: number) => [number, number, number];
+
+    uMin?: number;
+
+    uMax?: number;
+
+    vMin?: number;
+
+    vMax?: number;
+
+    uSegments?: number;
+
+    vSegments?: number;
+
+    plane?: "xy" | "xz" | "yz";
+
+    skipInvalid?: boolean;
+
+    doubleSided?: boolean;
+
 };
 ```
 

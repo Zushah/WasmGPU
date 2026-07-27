@@ -22,10 +22,14 @@ const result = wgpu.colormap.fromPalette(colors, desc);
 ### ColormapDescriptor
 
 ```ts
-type ColormapDescriptor = {
-    resolution?: number;
-    filter?: ColormapFilter;
-    colorSpace?: "srgb" | "linear";
+type ColormapDescriptor = {
+
+    resolution?: number;
+
+    filter?: ColormapFilter;
+
+    colorSpace?: "srgb" | "linear";
+
 };
 ```
 

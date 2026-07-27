@@ -1,7 +1,7 @@
 # WasmGPU.createControls.orbit
 
 ## Summary
-WasmGPU.createControls.orbit creates `OrbitControls`, a `NavigationControls` specialization locked to orbit behavior.
+WasmGPU.createControls.orbit creates `OrbitControls`, a `NavigationControls` specialization that starts in orbit mode.
 It is the simplest camera interaction entry point for inspect-and-pan workflows.
 Orbit mode keeps a target point and rotates the camera around it.
 
@@ -23,31 +23,10 @@ const controls = wgpu.createControls.orbit(camera, domElement, options);
 
 ## Type Details
 ```ts
-type OrbitControlsDescriptor = {
-    mode?: "orbit" | "trackball"; // forced to orbit by this factory
-    axisConvention?: "y-up-rh" | "z-up-rh" | "x-up-rh" | { right?: Vec3; up: Vec3; forward: Vec3 };
-    target?: Vec3;
-    enabled?: boolean;
-    enableRotate?: boolean;
-    enablePan?: boolean;
-    enableZoom?: boolean;
-    rotateSpeed?: number;
-    panSpeed?: number;
-    zoomSpeed?: number;
-    zoomOnCursor?: boolean;
-    enableDamping?: boolean;
-    dampingFactor?: number;
-    minDistance?: number;
-    maxDistance?: number;
-    minZoom?: number;
-    maxZoom?: number;
-    minPolarAngle?: number;
-    maxPolarAngle?: number;
-    minAzimuthAngle?: number;
-    maxAzimuthAngle?: number;
-    mouseButtons?: { rotate?: number; pan?: number; zoom?: number };
-};
+type OrbitControlsDescriptor = NavigationControlsDescriptor;
 ```
+
+The factory overrides the descriptor's initial `mode` with `"orbit"`. The returned controller still inherits `setMode()` and can switch to trackball or fly behavior later. See [WasmGPU.createControls.navigation](./wasmgpu-createcontrols-navigation.md) for the complete descriptor.
 
 ## Example
 ```js

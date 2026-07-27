@@ -1,7 +1,7 @@
 # Geometry.upload
 
 ## Summary
-Geometry.upload uploads pending CPU/wasm data into GPU buffers so this Geometry is render-ready.
+Geometry.upload refreshes attached Wasm views and uploads pending CPU or Wasm data into geometry-owned GPU buffers. Borrowed Wasm allocations are never freed by the geometry.
 
 ## Syntax
 ```ts
@@ -30,7 +30,8 @@ const wgpu = await WasmGPU.create(canvas);
 const geometry = wgpu.geometry.sphere(1, 24, 16);
 const device = wgpu.gpu.device;
 geometry.upload(device);
-console.log("updated");
+console.log(geometry.positionBuffer, geometry.indexBuffer);
+geometry.destroy();
 ```
 
 ## See Also
@@ -46,3 +47,4 @@ console.log("updated");
 - [Geometry.joints1Buffer](./wasmgpu-objects-geometry-joints1buffer.md)
 - [Geometry.jointsBuffer](./wasmgpu-objects-geometry-jointsbuffer.md)
 - [Geometry.normalBuffer](./wasmgpu-objects-geometry-normalbuffer.md)
+- [Geometry.refreshFromWasm](./wasmgpu-objects-geometry-refreshfromwasm.md)

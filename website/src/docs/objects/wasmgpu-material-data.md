@@ -21,14 +21,22 @@ const result = wgpu.material.data(options);
 ### DataMaterialDescriptor
 
 ```ts
-type DataMaterialDescriptor = MaterialDescriptor & {
-    data?: Float32Array;
-    dataBuffer?: GPUBuffer | { buffer: GPUBuffer } | null;
-    keepCPUData?: boolean;
-    scaleTransform: ScaleTransformDescriptor;
-    opacity?: number;
-    shading?: number;
-    colormap?: BuiltinColormapName | Colormap;
+type DataMaterialDescriptor = MaterialDescriptor & {
+
+    data?: Float32Array;
+
+    dataBuffer?: GPUBuffer | { buffer: GPUBuffer } | null;
+
+    keepCPUData?: boolean;
+
+    scaleTransform: ScaleTransformDescriptor;
+
+    opacity?: number;
+
+    shading?: number;
+
+    colormap?: BuiltinColormapName | Colormap;
+
 };
 ```
 
@@ -46,11 +54,16 @@ type DataMaterialDescriptor = MaterialDescriptor & {
 ### MaterialDescriptor
 
 ```ts
-type MaterialDescriptor = {
-    blendMode?: BlendMode;
-    cullMode?: CullMode;
-    depthWrite?: boolean;
-    depthTest?: boolean;
+type MaterialDescriptor = {
+
+    blendMode?: BlendMode;
+
+    cullMode?: CullMode;
+
+    depthWrite?: boolean;
+
+    depthTest?: boolean;
+
 };
 ```
 
@@ -65,24 +78,42 @@ type MaterialDescriptor = {
 ### ScaleTransformDescriptor
 
 ```ts
-type ScaleTransformDescriptor = {
-    mode?: ScaleMode;
-    clampMode?: ScaleClampMode;
-    valueMode?: ScaleValueMode;
-    componentCount?: number;
-    componentIndex?: number;
-    stride?: number;
-    offset?: number;
-    domainMin?: number;
-    domainMax?: number;
-    clampMin?: number;
-    clampMax?: number;
-    percentileLow?: number;
-    percentileHigh?: number;
-    logBase?: number;
-    symlogLinThresh?: number;
-    gamma?: number;
-    invert?: boolean;
+type ScaleTransformDescriptor = {
+
+    mode?: ScaleMode;
+
+    clampMode?: ScaleClampMode;
+
+    valueMode?: ScaleValueMode;
+
+    componentCount?: number;
+
+    componentIndex?: number;
+
+    stride?: number;
+
+    offset?: number;
+
+    domainMin?: number;
+
+    domainMax?: number;
+
+    clampMin?: number;
+
+    clampMax?: number;
+
+    percentileLow?: number;
+
+    percentileHigh?: number;
+
+    logBase?: number;
+
+    symlogLinThresh?: number;
+
+    gamma?: number;
+
+    invert?: boolean;
+
 };
 ```
 
