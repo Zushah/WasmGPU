@@ -106,7 +106,13 @@ jobs:
 
       -
         name: Run Node tests
+        if: ${{ runner.os != 'Linux' }}
         run: npm run test:js
+
+      -
+        name: Run Node tests with Xvfb
+        if: ${{ runner.os == 'Linux' }}
+        run: xvfb-run --auto-servernum npm run test:js -- --headed
 
       -
         name: Upload results
