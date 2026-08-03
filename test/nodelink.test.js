@@ -4,31 +4,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, createBufferReaders, destroyTestDevice, setupTest, trackDestroy } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
-import { create, globals } from "webgpu";
 
-Object.assign(globalThis, globals);
-const navigator = { gpu: create([]) };
-Object.defineProperty(globalThis, "navigator", { value: navigator, configurable: true });
-if (!globalThis.window) globalThis.window = {};
-if (typeof globalThis.window.devicePixelRatio !== "number") globalThis.window.devicePixelRatio = 1;
+const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
 
-const numberApproxEqual = (a, b, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers"); assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`); };
-
-const arraysApproxEqual = (a, b, tol = 1e-6, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`); };
-
-const trackDestroy = (buffer) => { let destroyed = 0; const originalDestroy = buffer.destroy.bind(buffer); buffer.destroy = () => { destroyed++; return originalDestroy(); }; return () => destroyed; };
-
-const gpu = navigator.gpu;
-assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
-const adapter = await gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-const device = await adapter.requestDevice();
-assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
-
-await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
+const { device } = await setupTest({ initWebAssembly: WasmGPU.initWebAssembly, webgpu: true });
 
 const { NodeLink, Compute, Scene, WasmGPU: Engine, WasmMemoryView } = WasmGPU;
 assert.ok(NodeLink, "Missing export: NodeLink");
@@ -41,24 +23,7 @@ assert.strictEqual(typeof Engine.prototype.createNodeLink, "function", "Missing 
 const compute = new Compute(device, device.queue);
 assert.ok(compute.kernels && typeof compute.kernels.copyF32 === "function", "Missing kernel: copyF32");
 assert.ok(typeof compute.kernels.copyU32 === "function", "Missing kernel: copyU32");
-
-const readBufferAsF32 = async (buffer, count) => {
-    const out = compute.createStorageBuffer({ label: "nodelink:read:f32", byteLength: count * 4, copySrc: true });
-    try {
-        compute.kernels.copyF32(buffer, { out, count });
-        await device.queue.onSubmittedWorkDone();
-        return await out.readAs(Float32Array);
-    } finally { out.destroy(); }
-};
-
-const readBufferAsU32 = async (buffer, count) => {
-    const out = compute.createStorageBuffer({ label: "nodelink:read:u32", byteLength: count * 4, copySrc: true });
-    try {
-        compute.kernels.copyU32(buffer, { out, count });
-        await device.queue.onSubmittedWorkDone();
-        return await out.readAs(Uint32Array);
-    } finally { out.destroy(); }
-};
+const { readBufferAsF32, readBufferAsU32 } = createBufferReaders(compute);
 
 const createNodeLinkBufferSet = (label) => ({
     nodePositions: compute.createStorageBuffer({ label: `${label}:nodePositions`, data: new Float32Array([1.0, 2.0, 3.0, 0.0]), copySrc: false }),
@@ -96,7 +61,7 @@ const setExternalNodeLinkBuffers = (link, buffers, ownBuffer = false) => {
 
 const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.destroy(); buffers.nodeScalars.destroy(); buffers.edges.destroy(); buffers.edgeColors.destroy(); };
 
-// Constructor / descriptor validation and mode enums.
+// 1) Constructor / descriptor validation and mode enums.
 {
     assert.throws(() => new NodeLink({ nodeGeometryMode: "foo" }), /nodeGeometryMode/, "Expected invalid nodeGeometryMode to throw");
     assert.throws(() => new NodeLink({ edgeGeometryMode: "foo" }), /edgeGeometryMode/, "Expected invalid edgeGeometryMode to throw");
@@ -112,7 +77,7 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     assert.throws(() => new NodeLink({ nodePositions: new Float32Array([0, 0, 0, 1, 1, 1]), edges: [0, 1] }), /Uint16Array|Uint32Array/, "Expected typed-array validation for edges");
 }
 
-// CPU upload path: positions/edges/scalars/colors/radii upload and own the created buffers.
+// 2) CPU upload path: positions/edges/scalars/colors/radii upload and own the created buffers.
 {
     const link = new NodeLink({
         nodePositions: new Float32Array([0.0, 0.0, 0.0, 1.0, 2.0, 3.0, -2.0, 1.0, 0.5]),
@@ -148,7 +113,7 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     link.destroy();
 }
 
-// External WebAssembly memory views: per-channel refresh, source-kind mixing, CPU snapshots, validation, and grow-only capacity.
+// 3) External WebAssembly memory views: per-channel refresh, source-kind mixing, CPU snapshots, validation, and grow-only capacity.
 {
     const makeView = (length, dtype = "f32", name = "nodelink-wasm-view", capacity = 64) => {
         const memory = new WebAssembly.Memory({ initial: 1 });
@@ -300,7 +265,7 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     for (const testCase of invalidCases) assert.throws(testCase.create, testCase.error, testCase.message);
 }
 
-// External buffers are borrowed by default, owned when requested, and owned replacements are destroyed exactly once.
+// 4) External buffers are borrowed by default, owned when requested, and owned replacements are destroyed exactly once.
 {
     const borrowed = createNodeLinkBufferSet("nodelink:ownership:borrowed");
     const ownedByCtor = createNodeLinkBufferSet("nodelink:ownership:ctor");
@@ -339,7 +304,7 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     destroyExternalNodeLinkBuffers(replaceBorrowed);
 }
 
-// Streaming updates: only requested node/edge ranges mutate.
+// 5) Streaming updates: only requested node/edge ranges mutate.
 {
     const link = new NodeLink({
         nodePositions: new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0]),
@@ -390,7 +355,7 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     link.destroy();
 }
 
-// Uniform packing sanity for independent node/edge scale and colormap channels.
+// 6) Uniform packing sanity for independent node/edge scale and colormap channels.
 {
     const link = new NodeLink({
         nodePositions: new Float32Array([0, 0, 0, 1, 0, 0]),
@@ -472,7 +437,7 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     link.destroy();
 }
 
-// Bounds + Scene aggregate and traversal support.
+// 7) Bounds + Scene aggregate and traversal support.
 {
     const linkA = new NodeLink({ nodePositions: new Float32Array([-1, -2, -3, 4, 5, 6]), edges: new Uint16Array([0, 1]), keepCPUData: true });
     const linkB = new NodeLink({ nodePositions: new Float32Array([10, 0, 0, 11, 0, 0]), edges: new Uint16Array([0, 1]), keepCPUData: true });
@@ -509,5 +474,8 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     linkB.destroy();
 }
 
-compute.destroy();
-device.destroy();
+// 8) Cleanup releases the shared compute context before its browser GPU device.
+{
+    compute.destroy();
+    await destroyTestDevice(device);
+}

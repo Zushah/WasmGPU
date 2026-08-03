@@ -4,19 +4,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, setupTest } from "./utils/helpers.js";
 import { initWebAssembly, wasm, frameArena, cullf, frustumf } from "../dist/WasmGPU.js";
 
-await initWebAssembly(new URL("../dist/", import.meta.url).toString());
+const { arraysApproxEqual } = createApproxHelpers();
 
-const approx = (a, b, tol = 1e-6) => Math.abs(a - b) <= tol;
-
-const approxArray = (a, b, tol = 1e-6) => {
-    assert.strictEqual(a.length, b.length, "Array lengths differ");
-    for (let i = 0; i < a.length; i++) {
-        assert.ok(approx(a[i], b[i], tol), `Arrays differ at index ${i}: ${a[i]} vs ${b[i]}`);
-    }
-};
+await setupTest({ initWebAssembly });
 
 // 1) cullf.writePlanesFromViewProjection which extracts frustum planes from a view-projection matrix.
 {
@@ -53,8 +47,8 @@ const approxArray = (a, b, tol = 1e-6) => {
         0, 0, 1, 0,
         0, 0, -1, 1,
     ]);
-    approxArray(Array.from(planes), Array.from(expectedPlanes), 1e-6);
-    approxArray(Array.from(planesDirect), Array.from(expectedPlanes), 1e-6);
+    arraysApproxEqual(Array.from(planes), Array.from(expectedPlanes), 1e-6);
+    arraysApproxEqual(Array.from(planesDirect), Array.from(expectedPlanes), 1e-6);
 
     const count = 6;
     const centersPtr = frameArena.allocF32(count * 3);
@@ -135,8 +129,8 @@ const approxArray = (a, b, tol = 1e-6) => {
     const outCenters = wasm.f32view(outCentersPtr, count * 3);
     const outRadii = wasm.f32view(outRadiiPtr, count);
 
-    approxArray(Array.from(outCenters), [0, 0, 0, 12, 4, 6], 1e-6);
-    approxArray(Array.from(outRadii), [1, 2], 1e-6);
+    arraysApproxEqual(Array.from(outCenters), [0, 0, 0, 12, 4, 6], 1e-6);
+    arraysApproxEqual(Array.from(outRadii), [1, 2], 1e-6);
 }
 
 // 3) cullf.spheresOcclusion uses WebGPU depth convention and only culls when nearestDepth > tileMaxDepth + bias.

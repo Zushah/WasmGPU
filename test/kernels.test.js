@@ -4,30 +4,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { arraysEqualU32, createApproxHelpers, createTestRandom, destroyTestDevice, setupTest } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
-import { create, globals } from "webgpu";
 
-Object.assign(globalThis, globals);
-const navigator = { gpu: create([]) };
+const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers(1e-5);
 
-const numberApproxEqual = (a, b, tol = 1e-5, msg = "Numbers differ") => { assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers"); assert.ok(Math.abs(a - b) < tol, `${msg}: ${a} vs ${b}`); };
+const random = createTestRandom();
 
-const arraysEqualU32 = (a, b, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) assert.strictEqual(a[i] >>> 0, b[i] >>> 0, `${msg} at index ${i}: ${a[i]} vs ${b[i]}`); };
+const makeRandomU32Array = (n, maxInclusive = 1024) => { const a = new Uint32Array(n); for (let i = 0; i < n; i++) a[i] = (Math.floor(random() * (maxInclusive + 1)) >>> 0); return a; };
 
-const arraysApproxEqualF32 = (a, b, tol = 1e-5, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`); };
+const makeRandomF32Array = (n, min = -10, max = 10) => { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = min + (max - min) * random(); return a; };
 
-const makeRandomU32Array = (n, maxInclusive = 1024) => { const a = new Uint32Array(n); for (let i = 0; i < n; i++) a[i] = (Math.floor(Math.random() * (maxInclusive + 1)) >>> 0); return a; };
-
-const makeRandomF32Array = (n, min = -10, max = 10) => { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = min + (max - min) * Math.random(); return a; };
-
-const gpu = navigator.gpu;
-assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
-const adapter = await gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-const device = await adapter.requestDevice();
-assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
+const { device } = await setupTest({ webgpu: true });
 
 const { Compute, ComputeKernels } = WasmGPU;
 assert.ok(Compute, "Missing export: Compute");
@@ -35,7 +24,7 @@ const compute = new Compute(device, device.queue);
 const kernels = compute.kernels ?? (ComputeKernels ? new ComputeKernels(device, device.queue) : null);
 assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported ComputeKernels.");
 
-// Copy kernels u32 / f32
+// 1) Copy kernels u32 / f32.
 {
     assert.strictEqual(typeof kernels.copyU32, "function", "Missing kernel: copyU32");
     assert.strictEqual(typeof kernels.copyF32, "function", "Missing kernel: copyF32");
@@ -71,7 +60,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
         const out = compute.createStorageBuffer({ label: "copy:f32:out", byteLength: n * 4, copySrc: true });
         const outRef = kernels.copyF32(bufA, { out, count: n }) ?? out;
         const got = await outRef.readAs(Float32Array);
-        arraysApproxEqualF32(got, a, 1e-5, "copyF32 mismatch");
+        arraysApproxEqual(got, a, 1e-5, "copyF32 mismatch");
     }
 
     // copyF32 (partial count)
@@ -83,11 +72,11 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
         const out = compute.createStorageBuffer({ label: "copy:f32:out_partial", byteLength: m * 4, copySrc: true });
         const outRef = kernels.copyF32(bufA, { out, count: m }) ?? out;
         const got = await outRef.readAs(Float32Array);
-        arraysApproxEqualF32(got, a.subarray(0, m), 1e-5, "copyF32 partial mismatch");
+        arraysApproxEqual(got, a.subarray(0, m), 1e-5, "copyF32 partial mismatch");
     }
 }
 
-// Reduction kernels u32
+// 2) Reduction kernels u32.
 {
     const n = 10000;
     const a = makeRandomU32Array(n, 10);
@@ -111,7 +100,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     assert.strictEqual(gotMax, mx, "maxU32 mismatch");
 }
 
-// Reduction kernels f32
+// 3) Reduction kernels f32.
 {
     const n = 8192 + 37;
     const a = new Float32Array(n);
@@ -128,7 +117,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     numberApproxEqual(gotMax, 1.0, 1e-6, "maxF32 mismatch");
 }
 
-// Argmin / argmax f32
+// 4) Argmin / argmax f32.
 {
     const a = new Float32Array([3.0, -2.5, 8.0, 1.25, -2.5, 7.0]);
     const bufA = compute.createStorageBuffer({ label: "argreduce:f32:in", data: a, copySrc: false });
@@ -148,7 +137,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     assert.strictEqual(maxIdx, 2, "argmaxF32 index mismatch");
 }
 
-// Exclusive scan u32
+// 5) Exclusive scan u32.
 {
     const n = 4096 + 13;
     const a = makeRandomU32Array(n, 7);
@@ -164,12 +153,12 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     arraysEqualU32(got, expected, "scanExclusiveU32 mismatch");
 }
 
-// Histogram u32 keys
+// 6) Histogram u32 keys.
 {
     const bins = 32;
     const n = 20000;
     const keys = new Uint32Array(n);
-    for (let i = 0; i < n; i++) keys[i] = (Math.floor(Math.random() * bins) >>> 0);
+    for (let i = 0; i < n; i++) keys[i] = (Math.floor(random() * bins) >>> 0);
     const bufKeys = compute.createStorageBuffer({ label: "hist:u32:keys", data: keys, copySrc: false });
     const outBins = kernels.histogramU32(bufKeys, bins, { clear: true });
     const got = await outBins.readAs(Uint32Array);
@@ -178,12 +167,12 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     arraysEqualU32(got, expected, "histogramU32 mismatch");
 }
 
-// Compaction u32
+// 7) Compaction u32.
 {
     const n = 4096 + 17;
     const input = makeRandomU32Array(n, 1000);
     const flags = new Uint32Array(n);
-    for (let i = 0; i < n; i++) flags[i] = (Math.random() < 0.35) ? 1 : 0;
+    for (let i = 0; i < n; i++) flags[i] = (random() < 0.35) ? 1 : 0;
     const bufIn = compute.createStorageBuffer({ label: "compact:u32:in", data: input, copySrc: false });
     const bufFlags = compute.createStorageBuffer({ label: "compact:u32:flags", data: flags, copySrc: false });
     const { output, count } = kernels.compactU32(bufIn, bufFlags);
@@ -195,12 +184,12 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     for (let i = 0; i < expected.length; i++) assert.strictEqual(gotOut[i] >>> 0, expected[i] >>> 0, `compactU32 output mismatch at index ${i}`);
 }
 
-// Compaction f32
+// 8) Compaction f32.
 {
     const n = 2048 + 9;
     const input = makeRandomF32Array(n, -5, 5);
     const flags = new Uint32Array(n);
-    for (let i = 0; i < n; i++) flags[i] = (Math.random() < 0.5) ? 1 : 0;
+    for (let i = 0; i < n; i++) flags[i] = (random() < 0.5) ? 1 : 0;
     const bufIn = compute.createStorageBuffer({ label: "compact:f32:in", data: input, copySrc: false });
     const bufFlags = compute.createStorageBuffer({ label: "compact:f32:flags", data: flags, copySrc: false });
     const { output, count } = kernels.compactF32(bufIn, bufFlags);
@@ -212,7 +201,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     for (let i = 0; i < expected.length; i++) numberApproxEqual(gotOut[i], expected[i], 1e-5, `compactF32 output mismatch at index ${i}`);
 }
 
-// Radix sort u32 keys
+// 9) Radix sort u32 keys.
 {
     const n = 10000 + 3;
     const keys = makeRandomU32Array(n, 0xFFFFFFFF >>> 0);
@@ -223,7 +212,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     for (let i = 0; i < n; i++) assert.strictEqual(got[i] >>> 0, expected[i] >>> 0, `radixSortKeysU32 mismatch at index ${i}`);
 }
 
-// Radix sort u32 key-value pairs
+// 10) Radix sort u32 key-value pairs.
 {
     assert.strictEqual(typeof kernels.radixSortPairsU32, "function", "Missing kernel: radixSortPairsU32");
 
@@ -276,7 +265,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// Batched LU f32 (partial pivot: factor + solve)
+// 11) Batched LU f32 (partial pivot: factor + solve).
 {
     assert.strictEqual(typeof kernels.luFactorF32Batched, "function", "Missing kernel: luFactorF32Batched");
     assert.strictEqual(typeof kernels.luSolveF32Batched, "function", "Missing kernel: luSolveF32Batched");
@@ -384,7 +373,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// Batched LU complex64 (partial pivot by |a|^2: factor + solve)
+// 12) Batched LU complex64 (partial pivot by |a|^2: factor + solve).
 {
     assert.strictEqual(typeof kernels.luFactorComplex64Batched, "function", "Missing kernel: luFactorComplex64Batched");
     assert.strictEqual(typeof kernels.luSolveComplex64Batched, "function", "Missing kernel: luSolveComplex64Batched");
@@ -560,7 +549,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// Complex64 solve fallback path for n > 512 (identity LU should return rhs unchanged)
+// 13) Complex64 solve fallback path for n > 512 (identity LU should return rhs unchanged).
 {
     const batch = 1;
     const n = 513;
@@ -583,10 +572,10 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     kernels.luSolveComplex64Batched(bufLu, bufIpiv, bufRhs, bufX, batch, n);
 
     const gotX = await bufX.readAs(Float32Array);
-    arraysApproxEqualF32(gotX, rhs, 1e-5, "LU c64 large solve mismatch");
+    arraysApproxEqual(gotX, rhs, 1e-5, "LU c64 large solve mismatch");
 }
 
-// Blocked-path regression for f32 LU at n >= 160 (covers lead/upper/trailing kernels).
+// 14) Blocked-path regression for f32 LU at n >= 160 (covers lead/upper/trailing kernels).
 {
     const n = 192;
     const batch = 2;
@@ -638,7 +627,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// Blocked-path regression for c64 LU at n >= 160 (covers lead/upper/trailing kernels).
+// 15) Blocked-path regression for c64 LU at n >= 160 (covers lead/upper/trailing kernels).
 {
     const n = 192;
     const batch = 2;
@@ -708,5 +697,8 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-compute.destroy();
-device.destroy();
+// 16) Cleanup releases the shared compute context before its browser GPU device.
+{
+    compute.destroy();
+    await destroyTestDevice(device);
+}

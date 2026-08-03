@@ -15,6 +15,7 @@ on:
       - .cargo/**
       - .github/workflows/test.yaml
       - esbuild.config.js
+      - playwright.config.js
       - package.json
       - package-lock.json
       - tsconfig.json
@@ -34,6 +35,7 @@ on:
       - .cargo/**
       - .github/workflows/test.yaml
       - esbuild.config.js
+      - playwright.config.js
       - package.json
       - package-lock.json
       - tsconfig.json
@@ -50,7 +52,7 @@ jobs:
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -68,41 +70,49 @@ jobs:
         uses: actions/checkout@v7
 
       -
-        name: Set up Node
+        name: Setup Node
         uses: actions/setup-node@v7
         with:
-          node-version: "24"
+          node-version: 24
 
       -
-        name: Install dependencies
+        name: Install Node dependencies
         run: npm ci
 
       -
-        name: Install Rust tooling
+        name: Install Playwright dependencies
+        if: ${{ runner.os == 'Linux' }}
+        run: npx playwright install-deps chromium
+
+      -
+        name: Install Chromium
+        run: npx playwright install --no-shell chromium
+
+      -
+        name: Install Rust dependencies
         run: |
           rustup target add wasm32-unknown-unknown
           rustup component add rustfmt
 
       -
-        name: Check Rust formatting
-        run: cargo fmt --manifest-path ./rust/Cargo.toml -- --check
-
-      -
         name: Run Rust tests
-        run: npm run test:rs
-
-      -
-        name: Install Vulkan driver
-        if: ${{ runner.os == 'Linux' }}
         run: |
-          sudo apt-get update
-          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
-          vulkaninfo --summary
+          cargo fmt --manifest-path ./rust/Cargo.toml -- --check
+          npm run test:rs
 
       -
-        name: Build
+        name: Build WasmGPU
         run: npm run build
 
       -
         name: Run Node tests
         run: npm run test:js
+
+      -
+        name: Upload results
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-report-${{ matrix.os }}
+          path: playwright-report/
+          retention-days: 7

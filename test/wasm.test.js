@@ -4,8 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
-import { readFile } from "node:fs/promises";
+import assert from "./utils/assert.js";
 import { WasmGPU, WasmMemoryView, WasmModule, driver, initWebAssembly, pythonInterop, wasm, webassemblyInterop } from "../dist/WasmGPU.js";
 import * as generatedWasm from "../build/wasm.js";
 
@@ -284,7 +283,9 @@ const makeFixture = () => {
 
 // 8) The compiled Rust module, generated JavaScript bridge, and declarations expose the exact function ABI.
 {
-    const wasmBytes = await readFile(new URL("../build/wasm.wasm", import.meta.url));
+    const wasmResponse = await fetch(new URL("../build/wasm.wasm", import.meta.url));
+    assert.ok(wasmResponse.ok, `Failed to fetch ./build/wasm.wasm: ${wasmResponse.status}`);
+    const wasmBytes = new Uint8Array(await wasmResponse.arrayBuffer());
     const wasmModule = await WebAssembly.compile(wasmBytes);
     const rawExports = WebAssembly.Module.exports(wasmModule);
     const rawFunctionNames = rawExports.filter((entry) => entry.kind === "function").map((entry) => entry.name).sort();
@@ -293,7 +294,9 @@ const makeFixture = () => {
     assert.ok(rawExports.some((entry) => entry.kind === "memory" && entry.name === "memory"), "Compiled Rust module must export memory");
 
     const rawInstance = new WebAssembly.Instance(wasmModule, {});
-    const declarations = await readFile(new URL("../build/wasm.d.ts", import.meta.url), "utf8");
+    const declarationsResponse = await fetch(new URL("../build/wasm.d.ts", import.meta.url));
+    assert.ok(declarationsResponse.ok, `Failed to fetch ./build/wasm.d.ts: ${declarationsResponse.status}`);
+    const declarations = await declarationsResponse.text();
     for (const [name, arity] of Object.entries(RUST_ABI)) {
         assert.strictEqual(typeof rawInstance.exports[name], "function", `Raw Wasm export '${name}' must be a function`);
         assert.strictEqual(rawInstance.exports[name].length, arity, `Raw Wasm export '${name}' arity mismatch`);

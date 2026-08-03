@@ -14,11 +14,14 @@
     "./README.md"
   ],
   "devDependencies": {
+    "typescript": "7.0.2",
     "@types/node": "26.1.1",
     "@webgpu/types": "0.1.71",
     "esbuild": "0.28.1",
-    "typescript": "7.0.2",
-    "webgpu": "0.4.0"
+    "@playwright/test": "1.62.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.1": true
   },
   "scripts": {
     "build:rs": "node ./scripts/build-rust-wasm.js",
@@ -26,9 +29,13 @@
     "build:es": "node ./esbuild.config.js",
     "build": "npm run build:rs && npm run build:ts && npm run build:es",
     "test:rs": "cargo test --manifest-path ./rust/Cargo.toml",
-    "test:js": "node ./scripts/run-tests.js",
+    "test:js": "playwright test",
+    "test:js:headed": "playwright test --headed",
+    "test:js:debug": "playwright test --debug",
+    "test:js:report": "playwright show-report",
+    "test:js:serve": "node ./scripts/run-tests.js",
     "test": "npm run test:rs && npm run test:js",
-    "dev": "npm run build && npm run test",
+    "dev": "npm run build && npm run test && npm run restore",
     "restore": "git restore build dist",
     "website": "python ./scripts/build_website.py",
     "logo": "python ./scripts/rasterize_logo.py",
@@ -89,9 +96,5 @@
     "smaa",
     "simd",
     "library"
-  ],
-  "allowScripts": {
-    "esbuild@0.28.1": true,
-    "webgpu@0.4.0": true
-  }
+  ]
 }

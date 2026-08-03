@@ -4,46 +4,20 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, createBufferReaders, destroyTestDevice, setupTest, trackDestroy } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
-import { create, globals } from "webgpu";
 
-Object.assign(globalThis, globals);
-const navigator = { gpu: create([]) };
-Object.defineProperty(globalThis, "navigator", { value: navigator, configurable: true });
-if (!globalThis.window) globalThis.window = {};
-if (typeof globalThis.window.devicePixelRatio !== "number") globalThis.window.devicePixelRatio = 1;
+const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
 
-const numberApproxEqual = (a, b, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers"); assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`); };
-
-const arraysApproxEqual = (a, b, tol = 1e-6, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`); };
-
-const trackDestroy = (buffer) => { let destroyed = 0; const originalDestroy = buffer.destroy.bind(buffer); buffer.destroy = () => { destroyed++; return originalDestroy(); }; return () => destroyed; };
-
-const gpu = navigator.gpu;
-assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
-const adapter = await gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-const device = await adapter.requestDevice();
-assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
-
-await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
+const { device } = await setupTest({ initWebAssembly: WasmGPU.initWebAssembly, webgpu: true });
 const { PointCloud, Compute, WasmMemoryView } = WasmGPU;
 assert.ok(PointCloud, "Missing export: PointCloud");
 assert.ok(Compute, "Missing export: Compute");
 assert.ok(WasmMemoryView, "Missing export: WasmMemoryView");
 const compute = new Compute(device, device.queue);
 assert.ok(compute.kernels && typeof compute.kernels.copyF32 === "function", "Missing kernel: compute.kernels.copyF32");
-
-const readBufferAsF32 = async (buffer, count) => {
-    const out = compute.createStorageBuffer({ label: "pc:read:f32", byteLength: count * 4, copySrc: true });
-    try {
-        compute.kernels.copyF32(buffer, { out, count });
-        await device.queue.onSubmittedWorkDone();
-        return await out.readAs(Float32Array);
-    } finally { out.destroy(); }
-};
+const { readBufferAsF32 } = createBufferReaders(compute);
 
 const createRawStorageBuffer = (label, data) => device.createBuffer({ label, size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
 
@@ -53,7 +27,7 @@ const makeWasmF32View = (length, ptr = 0, name = "pointcloud-wasm-f32") => { con
 
 const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-wasm-f32-global") => { const memory = new WebAssembly.Memory({ initial: 1 }), lengthGlobal = new WebAssembly.Global({ value: "i32", mutable: true }, length), moduleRef = WasmGPU.webassemblyInterop.fromMemory(memory, { name }), data = new Float32Array(memory.buffer, ptr, 64), view = moduleRef.view({ ptr, length: { global: lengthGlobal }, dtype: "f32", name }); assert.ok(view instanceof WasmMemoryView, "Expected fromMemory().view() to return a WasmMemoryView"); return { memory, moduleRef, lengthGlobal, data, view }; };
 
-// CPU data path: setData() -> upload() -> pointsBuffer readable by GPU
+// 1) CPU data path: setData() -> upload() -> pointsBuffer readable by GPU.
 {
     const data = new Float32Array([1.0, 2.0, 3.0, 0.50, 4.0, 6.0, 8.0, 0.25]);
 
@@ -74,7 +48,7 @@ const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-was
     pc.destroy?.();
 }
 
-// External WebAssembly memory views: constructors, explicit refresh, CPU snapshots, validation, and grow-only GPU capacity.
+// 2) External WebAssembly memory views: constructors, explicit refresh, CPU snapshots, validation, and grow-only GPU capacity.
 {
     const colorPoints = makeWasmF32View(8, 0, "pc:wasm:data:ctor-colors");
     const colorData = makeWasmF32View(8, 0, "pc:wasm:colors:ctor");
@@ -178,7 +152,7 @@ const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-was
     }
 }
 
-// External buffers are borrowed by default, owned when requested, and owned replacements are destroyed exactly once.
+// 3) External buffers are borrowed by default, owned when requested, and owned replacements are destroyed exactly once.
 {
     const borrowed = createRawStorageBuffer("pc:ownership:borrowed", new Float32Array(8));
     const ownedByCtor = createRawStorageBuffer("pc:ownership:ctor", new Float32Array(8));
@@ -227,7 +201,7 @@ const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-was
     replaceBorrowed.destroy();
 }
 
-// Uniform packing sanity for unified ScaleTransform + visual params.
+// 4) Uniform packing sanity for unified ScaleTransform + visual params.
 {
     const pc = new PointCloud({ scaleTransform: baseScaleTransform });
 
@@ -292,7 +266,7 @@ const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-was
     pc.destroy?.();
 }
 
-// CPU-side helpers: bounds + scale stats application/source descriptor.
+// 5) CPU-side helpers: bounds + scale stats application/source descriptor.
 {
     const data = new Float32Array([1.0, 2.0, 3.0, 0.50, 4.0, 6.0, 8.0, 0.25]);
 
@@ -334,5 +308,8 @@ const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-was
     pc.destroy?.();
 }
 
-compute.destroy();
-device.destroy();
+// 6) Cleanup releases the shared compute context before its browser GPU device.
+{
+    compute.destroy();
+    await destroyTestDevice(device);
+}

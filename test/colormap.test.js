@@ -4,31 +4,16 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, destroyTestDevice, setupTest } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
-import { create, globals } from "webgpu";
 
-Object.assign(globalThis, globals);
-const navigator = { gpu: create([]) };
+const { numberApproxEqual } = createApproxHelpers();
 
-const numberApproxEqual = (a, b, tol = 1e-6, msg = "Numbers differ") => {
-    assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers");
-    assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`);
-};
-
-const gpu = navigator.gpu;
-assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
-const adapter = await gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-const device = await adapter.requestDevice();
-assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => {
-    throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`);
-});
+const { device } = await setupTest({ webgpu: true });
 const { Colormap } = WasmGPU;
-assert.ok(Colormap, "Missing export: Colormap");
 
-// Built-in maps should exist and be singletons (same instance per name)
+// 1) Built-in maps should exist and be singletons (same instance per name).
 {
     assert.strictEqual(typeof Colormap.builtin, "function", "Colormap.builtin missing");
 
@@ -50,7 +35,7 @@ assert.ok(Colormap, "Missing export: Colormap");
     }
 }
 
-// fromStops(): should accept multi-stop gradients (continuous) and allocate a LUT with the requested resolution
+// 2) fromStops(): should accept multi-stop gradients (continuous) and allocate a LUT with the requested resolution.
 {
     assert.strictEqual(typeof Colormap.fromStops, "function", "Colormap.fromStops missing");
 
@@ -83,7 +68,7 @@ assert.ok(Colormap, "Missing export: Colormap");
     assert.strictEqual(threw, true, "Expected Colormap.fromStops([]) to throw");
 }
 
-// fromPalette(): should accept discrete categorical palettes and default to nearest filtering
+// 3) fromPalette(): should accept discrete categorical palettes and default to nearest filtering.
 {
     assert.strictEqual(typeof Colormap.fromPalette, "function", "Colormap.fromPalette missing");
 
@@ -98,7 +83,7 @@ assert.ok(Colormap, "Missing export: Colormap");
     assert.strictEqual(cm.filter, "nearest", "Expected Colormap.fromPalette default filter to be nearest");
 }
 
-// GPU upload path: getGPUResources() should allocate a 1D RGBA8 texture + sampler and return stable cached resources
+// 4) GPU upload path: getGPUResources() should allocate a 1D RGBA8 texture + sampler and return stable cached resources.
 {
     const cm = Colormap.builtin("magma");
     assert.strictEqual(typeof cm.getGPUResources, "function", "Colormap.getGPUResources missing");
@@ -116,7 +101,7 @@ assert.ok(Colormap, "Missing export: Colormap");
     assert.strictEqual(r1.texture, r2.texture, "Expected getGPUResources to return cached texture for the same device");
 }
 
-// External injection path: fromGPUTextureView() should wrap caller-provided view/sampler without allocating its own texture
+// 5) External injection path: fromGPUTextureView() should wrap caller-provided view/sampler without allocating its own texture.
 {
     assert.strictEqual(typeof Colormap.fromGPUTextureView, "function", "Colormap.fromGPUTextureView missing");
 
@@ -165,7 +150,7 @@ assert.ok(Colormap, "Missing export: Colormap");
     tex.destroy();
 }
 
-// Uniform stop bridge: toUniformStops() should return <= 8 vec4 stops with sane ranges
+// 6) Uniform stop bridge: toUniformStops() should return <= 8 vec4 stops with sane ranges.
 {
     const cm = Colormap.builtin("viridis");
     assert.strictEqual(typeof cm.toUniformStops, "function", "Colormap.toUniformStops missing");
@@ -183,4 +168,7 @@ assert.ok(Colormap, "Missing export: Colormap");
     }
 }
 
-device.destroy();
+// 7) Cleanup waits for shared GPU work before destroying the browser device.
+{
+    await destroyTestDevice(device);
+}

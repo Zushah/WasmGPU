@@ -4,13 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
-import { readFile } from "node:fs/promises";
-import { create, globals } from "webgpu";
-
-Object.assign(globalThis, globals);
-const navigator = { gpu: create([]) };
-Object.defineProperty(globalThis, "navigator", { value: navigator, configurable: true });
+import assert from "./utils/assert.js";
+import { destroyTestDevice, setupTest } from "./utils/helpers.js";
 
 const extractBundledShaders = (bundle) => {
     const markerPattern = /^\/\/ (src\/wgsl\/[^\r\n]+\.wgsl)\r?$/gm;
@@ -26,21 +21,20 @@ const extractBundledShaders = (bundle) => {
 
 const formatDiagnostic = (path, message) => { const location = message.lineNum > 0 ? `:${message.lineNum}:${message.linePos}` : ""; return `${path}${location}: ${message.message}`; };
 
-const bundle = await readFile(new URL("../dist/WasmGPU.js", import.meta.url), "utf8");
+const bundleResponse = await fetch(new URL("../dist/WasmGPU.js", import.meta.url));
+assert.ok(bundleResponse.ok, `Failed to fetch ./dist/WasmGPU.js: ${bundleResponse.status}`);
+const bundle = await bundleResponse.text();
 const shaders = extractBundledShaders(bundle);
-const gpu = navigator.gpu;
-assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
-const adapter = await gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire a WebGPU adapter");
 const requirements = ["primitive-index"];
+const { adapter, device } = await setupTest({ webgpu: { optionalFeatures: requirements } });
 const primitiveIndexSupported = adapter.features.has(requirements[0]);
-const device = await adapter.requestDevice({ requiredFeatures: primitiveIndexSupported ? ["primitive-index"] : [] });
-assert.ok(device, "Failed to acquire a WebGPU device");
 
 const errors = [];
 const warnings = [];
 const skipped = [];
-try {
+
+// 1) Every bundled WGSL module compiles without validation errors on supported browser features.
+{
     for (const shader of shaders) {
         if (!primitiveIndexSupported && /\benable\s+primitive_index\s*;/.test(shader.code)) { skipped.push(shader.path); continue; }
         device.pushErrorScope("validation");
@@ -58,9 +52,12 @@ try {
         for (const message of compilationInfo.messages.filter((entry) => entry.type === "warning")) warnings.push(formatDiagnostic(shader.path, message));
         if (validationError && moduleErrors.length === 0) errors.push(`${shader.path}: ${validationError.message}`);
     }
-    if (skipped.length > 0) console.warn(`[wgsl] skipped ${skipped.length} modules requiring the unavailable '${requirements[0]}' feature:\n${skipped.join("\n")}`);
-    for (const warning of warnings) console.warn(`[wgsl] warning: ${warning}`);
+    if (skipped.length > 0) console.warn(`skipped ${skipped.length} modules requiring the unavailable ${requirements[0]} feature:\n${skipped.join("\n")}`);
+    for (const warning of warnings) console.warn(`warning: ${warning}`);
     assert.equal(errors.length, 0, errors.join("\n"));
-} finally {
-    device.destroy();
+}
+
+// 2) Cleanup waits for compilation work before destroying the browser GPU device.
+{
+    await destroyTestDevice(device);
 }

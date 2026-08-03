@@ -4,13 +4,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, setupTest } from "./utils/helpers.js";
 import { initWebAssembly, Geometry, Mesh, Scene, TransformStore, UnlitMaterial, StandardMaterial } from "../dist/WasmGPU.js";
 
-const approxEqual = (actual, expected, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(actual) && Number.isFinite(expected), `${msg}: expected finite numbers`); assert.ok(Math.abs(actual - expected) <= tol, `${msg}: ${actual} vs ${expected}`); };
-const approxArray = (actual, expected, tol = 1e-6, msg = "Arrays differ") => { assert.equal(actual.length, expected.length, `${msg}: length ${actual.length} vs ${expected.length}`); for (let i = 0; i < actual.length; i++) approxEqual(actual[i], expected[i], tol, `${msg} at index ${i}`); };
+const { arraysApproxEqual } = createApproxHelpers();
 
-await initWebAssembly(new URL("../dist/", import.meta.url).toString());
+await setupTest({ initWebAssembly });
 
 // 1) Mesh runtime state preserves transforms, hierarchy, visibility, flags, and bounds.
 {
@@ -41,15 +41,15 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(mesh.receiveShadow, false);
     assert.equal(mesh.transform.parent, parent.transform);
     assert.equal(child.transform.parent, mesh.transform);
-    approxArray(mesh.transform.worldPosition, [12, 3, 4]);
-    approxArray(child.transform.worldPosition, [12, 6, 4]);
+    arraysApproxEqual(mesh.transform.worldPosition, [12, 3, 4]);
+    arraysApproxEqual(child.transform.worldPosition, [12, 6, 4]);
 
     const local = mesh.getLocalBounds();
     const world = mesh.getWorldBounds();
-    approxArray(local.boxMin, [-1, -1, -1]);
-    approxArray(local.boxMax, [1, 1, 1]);
-    approxArray(world.boxMin, [10, 0, 0]);
-    approxArray(world.boxMax, [14, 6, 8]);
+    arraysApproxEqual(local.boxMin, [-1, -1, -1]);
+    arraysApproxEqual(local.boxMax, [1, 1, 1]);
+    arraysApproxEqual(world.boxMin, [10, 0, 0]);
+    arraysApproxEqual(world.boxMax, [14, 6, 8]);
     assert.equal(mesh.getBounds().sphereRadius, world.sphereRadius);
 
     mesh.removeChild(child);
@@ -88,8 +88,8 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
     const visibleBounds = scene.getBounds();
     const allBounds = scene.getBounds({ visibleOnly: false });
-    approxArray(visibleBounds.boxMax, [0.5, 0.5, 0.5]);
-    approxArray(allBounds.boxMax, [10.5, 0.5, 0.5]);
+    arraysApproxEqual(visibleBounds.boxMax, [0.5, 0.5, 0.5]);
+    arraysApproxEqual(allBounds.boxMax, [10.5, 0.5, 0.5]);
 
     visible.destroy();
     assert.equal(scene.meshes.length, 1);
@@ -117,7 +117,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(clone.visible, false);
     assert.equal(clone.castShadow, false);
     assert.equal(clone.receiveShadow, false);
-    approxArray(clone.transform.position, [1, 2, 3]);
+    arraysApproxEqual(clone.transform.position, [1, 2, 3]);
     mesh.destroy();
     assert.doesNotThrow(() => clone.geometry.retain().release());
     assert.doesNotThrow(() => clone.material.getUniformData());

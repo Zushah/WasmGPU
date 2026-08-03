@@ -4,16 +4,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, createBrowserCanvasScope, destroyTestDevice, setupTest } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
-import { create, globals } from "webgpu";
 
-Object.assign(globalThis, globals);
-const navigator = { gpu: create([]) };
-
-const numberApproxEqual = (a, b, tol = 1e-5, msg = "Numbers differ") => { assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers"); assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`); };
-
-const arraysApproxEqual = (a, b, tol = 1e-5, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`); };
+const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers(1e-5);
+const browserCanvases = createBrowserCanvasScope();
 
 const makeCanvas = (width = 800, height = 600) => { const listeners = new Map(); return { style: {}, clientWidth: width, clientHeight: height, addEventListener(type, handler) { listeners.set(type, handler); }, removeEventListener(type, handler) { if (listeners.get(type) === handler) listeners.delete(type); }, setPointerCapture() {}, releasePointerCapture() {}, getBoundingClientRect() { return { left: 0, top: 0, width, height, right: width, bottom: height }; }, listeners }; };
 
@@ -25,17 +21,7 @@ const cameraForward = (camera) => { const m = camera.transform.worldMatrix; retu
 
 const cameraUp = (camera) => { const m = camera.transform.worldMatrix; return [m[4], m[5], m[6]]; };
 
-const withFakeWindow = (run) => { const hadWindow = Object.prototype.hasOwnProperty.call(globalThis, "window"); const previousWindow = globalThis.window; const fakeWindow = makeEventTarget(); Object.defineProperty(globalThis, "window", { value: fakeWindow, configurable: true }); try { return run(fakeWindow); } finally { if (hadWindow) Object.defineProperty(globalThis, "window", { value: previousWindow, configurable: true }); else delete globalThis.window; } };
-
-const gpu = navigator.gpu;
-assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
-const adapter = await gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-const device = await adapter.requestDevice();
-assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
-
-await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
+const { device } = await setupTest({ initWebAssembly: WasmGPU.initWebAssembly, webgpu: true });
 const { NavigationControls, OrbitControls, TrackballControls, FlyControls, PerspectiveCamera, OrthographicCamera, Geometry, Mesh, PointCloud, GlyphField, Scene, UnlitMaterial, AxisConventions } = WasmGPU;
 assert.ok(NavigationControls, "Missing export: NavigationControls");
 assert.ok(FlyControls, "Missing export: FlyControls");
@@ -163,20 +149,19 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
 
 // 6) Fly controls move in camera space, scale speed with the wheel, drag-look, reset, and clean up listeners.
 {
-    withFakeWindow((fakeWindow) => {
-        const orbit = new OrbitControls(new PerspectiveCamera(), makeCanvas());
-        const trackball = new TrackballControls(new PerspectiveCamera(), makeCanvas());
-        assert.strictEqual(fakeWindow.listeners.size, 0, "Orbit/trackball controls should not attach default keyboard listeners");
-        orbit.dispose();
-        trackball.dispose();
-        const navigationFly = new NavigationControls(new PerspectiveCamera(), makeCanvas(), { mode: "fly" });
-        assert.ok(fakeWindow.listeners.has("keydown") && fakeWindow.listeners.has("keyup"), "Fly mode should attach default keyboard listeners when window exists");
-        navigationFly.setMode("orbit");
-        assert.strictEqual(fakeWindow.listeners.size, 0, "Leaving fly mode should detach default keyboard listeners");
-        navigationFly.setMode("fly");
-        assert.ok(fakeWindow.listeners.has("keydown") && fakeWindow.listeners.has("keyup"), "Re-entering fly mode should restore default keyboard listeners");
-        navigationFly.dispose();
-    });
+    const modeKeyboard = makeEventTarget();
+    const orbit = new OrbitControls(new PerspectiveCamera(), makeCanvas());
+    const trackball = new TrackballControls(new PerspectiveCamera(), makeCanvas());
+    assert.strictEqual(modeKeyboard.listeners.size, 0, "Orbit/trackball controls should not attach keyboard listeners");
+    orbit.dispose();
+    trackball.dispose();
+    const navigationFlyMode = new NavigationControls(new PerspectiveCamera(), makeCanvas(), { mode: "fly", keyboardTarget: modeKeyboard });
+    assert.ok(modeKeyboard.listeners.has("keydown") && modeKeyboard.listeners.has("keyup"), "Fly mode should attach configured keyboard listeners");
+    navigationFlyMode.setMode("orbit");
+    assert.strictEqual(modeKeyboard.listeners.size, 0, "Leaving fly mode should detach configured keyboard listeners");
+    navigationFlyMode.setMode("fly");
+    assert.ok(modeKeyboard.listeners.has("keydown") && modeKeyboard.listeners.has("keyup"), "Re-entering fly mode should restore configured keyboard listeners");
+    navigationFlyMode.dispose();
 
     const keyboard = makeEventTarget();
     const canvas = makeCanvas();
@@ -321,4 +306,22 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
     assert.ok(Number.isFinite(controls.distance), "Fit on a partial scene should still produce a finite camera distance from bounded contributors");
 }
 
-device.destroy();
+// 9) Real DOM canvas events drive controls through the browser event system.
+{
+    const canvas = browserCanvases.createCanvas(800, 600);
+    const camera = new PerspectiveCamera({ fov: 60, aspect: 4 / 3, near: 0.1, far: 200 });
+    camera.transform.setPosition(0, 0, 10);
+    camera.lookAt(0, 0, 0);
+    const controls = new OrbitControls(camera, canvas, { target: [0, 0, 0], enableDamping: false });
+    const dispatched = canvas.dispatchEvent(new WheelEvent("wheel", { deltaY: 120, clientX: 400, clientY: 300, bubbles: true, cancelable: true }));
+    assert.strictEqual(dispatched, false, "The real wheel listener should prevent the browser's default scroll behavior");
+    controls.update(1 / 60);
+    assert.ok(controls.distance > 10, "A real wheel event should dolly the orbit camera away from its target");
+    controls.dispose();
+}
+
+// 10) Cleanup removes real canvases and waits for shared GPU work before destroying the browser device.
+{
+    browserCanvases.restore();
+    await destroyTestDevice(device);
+}

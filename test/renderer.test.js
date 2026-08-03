@@ -4,79 +4,32 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
-import { create, globals } from "webgpu";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, createBrowserCanvasScope, createWebGPUCanvasDouble as createMockCanvas, setupTest } from "./utils/helpers.js";
 import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, BlendMode, CullMode, PointCloud, GlyphField, NodeLink, wasm } from "../dist/WasmGPU.js";
 
-Object.assign(globalThis, globals);
-
-const baseGpu = create([]);
+const baseGpu = navigator.gpu;
 const originalRequestAdapter = baseGpu.requestAdapter.bind(baseGpu);
 const capturedAdapterOptions = [];
 const capturedDeviceDescriptors = [];
-const wrappedGpu = { requestAdapter: async (options) => { capturedAdapterOptions.push(options); const adapter = await originalRequestAdapter(options); assert.ok(adapter, "Failed to acquire a WebGPU adapter"); return { features: adapter.features, limits: adapter.limits, requestDevice: async (descriptor = {}) => { capturedDeviceDescriptors.push(descriptor); return await adapter.requestDevice(descriptor); } }; } };
-if (typeof baseGpu.getPreferredCanvasFormat === "function") wrappedGpu.getPreferredCanvasFormat = baseGpu.getPreferredCanvasFormat.bind(baseGpu);
-Object.defineProperty(globalThis, "navigator", { value: { gpu: wrappedGpu }, configurable: true });
-if (!globalThis.window) globalThis.window = {};
-globalThis.window.devicePixelRatio = 1;
-
-const approxEqual = (actual, expected, tol = 1e-6, msg = "Numbers differ") => {
-    assert.ok(Number.isFinite(actual) && Number.isFinite(expected), `${msg}: expected finite numbers`);
-    assert.ok(Math.abs(actual - expected) <= tol, `${msg}: ${actual} vs ${expected}`);
-};
-
-const makeCanvas = (width = 640, height = 480) => {
-    const canvas = {
-        width,
-        height,
-        clientWidth: width,
-        clientHeight: height,
-        style: {},
-        configureCalls: [],
-        currentTextureCount: 0,
-        addEventListener() {},
-        removeEventListener() {},
-        getBoundingClientRect() {
-            return {
-                left: 0,
-                top: 0,
-                width: this.clientWidth,
-                height: this.clientHeight,
-                right: this.clientWidth,
-                bottom: this.clientHeight
-            };
+const wrappedRequestAdapter = async (options) => {
+    capturedAdapterOptions.push(options);
+    const adapter = await originalRequestAdapter(options);
+    assert.ok(adapter, "Failed to acquire a WebGPU adapter");
+    const originalRequestDevice = adapter.requestDevice.bind(adapter);
+    return {
+        features: adapter.features,
+        limits: adapter.limits,
+        requestDevice: async (descriptor = {}) => {
+            capturedDeviceDescriptors.push(descriptor);
+            return await originalRequestDevice(descriptor);
         }
     };
-    let device = null;
-    let format = "rgba8unorm";
-    let usage = GPUTextureUsage.RENDER_ATTACHMENT;
-    const context = {
-        configure(descriptor) {
-            device = descriptor.device;
-            format = descriptor.format ?? format;
-            usage = descriptor.usage ?? usage;
-            canvas.configureCalls.push(descriptor);
-        },
-        unconfigure() {
-            device = null;
-        },
-        getCurrentTexture() {
-            assert.ok(device, "GPUCanvasContext.configure() must be called before getCurrentTexture().");
-            canvas.currentTextureCount++;
-            return device.createTexture({
-                size: {
-                    width: Math.max(1, canvas.width | 0),
-                    height: Math.max(1, canvas.height | 0),
-                    depthOrArrayLayers: 1
-                },
-                format,
-                usage: usage | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-            });
-        }
-    };
-    canvas.getContext = (kind) => kind === "webgpu" ? context : null;
-    return canvas;
 };
+baseGpu.requestAdapter = wrappedRequestAdapter;
+
+const { numberApproxEqual } = createApproxHelpers();
+const browserCanvases = createBrowserCanvasScope();
 
 const createCamera = (aspect = 1) => {
     const camera = new PerspectiveCamera({ fov: 60, aspect, near: 0.1, far: 100 });
@@ -84,11 +37,11 @@ const createCamera = (aspect = 1) => {
     return camera;
 };
 
-await initWebAssembly(new URL("../dist/", import.meta.url).toString());
+await setupTest({ initWebAssembly });
 
 // 1) Renderer creation configures WebGPU, canvas sizing, device limits, and GPU handles.
 {
-    const canvas = makeCanvas(320, 160);
+    const canvas = createMockCanvas(320, 160);
     const renderer = await Renderer.create(canvas, {
         antialias: false,
         frustumCulling: false,
@@ -104,7 +57,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(canvas.configureCalls.length, 1);
     assert.equal(canvas.width, 320);
     assert.equal(canvas.height, 160);
-    approxEqual(renderer.aspectRatio, 2);
+    numberApproxEqual(renderer.aspectRatio, 2);
     assert.equal(capturedAdapterOptions.at(-1).powerPreference, "low-power");
     assert.equal(capturedDeviceDescriptors.at(-1).requiredLimits.maxUniformBufferBindingSize, 16384);
     assert.ok(!Object.prototype.hasOwnProperty.call(capturedDeviceDescriptors.at(-1).requiredLimits, "maxSampledTexturesPerShaderStage"));
@@ -115,17 +68,18 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     renderer.resize();
     assert.equal(canvas.width, 200);
     assert.equal(canvas.height, 50);
-    approxEqual(renderer.aspectRatio, 4);
+    numberApproxEqual(renderer.aspectRatio, 4);
     renderer.enableGpuTiming(true);
     assert.equal(typeof renderer.isGpuTimingSupported, "boolean");
     assert.equal(renderer.gpuTimeNs === null || Number.isFinite(renderer.gpuTimeNs), true);
     renderer.enableGpuTiming(false);
     renderer.destroy();
+    baseGpu.requestAdapter = originalRequestAdapter;
 }
 
 // 2) Render submits core mesh/material paths and updates GPU-side material state.
 {
-    const canvas = makeCanvas(256, 256);
+    const canvas = browserCanvases.createCanvas(256, 256);
     const renderer = await Renderer.create(canvas, {
         antialias: false,
         frustumCulling: false,
@@ -178,8 +132,8 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     scene.add(meshA).add(meshB).add(meshC).add(meshD);
 
     assert.doesNotThrow(() => renderer.render(scene, camera));
-    assert.equal(canvas.currentTextureCount, 1);
-    approxEqual(camera.aspect, 1);
+    await renderer.gpu.queue.onSubmittedWorkDone();
+    numberApproxEqual(camera.aspect, 1);
     assert.ok(unlit.uniformBuffer);
     assert.ok(standard.uniformBuffer);
     assert.ok(custom.uniformBuffer);
@@ -198,7 +152,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 3) Frustum culling stats use the nested public shape and keep occlusion counts separate.
 {
-    const canvas = makeCanvas(192, 192);
+    const canvas = browserCanvases.createCanvas(192, 192);
     const renderer = await Renderer.create(canvas, {
         antialias: false,
         frustumCulling: true,
@@ -232,7 +186,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 4) The render path stays cold for occlusion bookkeeping when occlusion culling is disabled.
 {
-    const canvas = makeCanvas(160, 160);
+    const canvas = browserCanvases.createCanvas(160, 160);
     const renderer = await Renderer.create(canvas, {
         antialias: false,
         frustumCulling: false,
@@ -261,7 +215,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 5) Render-only occlusion hooks do not run during pick or warmup, so picking stays exact and warmup stays unfiltered.
 {
-    const canvas = makeCanvas(160, 160);
+    const canvas = browserCanvases.createCanvas(160, 160);
     const renderer = await Renderer.create(canvas, {
         antialias: false,
         frustumCulling: false,
@@ -298,7 +252,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 6) Occlusion-enabled renders create capture resources and submit the capture path without throwing.
 {
-    const canvas = makeCanvas(192, 192);
+    const canvas = browserCanvases.createCanvas(192, 192);
     const renderer = await Renderer.create(canvas, {
         antialias: false,
         frustumCulling: false,
@@ -328,7 +282,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 7) Strict previous-frame validity skips occlusion filtering when the stored view-projection does not match.
 {
-    const canvas = makeCanvas(160, 160);
+    const canvas = browserCanvases.createCanvas(160, 160);
     const renderer = await Renderer.create(canvas, {
         antialias: false,
         frustumCulling: false,
@@ -372,7 +326,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 8) Safe occluder capture classification keeps ambiguous coverage paths out of the capture set.
 {
-    const canvas = makeCanvas(200, 200);
+    const canvas = browserCanvases.createCanvas(200, 200);
     const renderer = await Renderer.create(canvas, {
         antialias: false,
         frustumCulling: false,
@@ -449,7 +403,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 9) Picking APIs return stable empty and region result shapes.
 {
-    const canvas = makeCanvas(128, 128);
+    const canvas = browserCanvases.createCanvas(128, 128);
     const renderer = await Renderer.create(canvas, {
         antialias: false,
         frustumCulling: false,
@@ -483,7 +437,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 10) SMAA render path and destroyed scene objects clean up without poisoning later frames.
 {
-    const canvas = makeCanvas(160, 120);
+    const canvas = createMockCanvas(160, 120);
     const renderer = await Renderer.create(canvas, {
         antialias: true,
         frustumCulling: false,
@@ -505,7 +459,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 // 11) Warmup validates defaults and errors without acquiring a swapchain texture.
 {
     assert.equal(typeof WasmGPU.prototype.warmup, "function");
-    const canvas = makeCanvas(256, 256);
+    const canvas = createMockCanvas(256, 256);
     const wgpu = await WasmGPU.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
     const scene = wgpu.createScene([0, 0, 0]);
     const camera = wgpu.createCamera.perspective({ fov: 50, near: 0.1, far: 100 });
@@ -522,7 +476,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 12) Warmup eagerly exercises visible render resource creation paths before the first render.
 {
-    const canvas = makeCanvas(320, 240);
+    const canvas = createMockCanvas(320, 240);
     const wgpu = await WasmGPU.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
     const scene = wgpu.createScene([0.01, 0.02, 0.03]);
     const camera = wgpu.createCamera.perspective({ fov: 55, near: 0.1, far: 200 });
@@ -592,7 +546,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 13) Transmission warmup prepares transmissive material binding without drawing a visible frame.
 {
-    const canvas = makeCanvas(240, 180);
+    const canvas = createMockCanvas(240, 180);
     const wgpu = await WasmGPU.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
     const scene = wgpu.createScene([0, 0, 0]);
     const camera = wgpu.createCamera.perspective({ fov: 50, near: 0.1, far: 100 });
@@ -617,7 +571,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
 // 14) Renderer culling growth and destruction release retained WebAssembly scratch blocks.
 {
-    const canvas = makeCanvas(160, 120);
+    const canvas = browserCanvases.createCanvas(160, 120);
     const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: true, canvasFormat: "rgba8unorm" });
     const scene = new Scene();
     const camera = createCamera(160 / 120);
@@ -656,4 +610,9 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
         camera.destroy();
         renderer.destroy();
     }
+}
+
+// 15) Cleanup removes every real canvas element created by renderer integration themes.
+{
+    browserCanvases.restore();
 }

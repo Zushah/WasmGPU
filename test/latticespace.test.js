@@ -4,56 +4,29 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, createBrowserCanvasScope, destroyTestDevice, readBufferAsF32, readBufferAsU32, setupTest, trackDestroy } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
-import { create, globals } from "webgpu";
 
-Object.assign(globalThis, globals);
-const gpu = create([]);
-Object.defineProperty(globalThis, "navigator", { value: { gpu }, configurable: true });
-if (!globalThis.window) globalThis.window = {};
-globalThis.window.devicePixelRatio = 1;
+const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
+const browserCanvases = createBrowserCanvasScope();
 
-const makeCanvas = (width = 192, height = 192) => {
-    const canvas = {
-        width, height, clientWidth: width, clientHeight: height, style: {},
-        addEventListener() {}, removeEventListener() {},
-        getBoundingClientRect() { return { left: 0, top: 0, right: this.clientWidth, bottom: this.clientHeight, width: this.clientWidth, height: this.clientHeight }; }
-    };
-    let device = null;
-    let format = "rgba8unorm";
-    const context = {
-        configure(descriptor) { device = descriptor.device; format = descriptor.format ?? format; },
-        unconfigure() { device = null; },
-        getCurrentTexture() {
-            assert.ok(device, "GPUCanvasContext must be configured");
-            return device.createTexture({ size: { width: canvas.width, height: canvas.height, depthOrArrayLayers: 1 }, format, usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_SRC });
-        }
-    };
-    canvas.getContext = (kind) => kind === "webgpu" ? context : null;
-    return canvas;
-};
+let uncapturedError = null;
+const { device } = await setupTest({
+    initWebAssembly: WasmGPU.initWebAssembly,
+    webgpu: { onUncapturedError: (event) => { uncapturedError = event.error?.message ?? String(event.error); } }
+});
 
-const approx = (actual, expected, tolerance = 1e-6, message = "Numbers differ") => assert.ok(Math.abs(actual - expected) <= tolerance, `${message}: ${actual} vs ${expected}`);
-const approxArray = (actual, expected, tolerance = 1e-6, message = "Arrays differ") => { assert.strictEqual(actual.length, expected.length, `${message}: length`); for (let i = 0; i < actual.length; i++) approx(actual[i], expected[i], tolerance, `${message} at ${i}`); };
-const trackDestroy = (buffer) => { let count = 0; const destroy = buffer.destroy.bind(buffer); buffer.destroy = () => { count++; destroy(); }; return () => count; };
-
-await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
 const { LatticeSpace, Scene, Renderer, PerspectiveCamera, BlendMode, CullMode, Compute, WasmMemoryView } = WasmGPU;
 assert.ok(LatticeSpace, "Missing export: LatticeSpace");
 assert.strictEqual(typeof WasmGPU.WasmGPU.prototype.createLatticeSpace, "function", "Missing WasmGPU.createLatticeSpace");
 
-const adapter = await gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire WebGPU adapter");
-const device = await adapter.requestDevice();
 const compute = new Compute(device, device.queue);
-let uncapturedError = null;
-device.addEventListener("uncapturederror", (event) => { uncapturedError = event?.error?.message ?? String(event); });
 
-const readF32 = async (buffer, count, localCompute = compute) => { const output = localCompute.createStorageBuffer({ byteLength: count * 4, copySrc: true }); try { localCompute.kernels.copyF32(buffer, { out: output, count }); return await output.readAs(Float32Array); } finally { output.destroy(); } };
-const readU32 = async (buffer, count, localCompute = compute) => { const output = localCompute.createStorageBuffer({ byteLength: count * 4, copySrc: true }); try { localCompute.kernels.copyU32(buffer, { out: output, count }); return await output.readAs(Uint32Array); } finally { output.destroy(); } };
+const readF32 = (buffer, count, localCompute = compute) => readBufferAsF32(localCompute, buffer, count);
+const readU32 = (buffer, count, localCompute = compute) => readBufferAsU32(localCompute, buffer, count);
 
-// Descriptor defaults, structural validation, and X-fastest indexing.
+// 1) Descriptor defaults, structural validation, and X-fastest indexing.
 {
     const space = new LatticeSpace({ dimensions: [3, 2], data: new Float32Array(6), keepCPUData: true });
     assert.deepStrictEqual(space.dimensions, [3, 2]);
@@ -87,7 +60,7 @@ const readU32 = async (buffer, count, localCompute = compute) => { const output 
     assert.throws(() => new LatticeSpace({ dimensions: [2, 2], componentCount: 2, scaleTransform: { componentCount: 3 } }), /componentCount/i);
 }
 
-// Occlusion revisions invalidate every state change that can alter captured coverage.
+// 2) Occlusion revisions invalidate every state change that can alter captured coverage.
 {
     const space = new LatticeSpace({ dimensions: [1, 1, 2], componentCount: 2, data: new Float32Array(4) });
     const expectRevisionChange = (change) => {
@@ -102,21 +75,21 @@ const readU32 = async (buffer, count, localCompute = compute) => { const output 
     space.destroy();
 }
 
-// Analytic local/world bounds follow origin, spacing, cell scale, clipping, and transform.
+// 3) Analytic local/world bounds follow origin, spacing, cell scale, clipping, and transform.
 {
     const space = new LatticeSpace({ dimensions: [4, 3, 2], origin: [1, 2, 3], spacing: [2, 4, 6], cellScale: [0.5, 0.5, 0.5], indexRange: { min: [1, 1, 0], max: [4, 3, 2] }, colorMode: "solid" });
     const local = space.getLocalBounds();
-    approxArray(local.boxMin, [2.5, 5, 1.5], 1e-6, "local bounds min");
-    approxArray(local.boxMax, [7.5, 11, 10.5], 1e-6, "local bounds max");
+    arraysApproxEqual(local.boxMin, [2.5, 5, 1.5], 1e-6, "local bounds min");
+    arraysApproxEqual(local.boxMax, [7.5, 11, 10.5], 1e-6, "local bounds max");
     space.transform.setPosition(10, -2, 1);
     WasmGPU.Transform.updateAll();
     const world = space.getWorldBounds();
-    approxArray(world.boxMin, [12.5, 3, 2.5], 1e-6, "world bounds min");
-    approxArray(world.boxMax, [17.5, 9, 11.5], 1e-6, "world bounds max");
+    arraysApproxEqual(world.boxMin, [12.5, 3, 2.5], 1e-6, "world bounds min");
+    arraysApproxEqual(world.boxMax, [17.5, 9, 11.5], 1e-6, "world bounds max");
     space.destroy();
 }
 
-// CPU upload, partial updates, mask upload, retained records, scale source, and uniforms.
+// 4) CPU upload, partial updates, mask upload, retained records, scale source, and uniforms.
 {
     const values = new Float32Array([1, 2, 3, 4, 5, 6, 7, 8]);
     const mask = new Uint32Array([1, 0, 1, 1]);
@@ -127,26 +100,26 @@ const readU32 = async (buffer, count, localCompute = compute) => { const output 
     assert.deepStrictEqual(record.index, [1, 0]);
     assert.deepStrictEqual(record.center, [1, 0, 0]);
     assert.deepStrictEqual(record.values, [30, 40]);
-    approx(record.scalar, 50);
+    numberApproxEqual(record.scalar, 50);
     assert.strictEqual(record.active, true);
     space.upload(device, device.queue);
     assert.ok(space.dataBuffer);
     assert.ok(space.maskBuffer);
-    approxArray(await readF32(space.dataBuffer, 8), [1, 2, 30, 40, 5, 6, 7, 8], 0, "uploaded lattice data");
+    arraysApproxEqual(await readF32(space.dataBuffer, 8), [1, 2, 30, 40, 5, 6, 7, 8], 0, "uploaded lattice data");
     assert.deepStrictEqual(Array.from(await readU32(space.maskBuffer, 4)), [1, 1, 1, 1]);
     assert.strictEqual(space.getScaleSourceDescriptor().count, 4);
     assert.strictEqual(space.getScaleSourceDescriptor().stride, 2);
     const uniforms = space.getUniformData();
     assert.strictEqual(uniforms.length * 4, space.getUniformBufferSize());
     assert.deepStrictEqual(Array.from(uniforms.slice(0, 4)), [2, 2, 1, 2]);
-    approx(uniforms[28], 0.75);
+    numberApproxEqual(uniforms[28], 0.75);
     space.dropCPUData();
     assert.strictEqual(space.getCellRecord(1).values.length, 0);
     assert.throws(() => space.updateData(new Float32Array([1, 2]), 0), /requires retained CPU data/i);
     space.destroy();
 }
 
-// Wasm sources refresh explicitly and preserve GPU capacity where possible.
+// 5) Wasm sources refresh explicitly and preserve GPU capacity where possible.
 {
     const memory = new WebAssembly.Memory({ initial: 1 });
     const module = WasmGPU.webassemblyInterop.fromMemory(memory, { name: "latticespace:test" });
@@ -176,7 +149,7 @@ const readU32 = async (buffer, count, localCompute = compute) => { const output 
     assert.throws(() => new LatticeSpace({ dimensions: [2, 2], componentCount: 2, wasmData: bad }), /data length/i);
 }
 
-// External GPU buffers are borrowed by default and owned only by explicit transfer.
+// 6) External GPU buffers are borrowed by default and owned only by explicit transfer.
 {
     const makeBuffer = (size) => device.createBuffer({ size, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     const borrowed = makeBuffer(16);
@@ -195,7 +168,7 @@ const readU32 = async (buffer, count, localCompute = compute) => { const output 
     small.destroy();
 }
 
-// Scene sibling APIs, traversal, visibility, bounds, clearing, and destruction.
+// 7) Scene sibling APIs, traversal, visibility, bounds, clearing, and destruction.
 {
     const visible = new LatticeSpace({ dimensions: [2, 2], data: new Float32Array(4), name: "visible" });
     const hidden = new LatticeSpace({ dimensions: [1, 1, 1], colorMode: "solid", name: "hidden", visible: false, origin: [20, 0, 0] });
@@ -219,9 +192,9 @@ const readU32 = async (buffer, count, localCompute = compute) => { const output 
     hidden.destroy();
 }
 
-// Real renderer coverage: procedural 2D/3D shaders, picking, private GPU sorting, state removal, and cleanup.
+// 8) Real renderer coverage: procedural 2D/3D shaders, picking, private GPU sorting, state removal, and cleanup.
 {
-    const renderer = await Renderer.create(makeCanvas(), { antialias: false, frustumCulling: false, occlusionCulling: true, canvasFormat: "rgba8unorm" });
+    const renderer = await Renderer.create(browserCanvases.createCanvas(192, 192), { antialias: false, frustumCulling: false, occlusionCulling: true, canvasFormat: "rgba8unorm" });
     const rendererAny = renderer;
     const localCompute = new Compute(rendererAny.device, rendererAny.queue);
     rendererAny.device.addEventListener("uncapturederror", (event) => { uncapturedError = event?.error?.message ?? String(event); });
@@ -248,7 +221,7 @@ const readU32 = async (buffer, count, localCompute = compute) => { const output 
     assert.strictEqual(hit.kind, "latticespace");
     assert.strictEqual(hit.object, volume);
     assert.strictEqual(hit.elementIndex, 0);
-    approx(hit.worldPosition[2], 2.4, 0.03, "Expected the outward-wound front voxel face to determine pick depth");
+    numberApproxEqual(hit.worldPosition[2], 2.4, 0.03, "Expected the outward-wound front voxel face to determine pick depth");
 
     volume.blendMode = BlendMode.Opaque;
     volume.depthWrite = true;
@@ -277,5 +250,9 @@ const readU32 = async (buffer, count, localCompute = compute) => { const output 
     localCompute.destroy();
 }
 
-compute.destroy();
-device.destroy();
+// 9) Cleanup removes real canvases and releases the shared compute context before its browser GPU device.
+{
+    browserCanvases.restore();
+    compute.destroy();
+    await destroyTestDevice(device);
+}

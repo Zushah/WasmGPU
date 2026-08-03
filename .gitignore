@@ -5,6 +5,8 @@ rust/target/
 build/debug.wasm
 build/*.map
 website/build/
+playwright-report/
+test-results/
 __pycache__/
 *.py[cod]
 *.log

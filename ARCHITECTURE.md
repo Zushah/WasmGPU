@@ -1,10 +1,10 @@
 # WasmGPU Architecture
 
-Last updated: Monday, July 27, 2026.
+Latest commit: Monday, August 3, 2026, [**`×××××××`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Last commit: Thursday, July 23, 2026, [**`11098fc`**](https://www.github.com/Zushah/WasmGPU/commit/11098fc).
+Parent commit: Monday, July 27, 2026, [**`44bf252`**](https://www.github.com/Zushah/WasmGPU/commit/44bf252).
 
-Last release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
+Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
 ## Contents
 
@@ -817,12 +817,16 @@ Architectural role:
 Important files:
 
 - `./rust/src/tests/*.rs`: native Rust conformance tests run by `npm run test:rs`.
-- `./test/*.test.js`: Node test files run by `npm run test:js`.
+- `./test/*.test.js`: Node tests which are browser modules loaded one per isolated Chromium page by `npm run test:js`.
+- `./test/runner.spec.js`: Playwright entry point that discovers test modules, verifies browser WebGPU compute and real-canvas presentation, forwards browser diagnostics, and imports each module in isolation.
+- `./test/utils/`: browser-safe assertions, deterministic random data, shared setup and WebGPU device lifecycles, approximate comparisons, scoped real canvases, narrowly focused observable canvas doubles, compute-buffer readback, and other reusable test helpers. Test modules bind test-specific helpers first, call `setupTest()` once when shared initialization is needed, then bind and validate subsystem exports before entering numbered theme blocks.
+- `./playwright.config.js`: pins the browser-test topology, local origin, Chromium channel, SwiftShader WebGPU flags, isolation, retries, reports, traces, and screenshots.
+- `./scripts/run-tests.js`: minimal same-origin static server for test modules, bundled JavaScript, generated WebAssembly, declarations, and WGSL assets.
 - `./test/wasm.test.js`: WebAssembly ABI, generated-binding, heap, frame-arena, and external-module interop coverage.
-- `./test/wgsl.test.js`: Checks shader-module compilation and diagnostics through Node WebGPU. It requests supported optional features and skips only modules that explicitly require unavailable features. It does not construct pipelines or validate shader interfaces against TypeScript bind group, vertex, override-constant, or render-target descriptors, so focused subsystem tests cover those integration contracts.
+- `./test/wgsl.test.js`: checks shader-module compilation and diagnostics through Playwright Chromium WebGPU. It requests supported optional features and skips only modules that explicitly require unavailable features. It does not construct pipelines or validate shader interfaces against TypeScript bind group, vertex, override-constant, or render-target descriptors, so focused subsystem tests cover those integration contracts.
 - `./.github/workflows/test.yaml`: GitHub Actions workflow for automatically running tests on every push and pull request.
 
-`npm run test` runs both the native Rust and Node suites. Tests use generated or bundled files when needed. If a change modifies Rust exports, generated WebAssembly bindings, renderer behavior, glTF import, shader layouts, or public descriptors, add or update focused tests where the current test setup can exercise the behavior.
+`npm run test` runs both the Rust and Node tests. Node tests use Playwright's Chromium build and force SwiftShader so CI does not depend on host GPU hardware or drivers. Linux uses Chromium's surfaceless Vulkan path so headless tests cover native `GPUCanvasContext` presentation as well as offscreen GPU work. The suite tests WasmGPU in its production execution environment: a real DOM, browser WebAssembly, browser image/canvas APIs, and `navigator.gpu`. Renderer-facing integration themes use real canvas contexts; controlled doubles remain only where a test must inspect configuration calls, swapchain acquisition counts, injected picking results, event-listener ownership, or similar isolated contracts. Each test module gets a fresh page and requests its own device, preventing mutable DOM, WebAssembly, and GPU state from leaking between modules. Tests use generated or bundled files when needed. If a change modifies Rust exports, generated WebAssembly bindings, renderer behavior, glTF import, shader layouts, or public descriptors, add or update focused tests where the current test setup can exercise the behavior.
 
 ### 2.13. Documentation and website
 
@@ -998,9 +1002,13 @@ Use the commands from `./package.json`:
 | `npm run build:es` | Bundle the package via `./esbuild.config.js`. |
 | `npm run build` | Run Rust build, TypeScript check, and bundle build. |
 | `npm run test:rs` | Run Rust tests under `./rust/src/tests/`. |
-| `npm run test:js` | Run Node tests under `./test/*.test.js` via `./scripts/run-tests.js`. |
-| `npm run test` | Run the Rust and Node test suites. |
-| `npm run dev` | Run build and tests. |
+| `npm run test:js` | Run Node tests under `./test/*.test.js` through Playwright Chromium. |
+| `npm run test:js:headed` | Run the Node tests with a visible Chromium window. |
+| `npm run test:js:debug` | Run the Node tests with Playwright's interactive debugger. |
+| `npm run test:js:report` | Open the Playwright report generated by the latest Node tests. |
+| `npm run test:js:serve` | Serve the repository locally for the Node tests. |
+| `npm run test` | Run the Rust and Node tests. |
+| `npm run dev` | Run `npm run build` and `npm run test` and `npm run restore`. |
 | `npm run website` | Build the website into `./website/build/`. |
 | `npm run restore` | Restore `./build/` and `./dist/` from Git after local builds. |
 | `npm run logo` | Regenerate logo raster assets via `./scripts/rasterize_logo.py`. |

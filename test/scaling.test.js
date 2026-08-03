@@ -4,34 +4,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, destroyTestDevice, setupTest } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
-import { create, globals } from "webgpu";
 
-Object.assign(globalThis, globals);
-const navigator = { gpu: create([]) };
+const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers(1e-5);
 
-const numberApproxEqual = (a, b, tol = 1e-5, msg = "Numbers differ") => {
-    assert.ok(Number.isFinite(a) && Number.isFinite(b), `${msg}: expected finite numbers (${a}, ${b})`);
-    assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`);
-};
-
-const arraysApproxEqual = (a, b, tol = 1e-5, msg = "Arrays differ") => {
-    assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`);
-    for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`);
-};
-
-const gpu = navigator.gpu;
-assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
-const adapter = await gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-const device = await adapter.requestDevice();
-assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => {
-    throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`);
-});
-
-await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
+const { device } = await setupTest({ initWebAssembly: WasmGPU.initWebAssembly, webgpu: true });
 
 const { Compute, ScaleService, normalizeScaleTransform, packScaleTransform, applyScaleTransformCPU, PointCloud, GlyphField, DataMaterial } = WasmGPU;
 
@@ -379,5 +358,8 @@ const scale = new ScaleService(compute);
     dataMaterial.destroy?.();
 }
 
-compute.destroy();
-device.destroy();
+// 7) Cleanup releases the shared compute context before its browser GPU device.
+{
+    compute.destroy();
+    await destroyTestDevice(device);
+}

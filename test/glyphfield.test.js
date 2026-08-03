@@ -4,28 +4,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, destroyTestDevice, setupTest, trackDestroy } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
-import { create, globals } from "webgpu";
 
-Object.assign(globalThis, globals);
-const navigator = { gpu: create([]) };
+const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
 
-const numberApproxEqual = (a, b, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers"); assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`); };
-
-const arraysApproxEqual = (a, b, tol = 1e-6, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`); };
-
-const trackDestroy = (buffer) => { let destroyed = 0; const originalDestroy = buffer.destroy.bind(buffer); buffer.destroy = () => { destroyed++; return originalDestroy(); }; return () => destroyed; };
-
-const gpu = navigator.gpu;
-assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
-const adapter = await gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-const device = await adapter.requestDevice();
-assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
-
-await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
+const { device } = await setupTest({ initWebAssembly: WasmGPU.initWebAssembly, webgpu: true });
 const { GlyphField, Compute, wasm, WasmMemoryView } = WasmGPU;
 assert.ok(GlyphField, "Missing export: GlyphField");
 assert.ok(Compute, "Missing export: Compute");
@@ -61,7 +46,7 @@ const createExternalGlyphDescriptor = (buffers, extra = {}) => ({
 
 const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buffers.positions.buffer, buffers.rotations.buffer, buffers.scales.buffer, buffers.attributes.buffer, 1, opts); };
 
-// CPU data path: setCPUData() -> upload() -> SoA buffers readable by GPU
+// 1) CPU data path: setCPUData() -> upload() -> SoA buffers readable by GPU.
 {
     const instanceCount = 2;
     const positions = new Float32Array([1.0, 2.0, 3.0, 0.0, 4.0, 5.0, 6.0, 0.0]);
@@ -107,7 +92,7 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
     gf.destroy?.();
 }
 
-// External WebAssembly memory views: constructors, explicit refresh, CPU snapshots, validation, and grow-only GPU capacity.
+// 2) External WebAssembly memory views: constructors, explicit refresh, CPU snapshots, validation, and grow-only GPU capacity.
 {
     const readF32 = async (buffer, count, label = "glyphfield:wasm:read") => { const out = compute.createStorageBuffer({ label, byteLength: count * 4, copySrc: true }); try { compute.kernels.copyF32(buffer, { out, count }); await device.queue.onSubmittedWorkDone(); return await out.readAs(Float32Array); } finally { out.destroy(); } };
     const makeView = (length, name, dynamicLength = false) => { const memory = new WebAssembly.Memory({ initial: 1 }), moduleRef = WasmGPU.webassemblyInterop.fromMemory(memory, { name }), data = new Float32Array(memory.buffer, 0, Math.max(length, 64)), lengthGlobal = dynamicLength ? new WebAssembly.Global({ value: "i32", mutable: true }, length) : null, view = moduleRef.view({ ptr: 0, length: lengthGlobal ? { global: lengthGlobal } : length, dtype: "f32", name }); assert.ok(view instanceof WasmMemoryView, "Expected fromMemory().view() to return a WasmMemoryView"); return { memory, moduleRef, data, lengthGlobal, view }; };
@@ -218,7 +203,7 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
     for (const testCase of invalidCases) assert.throws(testCase.create, testCase.error, testCase.message);
 }
 
-// External buffers are borrowed by default, owned when requested, and owned replacements are destroyed exactly once.
+// 3) External buffers are borrowed by default, owned when requested, and owned replacements are destroyed exactly once.
 {
     const borrowed = createGlyphBufferSet("glyphfield:ownership:borrowed");
     const ownedByCtor = createGlyphBufferSet("glyphfield:ownership:ctor");
@@ -257,7 +242,7 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
     destroyExternalGlyphBuffers(replaceBorrowed);
 }
 
-// WebAssembly-staged SoA path: setWasmSoA() -> upload() reads from WebAssembly memory into GPU buffers
+// 4) WebAssembly-staged SoA path: setWasmSoA() -> upload() reads from WebAssembly memory into GPU buffers.
 {
     const instanceCount = 2;
     const len4 = instanceCount * 4;
@@ -312,7 +297,7 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
     } finally { wasm.freeF32(posPtr, len4); wasm.freeF32(rotPtr, len4); wasm.freeF32(sclPtr, len4); wasm.freeF32(attrPtr, len4); }
 }
 
-// Uniform packing sanity: unified ScaleTransform + visual/solid params.
+// 5) Uniform packing sanity: unified ScaleTransform + visual/solid params.
 {
     const gf = new GlyphField({ scaleTransform: baseScaleTransform });
 
@@ -378,5 +363,8 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
     gf.destroy?.();
 }
 
-compute.destroy();
-device.destroy();
+// 6) Cleanup releases the shared compute context before its browser GPU device.
+{
+    compute.destroy();
+    await destroyTestDevice(device);
+}

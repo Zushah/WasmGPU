@@ -4,7 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, setupTest } from "./utils/helpers.js";
 import { initWebAssembly, readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32, parseGLB, loadGltf, importGltf, Scene, TransformStore, UnlitMaterial, StandardMaterial, SplatField, wasm } from "../dist/WasmGPU.js";
 
 const pad4 = (n) => (n + 3) & ~3;
@@ -26,11 +27,10 @@ const makeGLB = (gltfJson, binBytes) => {
     return out;
 };
 const copyBytes = (target, offset, source) => { target.set(new Uint8Array(source.buffer, source.byteOffset, source.byteLength), offset); };
-const approxEqual = (actual, expected, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(actual) && Number.isFinite(expected), `${msg}: expected finite numbers`); assert.ok(Math.abs(actual - expected) <= tol, `${msg}: ${actual} vs ${expected}`); };
-const approxArray = (actual, expected, tol = 1e-6, msg = "Arrays differ") => { assert.equal(actual.length, expected.length, `${msg}: length ${actual.length} vs ${expected.length}`); for (let i = 0; i < actual.length; i++) approxEqual(actual[i], expected[i], tol, `${msg} at index ${i}`); };
+const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
 const expectSupport = (metadata, names, expected) => { for (const name of names) assert.equal(metadata.extensions.support[name], expected, `${name} should be ${expected}`); };
 
-await initWebAssembly(new URL("../dist/", import.meta.url).toString());
+await setupTest({ initWebAssembly });
 
 // 1) GLB parsing, loading, and accessors preserve document structure and decoded data.
 {
@@ -107,13 +107,13 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     const accessorView = readAccessor(accessorDoc, 0);
     assert.equal(accessorView.count, 2);
     assert.equal(accessorView.numComponents, 3);
-    approxArray(Array.from(readAccessorAsFloat32(accessorDoc, 0)), [1, 2, 3, 4, 5, 6]);
+    arraysApproxEqual(Array.from(readAccessorAsFloat32(accessorDoc, 0)), [1, 2, 3, 4, 5, 6]);
     const uv = readAccessorAsFloat32(accessorDoc, 1);
-    approxEqual(uv[0], 0);
-    approxEqual(uv[1], 1);
-    approxEqual(uv[2], 32768 / 65535);
-    approxEqual(uv[3], 0);
-    approxArray(Array.from(readAccessorAsFloat32(accessorDoc, 2)), [0, 0, 0, 7, 8, 9, 0, 0, 0]);
+    numberApproxEqual(uv[0], 0);
+    numberApproxEqual(uv[1], 1);
+    numberApproxEqual(uv[2], 32768 / 65535);
+    numberApproxEqual(uv[3], 0);
+    arraysApproxEqual(Array.from(readAccessorAsFloat32(accessorDoc, 2)), [0, 0, 0, 7, 8, 9, 0, 0, 0]);
     assert.deepEqual(Array.from(readAccessorAsUint16(accessorDoc, 3)), [0, 2, 1]);
     assert.deepEqual(Array.from(readIndicesAsUint32(accessorDoc, 3)), [0, 2, 1]);
 }
@@ -239,9 +239,9 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(standardMesh.material.blendMode, "transparent");
     assert.equal(standardMesh.material.cullMode, "none");
     assert.equal(standardMesh.material.depthWrite, false);
-    approxArray(Array.from(standardMesh.geometry.positions), [0, 0, 0, 2, 0, 0, 0, 2, 0]);
-    approxArray(Array.from(standardMesh.geometry.uvs), Array.from(uv0));
-    approxArray(Array.from(standardMesh.geometry.uvs1), [0, 0, 0, 1, 1, 0]);
+    arraysApproxEqual(Array.from(standardMesh.geometry.positions), [0, 0, 0, 2, 0, 0, 0, 2, 0]);
+    arraysApproxEqual(Array.from(standardMesh.geometry.uvs), Array.from(uv0));
+    arraysApproxEqual(Array.from(standardMesh.geometry.uvs1), [0, 0, 0, 1, 1, 0]);
     assert.equal(standardMesh.material.baseColorTextureTransform.texCoord, 1);
     assert.deepEqual(standardMesh.material.baseColorTextureTransform.offset, [0.25, 0.5]);
     assert.deepEqual(standardMesh.material.baseColorTextureTransform.scale, [2, 3]);
@@ -254,7 +254,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(standardMesh.material.extensions.iridescence.ior, 1.22);
     assert.equal(standardMesh.material.extensions.iridescence.thicknessMaximum, 430);
     assert.equal(standardMesh.material.extensions.anisotropy.strength, 0.7);
-    approxEqual(standardMesh.material.extensions.anisotropy.rotation, 0.33);
+    numberApproxEqual(standardMesh.material.extensions.anisotropy.rotation, 0.33);
     assert.equal(standardMesh.material.extensions.transmission.factor, 0.75);
     assert.equal(standardMesh.material.extensions.volume.thicknessFactor, 0.9);
     assert.equal(standardMesh.material.extensions.volume.attenuationDistance, 12);
@@ -298,8 +298,8 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(res.meshes.length, 1);
     assert.equal(scene.meshes.length, 1);
     assert.equal(res.meshes[0].name, "ChildMesh");
-    approxArray(res.meshes[0].transform.worldPosition, [5, 2, 3]);
-    approxArray(res.nodes[3].transform.worldPosition, [1, 7, 3]);
+    arraysApproxEqual(res.meshes[0].transform.worldPosition, [5, 2, 3]);
+    arraysApproxEqual(res.nodes[3].transform.worldPosition, [1, 7, 3]);
     assert.equal(res.nodes[2].parentIndex, 1);
 
     res.destroy();
@@ -380,10 +380,10 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
         assert.equal(res.clips.length, 1);
 
         const before = res.meshes[0].getLocalBounds();
-        approxEqual(before.boxMax[1], 1);
+        numberApproxEqual(before.boxMax[1], 1);
         res.clips[0].sample(1);
         const after = res.meshes[0].getLocalBounds();
-        approxEqual(after.boxMax[1], 2);
+        numberApproxEqual(after.boxMax[1], 2);
     } finally {
         wasm.freeF32 = originalFreeF32;
     }
@@ -474,7 +474,7 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
 
     res.clips[0].sample(1);
     assert.equal(res.meshes[0].visible, false);
-    approxEqual(res.meshes[0].material.extensions.clearcoat.factor, 0.8);
+    numberApproxEqual(res.meshes[0].material.extensions.clearcoat.factor, 0.8);
     assert.equal(res.lights[0].intensity, 5);
 
     res.destroy();
@@ -630,12 +630,12 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(res.splatFields[0].colorSpace, "linear");
     assert.equal(res.splatFields[0].usesSphericalHarmonics, true);
     assert.equal(res.splatFields[0].shDegree, 3);
-    approxArray(res.splatFields[0].transform.worldPosition, [1, 2, 3]);
-    approxArray(Array.from(res.splatFields[0]._centerOpacityCPU), [0, 0, 0, 128 / 255, 1, 2, 3, 1, 4, 5, 6, 64 / 255]);
-    approxArray(Array.from(res.splatFields[0]._rotationCPU), [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
-    approxArray(Array.from(res.splatFields[0]._scaleCPU), [1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0]);
-    approxArray(Array.from(res.splatFields[0]._shCPU), packSH([0, 1, 2]));
-    approxArray(Array.from(res.splatFields[0]._colorCPU), [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
+    arraysApproxEqual(res.splatFields[0].transform.worldPosition, [1, 2, 3]);
+    arraysApproxEqual(Array.from(res.splatFields[0]._centerOpacityCPU), [0, 0, 0, 128 / 255, 1, 2, 3, 1, 4, 5, 6, 64 / 255]);
+    arraysApproxEqual(Array.from(res.splatFields[0]._rotationCPU), [0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]);
+    arraysApproxEqual(Array.from(res.splatFields[0]._scaleCPU), [1, 2, 3, 0, 4, 5, 6, 0, 7, 8, 9, 0]);
+    arraysApproxEqual(Array.from(res.splatFields[0]._shCPU), packSH([0, 1, 2]));
+    arraysApproxEqual(Array.from(res.splatFields[0]._colorCPU), [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]);
     res.nodes[0].visible = false;
     assert.equal(res.meshes[0].visible, false);
     assert.equal(res.splatFields[0].visible, false);
@@ -650,8 +650,8 @@ await initWebAssembly(new URL("../dist/", import.meta.url).toString());
     assert.equal(indexedRes.splatFields[0].splatCount, indices.length);
     assert.equal(indexedRes.splatFields[0].usesSphericalHarmonics, true);
     assert.equal(indexedRes.splatFields[0].shDegree, 3);
-    approxArray(Array.from(indexedRes.splatFields[0]._centerOpacityCPU), [4, 5, 6, 64 / 255, 0, 0, 0, 128 / 255]);
-    approxArray(Array.from(indexedRes.splatFields[0]._shCPU), packSH([2, 0]));
+    arraysApproxEqual(Array.from(indexedRes.splatFields[0]._centerOpacityCPU), [4, 5, 6, 64 / 255, 0, 0, 0, 128 / 255]);
+    arraysApproxEqual(Array.from(indexedRes.splatFields[0]._shCPU), packSH([2, 0]));
     indexedRes.destroy();
 
     const srgbWarnings = [];

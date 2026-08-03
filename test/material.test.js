@@ -4,23 +4,20 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
-import { create, globals } from "webgpu";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, destroyTestDevice, setupTest } from "./utils/helpers.js";
 import { UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, Colormap, Texture2D, BlendMode, CullMode, SCALE_UNIFORM_FLOAT_COUNT } from "../dist/WasmGPU.js";
 
-Object.assign(globalThis, globals);
-const navigator = { gpu: create([]) };
-const approxEqual = (actual, expected, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(actual) && Number.isFinite(expected), `${msg}: expected finite numbers`); assert.ok(Math.abs(actual - expected) <= tol, `${msg}: ${actual} vs ${expected}`); };
-const approxArray = (actual, expected, tol = 1e-6, msg = "Arrays differ") => { assert.equal(actual.length, expected.length, `${msg}: length ${actual.length} vs ${expected.length}`); for (let i = 0; i < actual.length; i++) approxEqual(actual[i], expected[i], tol, `${msg} at index ${i}`); };
+const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
 const expectPackedTextureTransform = (uniforms, offset, expected, msg) => {
-    approxEqual(uniforms[offset + 0], expected.offset[0], 1e-6, `${msg}.offset.x`);
-    approxEqual(uniforms[offset + 1], expected.offset[1], 1e-6, `${msg}.offset.y`);
-    approxEqual(uniforms[offset + 2], Math.cos(expected.rotation), 1e-6, `${msg}.cos`);
-    approxEqual(uniforms[offset + 3], Math.sin(expected.rotation), 1e-6, `${msg}.sin`);
-    approxEqual(uniforms[offset + 4], expected.scale[0], 1e-6, `${msg}.scale.x`);
-    approxEqual(uniforms[offset + 5], expected.scale[1], 1e-6, `${msg}.scale.y`);
-    approxEqual(uniforms[offset + 6], expected.texCoord, 1e-6, `${msg}.texCoord`);
-    approxEqual(uniforms[offset + 7], 0, 1e-6, `${msg}.pad`);
+    numberApproxEqual(uniforms[offset + 0], expected.offset[0], 1e-6, `${msg}.offset.x`);
+    numberApproxEqual(uniforms[offset + 1], expected.offset[1], 1e-6, `${msg}.offset.y`);
+    numberApproxEqual(uniforms[offset + 2], Math.cos(expected.rotation), 1e-6, `${msg}.cos`);
+    numberApproxEqual(uniforms[offset + 3], Math.sin(expected.rotation), 1e-6, `${msg}.sin`);
+    numberApproxEqual(uniforms[offset + 4], expected.scale[0], 1e-6, `${msg}.scale.x`);
+    numberApproxEqual(uniforms[offset + 5], expected.scale[1], 1e-6, `${msg}.scale.y`);
+    numberApproxEqual(uniforms[offset + 6], expected.texCoord, 1e-6, `${msg}.texCoord`);
+    numberApproxEqual(uniforms[offset + 7], 0, 1e-6, `${msg}.pad`);
 };
 const createTextureViews = (device, queue, rgba, wantSrgbView) => {
     const texture = device.createTexture({ size: { width: 1, height: 1 }, format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST, viewFormats: ["rgba8unorm-srgb"] });
@@ -110,13 +107,7 @@ const vertexBuffersSkinned8Standard = [
     }
 ];
 const vertexBuffersWithUv0 = vertexBuffersWithUv1.slice(0, 3);
-const gpu = navigator.gpu;
-assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
-const adapter = await gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-const device = await adapter.requestDevice();
-assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
+const { device } = await setupTest({ webgpu: true });
 
 const fallbackSampler = device.createSampler({ addressModeU: "repeat", addressModeV: "repeat", magFilter: "linear", minFilter: "linear", mipmapFilter: "linear" });
 const white = createTextureViews(device, device.queue, [255, 255, 255, 255], true);
@@ -181,7 +172,7 @@ let cleanupPipeline = null;
     assert.equal(material.getUniformBufferSize(), 64);
     const uniforms = material.getUniformData();
     assert.equal(uniforms.length, 16);
-    approxArray(Array.from(uniforms.slice(0, 5)), [0.25, 0.5, 0.75, 0.8, 0.1]);
+    arraysApproxEqual(Array.from(uniforms.slice(0, 5)), [0.25, 0.5, 0.75, 0.8, 0.1]);
     expectPackedTextureTransform(uniforms, 8, transform, "unlit.baseColorTextureTransform");
 
     const copy = material.baseColorTextureTransform;
@@ -262,25 +253,25 @@ let cleanupPipeline = null;
     assert.equal(material.getUniformBufferSize(), 816);
     const uniforms = material.getUniformData();
     assert.equal(uniforms.length, 204);
-    approxArray(Array.from(uniforms.slice(0, 13)), [1, 0, 0, 0.9, 0, 0, 1, 0.5, 0.2, 0.7, 1.25, 0.9, 0.35]);
+    arraysApproxEqual(Array.from(uniforms.slice(0, 13)), [1, 0, 0, 0.9, 0, 0, 1, 0.5, 0.2, 0.7, 1.25, 0.9, 0.35]);
     expectPackedTextureTransform(uniforms, 16, baseTransform, "standard.baseColorTextureTransform");
     expectPackedTextureTransform(uniforms, 24, mrTransform, "standard.metallicRoughnessTextureTransform");
     expectPackedTextureTransform(uniforms, 32, normalTransform, "standard.normalTextureTransform");
     expectPackedTextureTransform(uniforms, 40, occlusionTransform, "standard.occlusionTextureTransform");
     expectPackedTextureTransform(uniforms, 48, emissiveTransform, "standard.emissiveTextureTransform");
-    approxArray(Array.from(uniforms.slice(56, 68)), [0.4, 0.2, 0.8, 0, 0.9, 0.5, 0.6, 0.7, 1.55, 2, 0, 0]);
+    arraysApproxEqual(Array.from(uniforms.slice(56, 68)), [0.4, 0.2, 0.8, 0, 0.9, 0.5, 0.6, 0.7, 1.55, 2, 0, 0]);
     expectPackedTextureTransform(uniforms, 68, clearcoatTransform, "standard.clearcoatTextureTransform");
     expectPackedTextureTransform(uniforms, 76, clearcoatRoughnessTransform, "standard.clearcoatRoughnessTextureTransform");
     expectPackedTextureTransform(uniforms, 84, clearcoatNormalTransform, "standard.clearcoatNormalTextureTransform");
     expectPackedTextureTransform(uniforms, 92, specularTransform, "standard.specularTextureTransform");
     expectPackedTextureTransform(uniforms, 100, specularColorTransform, "standard.specularColorTextureTransform");
-    approxArray(Array.from(uniforms.slice(108, 120)), [0.2, 0.3, 0.4, 0.25, 0.45, 1.4, 120, 420, 0.5, Math.cos(0.7), Math.sin(0.7), 0]);
+    arraysApproxEqual(Array.from(uniforms.slice(108, 120)), [0.2, 0.3, 0.4, 0.25, 0.45, 1.4, 120, 420, 0.5, Math.cos(0.7), Math.sin(0.7), 0]);
     expectPackedTextureTransform(uniforms, 120, sheenColorTransform, "standard.sheenColorTextureTransform");
     expectPackedTextureTransform(uniforms, 128, sheenRoughnessTransform, "standard.sheenRoughnessTextureTransform");
     expectPackedTextureTransform(uniforms, 136, iridescenceTransform, "standard.iridescenceTextureTransform");
     expectPackedTextureTransform(uniforms, 144, iridescenceThicknessTransform, "standard.iridescenceThicknessTextureTransform");
     expectPackedTextureTransform(uniforms, 152, anisotropyTransform, "standard.anisotropyTextureTransform");
-    approxArray(Array.from(uniforms.slice(160, 172)), [0.3, 0.35, 0.6, 0.42, 0.6, 0.7, 0.8, 10, 0.8, 0.7, 0.6, 0]);
+    arraysApproxEqual(Array.from(uniforms.slice(160, 172)), [0.3, 0.35, 0.6, 0.42, 0.6, 0.7, 0.8, 10, 0.8, 0.7, 0.6, 0]);
     expectPackedTextureTransform(uniforms, 172, transmissionTransform, "standard.transmissionTextureTransform");
     expectPackedTextureTransform(uniforms, 180, volumeThicknessTransform, "standard.volumeThicknessTextureTransform");
     expectPackedTextureTransform(uniforms, 188, diffuseTransmissionTransform, "standard.diffuseTransmissionTextureTransform");
@@ -288,8 +279,8 @@ let cleanupPipeline = null;
 
     material.metallic = 2;
     material.roughness = -1;
-    approxEqual(material.getUniformData()[8], 1);
-    approxEqual(material.getUniformData()[9], 0);
+    numberApproxEqual(material.getUniformData()[8], 1);
+    numberApproxEqual(material.getUniformData()[9], 0);
     material.bindGroupKey = "cached";
     material.markClean();
     material.baseColorTexture = null;
@@ -312,9 +303,9 @@ let cleanupPipeline = null;
     extensions.sheen.colorTextureTransform.offset[0] = 99;
     extensions.diffuseTransmission.colorTextureTransform.offset[0] = 99;
     assert.equal(material.extensions.clearcoat.factor, 0.4);
-    approxEqual(material.extensions.clearcoat.textureTransform.offset[0], 0.11);
-    approxEqual(material.extensions.sheen.colorTextureTransform.offset[0], 0.61);
-    approxEqual(material.extensions.diffuseTransmission.colorTextureTransform.offset[0], 1.41);
+    numberApproxEqual(material.extensions.clearcoat.textureTransform.offset[0], 0.11);
+    numberApproxEqual(material.extensions.sheen.colorTextureTransform.offset[0], 0.61);
+    numberApproxEqual(material.extensions.diffuseTransmission.colorTextureTransform.offset[0], 1.41);
     assert.equal(material.getFeatureMask() & 0b11111, 0b11111);
     assert.ok(material.getFeatureMask() > 0b11111);
     material.bindGroupKey = "cached";
@@ -509,8 +500,8 @@ let cleanupPipeline = null;
     assert.equal(material.getUniformBufferSize(), (SCALE_UNIFORM_FLOAT_COUNT + 4) * 4);
     const uniforms = material.getUniformData();
     assert.equal(uniforms.length, SCALE_UNIFORM_FLOAT_COUNT + 4);
-    approxEqual(uniforms[SCALE_UNIFORM_FLOAT_COUNT + 0], 1);
-    approxEqual(uniforms[SCALE_UNIFORM_FLOAT_COUNT + 1], 0);
+    numberApproxEqual(uniforms[SCALE_UNIFORM_FLOAT_COUNT + 0], 1);
+    numberApproxEqual(uniforms[SCALE_UNIFORM_FLOAT_COUNT + 1], 0);
     const scaleSource = material.getScaleSourceDescriptor(77);
     assert.equal(scaleSource.count, 4);
     assert.equal(scaleSource.componentCount, 2);
@@ -555,7 +546,7 @@ let cleanupPipeline = null;
     assert.equal(builtin.toUniformStops(99).length, 8);
 
     const stops = Colormap.fromStops([{ t: 0, color: [0, 0, 0, 1] }, { t: 0.5, color: [0.5, 0.5, 0, 1] }, { t: 1, color: [1, 1, 1, 1] }], { resolution: 3, filter: "linear", colorSpace: "linear" });
-    approxArray(stops.sampleCPU(0.5), [128 / 255, 128 / 255, 0, 1], 1 / 255);
+    arraysApproxEqual(stops.sampleCPU(0.5), [128 / 255, 128 / 255, 0, 1], 1 / 255);
     const resourcesA = stops.getGPUResources(device, device.queue);
     const resourcesB = stops.getGPUResources(device, device.queue);
     assert.equal(resourcesA.texture, resourcesB.texture);
@@ -563,7 +554,7 @@ let cleanupPipeline = null;
     assert.equal(resourcesA.width, 3);
 
     const palette = Colormap.fromPalette([[0, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]], { filter: "nearest", colorSpace: "linear" });
-    approxArray(palette.sampleCPU(0.9), [0, 0, 1, 1]);
+    arraysApproxEqual(palette.sampleCPU(0.9), [0, 0, 1, 1]);
     assert.equal(palette.toUniformStops(3, "linear").length, 3);
 
     const externalTexture = device.createTexture({ size: { width: 2, height: 1, depthOrArrayLayers: 1 }, dimension: "1d", format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING });
@@ -597,15 +588,15 @@ let cleanupPipeline = null;
 
     assert.equal(material.getUniformBufferSize(), 48);
     const uniforms = material.getUniformData();
-    approxEqual(uniforms[0], 0.5);
-    approxArray(Array.from(uniforms.slice(4, 7)), [1, 2, 3]);
-    approxArray(Array.from(uniforms.slice(8, 12)), [0.2, 0.4, 0.6, 0.8]);
+    numberApproxEqual(uniforms[0], 0.5);
+    arraysApproxEqual(Array.from(uniforms.slice(4, 7)), [1, 2, 3]);
+    arraysApproxEqual(Array.from(uniforms.slice(8, 12)), [0.2, 0.4, 0.6, 0.8]);
     assert.deepEqual(material.getUniform("axis"), [1, 2, 3]);
     material.markClean();
     material.setUniform("gain", 0.75);
     material.setUniform("missing", 1);
     assert.equal(material.dirty, true);
-    approxEqual(material.getUniformData()[0], 0.75);
+    numberApproxEqual(material.getUniformData()[0], 0.75);
 
     const shaderCode = material.getShaderCode();
     assert.ok(shaderCode.includes("struct CustomUniforms"));
@@ -647,9 +638,12 @@ let cleanupPipeline = null;
     assert.throws(() => data.upload(device, device.queue), /already been released/);
 }
 
-white.texture.destroy();
-normal.texture.destroy();
-metallicRoughness.texture.destroy();
-occlusion.texture.destroy();
-anisotropy.texture.destroy();
-device.destroy();
+// 9) Cleanup releases shared textures before their browser GPU device.
+{
+    white.texture.destroy();
+    normal.texture.destroy();
+    metallicRoughness.texture.destroy();
+    occlusion.texture.destroy();
+    anisotropy.texture.destroy();
+    await destroyTestDevice(device);
+}

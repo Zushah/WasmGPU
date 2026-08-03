@@ -4,13 +4,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, setupTest } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
 
-const numberApproxEqual = (a, b, tol = 1e-6, msg = "Numbers differ") => {
-    assert.ok(Number.isFinite(a) && Number.isFinite(b), `${msg}: expected finite values (${a}, ${b})`);
-    assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`);
-};
+const { numberApproxEqual } = createApproxHelpers();
 
 const hit = (overrides = {}) => ({
     kind: "pointcloud",
@@ -23,44 +21,7 @@ const hit = (overrides = {}) => ({
     ...overrides
 });
 
-const mockDOM = () => {
-    const originalDocument = globalThis.document;
-    class MockElement {
-        constructor(tagName) {
-            this.tagName = tagName;
-            this.children = [];
-            this.parentElement = null;
-            this.style = {};
-            this.dataset = {};
-            this.textContent = "";
-        }
-        appendChild(child) {
-            this.children.push(child);
-            child.parentElement = this;
-            return child;
-        }
-        removeChild(child) {
-            const index = this.children.indexOf(child);
-            if (index >= 0) this.children.splice(index, 1);
-            child.parentElement = null;
-        }
-        remove() {
-            if (!this.parentElement) return;
-            this.parentElement.removeChild(this);
-        }
-    }
-    globalThis.document = {
-        createElement(tag) {
-            return new MockElement(tag);
-        }
-    };
-    return () => {
-        if (originalDocument === undefined) delete globalThis.document;
-        else globalThis.document = originalDocument;
-    };
-};
-
-await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
+await setupTest({ initWebAssembly: WasmGPU.initWebAssembly });
 
 const { AnnotationToolkit, AnnotationStore, AnnotationMarkerRenderer, AnnotationLabelLayer, AnnotationMode, AnnotationKind, createAnnotationAnchor, computeDistanceWorld, computeAngleRadians, formatDistanceWorld, formatAngleRadians, mapAnnotationProbeReadout } = WasmGPU;
 
@@ -72,7 +33,7 @@ assert.strictEqual(AnnotationMode.Marker, "marker", "AnnotationMode.Marker misma
 assert.strictEqual(AnnotationKind.Distance, "distance", "AnnotationKind.Distance mismatch");
 assert.ok(typeof mapAnnotationProbeReadout === "function", "Missing export: mapAnnotationProbeReadout()");
 
-// Store lifecycle: deterministic IDs + CRUD + recomputation on edits.
+// 1) Store lifecycle: deterministic IDs + CRUD + recomputation on edits.
 {
     let now = 100;
     const store = new AnnotationStore({ idPrefix: "anno", nowMs: () => now++ });
@@ -95,7 +56,7 @@ assert.ok(typeof mapAnnotationProbeReadout === "function", "Missing export: mapA
     assert.strictEqual(store.size, 0, "Store size mismatch after clear()");
 }
 
-// Distance/angle math + units formatting.
+// 2) Distance/angle math + units formatting.
 {
     numberApproxEqual(computeDistanceWorld([0, 0, 0], [3, 4, 12]), 13, 1e-9, "Distance math mismatch");
     numberApproxEqual(computeAngleRadians([1, 0, 0], [0, 0, 0], [0, 1, 0]), Math.PI * 0.5, 1e-9, "Right-angle mismatch");
@@ -105,7 +66,7 @@ assert.ok(typeof mapAnnotationProbeReadout === "function", "Missing export: mapA
     assert.strictEqual(angleText, "180 deg", "Angle formatting mismatch");
 }
 
-// Toolkit interaction state machine + readout mapping.
+// 3) Toolkit interaction state machine + readout mapping.
 {
     const toolkit = new AnnotationToolkit({ pick: async () => null }, { autoCreateOverlay: false, autoBindPointerEvents: false });
     const h0 = hit({ worldPosition: [0, 0, 0], elementIndex: 0 });
@@ -138,7 +99,7 @@ assert.ok(typeof mapAnnotationProbeReadout === "function", "Missing export: mapA
     numberApproxEqual(probe.attributes.scalar, 1.25, 1e-9, "Probe scalar mapping mismatch");
 }
 
-// Marker renderer sync should be revision-driven and content-stable.
+// 4) Marker renderer sync should be revision-driven and content-stable.
 {
     const store = new AnnotationStore({ idPrefix: "mr" });
     const renderer = new AnnotationMarkerRenderer({ markerScale: 0.1, maxInstances: 16 });
@@ -155,12 +116,12 @@ assert.ok(typeof mapAnnotationProbeReadout === "function", "Missing export: mapA
     assert.strictEqual(renderer.instanceCount, 3, "Distance record should contribute two additional marker instances");
 }
 
-// Label layer should reuse pooled nodes under stable annotation count.
+// 5) Label layer should reuse pooled nodes under stable annotation count.
 {
-    const restoreDom = mockDOM();
+    const root = document.createElement("div");
+    document.body.appendChild(root);
     try {
         const layer = new AnnotationLabelLayer({ maxLabels: 3 });
-        const root = document.createElement("div");
         layer.attach(root);
         const camera = {
             type: "perspective",
@@ -208,6 +169,6 @@ assert.ok(typeof mapAnnotationProbeReadout === "function", "Missing export: mapA
         assert.strictEqual(poolB, poolA, "Pool size should remain stable for unchanged annotation count");
         layer.detach();
     } finally {
-        restoreDom();
+        root.remove();
     }
 }

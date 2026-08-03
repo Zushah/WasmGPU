@@ -4,21 +4,14 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { destroyTestDevice, setupTest } from "./utils/helpers.js";
 import { initWebAssembly, Compute, wasm } from "../dist/WasmGPU.js";
-import { create, globals } from "webgpu";
 
-await initWebAssembly(new URL("../dist/", import.meta.url).toString());
-Object.assign(globalThis, globals);
-const navigator = { gpu: create([]) };
-const adapter = await navigator.gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-const device = await adapter.requestDevice();
-assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
+const { device } = await setupTest({ initWebAssembly, webgpu: true });
 const compute = new Compute(device, device.queue);
 
-// CPU: contiguous row-major
+// 1) CPU: contiguous row-major.
 {
     const a = compute.CPUndarray.zeros("f32", { shape: [2, 3] });
     assert.strictEqual(a.residency, "cpu-webassembly");
@@ -39,7 +32,7 @@ const compute = new Compute(device, device.queue);
     a.destroy();
 }
 
-// CPU: custom stride (interleaved / gapped layout)
+// 2) CPU: custom stride (interleaved / gapped layout).
 {
     // 2x3 f32 where each element is 8 bytes apart (4 bytes padding between elements).
     const a = compute.CPUndarray.zeros("f32", {
@@ -67,7 +60,7 @@ const compute = new Compute(device, device.queue);
     a.destroy();
 }
 
-// Contiguous roundtrip
+// 3) Contiguous roundtrip.
 {
     const a = compute.CPUndarray.fromArray("f32", [2, 3], [1, 2, 3, 4, 5, 6]);
     const ga = a.uploadToGPU(compute, { copySrc: true, label: "ndarray_roundtrip_contiguous" });
@@ -83,7 +76,7 @@ const compute = new Compute(device, device.queue);
     a.destroy();
 }
 
-// Gapped/interleaved roundtrip
+// 4) Gapped/interleaved roundtrip.
 {
     const a = compute.CPUndarray.zeros("f32", {
         shape: [2, 3],
@@ -113,7 +106,7 @@ const compute = new Compute(device, device.queue);
     a.destroy();
 }
 
-// Readback requires copySrc: true
+// 5) Readback requires copySrc: true.
 {
     const a = compute.CPUndarray.fromArray("f32", [1], [42]);
     const ga = a.uploadToGPU(compute, { copySrc: false });
@@ -129,7 +122,7 @@ const compute = new Compute(device, device.queue);
     a.destroy();
 }
 
-// CPU: owned WebAssembly allocations have deterministic, guarded lifetimes.
+// 6) CPU: owned WebAssembly allocations have deterministic, guarded lifetimes.
 {
     const a = compute.CPUndarray.fromArray("f32", [2, 2], [1, 2, 3, 4]);
     assert.strictEqual(a.destroyed, false);
@@ -150,7 +143,7 @@ const compute = new Compute(device, device.queue);
     assert.doesNotThrow(() => a.destroy(), "CPUndarray.destroy() must be idempotent");
 }
 
-// CPU: repeated allocation/destruction reuses heap storage instead of growing linearly.
+// 7) CPU: repeated allocation/destruction reuses heap storage instead of growing linearly.
 {
     const churn = () => {
         const a = compute.CPUndarray.zeros("u8", { shape: [256 * 1024] });
@@ -165,5 +158,8 @@ const compute = new Compute(device, device.queue);
     assert.strictEqual(wasm.memory().buffer.byteLength, stabilizedHeapBytes, "Destroyed CPUndarray storage must be reusable under fixed-size churn");
 }
 
-compute.destroy();
-device.destroy();
+// 8) Cleanup releases the shared compute context before its browser GPU device.
+{
+    compute.destroy();
+    await destroyTestDevice(device);
+}

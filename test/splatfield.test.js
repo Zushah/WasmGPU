@@ -4,87 +4,16 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import assert from "assert";
+import assert from "./utils/assert.js";
+import { createApproxHelpers, createBrowserCanvasScope, destroyTestDevice, makeSequence, readBufferAsF32 as readSharedF32, readBufferAsU32 as readSharedU32, setupTest, trackDestroy } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
-import { create, globals } from "webgpu";
 
-Object.assign(globalThis, globals);
-const navigator = { gpu: create([]) };
-Object.defineProperty(globalThis, "navigator", { value: navigator, configurable: true });
-if (!globalThis.window) globalThis.window = {};
-if (typeof globalThis.window.devicePixelRatio !== "number") globalThis.window.devicePixelRatio = 1;
-
-const numberApproxEqual = (a, b, tol = 1e-6, msg = "Numbers differ") => { assert.ok(Number.isFinite(a) && Number.isFinite(b), "Expected finite numbers"); assert.ok(Math.abs(a - b) <= tol, `${msg}: ${a} vs ${b}`); };
-
-const arraysApproxEqual = (a, b, tol = 1e-6, msg = "Arrays differ") => { assert.strictEqual(a.length, b.length, `${msg}: length ${a.length} vs ${b.length}`); for (let i = 0; i < a.length; i++) numberApproxEqual(a[i], b[i], tol, `${msg} at index ${i}`); };
+const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
+const browserCanvases = createBrowserCanvasScope();
 
 const srgbChannelToLinear = (value) => { const x = Math.max(0, Math.min(1, value)); if (x <= 0.04045) return x / 12.92; return Math.pow((x + 0.055) / 1.055, 2.4); };
 
-const makeCanvas = (width = 256, height = 256) => {
-    const canvas = {
-        width,
-        height,
-        clientWidth: width,
-        clientHeight: height,
-        style: {},
-        currentTextureCount: 0,
-        configureCalls: [],
-        addEventListener() {},
-        removeEventListener() {},
-        getBoundingClientRect() {
-            return {
-                left: 0,
-                top: 0,
-                width: this.clientWidth,
-                height: this.clientHeight,
-                right: this.clientWidth,
-                bottom: this.clientHeight
-            };
-        }
-    };
-    let device = null;
-    let format = "rgba8unorm";
-    let usage = GPUTextureUsage.RENDER_ATTACHMENT;
-    const context = {
-        configure(descriptor) {
-            device = descriptor.device;
-            format = descriptor.format ?? format;
-            usage = descriptor.usage ?? usage;
-            canvas.configureCalls.push(descriptor);
-        },
-        unconfigure() {
-            device = null;
-        },
-        getCurrentTexture() {
-            assert.ok(device, "GPUCanvasContext.configure() must be called before getCurrentTexture().");
-            canvas.currentTextureCount++;
-            return device.createTexture({
-                size: { width: Math.max(1, canvas.width | 0), height: Math.max(1, canvas.height | 0), depthOrArrayLayers: 1 },
-                format,
-                usage: usage | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING
-            });
-        }
-    };
-    canvas.getContext = (kind) => kind === "webgpu" ? context : null;
-    return canvas;
-};
-
-const trackDestroy = (buffer) => {
-    let destroyed = 0;
-    const originalDestroy = buffer.destroy.bind(buffer);
-    buffer.destroy = () => { destroyed++; return originalDestroy(); };
-    return () => destroyed;
-};
-
-const gpu = navigator.gpu;
-assert.ok(gpu, "WebGPU not available. Ensure the dev dependency 'webgpu' is installed.");
-await WasmGPU.initWebAssembly(new URL("../dist/", import.meta.url).toString());
-
-const adapter = await gpu.requestAdapter();
-assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-const device = await adapter.requestDevice();
-assert.ok(device, "Failed to acquire a WebGPU device");
-device.addEventListener("uncapturederror", (e) => { throw new Error(`Uncaptured WebGPU error: ${e.error ? e.error.message : String(e)}`); });
+const { device } = await setupTest({ initWebAssembly: WasmGPU.initWebAssembly, webgpu: true });
 
 const { SplatField, WasmGPU: Engine, Compute, Scene, Renderer, PerspectiveCamera, OrthographicCamera, WasmMemoryView } = WasmGPU;
 
@@ -100,34 +29,18 @@ const compute = new Compute(device, device.queue);
 
 const readBufferAsF32 = async (buffer, count, gpuDevice = device, gpuQueue = device.queue) => {
     const localCompute = (gpuDevice === device && gpuQueue === device.queue) ? compute : new Compute(gpuDevice, gpuQueue);
-    const out = localCompute.createStorageBuffer({
-        label: "splatfield:read:f32",
-        byteLength: count * 4,
-        copySrc: true
-    });
     try {
-        localCompute.kernels.copyF32(buffer, { out, count });
-        await gpuQueue.onSubmittedWorkDone();
-        return await out.readAs(Float32Array);
+        return await readSharedF32(localCompute, buffer, count);
     } finally {
-        out.destroy();
         if (localCompute !== compute) localCompute.destroy();
     }
 };
 
 const readBufferAsU32 = async (buffer, count, gpuDevice = device, gpuQueue = device.queue) => {
     const localCompute = (gpuDevice === device && gpuQueue === device.queue) ? compute : new Compute(gpuDevice, gpuQueue);
-    const out = localCompute.createStorageBuffer({
-        label: "splatfield:read:u32",
-        byteLength: count * 4,
-        copySrc: true
-    });
     try {
-        localCompute.kernels.copyU32(buffer, { out, count });
-        await gpuQueue.onSubmittedWorkDone();
-        return await out.readAs(Uint32Array);
+        return await readSharedU32(localCompute, buffer, count);
     } finally {
-        out.destroy();
         if (localCompute !== compute) localCompute.destroy();
     }
 };
@@ -135,8 +48,6 @@ const readBufferAsU32 = async (buffer, count, gpuDevice = device, gpuQueue = dev
 const createStorageBuffer = (gpuDevice, byteLength) => { return gpuDevice.createBuffer({ size: byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }); };
 
 const createPackedStorageBuffer = (gpuDevice, gpuQueue, data) => { const buffer = createStorageBuffer(gpuDevice, data.byteLength); if (data.byteLength > 0) gpuQueue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength); return buffer; };
-
-const makeSequence = (length, start = 0) => { const out = new Float32Array(length); for (let i = 0; i < length; i++) out[i] = start + i; return out; };
 
 const makeSphericalHarmonics = (count) => ({ sh0: makeSequence(count * 3, 0), sh1: makeSequence(count * 9, 100), sh2: makeSequence(count * 15, 200), sh3: makeSequence(count * 21, 300) });
 
@@ -220,9 +131,9 @@ const makeRenderableField = (count = 3, zValues = null) => {
     return new SplatField({ positions, rotations, scales, colors });
 };
 
-// Public factory, CPU upload, color handling, and ND indexing work for CPU-authored splatfields.
+// 1) Public factory, CPU upload, color handling, and ND indexing work for CPU-authored splatfields.
 {
-    const canvas = makeCanvas(128, 128);
+    const canvas = browserCanvases.createCanvas(128, 128);
     const wgpu = await Engine.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
     const factoryField = wgpu.createSplatField({
         positions: new Float32Array([0, 0, 0]),
@@ -285,7 +196,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
     field.destroy();
 }
 
-// Descriptor inference and validation keep CPU-authored colors deterministic and explicit.
+// 2) Descriptor inference and validation keep CPU-authored colors deterministic and explicit.
 {
     const rgbField = new SplatField({
         positions: new Float32Array([0, 0, 0, 1, 0, 0, 2, 0, 0, 3, 0, 0]),
@@ -335,7 +246,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
     rgbaField.destroy();
 }
 
-// Spherical harmonic descriptors infer degree, reject partial inputs, and expose retained CPU records.
+// 3) Spherical harmonic descriptors infer degree, reject partial inputs, and expose retained CPU records.
 {
     const sh = makeSphericalHarmonics(2);
     const degree0 = new SplatField({ positions: new Float32Array([0, 0, 0, 1, 0, 0]), sh0: sh.sh0 });
@@ -387,7 +298,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
     degree2.destroy();
 }
 
-// External-buffer splatfields validate packed input sizes, preserve ownership semantics, and safely synthesize missing colors.
+// 4) External-buffer splatfields validate packed input sizes, preserve ownership semantics, and safely synthesize missing colors.
 {
     assert.throws(
         () => {
@@ -521,7 +432,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
     assert.strictEqual(ownedShDestroyed(), 1, "Expected ownBuffers shBuffer to be destroyed");
 }
 
-// External WebAssembly memory views: strict packed source family, explicit refresh, SH/direct-color exclusivity, CPU snapshots, validation, and grow-only capacity.
+// 5) External WebAssembly memory views: strict packed source family, explicit refresh, SH/direct-color exclusivity, CPU snapshots, validation, and grow-only capacity.
 {
     const makeView = (length, dtype = "f32", name = "splatfield-wasm-view", capacity = 128) => {
         const memory = new WebAssembly.Memory({ initial: 1 });
@@ -678,7 +589,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
     } finally { mixColorBuffer.destroy(); }
 }
 
-// Bounds and scene APIs expose splatfields as first-class scene objects with explicit and computed spatial state.
+// 6) Bounds and scene APIs expose splatfields as first-class scene objects with explicit and computed spatial state.
 {
     const explicitField = new SplatField({
         positions: new Float32Array([0, 0, 0]),
@@ -745,9 +656,9 @@ const makeRenderableField = (count = 3, zValues = null) => {
     assert.strictEqual(scene.splatFields.length, 0, "Scene.destroy() should clear splatfields");
 }
 
-// Renderer renders, depth-sorts, and cleans up splatfield state across normal and mixed-size frames.
+// 7) Renderer renders, depth-sorts, and cleans up splatfield state across normal and mixed-size frames.
 {
-    const canvas = makeCanvas(192, 192);
+    const canvas = browserCanvases.createCanvas(192, 192);
     const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
     const rendererAny = renderer;
     const scene = new Scene();
@@ -876,7 +787,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
     assert.strictEqual(remainingTransformDestroyed(), 1, "Expected Renderer.destroy() to destroy remaining transformBuffer resources");
     scene.destroy();
 
-    const canvasAA = makeCanvas(192, 192);
+    const canvasAA = browserCanvases.createCanvas(192, 192);
     const rendererAA = await Renderer.create(canvasAA, { antialias: true, frustumCulling: false, canvasFormat: "rgba8unorm" });
     const rendererAAAny = rendererAA;
     const sceneAA = new Scene();
@@ -887,5 +798,9 @@ const makeRenderableField = (count = 3, zValues = null) => {
     sceneAA.destroy();
 }
 
-compute.destroy();
-device.destroy();
+// 8) Cleanup removes real canvases and releases the shared compute context before its browser GPU device.
+{
+    browserCanvases.restore();
+    compute.destroy();
+    await destroyTestDevice(device);
+}
