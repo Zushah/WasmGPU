@@ -15,11 +15,13 @@ const PORT = 4173;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
 const launchArgs = [
     "--enable-unsafe-webgpu",
-    "--use-angle=swiftshader",
     "--use-webgpu-adapter=swiftshader",
     "--use-gpu-in-tests"
 ];
-if (process.platform === "linux") launchArgs.unshift("--disable-vulkan-surface", "--enable-features=Vulkan");
+
+if (process.platform === "darwin") launchArgs.push("--use-angle=swiftshader");
+else launchArgs.push("--enable-features=Vulkan", "--use-angle=vulkan", "--use-vulkan=swiftshader");
+if (process.platform === "linux") launchArgs.push("--disable-vulkan-surface");
 
 export default defineConfig({
     testDir: "./test",

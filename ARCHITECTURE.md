@@ -2,7 +2,7 @@
 
 Latest commit: Monday, August 3, 2026, [**`×××××××`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Monday, July 27, 2026, [**`44bf252`**](https://www.github.com/Zushah/WasmGPU/commit/44bf252).
+Parent commit: Monday, August 3, 2026, [**`168eaf7`**](https://www.github.com/Zushah/WasmGPU/commit/168eaf7).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -826,7 +826,7 @@ Important files:
 - `./test/wgsl.test.js`: checks shader-module compilation and diagnostics through Playwright Chromium WebGPU. It requests supported optional features and skips only modules that explicitly require unavailable features. It does not construct pipelines or validate shader interfaces against TypeScript bind group, vertex, override-constant, or render-target descriptors, so focused subsystem tests cover those integration contracts.
 - `./.github/workflows/test.yaml`: GitHub Actions workflow for automatically running tests on every push and pull request.
 
-`npm run test` runs both the Rust and Node tests. Node tests use Playwright's Chromium build and force SwiftShader so CI does not depend on host GPU hardware or drivers. Linux uses Chromium's surfaceless Vulkan path so headless tests cover native `GPUCanvasContext` presentation as well as offscreen GPU work. The suite tests WasmGPU in its production execution environment: a real DOM, browser WebAssembly, browser image/canvas APIs, and `navigator.gpu`. Renderer-facing integration themes use real canvas contexts; controlled doubles remain only where a test must inspect configuration calls, swapchain acquisition counts, injected picking results, event-listener ownership, or similar isolated contracts. Each test module gets a fresh page and requests its own device, preventing mutable DOM, WebAssembly, and GPU state from leaking between modules. Tests use generated or bundled files when needed. If a change modifies Rust exports, generated WebAssembly bindings, renderer behavior, glTF import, shader layouts, or public descriptors, add or update focused tests where the current test setup can exercise the behavior.
+`npm run test` runs both the Rust and Node tests. Node tests use Playwright's Chromium build and force SwiftShader so CI does not depend on host GPU hardware or drivers. Windows and Linux use Vulkan-backed SwiftShader for WebGPU and ANGLE presentation, with Chromium's surfaceless Vulkan path enabled on headless Linux, while MacOS uses its supported ANGLE SwiftShader path. This lets the suite cover native `GPUCanvasContext` presentation as well as offscreen GPU work. The suite tests WasmGPU in its production execution environment: a real DOM, browser WebAssembly, browser image/canvas APIs, and `navigator.gpu`. Renderer-facing integration themes use real canvas contexts; controlled doubles remain only where a test must inspect configuration calls, swapchain acquisition counts, injected picking results, event-listener ownership, or similar isolated contracts. Each test module gets a fresh page and requests its own device, preventing mutable DOM, WebAssembly, and GPU state from leaking between modules. Tests use generated or bundled files when needed. If a change modifies Rust exports, generated WebAssembly bindings, renderer behavior, glTF import, shader layouts, or public descriptors, add or update focused tests where the current test setup can exercise the behavior.
 
 ### 2.13. Documentation and website
 
