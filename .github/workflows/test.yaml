@@ -85,6 +85,17 @@ jobs:
         run: npx playwright install-deps chromium
 
       -
+        name: Install Vulkan driver
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mesa-vulkan-drivers vulkan-tools
+          LAVAPIPE_ICD=$(find /usr/share/vulkan/icd.d -maxdepth 1 -name 'lvp_icd*.json' -print -quit)
+          test -n "$LAVAPIPE_ICD"
+          echo "VK_DRIVER_FILES=$LAVAPIPE_ICD" >> "$GITHUB_ENV"
+          VK_DRIVER_FILES="$LAVAPIPE_ICD" vulkaninfo --summary
+
+      -
         name: Install Chromium
         run: npx playwright install --no-shell chromium
 
@@ -113,6 +124,8 @@ jobs:
         name: Run Node tests with Xvfb
         if: ${{ runner.os == 'Linux' }}
         run: xvfb-run --auto-servernum npm run test:js -- --headed
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
 
       -
         name: Upload results
