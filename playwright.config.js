@@ -5,6 +5,7 @@
  */
 
 import { defineConfig } from "@playwright/test";
+import { expectedTests } from "./test/manifests/suites.js";
 
 if (Object.prototype.hasOwnProperty.call(process.env, "NO_COLOR")) {
     delete process.env.NO_COLOR;
@@ -13,6 +14,19 @@ if (Object.prototype.hasOwnProperty.call(process.env, "NO_COLOR")) {
 
 const PORT = 4173;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+const requestedProjects = process.argv.flatMap((argument, index, arguments_) => {
+    if (argument === "--project") return [arguments_[index + 1]];
+    if (argument.startsWith("--project=")) return [argument.slice("--project=".length)];
+    return [];
+});
+const lifecycleSuites = new Map([
+    ["test:setup", "setup"],
+    ["test:js", "javascript"],
+    ["test:js:headed", "javascript"],
+    ["test:js:debug", "javascript"],
+    ["test:ex", "examples"]
+]);
+const reportSuite = lifecycleSuites.get(process.env.npm_lifecycle_event) ?? (requestedProjects.length === 1 && requestedProjects[0] === "setup" ? "setup" : requestedProjects.includes("examples") && !requestedProjects.includes("runner") ? "examples" : requestedProjects.length ? "javascript" : "all");
 const launchArgs = [
     "--enable-unsafe-webgpu",
     "--disable-dawn-features=use_dxc",
@@ -24,19 +38,31 @@ if (process.platform === "linux") launchArgs.push(
     "--use-angle=vulkan",
     "--use-vulkan=native"
 );
-else launchArgs.push("--use-webgpu-adapter=swiftshader");
+else launchArgs.push(
+    "--use-webgpu-adapter=swiftshader"
+);
 
 export default defineConfig({
-    testDir: "./test",
-    testMatch: "runner.spec.js",
+    testDir: "./test/manifests",
+    testMatch: "**/*.spec.js",
     fullyParallel: false,
     workers: 1,
     timeout: 120_000,
     expect: { timeout: 5_000 },
     retries: process.env.CI ? 1 : 0,
     retryStrategy: "isolated",
-    reporter: [["line"], ["html", { open: "never" }]],
-    outputDir: "./test-results",
+    reporter: [
+        ["line"],
+        ["html", { open: "never", outputFolder: `./playwright-report/${reportSuite}` }],
+        ["blob", { outputDir: `./blob-report/${reportSuite}` }],
+        ["./scripts/merge-test-reports.js", { expectedTests: expectedTests[reportSuite], outputFile: `./blob-report/${reportSuite}/run.json`, suite: reportSuite }]
+    ],
+    outputDir: `./test-results/${reportSuite}`,
+    projects: [
+        { name: "setup", testMatch: "setup.spec.js" },
+        { name: "runner", testMatch: "runner.spec.js" },
+        { name: "examples", testMatch: "examples.spec.js" }
+    ],
     use: {
         baseURL: BASE_URL,
         channel: "chromium",
@@ -50,7 +76,8 @@ export default defineConfig({
         }
     },
     webServer: {
-        command: `node ./scripts/run-tests.js --port ${PORT}`,
+        command: `node ./scripts/serve-tests.js --port ${PORT}`,
+        gracefulShutdown: { signal: "SIGTERM", timeout: 500 },
         url: `${BASE_URL}/test/index.html`,
         reuseExistingServer: !process.env.CI,
         timeout: 30_000,

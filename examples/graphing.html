@@ -241,7 +241,7 @@
                 interactionThrottleMs: 30,
                 autoUpdate: true
             });
-            overlaySystem.addLayer(wgpu.createOverlay.grid({
+            const grid = wgpu.createOverlay.grid({
                 id: "graph-grid",
                 plane: "xz",
                 origin: [0, 0, 0],
@@ -250,19 +250,22 @@
                 majorStepFactor: 5,
                 maxLines: 160,
                 maxLabels: 42
-            })).addLayer(wgpu.createOverlay.axisTriad({
+            });
+            const worldTriad = wgpu.createOverlay.axisTriad({
                 id: "graph-world-triad",
                 anchor: { kind: "world", position: [0, 0, 0] },
                 lengthWorld: 1.1,
                 lineWidthPx: 2,
                 labels: ["X", "Y", "Z"]
-            })).addLayer(wgpu.createOverlay.axisTriad({
+            });
+            const screenTriad = wgpu.createOverlay.axisTriad({
                 id: "graph-screen-triad",
                 anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-26, -26] },
                 sizePx: 52,
                 lineWidthPx: 2,
                 labels: ["x", "y", "z"]
-            })).addLayer(wgpu.createOverlay.legend({
+            });
+            const legend = wgpu.createOverlay.legend({
                 id: "graph-legend",
                 title: "Mapped Value",
                 source: {
@@ -275,7 +278,8 @@
                 tickCount: 7,
                 strictParity: true,
                 formatValue: (value) => fmt(value, 4)
-            }));
+            });
+            overlaySystem.addLayer(grid).addLayer(worldTriad).addLayer(screenTriad).addLayer(legend);
 
             // Pyodide setup
             const pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.3/full/" });
@@ -538,7 +542,7 @@
                     activePlot = built.plot;
                     activeProbe = null;
                     scene.add(activeMesh);
-                    legendLayer.setSource(activeMesh.material);
+                    legend.setSource(activeMesh.material);
                     overlaySystem.setView(activeCamera, scene);
                     fitCurrent(null, false);
                     controls.saveState();

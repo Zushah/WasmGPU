@@ -6,6 +6,7 @@ build/debug.wasm
 build/*.map
 website/build/
 playwright-report/
+blob-report/
 test-results/
 __pycache__/
 *.py[cod]
@@ -21,4 +22,6 @@ Thumbs.db
 .esbuild/
 .cache/
 .tmp/
+.temp/
+tmp/
 temp/

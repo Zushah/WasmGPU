@@ -5,20 +5,17 @@
  */
 
 import { readdirSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "@playwright/test";
+import { colors, installWebGPUMonitor, settleWebGPUMonitor } from "../utils/helpers.js";
+import { examples } from "./suites.js";
+const EXAMPLES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../examples");
+const { g, x } = colors;
 
-const TEST_DIR = dirname(fileURLToPath(import.meta.url));
-const files = readdirSync(TEST_DIR, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".test.js")).map((entry) => entry.name).sort((a, b) => a.localeCompare(b));
-const canUseColor = process.env.FORCE_COLOR !== "0" && (process.stdout.isTTY || !process.env.NO_COLOR);
-const r = canUseColor ? "\x1b[31m" : "";
-const g = canUseColor ? "\x1b[32m" : "";
-const y = canUseColor ? "\x1b[33m" : "";
-const x = canUseColor ? "\x1b[0m" : "";
-
-test("browser WebGPU check", async ({ page }) => {
+test("WebGPU", async ({ page }) => {
     const start = Date.now();
+    await installWebGPUMonitor(page);
     await page.goto("/test/index.html");
     const result = await page.evaluate(async () => {
         if (!globalThis.isSecureContext) return { error: "The test origin is not a secure context." };
@@ -54,32 +51,19 @@ test("browser WebGPU check", async ({ page }) => {
         }
         return { error: null, features, info };
     });
+    const gpu = await settleWebGPUMonitor(page);
     expect(result.error).toBeNull();
+    expect(gpu.devices).toBeGreaterThan(0);
+    expect(gpu.submissions).toBeGreaterThan(0);
+    expect(gpu.completedSubmissions).toBeGreaterThan(0);
+    expect(gpu.errors, gpu.errors.join("\n")).toEqual([]);
+    expect(gpu.deviceLosses, gpu.deviceLosses.join("\n")).toEqual([]);
     const stop = Date.now();
-    console.log(`${g}[test:00:webgpu] passed in ${stop - start}ms, using adapter=${JSON.stringify(result.info)}, features=${result.features.join(",")}${x}`);
+    console.log(`${g}[setup:01:webgpu] passed in ${stop - start}ms, devices=${gpu.devices}, submissions=${gpu.submissions}, adapter=${JSON.stringify(result.info)}, features=${result.features.join(",")}${x}`);
 });
 
-for (let i = 0; i < files.length; ++i) {
-    const file = files[i];
-    const name = file.replace(/\.test\.js$/, "");
-    const index = (i + 1).toString().padStart(2, "0");
-    test(`test/${file}`, async ({ page }) => {
-        const start = Date.now();
-        const consoleErrors = [];
-        const pageErrors = [];
-        page.on("pageerror", (error) => pageErrors.push(error));
-        page.on("console", (message) => {
-            const text = message.text();
-            if (message.type() === "warning") console.warn(`${y}[test:${index}:${name}] ${text}${x}`);
-            else if (message.type() === "error") { consoleErrors.push(text); console.error(`${r}[test:${index}:${name}] ${text}${x}`); }
-            else if (text) console.log(`[test:${index}:${name}] ${text}`);
-        });
-        await page.goto("/test/index.html");
-        await page.evaluate(async (moduleUrl) => { await import(moduleUrl); }, `/test/${file}`);
-        await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
-        expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
-        expect(pageErrors, pageErrors.map((error) => error.stack ?? error.message).join("\n\n")).toEqual([]);
-        const stop = Date.now();
-        console.log(`${g}[test:${index}:${name}] passed in ${stop - start}ms${x}`);
-    });
-}
+test("Examples", () => {
+    const discovered = readdirSync(EXAMPLES_DIR, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".html")).map((entry) => entry.name).sort((a, b) => a.localeCompare(b));
+    expect(examples.map((example) => example.file)).toEqual(discovered);
+    console.log(`${g}[setup:02:examples] passed, discovered ${discovered.length} examples${x}`);
+});

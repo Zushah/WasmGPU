@@ -8,7 +8,9 @@ on:
       - src/**
       - rust/**
       - test/**
-      - scripts/run-tests.js
+      - examples/**
+      - scripts/serve-tests.js
+      - scripts/merge-test-reports.js
       - scripts/build-rust-wasm.js
       - build/**
       - dist/**
@@ -28,7 +30,9 @@ on:
       - src/**
       - rust/**
       - test/**
-      - scripts/run-tests.js
+      - examples/**
+      - scripts/serve-tests.js
+      - scripts/merge-test-reports.js
       - scripts/build-rust-wasm.js
       - build/**
       - dist/**
@@ -85,6 +89,10 @@ jobs:
         run: npx playwright install-deps chromium
 
       -
+        name: Install Chromium
+        run: npx playwright install --no-shell chromium
+
+      -
         name: Install Vulkan driver
         if: ${{ runner.os == 'Linux' }}
         run: |
@@ -96,14 +104,19 @@ jobs:
           VK_DRIVER_FILES="$LAVAPIPE_ICD" vulkaninfo --summary
 
       -
-        name: Install Chromium
-        run: npx playwright install --no-shell chromium
-
-      -
         name: Install Rust dependencies
         run: |
           rustup target add wasm32-unknown-unknown
           rustup component add rustfmt
+
+      -
+        name: Build WasmGPU
+        run: npm run build
+
+      -
+        name: Prepare test reports
+        id: prepare
+        run: npm run test:clean
 
       -
         name: Run Rust tests
@@ -112,26 +125,54 @@ jobs:
           npm run test:rs
 
       -
-        name: Build WasmGPU
-        run: npm run build
+        name: Run setup tests
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os != 'Linux' }}
+        run: npm run test:setup
+
+      -
+        name: Run setup tests with Xvfb
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os == 'Linux' }}
+        run: xvfb-run --auto-servernum npm run test:setup -- --headed
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
 
       -
         name: Run Node tests
-        if: ${{ runner.os != 'Linux' }}
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os != 'Linux' }}
         run: npm run test:js
 
       -
         name: Run Node tests with Xvfb
-        if: ${{ runner.os == 'Linux' }}
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os == 'Linux' }}
         run: xvfb-run --auto-servernum npm run test:js -- --headed
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
 
       -
-        name: Upload results
+        name: Run examples tests
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os != 'Linux' }}
+        run: npm run test:ex
+
+      -
+        name: Run examples tests with Xvfb
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os == 'Linux' }}
+        run: xvfb-run --auto-servernum npm run test:ex -- --headed
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+
+      -
+        name: Merge test reports
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        run: npm run test:merge
+
+      -
+        name: Upload test reports
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-${{ matrix.os }}
-          path: playwright-report/
+          path: |
+            playwright-report/
+            test-results/
+            blob-report/
           retention-days: 7

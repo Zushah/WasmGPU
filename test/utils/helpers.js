@@ -10,6 +10,69 @@ import { requestTestDevice } from "./webgpu.js";
 export { createTestRandom } from "./random.js";
 export { destroyTestDevice } from "./webgpu.js";
 
+const nodeProcess = globalThis.process;
+const canUseColor = nodeProcess ? nodeProcess.env.FORCE_COLOR !== "0" && (nodeProcess.stdout.isTTY || !nodeProcess.env.NO_COLOR) : false;
+
+export const colors = {
+    r: canUseColor ? "\x1b[31m" : "",
+    g: canUseColor ? "\x1b[32m" : "",
+    y: canUseColor ? "\x1b[33m" : "",
+    x: canUseColor ? "\x1b[0m" : ""
+};
+
+export const installWebGPUMonitor = async (page) => page.addInitScript(() => {
+    const monitor = { completedSubmissions: 0, deviceLosses: [], devices: 0, errors: [], submissions: 0 };
+    const queues = new Set();
+    Object.defineProperty(monitor, "settle", { value: async () => Promise.all(Array.from(queues, (queue) => queue.onSubmittedWorkDone())) });
+    Object.defineProperty(globalThis, "__wasmgpuTestMonitor", { configurable: false, value: monitor });
+    if (!navigator.gpu) { monitor.errors.push("navigator.gpu is unavailable."); return; }
+    const wrappedAdapters = new WeakSet();
+    const wrappedQueues = new WeakSet();
+    const requestAdapter = navigator.gpu.requestAdapter.bind(navigator.gpu);
+    navigator.gpu.requestAdapter = async (...adapterArgs) => {
+        const adapter = await requestAdapter(...adapterArgs);
+        if (!adapter || wrappedAdapters.has(adapter)) return adapter;
+        wrappedAdapters.add(adapter);
+        const requestDevice = adapter.requestDevice.bind(adapter);
+        adapter.requestDevice = async (...deviceArgs) => {
+            const device = await requestDevice(...deviceArgs);
+            monitor.devices++;
+            device.addEventListener("uncapturederror", (event) => monitor.errors.push(event.error?.message ?? String(event.error)));
+            device.lost.then((info) => {
+                if (info.reason !== "destroyed") monitor.deviceLosses.push(`${info.reason || "unknown"}: ${info.message || "no message"}`);
+            }).catch((error) => monitor.deviceLosses.push(error?.message ?? String(error)));
+            const queue = device.queue;
+            queues.add(queue);
+            if (!wrappedQueues.has(queue)) {
+                wrappedQueues.add(queue);
+                const submit = queue.submit.bind(queue);
+                let completionPending = false;
+                queue.submit = (...submitArgs) => {
+                    const result = submit(...submitArgs);
+                    monitor.submissions++;
+                    if (!completionPending) {
+                        completionPending = true;
+                        queue.onSubmittedWorkDone().then(() => { monitor.completedSubmissions++; }).catch((error) => monitor.errors.push(error?.message ?? String(error))).finally(() => { completionPending = false; });
+                    }
+                    return result;
+                };
+            }
+            return device;
+        };
+        return adapter;
+    };
+});
+
+export const readWebGPUMonitor = async (page) => page.evaluate(() => globalThis.__wasmgpuTestMonitor);
+
+export const settleWebGPUMonitor = async (page) => {
+    await page.evaluate(async () => {
+        await globalThis.__wasmgpuTestMonitor.settle();
+        await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    return readWebGPUMonitor(page);
+};
+
 export const createApproxHelpers = (defaultTolerance = 1e-6) => {
     const numberApproxEqual = (actual, expected, tolerance = defaultTolerance, message = "Numbers differ") => {
         assert.ok(Number.isFinite(actual) && Number.isFinite(expected), `${message}: expected finite numbers (${actual}, ${expected})`);
