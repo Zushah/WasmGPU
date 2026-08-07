@@ -44,7 +44,10 @@ if (browserName === "chromium") {
         "--use-webgpu-adapter=swiftshader"
     );
     launchOptions.args = args;
-} else if (browserName === "firefox") launchOptions.firefoxUserPrefs = { "dom.webgpu.enabled": true };
+} else if (browserName === "firefox") launchOptions.firefoxUserPrefs = {
+    "dom.webgpu.enabled": true,
+    "gfx.webgpu.ignore-blocklist": true
+};
 
 export default defineConfig({
     testDir: "./test/manifests",

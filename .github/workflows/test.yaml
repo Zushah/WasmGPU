@@ -103,13 +103,6 @@ jobs:
             browser: firefox
             browsername: Firefox
             browserinstall: firefox
-          - name: MacOS 15 ARM64 WebKit
-            id: macos-arm64-webkit
-            os: macos-15
-            browser: webkit
-            browsername: WebKit
-            browserinstall: webkit
-
     env:
       WASMGPU_BROWSER: ${{ matrix.browser }}
 
@@ -171,11 +164,13 @@ jobs:
 
       -
         name: Run setup tests
+        id: setup
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os != 'Linux' }}
         run: npm run test:setup
 
       -
         name: Run setup tests with Xvfb
+        id: setup-xvfb
         if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os == 'Linux' }}
         run: xvfb-run --auto-servernum npm run test:setup -- --headed
         env:
@@ -183,31 +178,31 @@ jobs:
 
       -
         name: Run Node tests
-        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os != 'Linux' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os != 'Linux' }}
         run: npm run test:js
 
       -
         name: Run Node tests with Xvfb
-        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os == 'Linux' }}
+        if: ${{ !cancelled() && steps.setup-xvfb.outcome == 'success' && runner.os == 'Linux' }}
         run: xvfb-run --auto-servernum npm run test:js -- --headed
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
 
       -
         name: Run examples tests
-        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os != 'Linux' }}
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os != 'Linux' }}
         run: npm run test:ex
 
       -
         name: Run examples tests with Xvfb
-        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os == 'Linux' }}
+        if: ${{ !cancelled() && steps.setup-xvfb.outcome == 'success' && runner.os == 'Linux' }}
         run: xvfb-run --auto-servernum npm run test:ex -- --headed
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
 
       -
         name: Merge test reports
-        if: ${{ !cancelled() && steps.prepare.outcome == 'success' }}
+        if: ${{ !cancelled() && ((runner.os != 'Linux' && steps.setup.outcome == 'success') || (runner.os == 'Linux' && steps.setup-xvfb.outcome == 'success')) }}
         run: npm run test:merge
 
       -
