@@ -7,13 +7,13 @@
 import { defineConfig } from "@playwright/test";
 import { expectedTests } from "./test/manifests/suites.js";
 
-if (Object.prototype.hasOwnProperty.call(process.env, "NO_COLOR")) {
-    delete process.env.NO_COLOR;
-    process.env.FORCE_COLOR = "0";
-}
+if (Object.prototype.hasOwnProperty.call(process.env, "NO_COLOR")) { delete process.env.NO_COLOR; process.env.FORCE_COLOR = "0"; }
 
 const PORT = 4173;
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+const browserName = process.env.WASMGPU_BROWSER ?? "chromium";
+const supportedBrowsers = new Set(["chromium", "firefox", "webkit"]);
+if (!supportedBrowsers.has(browserName)) throw new Error(`Unsupported WASMGPU_BROWSER: ${browserName}`);
 const requestedProjects = process.argv.flatMap((argument, index, arguments_) => {
     if (argument === "--project") return [arguments_[index + 1]];
     if (argument.startsWith("--project=")) return [argument.slice("--project=".length)];
@@ -27,20 +27,24 @@ const lifecycleSuites = new Map([
     ["test:ex", "examples"]
 ]);
 const reportSuite = lifecycleSuites.get(process.env.npm_lifecycle_event) ?? (requestedProjects.length === 1 && requestedProjects[0] === "setup" ? "setup" : requestedProjects.includes("examples") && !requestedProjects.includes("runner") ? "examples" : requestedProjects.length ? "javascript" : "all");
-const launchArgs = [
-    "--enable-unsafe-webgpu",
-    "--disable-dawn-features=use_dxc",
-    "--use-gpu-in-tests",
-    "--enable-accelerated-2d-canvas"
-];
-if (process.platform === "linux") launchArgs.push(
-    "--enable-features=Vulkan",
-    "--use-angle=vulkan",
-    "--use-vulkan=native"
-);
-else launchArgs.push(
-    "--use-webgpu-adapter=swiftshader"
-);
+const launchOptions = {};
+if (browserName === "chromium") {
+    const args = [
+        "--enable-unsafe-webgpu",
+        "--disable-dawn-features=use_dxc",
+        "--use-gpu-in-tests",
+        "--enable-accelerated-2d-canvas"
+    ];
+    if (process.platform === "linux") args.push(
+        "--enable-features=Vulkan",
+        "--use-angle=vulkan",
+        "--use-vulkan=native"
+    );
+    else args.push(
+        "--use-webgpu-adapter=swiftshader"
+    );
+    launchOptions.args = args;
+} else if (browserName === "firefox") launchOptions.firefoxUserPrefs = { "dom.webgpu.enabled": true };
 
 export default defineConfig({
     testDir: "./test/manifests",
@@ -65,15 +69,14 @@ export default defineConfig({
     ],
     use: {
         baseURL: BASE_URL,
-        channel: "chromium",
+        browserName,
+        ...(browserName === "chromium" ? { channel: "chromium" } : {}),
         headless: true,
         viewport: { width: 1280, height: 720 },
         deviceScaleFactor: 1,
         trace: "retain-on-failure",
         screenshot: "only-on-failure",
-        launchOptions: {
-            args: launchArgs
-        }
+        launchOptions
     },
     webServer: {
         command: `node ./scripts/serve-tests.js --port ${PORT}`,

@@ -61,12 +61,57 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Windows 11
+          - name: Windows 11 AMD64 Chromium
+            id: windows-amd64-chromium
             os: windows-2025
-          - name: MacOS 15
-            os: macos-15-intel
-          - name: Ubuntu 24
+            browser: chromium
+            browsername: Chromium
+            browserinstall: --no-shell chromium
+          - name: Windows 11 AMD64 Firefox
+            id: windows-amd64-firefox
+            os: windows-2025
+            browser: firefox
+            browsername: Firefox
+            browserinstall: firefox
+          - name: Ubuntu 24 AMD64 Chromium
+            id: ubuntu-amd64-chromium
             os: ubuntu-24.04
+            browser: chromium
+            browsername: Chromium
+            browserinstall: --no-shell chromium
+          - name: Ubuntu 24 ARM64 Chromium
+            id: ubuntu-arm64-chromium
+            os: ubuntu-24.04-arm
+            browser: chromium
+            browsername: Chromium
+            browserinstall: --no-shell chromium
+          - name: MacOS 15 AMD64 Chromium
+            id: macos-amd64-chromium
+            os: macos-15-intel
+            browser: chromium
+            browsername: Chromium
+            browserinstall: --no-shell chromium
+          - name: MacOS 15 ARM64 Chromium
+            id: macos-arm64-chromium
+            os: macos-15
+            browser: chromium
+            browsername: Chromium
+            browserinstall: --no-shell chromium
+          - name: MacOS 15 ARM64 Firefox
+            id: macos-arm64-firefox
+            os: macos-15
+            browser: firefox
+            browsername: Firefox
+            browserinstall: firefox
+          - name: MacOS 15 ARM64 WebKit
+            id: macos-arm64-webkit
+            os: macos-15
+            browser: webkit
+            browsername: WebKit
+            browserinstall: webkit
+
+    env:
+      WASMGPU_BROWSER: ${{ matrix.browser }}
 
     steps:
       -
@@ -86,11 +131,11 @@ jobs:
       -
         name: Install Playwright dependencies
         if: ${{ runner.os == 'Linux' }}
-        run: npx playwright install-deps chromium
+        run: npx playwright install-deps ${{ matrix.browser }}
 
       -
-        name: Install Chromium
-        run: npx playwright install --no-shell chromium
+        name: Install ${{ matrix.browsername }}
+        run: npx playwright install ${{ matrix.browserinstall }}
 
       -
         name: Install Vulkan driver
@@ -170,7 +215,7 @@ jobs:
         if: ${{ !cancelled() }}
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report-${{ matrix.os }}
+          name: playwright-report-${{ matrix.id }}
           path: |
             playwright-report/
             test-results/

@@ -9,12 +9,13 @@ import { colors, installWebGPUMonitor, settleWebGPUMonitor } from "../utils/help
 import { testFiles } from "./suites.js";
 
 const { r, g, y, x } = colors;
+const firefoxIntentionalTeardownErrors = new Set(["Buffer with '' label has been destroyed"]);
 
 for (let i = 0; i < testFiles.length; ++i) {
     const file = testFiles[i];
     const name = file.replace(/\.test\.js$/, "");
     const index = (i + 1).toString().padStart(2, "0");
-    test(`test/${file}`, async ({ page }) => {
+    test(`test/${file}`, async ({ browserName, page }) => {
         const start = Date.now();
         await installWebGPUMonitor(page);
         const consoleErrors = [];
@@ -29,9 +30,11 @@ for (let i = 0; i < testFiles.length; ++i) {
         await page.goto("/test/index.html");
         await page.evaluate(async (moduleUrl) => { await import(moduleUrl); }, `/test/${file}`);
         const gpu = await settleWebGPUMonitor(page);
+        const intentionalTeardownErrors = browserName === "firefox" ? gpu.intentionalTeardownErrors.filter((error) => !firefoxIntentionalTeardownErrors.has(error)) : gpu.intentionalTeardownErrors;
+        const gpuErrors = [...gpu.errors, ...intentionalTeardownErrors];
         expect(consoleErrors, consoleErrors.join("\n")).toEqual([]);
         expect(pageErrors, pageErrors.map((error) => error.stack ?? error.message).join("\n\n")).toEqual([]);
-        expect(gpu.errors, gpu.errors.join("\n")).toEqual([]);
+        expect(gpuErrors, gpuErrors.join("\n")).toEqual([]);
         expect(gpu.deviceLosses, gpu.deviceLosses.join("\n")).toEqual([]);
         const stop = Date.now();
         console.log(`${g}[test:${index}:${name}] passed in ${stop - start}ms, devices=${gpu.devices}, submissions=${gpu.submissions}${x}`);

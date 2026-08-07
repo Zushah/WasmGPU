@@ -37,18 +37,12 @@ test("WebGPU", async ({ page }) => {
         document.body.appendChild(canvas);
         const context = canvas.getContext("webgpu");
         if (!context) { canvas.remove(); device.destroy(); return { error: "canvas.getContext(\"webgpu\") returned null." }; }
-        try {
-            context.configure({ device, format: navigator.gpu.getPreferredCanvasFormat() });
-            const encoder = device.createCommandEncoder();
-            const pass = encoder.beginRenderPass({ colorAttachments: [{ view: context.getCurrentTexture().createView(), clearValue: [0, 0, 0, 1], loadOp: "clear", storeOp: "store" }] });
-            pass.end();
-            device.queue.submit([encoder.finish()]);
-            await device.queue.onSubmittedWorkDone();
-        } finally {
-            context.unconfigure();
-            canvas.remove();
-            device.destroy();
-        }
+        context.configure({ device, format: navigator.gpu.getPreferredCanvasFormat() });
+        const encoder = device.createCommandEncoder();
+        const pass = encoder.beginRenderPass({ colorAttachments: [{ view: context.getCurrentTexture().createView(), clearValue: [0, 0, 0, 1], loadOp: "clear", storeOp: "store" }] });
+        pass.end();
+        device.queue.submit([encoder.finish()]);
+        await device.queue.onSubmittedWorkDone();
         return { error: null, features, info };
     });
     const gpu = await settleWebGPUMonitor(page);

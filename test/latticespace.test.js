@@ -5,7 +5,7 @@
  */
 
 import assert from "./utils/assert.js";
-import { createApproxHelpers, createBrowserCanvasScope, destroyTestDevice, readBufferAsF32, readBufferAsU32, setupTest, trackDestroy } from "./utils/helpers.js";
+import { createApproxHelpers, createBrowserCanvasScope, destroyTestDevice, readBufferAsF32, readBufferAsU32, runIntentionalWebGPUTeardown, setupTest, trackDestroy } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
 
 const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
@@ -194,7 +194,7 @@ const readU32 = (buffer, count, localCompute = compute) => readBufferAsU32(local
 
 // 8) Real renderer coverage: procedural 2D/3D shaders, picking, private GPU sorting, state removal, and cleanup.
 {
-    const renderer = await Renderer.create(browserCanvases.createCanvas(192, 192), { antialias: false, frustumCulling: false, occlusionCulling: true, canvasFormat: "rgba8unorm" });
+    const renderer = await Renderer.create(browserCanvases.createCanvas(192, 192), { antialias: false, frustumCulling: false, occlusionCulling: true });
     const rendererAny = renderer;
     const localCompute = new Compute(rendererAny.device, rendererAny.queue);
     rendererAny.device.addEventListener("uncapturederror", (event) => { uncapturedError = event?.error?.message ?? String(event); });
@@ -245,7 +245,7 @@ const readU32 = (buffer, count, localCompute = compute) => readBufferAsU32(local
     renderer.render(scene, camera);
     await rendererAny.queue.onSubmittedWorkDone();
     assert.strictEqual(uncapturedError, null, "Occlusion-enabled LatticeSpace frame emitted an uncaptured WebGPU error");
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
     scene.destroy();
     localCompute.destroy();
 }

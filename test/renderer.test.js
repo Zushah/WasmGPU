@@ -5,7 +5,7 @@
  */
 
 import assert from "./utils/assert.js";
-import { createApproxHelpers, createBrowserCanvasScope, createWebGPUCanvasDouble as createMockCanvas, setupTest } from "./utils/helpers.js";
+import { createApproxHelpers, createBrowserCanvasScope, createWebGPUCanvasDouble as createMockCanvas, runIntentionalWebGPUTeardown, setupTest } from "./utils/helpers.js";
 import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, BlendMode, CullMode, PointCloud, GlyphField, NodeLink, wasm } from "../dist/WasmGPU.js";
 
 const baseGpu = navigator.gpu;
@@ -73,18 +73,14 @@ await setupTest({ initWebAssembly });
     assert.equal(typeof renderer.isGpuTimingSupported, "boolean");
     assert.equal(renderer.gpuTimeNs === null || Number.isFinite(renderer.gpuTimeNs), true);
     renderer.enableGpuTiming(false);
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
     baseGpu.requestAdapter = originalRequestAdapter;
 }
 
 // 2) Render submits core mesh/material paths and updates GPU-side material state.
 {
     const canvas = browserCanvases.createCanvas(256, 256);
-    const renderer = await Renderer.create(canvas, {
-        antialias: false,
-        frustumCulling: false,
-        canvasFormat: "rgba8unorm"
-    });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false });
     const scene = new Scene({ background: [0.02, 0.03, 0.04] });
     const camera = createCamera();
     const unlit = new UnlitMaterial({ color: [0.8, 0.2, 0.1] });
@@ -147,18 +143,13 @@ await setupTest({ initWebAssembly });
     assert.ok(meshB.geometry.indexBuffer);
 
     scene.destroy();
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
 }
 
 // 3) Frustum culling stats use the nested public shape and keep occlusion counts separate.
 {
     const canvas = browserCanvases.createCanvas(192, 192);
-    const renderer = await Renderer.create(canvas, {
-        antialias: false,
-        frustumCulling: true,
-        frustumCullingStats: true,
-        canvasFormat: "rgba8unorm"
-    });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: true, frustumCullingStats: true });
     const scene = new Scene();
     const camera = createCamera();
     const geometry = Geometry.box();
@@ -181,19 +172,13 @@ await setupTest({ initWebAssembly });
     });
 
     scene.destroy();
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
 }
 
 // 4) The render path stays cold for occlusion bookkeeping when occlusion culling is disabled.
 {
     const canvas = browserCanvases.createCanvas(160, 160);
-    const renderer = await Renderer.create(canvas, {
-        antialias: false,
-        frustumCulling: false,
-        occlusionCulling: false,
-        occlusionCullingStats: true,
-        canvasFormat: "rgba8unorm"
-    });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false, occlusionCulling: false, occlusionCullingStats: true });
     const rendererAny = renderer;
     const scene = new Scene();
     const camera = createCamera();
@@ -210,19 +195,13 @@ await setupTest({ initWebAssembly });
     assert.deepEqual(renderer.cullingStats.occlusion, { tested: 0, visible: 0, occluded: 0 });
 
     scene.destroy();
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
 }
 
 // 5) Render-only occlusion hooks do not run during pick or warmup, so picking stays exact and warmup stays unfiltered.
 {
     const canvas = browserCanvases.createCanvas(160, 160);
-    const renderer = await Renderer.create(canvas, {
-        antialias: false,
-        frustumCulling: false,
-        occlusionCulling: true,
-        occlusionCullingStats: true,
-        canvasFormat: "rgba8unorm"
-    });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false, occlusionCulling: true, occlusionCullingStats: true });
     const scene = new Scene();
     const camera = createCamera();
     let applyCalls = 0;
@@ -247,19 +226,13 @@ await setupTest({ initWebAssembly });
     assert.equal(applyCalls, 1);
     assert.equal(captureCalls, 1);
 
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
 }
 
 // 6) Occlusion-enabled renders create capture resources and submit the capture path without throwing.
 {
     const canvas = browserCanvases.createCanvas(192, 192);
-    const renderer = await Renderer.create(canvas, {
-        antialias: false,
-        frustumCulling: false,
-        occlusionCulling: true,
-        occlusionCullingStats: true,
-        canvasFormat: "rgba8unorm"
-    });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false, occlusionCulling: true, occlusionCullingStats: true });
     const rendererAny = renderer;
     const scene = new Scene();
     const camera = createCamera();
@@ -277,19 +250,13 @@ await setupTest({ initWebAssembly });
     assert.equal(uncapturedError, null);
 
     scene.destroy();
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
 }
 
 // 7) Strict previous-frame validity skips occlusion filtering when the stored view-projection does not match.
 {
     const canvas = browserCanvases.createCanvas(160, 160);
-    const renderer = await Renderer.create(canvas, {
-        antialias: false,
-        frustumCulling: false,
-        occlusionCulling: true,
-        occlusionCullingStats: true,
-        canvasFormat: "rgba8unorm"
-    });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false, occlusionCulling: true, occlusionCullingStats: true });
     const rendererAny = renderer;
     const scene = new Scene();
     const camera = createCamera();
@@ -321,18 +288,13 @@ await setupTest({ initWebAssembly });
     assert.deepEqual(renderer.cullingStats.occlusion, { tested: 0, visible: 0, occluded: 0 });
 
     scene.destroy();
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
 }
 
 // 8) Safe occluder capture classification keeps ambiguous coverage paths out of the capture set.
 {
     const canvas = browserCanvases.createCanvas(200, 200);
-    const renderer = await Renderer.create(canvas, {
-        antialias: false,
-        frustumCulling: false,
-        occlusionCulling: true,
-        canvasFormat: "rgba8unorm"
-    });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false, occlusionCulling: true });
     const rendererAny = renderer;
     const scene = new Scene();
     const camera = createCamera();
@@ -398,17 +360,13 @@ await setupTest({ initWebAssembly });
     assert.ok(frameState.nodeLinkOccluders.every((item) => item.link === safeGraph));
 
     scene.destroy();
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
 }
 
 // 9) Picking APIs return stable empty and region result shapes.
 {
     const canvas = browserCanvases.createCanvas(128, 128);
-    const renderer = await Renderer.create(canvas, {
-        antialias: false,
-        frustumCulling: false,
-        canvasFormat: "rgba8unorm"
-    });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false });
     const scene = new Scene();
     const camera = createCamera();
 
@@ -432,17 +390,13 @@ await setupTest({ initWebAssembly });
     assert.ok(emptyLasso.sampledPixels > 0);
 
     scene.destroy();
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
 }
 
 // 10) SMAA render path and destroyed scene objects clean up without poisoning later frames.
 {
     const canvas = createMockCanvas(160, 120);
-    const renderer = await Renderer.create(canvas, {
-        antialias: true,
-        frustumCulling: false,
-        canvasFormat: "rgba8unorm"
-    });
+    const renderer = await Renderer.create(canvas, { antialias: true, frustumCulling: false, canvasFormat: "rgba8unorm" });
     const scene = new Scene();
     const camera = createCamera();
     const mesh = new Mesh(Geometry.box(), new UnlitMaterial());
@@ -453,7 +407,7 @@ await setupTest({ initWebAssembly });
     assert.doesNotThrow(() => renderer.render(scene, camera));
     assert.equal(canvas.currentTextureCount, 1);
 
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
 }
 
 // 11) Warmup validates defaults and errors without acquiring a swapchain texture.
@@ -471,7 +425,7 @@ await setupTest({ initWebAssembly });
     await assert.doesNotReject(async () => wgpu.warmup({ scene, camera }));
     assert.equal(canvas.currentTextureCount, 0);
     scene.destroy();
-    wgpu.destroy();
+    await runIntentionalWebGPUTeardown(() => wgpu.destroy());
 }
 
 // 12) Warmup eagerly exercises visible render resource creation paths before the first render.
@@ -541,7 +495,7 @@ await setupTest({ initWebAssembly });
     assert.doesNotThrow(() => wgpu.render(scene, camera));
     assert.equal(canvas.currentTextureCount, 1);
     scene.destroy();
-    wgpu.destroy();
+    await runIntentionalWebGPUTeardown(() => wgpu.destroy());
 }
 
 // 13) Transmission warmup prepares transmissive material binding without drawing a visible frame.
@@ -566,13 +520,13 @@ await setupTest({ initWebAssembly });
     assert.doesNotThrow(() => wgpu.render(scene, camera));
     assert.equal(canvas.currentTextureCount, 1);
     scene.destroy();
-    wgpu.destroy();
+    await runIntentionalWebGPUTeardown(() => wgpu.destroy());
 }
 
 // 14) Renderer culling growth and destruction release retained WebAssembly scratch blocks.
 {
     const canvas = browserCanvases.createCanvas(160, 120);
-    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: true, canvasFormat: "rgba8unorm" });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: true });
     const scene = new Scene();
     const camera = createCamera(160 / 120);
     const meshes = [
@@ -598,7 +552,7 @@ await setupTest({ initWebAssembly });
         const final = { centersPtr: renderer.cullCentersPtr, radiiPtr: renderer.cullRadiiPtr, cap: renderer.cullCapacity };
         scene.destroy();
         camera.destroy();
-        renderer.destroy();
+        await runIntentionalWebGPUTeardown(() => renderer.destroy());
         assert.ok(freedF32.some(([ptr, len]) => ptr === final.centersPtr && len === final.cap * 3), "Renderer.destroy() must free the final center block");
         assert.ok(freedF32.some(([ptr, len]) => ptr === final.radiiPtr && len === final.cap), "Renderer.destroy() must free the final radius block");
         assert.equal(renderer.cullCentersPtr, 0);
@@ -608,7 +562,7 @@ await setupTest({ initWebAssembly });
         wasm.freeF32 = originalFreeF32;
         scene.destroy();
         camera.destroy();
-        renderer.destroy();
+        await runIntentionalWebGPUTeardown(() => renderer.destroy());
     }
 }
 

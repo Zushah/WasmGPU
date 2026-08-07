@@ -5,7 +5,7 @@
  */
 
 import assert from "./utils/assert.js";
-import { createApproxHelpers, createBrowserCanvasScope, destroyTestDevice, makeSequence, readBufferAsF32 as readSharedF32, readBufferAsU32 as readSharedU32, setupTest, trackDestroy } from "./utils/helpers.js";
+import { createApproxHelpers, createBrowserCanvasScope, destroyTestDevice, makeSequence, readBufferAsF32 as readSharedF32, readBufferAsU32 as readSharedU32, runIntentionalWebGPUTeardown, setupTest, trackDestroy } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
 
 const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
@@ -134,14 +134,14 @@ const makeRenderableField = (count = 3, zValues = null) => {
 // 1) Public factory, CPU upload, color handling, and ND indexing work for CPU-authored splatfields.
 {
     const canvas = browserCanvases.createCanvas(128, 128);
-    const wgpu = await Engine.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
+    const wgpu = await Engine.create(canvas, { antialias: false, frustumCulling: false });
     const factoryField = wgpu.createSplatField({
         positions: new Float32Array([0, 0, 0]),
         scales: new Float32Array([0.25, 0.25, 0.25])
     });
     assert.ok(factoryField instanceof SplatField, "Expected WasmGPU.createSplatField() to return a SplatField");
     factoryField.destroy();
-    wgpu.destroy();
+    await runIntentionalWebGPUTeardown(() => wgpu.destroy());
 
     const field = new SplatField({
         positions: new Float32Array([1, 2, 3, 4, 5, 6]),
@@ -659,7 +659,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
 // 7) Renderer renders, depth-sorts, and cleans up splatfield state across normal and mixed-size frames.
 {
     const canvas = browserCanvases.createCanvas(192, 192);
-    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false });
     const rendererAny = renderer;
     const scene = new Scene();
     const perspectiveCamera = makePerspectiveCamera();
@@ -782,19 +782,19 @@ const makeRenderableField = (count = 3, zValues = null) => {
     assert.ok(remainingState, "Expected sort state to exist before renderer destruction");
     const remainingSortedIndexDestroyed = trackDestroy(remainingState.sortedIndexBuffer);
     const remainingTransformDestroyed = trackDestroy(remainingState.transformBuffer);
-    renderer.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
     assert.strictEqual(remainingSortedIndexDestroyed(), 1, "Expected Renderer.destroy() to destroy remaining sortedIndexBuffer resources");
     assert.strictEqual(remainingTransformDestroyed(), 1, "Expected Renderer.destroy() to destroy remaining transformBuffer resources");
     scene.destroy();
 
     const canvasAA = browserCanvases.createCanvas(192, 192);
-    const rendererAA = await Renderer.create(canvasAA, { antialias: true, frustumCulling: false, canvasFormat: "rgba8unorm" });
+    const rendererAA = await Renderer.create(canvasAA, { antialias: true, frustumCulling: false });
     const rendererAAAny = rendererAA;
     const sceneAA = new Scene();
     sceneAA.add(makeRenderableField(3));
     assert.doesNotThrow(() => rendererAA.render(sceneAA, makePerspectiveCamera()));
     await rendererAAAny.queue.onSubmittedWorkDone();
-    rendererAA.destroy();
+    await runIntentionalWebGPUTeardown(() => rendererAA.destroy());
     sceneAA.destroy();
 }
 

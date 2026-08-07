@@ -5,7 +5,7 @@
  */
 
 import assert from "./utils/assert.js";
-import { createApproxHelpers, createBrowserCanvasScope, destroyTestDevice, makeSequence, setupTest } from "./utils/helpers.js";
+import { createApproxHelpers, createBrowserCanvasScope, destroyTestDevice, makeSequence, runIntentionalWebGPUTeardown, setupTest } from "./utils/helpers.js";
 import * as WasmGPU from "../dist/WasmGPU.js";
 
 const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
@@ -26,7 +26,7 @@ const pointScaleTransform = { componentCount: 4, componentIndex: 3, stride: 4, o
 const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, offset: 0 };
 
 const canvas = browserCanvases.createCanvas(512, 512);
-const wgpu = await Engine.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
+const wgpu = await Engine.create(canvas, { antialias: false, frustumCulling: false });
 const scene = wgpu.createScene([0, 0, 0]);
 const camera = wgpu.createCamera.perspective({ fov: 50, near: 0.1, far: 200 });
 camera.transform.setPosition(0, 0, 12);
@@ -459,7 +459,7 @@ const makePickHit = (kind, object, objectId, elementIndex, worldPosition) => ({ 
 
 // 5) Cleanup releases the engine and removes its real canvas before destroying the independently requested browser GPU device.
 {
-    wgpu.destroy();
+    await runIntentionalWebGPUTeardown(() => wgpu.destroy());
     browserCanvases.restore();
     await destroyTestDevice(device);
 }

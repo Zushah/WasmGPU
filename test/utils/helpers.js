@@ -21,9 +21,18 @@ export const colors = {
 };
 
 export const installWebGPUMonitor = async (page) => page.addInitScript(() => {
-    const monitor = { completedSubmissions: 0, deviceLosses: [], devices: 0, errors: [], submissions: 0 };
+    const monitor = { completedSubmissions: 0, deviceLosses: [], devices: 0, errors: [], intentionalTeardownErrors: [], submissions: 0 };
     const queues = new Set();
-    Object.defineProperty(monitor, "settle", { value: async () => Promise.all(Array.from(queues, (queue) => queue.onSubmittedWorkDone())) });
+    let intentionalTeardownDepth = 0;
+    const settle = async () => {
+        await Promise.all(Array.from(queues, (queue) => queue.onSubmittedWorkDone()));
+        await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+    Object.defineProperties(monitor, {
+        beginIntentionalTeardown: { value: async () => { await settle(); intentionalTeardownDepth++; } },
+        endIntentionalTeardown: { value: async () => { try { await settle(); } finally { intentionalTeardownDepth--; } } },
+        settle: { value: settle }
+    });
     Object.defineProperty(globalThis, "__wasmgpuTestMonitor", { configurable: false, value: monitor });
     if (!navigator.gpu) { monitor.errors.push("navigator.gpu is unavailable."); return; }
     const wrappedAdapters = new WeakSet();
@@ -37,7 +46,10 @@ export const installWebGPUMonitor = async (page) => page.addInitScript(() => {
         adapter.requestDevice = async (...deviceArgs) => {
             const device = await requestDevice(...deviceArgs);
             monitor.devices++;
-            device.addEventListener("uncapturederror", (event) => monitor.errors.push(event.error?.message ?? String(event.error)));
+            device.addEventListener("uncapturederror", (event) => {
+                const errors = intentionalTeardownDepth ? monitor.intentionalTeardownErrors : monitor.errors;
+                errors.push(event.error?.message ?? String(event.error));
+            });
             device.lost.then((info) => {
                 if (info.reason !== "destroyed") monitor.deviceLosses.push(`${info.reason || "unknown"}: ${info.message || "no message"}`);
             }).catch((error) => monitor.deviceLosses.push(error?.message ?? String(error)));
@@ -66,11 +78,16 @@ export const installWebGPUMonitor = async (page) => page.addInitScript(() => {
 export const readWebGPUMonitor = async (page) => page.evaluate(() => globalThis.__wasmgpuTestMonitor);
 
 export const settleWebGPUMonitor = async (page) => {
-    await page.evaluate(async () => {
-        await globalThis.__wasmgpuTestMonitor.settle();
-        await new Promise((resolve) => setTimeout(resolve, 0));
-    });
+    await page.evaluate(() => globalThis.__wasmgpuTestMonitor.settle());
     return readWebGPUMonitor(page);
+};
+
+export const runIntentionalWebGPUTeardown = async (teardown) => {
+    const monitor = globalThis.__wasmgpuTestMonitor;
+    if (!monitor) return teardown();
+    await monitor.beginIntentionalTeardown();
+    try { return await teardown(); }
+    finally { await monitor.endIntentionalTeardown(); }
 };
 
 export const createApproxHelpers = (defaultTolerance = 1e-6) => {

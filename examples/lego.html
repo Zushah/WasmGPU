@@ -51,7 +51,7 @@
                 };
             };
 
-            const wgpu = await WasmGPU.create(canvas, { antialias: true, frustumCulling: true, canvasFormat: "rgba8unorm" });
+            const wgpu = await WasmGPU.create(canvas, { antialias: true, frustumCulling: true });
             const scene = wgpu.createScene([0.02, 0.025, 0.035]);
             const camera = wgpu.createCamera.perspective({ fov: 45, near: 0.01, far: 100 });
             camera.transform.setPosition(0, 0.35, 3.5);
