@@ -13,8 +13,10 @@ import { examples } from "./suites.js";
 const EXAMPLES_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../examples");
 const { g, x } = colors;
 
-test("WebGPU", async ({ page }) => {
+test("WebGPU", async ({ browserName, page }) => {
     const start = Date.now();
+    const browserWebGPUWarnings = [];
+    page.on("console", (message) => { if (message.type() === "warning" && message.text().includes("WebGPU")) browserWebGPUWarnings.push(message.text()); });
     await installWebGPUMonitor(page);
     await page.goto("/test/index.html");
     const result = await page.evaluate(async () => {
@@ -46,7 +48,7 @@ test("WebGPU", async ({ page }) => {
         return { error: null, features, info };
     });
     const gpu = await settleWebGPUMonitor(page);
-    expect(result.error).toBeNull();
+    expect(result.error, [`${browserName}: ${result.error}`, ...browserWebGPUWarnings].join("\n")).toBeNull();
     expect(gpu.devices).toBeGreaterThan(0);
     expect(gpu.submissions).toBeGreaterThan(0);
     expect(gpu.completedSubmissions).toBeGreaterThan(0);

@@ -14,6 +14,7 @@ const BASE_URL = `http://127.0.0.1:${PORT}`;
 const browserName = process.env.WASMGPU_BROWSER ?? "chromium";
 const supportedBrowsers = new Set(["chromium", "firefox", "webkit"]);
 if (!supportedBrowsers.has(browserName)) throw new Error(`Unsupported WASMGPU_BROWSER: ${browserName}`);
+const headless = browserName !== "firefox" || process.platform === "linux";
 const requestedProjects = process.argv.flatMap((argument, index, arguments_) => {
     if (argument === "--project") return [arguments_[index + 1]];
     if (argument.startsWith("--project=")) return [argument.slice("--project=".length)];
@@ -74,7 +75,7 @@ export default defineConfig({
         baseURL: BASE_URL,
         browserName,
         ...(browserName === "chromium" ? { channel: "chromium" } : {}),
-        headless: true,
+        headless,
         viewport: { width: 1280, height: 720 },
         deviceScaleFactor: 1,
         trace: "retain-on-failure",
