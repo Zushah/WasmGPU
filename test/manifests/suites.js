@@ -25,7 +25,7 @@ export const examples = [
     { file: "picking.html", title: "WasmGPU | Picking Example", ready: [".nav", "Picking & Selection"] },
     { file: "protein.html", title: "WasmGPU | Protein Example", ready: [".info", "loaded"] },
     { file: "quantum.html", title: "WasmGPU | Quantum Example", ready: [".readout", "orbital: 3d_z²"] },
-    { file: "scaling.html", title: "WasmGPU | Scaling Example", ready: ["#scale-status", "status: idle"] },
+    { file: "scaling.html", title: "WasmGPU | Scaling Example", ready: ["#scale-status", "status: idle"], interactionTimeout: 120_000, timeout: 180_000 },
     { file: "terrain.html", title: "WasmGPU | Terrain Example", ready: [".hud", "Click terrain to lock pointer"] }
 ];
 

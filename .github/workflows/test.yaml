@@ -12,6 +12,7 @@ on:
       - scripts/serve-tests.js
       - scripts/merge-test-reports.js
       - scripts/build-rust-wasm.js
+      - scripts/configure-firefox-webgpu.js
       - build/**
       - dist/**
       - .cargo/**
@@ -34,6 +35,7 @@ on:
       - scripts/serve-tests.js
       - scripts/merge-test-reports.js
       - scripts/build-rust-wasm.js
+      - scripts/configure-firefox-webgpu.js
       - build/**
       - dist/**
       - .cargo/**
@@ -73,6 +75,7 @@ jobs:
             browser: firefox
             browsername: Firefox
             browserinstall: firefox
+            forcefallbackadapter: "1"
           - name: Ubuntu 24 AMD64 Chromium
             id: ubuntu-amd64-chromium
             os: ubuntu-24.04
@@ -105,6 +108,7 @@ jobs:
             browserinstall: firefox
     env:
       WASMGPU_BROWSER: ${{ matrix.browser }}
+      WASMGPU_FORCE_FALLBACK_ADAPTER: ${{ matrix.forcefallbackadapter }}
 
     steps:
       -
@@ -129,6 +133,11 @@ jobs:
       -
         name: Install ${{ matrix.browsername }}
         run: npx playwright install ${{ matrix.browserinstall }}
+
+      -
+        name: Configure Firefox WebGPU startup
+        if: ${{ matrix.forcefallbackadapter == '1' }}
+        run: node ./scripts/configure-firefox-webgpu.js
 
       -
         name: Install Vulkan driver

@@ -10,16 +10,27 @@ import { expectedTests } from "./test/manifests/suites.js";
 if (Object.prototype.hasOwnProperty.call(process.env, "NO_COLOR")) { delete process.env.NO_COLOR; process.env.FORCE_COLOR = "0"; }
 
 const PORT = 4173;
+
 const BASE_URL = `http://127.0.0.1:${PORT}`;
+
 const browserName = process.env.WASMGPU_BROWSER ?? "chromium";
+
 const supportedBrowsers = new Set(["chromium", "firefox", "webkit"]);
+
 if (!supportedBrowsers.has(browserName)) throw new Error(`Unsupported WASMGPU_BROWSER: ${browserName}`);
+
+const forceFallbackAdapter = process.env.WASMGPU_FORCE_FALLBACK_ADAPTER === "1";
+
+if (forceFallbackAdapter && browserName !== "firefox") throw new Error("WASMGPU_FORCE_FALLBACK_ADAPTER is only supported for Firefox.");
+
 const headless = browserName !== "firefox" || process.platform === "linux";
+
 const requestedProjects = process.argv.flatMap((argument, index, arguments_) => {
     if (argument === "--project") return [arguments_[index + 1]];
     if (argument.startsWith("--project=")) return [argument.slice("--project=".length)];
     return [];
 });
+
 const lifecycleSuites = new Map([
     ["test:setup", "setup"],
     ["test:js", "javascript"],
@@ -27,8 +38,11 @@ const lifecycleSuites = new Map([
     ["test:js:debug", "javascript"],
     ["test:ex", "examples"]
 ]);
+
 const reportSuite = lifecycleSuites.get(process.env.npm_lifecycle_event) ?? (requestedProjects.length === 1 && requestedProjects[0] === "setup" ? "setup" : requestedProjects.includes("examples") && !requestedProjects.includes("runner") ? "examples" : requestedProjects.length ? "javascript" : "all");
+
 const launchOptions = {};
+
 if (browserName === "chromium") {
     const args = [
         "--enable-unsafe-webgpu",
@@ -45,10 +59,11 @@ if (browserName === "chromium") {
         "--use-webgpu-adapter=swiftshader"
     );
     launchOptions.args = args;
-} else if (browserName === "firefox") launchOptions.firefoxUserPrefs = {
-    "dom.webgpu.enabled": true,
-    "gfx.webgpu.ignore-blocklist": true
-};
+} else if (browserName === "firefox") {
+    launchOptions.firefoxUserPrefs = {
+        "dom.webgpu.enabled": true
+    };
+}
 
 export default defineConfig({
     testDir: "./test/manifests",

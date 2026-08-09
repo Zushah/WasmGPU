@@ -30,6 +30,7 @@ test("WebGPU", async ({ browserName, page }) => {
             architecture: adapter.info.architecture,
             description: adapter.info.description,
             device: adapter.info.device,
+            isFallbackAdapter: adapter.info.isFallbackAdapter,
             vendor: adapter.info.vendor
         } : null;
         const features = Array.from(adapter.features).sort();
@@ -48,7 +49,8 @@ test("WebGPU", async ({ browserName, page }) => {
         return { error: null, features, info };
     });
     const gpu = await settleWebGPUMonitor(page);
-    expect(result.error, [`${browserName}: ${result.error}`, ...browserWebGPUWarnings].join("\n")).toBeNull();
+    expect(result.error, [`${browserName} (forceFallbackAdapter=${gpu.forceFallbackAdapter}): ${result.error}`, ...browserWebGPUWarnings].join("\n")).toBeNull();
+    if (gpu.forceFallbackAdapter) expect(result.info?.isFallbackAdapter, "The configured WebGPU fallback adapter was not selected.").toBe(true);
     expect(gpu.devices).toBeGreaterThan(0);
     expect(gpu.submissions).toBeGreaterThan(0);
     expect(gpu.completedSubmissions).toBeGreaterThan(0);

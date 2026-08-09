@@ -36,7 +36,8 @@ const observeDiagnostics = (page, example) => {
     return { diagnostics, hasCrashed: () => crashed };
 };
 
-const exerciseExample = async (page, file) => {
+const exerciseExample = async (page, example) => {
+    const { file } = example;
     if (file === "controls.html") {
         await page.keyboard.press("2");
         await expect(page.locator(".nav")).toContainText("mode: trackball");
@@ -72,7 +73,7 @@ const exerciseExample = async (page, file) => {
         await expect(page.locator("#scale-status")).toContainText("colormap: viridis");
         await expect(page.locator("#scale-status")).toContainText("active mode/clamp: log / range");
         await page.locator("#scale-stats").dispatchEvent("click");
-        await expect(page.locator("#scale-status")).toContainText("status: stats ready", { timeout: 30_000 });
+        await expect(page.locator("#scale-status")).toContainText("status: stats ready", { timeout: example.interactionTimeout });
     }
 };
 
@@ -92,7 +93,7 @@ for (let i = 0; i < examples.length; ++i) {
         await expect.poll(() => page.evaluate(() => globalThis.__wasmgpuTestMonitor?.submissions ?? 0), { timeout: 90_000 }).toBeGreaterThan(0);
         await expect.poll(() => page.evaluate(() => globalThis.__wasmgpuTestMonitor?.completedSubmissions ?? 0), { timeout: 90_000 }).toBeGreaterThan(0);
         expect(await page.locator("canvas").evaluateAll((canvases) => canvases.some((canvas) => canvas.clientWidth > 0 && canvas.clientHeight > 0))).toBe(true);
-        await exerciseExample(page, example.file);
+        await exerciseExample(page, example);
         await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
         const gpu = await settleWebGPUMonitor(page);
         for (const warning of observed.diagnostics.warnings) console.warn(`${y}[example:${index}:${name}] ${warning}${x}`);

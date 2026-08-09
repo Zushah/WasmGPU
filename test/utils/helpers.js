@@ -12,6 +12,7 @@ export { destroyTestDevice } from "./webgpu.js";
 
 const nodeProcess = globalThis.process;
 const canUseColor = nodeProcess ? nodeProcess.env.FORCE_COLOR !== "0" && (nodeProcess.stdout.isTTY || !nodeProcess.env.NO_COLOR) : false;
+const forceFallbackAdapterByDefault = nodeProcess?.env.WASMGPU_FORCE_FALLBACK_ADAPTER === "1";
 
 export const colors = {
     r: canUseColor ? "\x1b[31m" : "",
@@ -20,8 +21,8 @@ export const colors = {
     x: canUseColor ? "\x1b[0m" : ""
 };
 
-export const installWebGPUMonitor = async (page) => page.addInitScript(() => {
-    const monitor = { completedSubmissions: 0, deviceLosses: [], devices: 0, errors: [], intentionalTeardownErrors: [], submissions: 0 };
+export const installWebGPUMonitor = async (page, { forceFallbackAdapter = forceFallbackAdapterByDefault } = {}) => page.addInitScript(({ forceFallbackAdapter }) => {
+    const monitor = { completedSubmissions: 0, deviceLosses: [], devices: 0, errors: [], forceFallbackAdapter, intentionalTeardownErrors: [], submissions: 0 };
     const queues = new Set();
     let intentionalTeardownDepth = 0;
     const settle = async () => {
@@ -39,6 +40,7 @@ export const installWebGPUMonitor = async (page) => page.addInitScript(() => {
     const wrappedQueues = new WeakSet();
     const requestAdapter = navigator.gpu.requestAdapter.bind(navigator.gpu);
     navigator.gpu.requestAdapter = async (...adapterArgs) => {
+        if (forceFallbackAdapter) adapterArgs[0] = { ...(adapterArgs[0] ?? {}), forceFallbackAdapter: true };
         const adapter = await requestAdapter(...adapterArgs);
         if (!adapter || wrappedAdapters.has(adapter)) return adapter;
         wrappedAdapters.add(adapter);
@@ -73,7 +75,7 @@ export const installWebGPUMonitor = async (page) => page.addInitScript(() => {
         };
         return adapter;
     };
-});
+}, { forceFallbackAdapter });
 
 export const readWebGPUMonitor = async (page) => page.evaluate(() => globalThis.__wasmgpuTestMonitor);
 
