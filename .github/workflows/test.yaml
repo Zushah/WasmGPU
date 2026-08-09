@@ -16,6 +16,7 @@ on:
       - build/**
       - dist/**
       - .cargo/**
+      - rust-toolchain.toml
       - .github/workflows/test.yaml
       - esbuild.config.js
       - playwright.config.js
@@ -39,6 +40,7 @@ on:
       - build/**
       - dist/**
       - .cargo/**
+      - rust-toolchain.toml
       - .github/workflows/test.yaml
       - esbuild.config.js
       - playwright.config.js

@@ -2,7 +2,7 @@
 
 Latest commit: Sunday, August 9, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Sunday, August 9, 2026, [**`b50ae5d`**](https://www.github.com/Zushah/WasmGPU/commit/b50ae5d).
+Parent commit: Sunday, August 9, 2026, [**`df233b2`**](https://www.github.com/Zushah/WasmGPU/commit/df233b2).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -900,7 +900,10 @@ Architectural role:
 
 Important files and directories:
 
+- `./.cargo/config.toml`: shared Cargo policy for warning-free local compilation, the Rust target directory, future-incompatibility reporting, MSRV-aware dependency resolution, the crates.io protocol, and the WebAssembly linker.
+- `./rust-toolchain.toml`: pinned Rust development toolchain, rustfmt and Clippy components, and the `wasm32-unknown-unknown` standard-library target.
 - `./package.json`: npm scripts and package metadata.
+- `./rust/Cargo.toml`: Rust crate metadata and release profile.
 - `./tsconfig.json`: TypeScript compiler settings.
 - `./esbuild.config.js`: bundle configuration, WGSL loader, minification, and copy steps from `./build/` to `./dist/`.
 - `./scripts/build-rust-wasm.js`: Rust-to-WebAssembly build script. It invokes Cargo, generates `.wasm`, `.wat`, JavaScript loader, and declaration output, and can run WebAssembly optimization tooling.
@@ -909,6 +912,8 @@ Important files and directories:
 - `./rust/target/`: local Rust build output when present. This is build output rather than source.
 
 `./build/` and `./dist/` are checked-in release artifacts. Development builds can modify them, and `npm run restore` restores them via Git.
+
+Cargo commands invoked from the repository root or `./rust/` inherit the repository Cargo policy and rustup toolchain selection. Package and release-profile settings remain in `./rust/Cargo.toml`, while dynamic WebAssembly SIMD, shared-memory, memory-limit, and post-processing variants remain owned by `./scripts/build-rust-wasm.js`.
 
 ### 2.15. Assets and repository metadata
 
@@ -967,6 +972,7 @@ When changing renderer paths, inspect the object class, material class, texture 
 
 For Rust changes:
 
+- use rustup so `./rust-toolchain.toml` selects the pinned development compiler, rustfmt and Clippy components, and WebAssembly target;
 - edit source under `./rust/src/`;
 - add portable algorithm coverage under `./rust/src/tests/` and WebAssembly-only ABI coverage in `./test/wasm.test.js`;
 - update TypeScript wrappers in `./src/wasm/index.ts` or `./src/wasm/interop.ts` when exports change;

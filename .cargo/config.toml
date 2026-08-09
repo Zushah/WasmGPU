@@ -1,2 +1,21 @@
+# Cargo configuration for WasmGPU
+#
+# Package configuration and release profiles belong in ./rust/Cargo.toml
+# WebAssembly artifact variants belong in ./scripts/build-rust-wasm.js
+# Personal preferences belong in the user's Cargo configuration
+
+[build]
+warnings = "deny"
+target-dir = "rust/target"
+
+[future-incompat-report]
+frequency = "always"
+
+[resolver]
+incompatible-rust-versions = "fallback"
+
+[registries.crates-io]
+protocol = "sparse"
+
 [target.wasm32-unknown-unknown]
 linker = "rust-lld"
