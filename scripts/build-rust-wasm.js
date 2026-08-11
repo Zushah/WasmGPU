@@ -602,11 +602,7 @@ export const mat4norm = (m) => { __write(__M0, 16, m); return mat4_norm(__M0); }
 export const mat4normalize = (m) => __mat4_unary(mat4_normalize, m);
 export const mat4normsq = (m) => { __write(__M0, 16, m); return mat4_normsq(__M0); };
 export const mat4perspective = (fovY, aspect, near, far) => { mat4_perspective(__M2, fovY, aspect, near, far); return __read16(__M2); };
-export const mat4print = (m) => {
-  console.log(
-\`[ \${m[0]} \${m[1]} \${m[2]} \${m[3]} ]\\n[ \${m[4]} \${m[5]} \${m[6]} \${m[7]} ]\\n[ \${m[8]} \${m[9]} \${m[10]} \${m[11]} ]\\n[ \${m[12]} \${m[13]} \${m[14]} \${m[15]} ]\`
-  );
-};
+export const mat4print = (m) => { console.log(\`[ \${m[0]} \${m[1]} \${m[2]} \${m[3]} ]\\n[ \${m[4]} \${m[5]} \${m[6]} \${m[7]} ]\\n[ \${m[8]} \${m[9]} \${m[10]} \${m[11]} ]\\n[ \${m[12]} \${m[13]} \${m[14]} \${m[15]} ]\`); };
 export const mat4random = (a, b) => { mat4_random_range(__M2, a, b); return __read16(__M2); };
 export const mat4rotateX = (m, angle) => { __write(__M0, 16, m); mat4_rotateX(__M2, __M0, angle); return __read16(__M2); };
 export const mat4rotateY = (m, angle) => { __write(__M0, 16, m); mat4_rotateY(__M2, __M0, angle); return __read16(__M2); };
@@ -638,7 +634,7 @@ export const quatnorm = (q) => { __write(__Q0, 4, q); return quat_norm(__Q0); };
 export const quatnormalize = (q) => __quat_unary(quat_normalize, q);
 export const quatnormscl = (q, scalar) => { __write(__Q0, 4, q); quat_normscl(__Q2, __Q0, scalar); return __read4(__Q2); };
 export const quatnormsq = (q) => { __write(__Q0, 4, q); return quat_normsq(__Q0); };
-export const quatprint = (q) => { console.log(\`( \${q[0]} , \${q[1]} , \${q[2]} , \${q[3]} )\`); };
+export const quatprint = (q) => { console.log(\`\${q[0]} \${q[1] < 0 ? "-" : "+"} \${Math.abs(q[1])}i \${q[2] < 0 ? "-" : "+"} \${Math.abs(q[2])}j \${q[3] < 0 ? "-" : "+"} \${Math.abs(q[3])}k\`); };
 export const quatrandom = (a, b) => { quat_random_range(__Q2, a, b); return __read4(__Q2); };
 export const quatround = (q) => __quat_unary(quat_round, q);
 export const quatscl = (q, scalar) => { __write(__Q0, 4, q); quat_scl(__Q2, __Q0, scalar); return __read4(__Q2); };

@@ -525,7 +525,7 @@ export const mat4f = {
     trace: (m: WasmPtr): number => ensure().mat4_trace(m >>> 0),
     translate: (out: WasmPtr, m: WasmPtr, v3: WasmPtr): void => { ensure().mat4_translate(out >>> 0, m >>> 0, v3 >>> 0); },
     transpose: (out: WasmPtr, m: WasmPtr): void => { ensure().mat4_transpose(out >>> 0, m >>> 0); },
-    print: (m: WasmPtr): void => { const a = wasm.f32view(m, 16); console.log(`[ ${a[0]} ${a[1]} ${a[2]} ${a[3]} ]\n` + `[ ${a[4]} ${a[5]} ${a[6]} ${a[7]} ]\n` + `[ ${a[8]} ${a[9]} ${a[10]} ${a[11]} ]\n` + `[ ${a[12]} ${a[13]} ${a[14]} ${a[15]} ]`); }
+    print: (m: WasmPtr): void => { const a = wasm.f32view(m, 16); console.log(`[ ${a[0]} ${a[1]} ${a[2]} ${a[3]} ]\n[ ${a[4]} ${a[5]} ${a[6]} ${a[7]} ]\n[ ${a[8]} ${a[9]} ${a[10]} ${a[11]} ]\n[ ${a[12]} ${a[13]} ${a[14]} ${a[15]} ]`); }
 };
 
 export const meshf = {
@@ -574,7 +574,7 @@ export const quatf = {
     slerp: (out: WasmPtr, a: WasmPtr, b: WasmPtr, t: number): void => { ensure().quat_slerp(out >>> 0, a >>> 0, b >>> 0, t); },
     sub: (out: WasmPtr, a: WasmPtr, b: WasmPtr): void => { ensure().quat_sub(out >>> 0, a >>> 0, b >>> 0); },
     toRotation: (outVec3: WasmPtr, q: WasmPtr, v3: WasmPtr): void => { ensure().quat_toRotation(outVec3 >>> 0, q >>> 0, v3 >>> 0); },
-    print: (q: WasmPtr): void => { const a = wasm.f32view(q, 4); console.log(`[ ${a[0]} ${a[1]} ${a[2]} ${a[3]} ]`); }
+    print: (q: WasmPtr): void => { const a = wasm.f32view(q, 4); console.log(`${a[0]} ${a[1] < 0 ? "-" : "+"} ${Math.abs(a[1])}i ${a[2] < 0 ? "-" : "+"} ${Math.abs(a[2])}j ${a[3] < 0 ? "-" : "+"} ${Math.abs(a[3])}k`); }
 };
 
 export const transformf = {
@@ -627,7 +627,7 @@ export const vec3f = {
     round: (out: WasmPtr, v: WasmPtr): void => { ensure().vec3_round(out >>> 0, v >>> 0); },
     scl: (out: WasmPtr, v: WasmPtr, scalar: number): void => { ensure().vec3_scl(out >>> 0, v >>> 0, scalar); },
     sub: (out: WasmPtr, a: WasmPtr, b: WasmPtr): void => { ensure().vec3_sub(out >>> 0, a >>> 0, b >>> 0); },
-    print: (v: WasmPtr): void => { const a = wasm.f32view(v, 3); console.log(`[ ${a[0]} ${a[1]} ${a[2]} ]`); }
+    print: (v: WasmPtr): void => { const a = wasm.f32view(v, 3); console.log(`(${a[0]}, ${a[1]}, ${a[2]})`); }
 };
 
 export const mat4 = {

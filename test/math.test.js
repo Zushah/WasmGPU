@@ -129,7 +129,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
         "log",
         () => quat.print([0, 0, 0, 1])
     );
-    assert.deepStrictEqual(messages, ["( 0 , 0 , 0 , 1 )"], "quat.print output mismatch");
+    assert.deepStrictEqual(messages, ["0 + 0i + 0j + 1k"], "quat.print output mismatch");
 }
 
 // 12) vec3.init / vec3.copy.
