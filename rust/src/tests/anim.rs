@@ -15,6 +15,7 @@ use crate::tests::common::{assert_approx, assert_slice_approx};
 fn keyframe_lookup_covers_empty_clamped_interior_and_duplicate_times() {
     assert_eq!(clamp01(-1.0), 0.0);
     assert_eq!(clamp01(2.0), 1.0);
+    assert!(clamp01(f32::NAN).is_nan());
     assert_eq!(find_keyframe(&[], 1.0), (0, 0, 0.0, 0.0));
     assert_eq!(find_keyframe(&[2.0], 1.0), (0, 0, 0.0, 0.0));
     assert_eq!(find_keyframe(&[1.0, 3.0], 0.0), (0, 0, 0.0, 2.0));

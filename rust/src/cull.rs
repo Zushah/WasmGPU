@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::shared::{f32_slice, f32_slice_mut, u32_slice, u32_slice_mut};
+use crate::shared::{f32_slice, f32_slice_mut, u32_slice, u32_slice_mut, with_driver_call};
 
 pub(crate) fn write_all_visible(
     out: &mut [u32],
@@ -62,16 +62,16 @@ pub(crate) fn mul_clip(m: &[f32], x: f32, y: f32, z: f32) -> [f32; 4] {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn cull_write_planes_from_view_projection(
+pub unsafe extern "C" fn cull_write_planes_from_view_projection(
     out_planes_ptr: u32,
     view_proj_ptr: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         if out_planes_ptr == 0 || view_proj_ptr == 0 {
             return 0;
         }
-        let m = f32_slice(view_proj_ptr, 16);
-        let out = f32_slice_mut(out_planes_ptr, 24);
+        let m = f32_slice(call, view_proj_ptr, 16);
+        let out = f32_slice_mut(call, out_planes_ptr, 24);
         let r0x = m[0];
         let r0y = m[4];
         let r0z = m[8];
@@ -126,12 +126,12 @@ pub extern "C" fn cull_write_planes_from_view_projection(
                 out[i + 3] *= inv;
             }
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn cull_prepare_world_spheres_from_ptrs(
+pub unsafe extern "C" fn cull_prepare_world_spheres_from_ptrs(
     out_centers_ptr: u32,
     out_radii_ptr: u32,
     world_ptrs_u32_ptr: u32,
@@ -139,7 +139,7 @@ pub extern "C" fn cull_prepare_world_spheres_from_ptrs(
     local_radii_ptr: u32,
     count: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         if out_centers_ptr == 0
             || out_radii_ptr == 0
             || world_ptrs_u32_ptr == 0
@@ -152,11 +152,11 @@ pub extern "C" fn cull_prepare_world_spheres_from_ptrs(
         if n == 0 {
             return 0;
         }
-        let out_centers = f32_slice_mut(out_centers_ptr, n * 3);
-        let out_radii = f32_slice_mut(out_radii_ptr, n);
-        let world_ptrs = u32_slice(world_ptrs_u32_ptr, n);
-        let local_centers = f32_slice(local_centers_ptr, n * 3);
-        let local_radii = f32_slice(local_radii_ptr, n);
+        let out_centers = f32_slice_mut(call, out_centers_ptr, n * 3);
+        let out_radii = f32_slice_mut(call, out_radii_ptr, n);
+        let world_ptrs = u32_slice(call, world_ptrs_u32_ptr, n);
+        let local_centers = f32_slice(call, local_centers_ptr, n * 3);
+        let local_radii = f32_slice(call, local_radii_ptr, n);
         for i in 0..n {
             let wptr = world_ptrs[i];
             if wptr == 0 {
@@ -166,7 +166,7 @@ pub extern "C" fn cull_prepare_world_spheres_from_ptrs(
                 out_radii[i] = -1.0;
                 continue;
             }
-            let w = f32_slice(wptr, 16);
+            let w = f32_slice(call, wptr, 16);
             let lc0 = local_centers[i * 3 + 0];
             let lc1 = local_centers[i * 3 + 1];
             let lc2 = local_centers[i * 3 + 2];
@@ -182,19 +182,19 @@ pub extern "C" fn cull_prepare_world_spheres_from_ptrs(
             let smax = sx.max(sy).max(sz);
             out_radii[i] = local_radii[i] * smax;
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn cull_spheres_frustum(
+pub unsafe extern "C" fn cull_spheres_frustum(
     out_indices_ptr: u32,
     centers_ptr: u32,
     radii_ptr: u32,
     count: u32,
     frustum_ptr: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         if out_indices_ptr == 0 || centers_ptr == 0 || radii_ptr == 0 || frustum_ptr == 0 {
             return 0;
         }
@@ -202,10 +202,10 @@ pub extern "C" fn cull_spheres_frustum(
         if n == 0 {
             return 0;
         }
-        let centers = f32_slice(centers_ptr, n * 3);
-        let radii = f32_slice(radii_ptr, n);
-        let fr = f32_slice(frustum_ptr, 24);
-        let out = u32_slice_mut(out_indices_ptr, n);
+        let centers = f32_slice(call, centers_ptr, n * 3);
+        let radii = f32_slice(call, radii_ptr, n);
+        let fr = f32_slice(call, frustum_ptr, 24);
+        let out = u32_slice_mut(call, out_indices_ptr, n);
         let mut planes = [0.0f32; 24];
         planes.copy_from_slice(fr);
         for p in 0..6 {
@@ -248,11 +248,11 @@ pub extern "C" fn cull_spheres_frustum(
             }
         }
         out_count as u32
-    }
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn cull_spheres_occlusion(
+pub unsafe extern "C" fn cull_spheres_occlusion(
     out_indices_ptr: u32,
     out_stats_ptr: u32,
     centers_ptr: u32,
@@ -271,25 +271,25 @@ pub extern "C" fn cull_spheres_occlusion(
     max_screen_coverage: f32,
     depth_bias: f32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         if out_indices_ptr == 0 || centers_ptr == 0 || radii_ptr == 0 || view_proj_ptr == 0 {
             return 0;
         }
         let n = count as usize;
         if n == 0 {
             if out_stats_ptr != 0 {
-                let stats = u32_slice_mut(out_stats_ptr, 3);
+                let stats = u32_slice_mut(call, out_stats_ptr, 3);
                 stats[0] = 0;
                 stats[1] = 0;
                 stats[2] = 0;
             }
             return 0;
         }
-        let centers = f32_slice(centers_ptr, n * 3);
-        let radii = f32_slice(radii_ptr, n);
-        let out = u32_slice_mut(out_indices_ptr, n);
+        let centers = f32_slice(call, centers_ptr, n * 3);
+        let radii = f32_slice(call, radii_ptr, n);
+        let out = u32_slice_mut(call, out_indices_ptr, n);
         let out_stats = if out_stats_ptr != 0 {
-            Some(u32_slice_mut(out_stats_ptr, 3))
+            Some(u32_slice_mut(call, out_stats_ptr, 3))
         } else {
             None
         };
@@ -304,12 +304,12 @@ pub extern "C" fn cull_spheres_occlusion(
         {
             return write_all_visible(out, centers, radii, out_stats);
         }
-        let view_proj = f32_slice(view_proj_ptr, 16);
+        let view_proj = f32_slice(call, view_proj_ptr, 16);
         let mip_count_usize = mip_count as usize;
-        let mip_offsets = u32_slice(mip_offsets_ptr, mip_count_usize);
-        let mip_widths = u32_slice(mip_widths_ptr, mip_count_usize);
-        let mip_heights = u32_slice(mip_heights_ptr, mip_count_usize);
-        let depth_values = f32_slice(depth_values_ptr, depth_values_len as usize);
+        let mip_offsets = u32_slice(call, mip_offsets_ptr, mip_count_usize);
+        let mip_widths = u32_slice(call, mip_widths_ptr, mip_count_usize);
+        let mip_heights = u32_slice(call, mip_heights_ptr, mip_count_usize);
+        let depth_values = f32_slice(call, depth_values_ptr, depth_values_len as usize);
         let near_plane = near_plane_from_view_projection(view_proj);
         let coverage_limit = max_screen_coverage.clamp(0.0, 1.0);
         let depth_epsilon = depth_bias.max(0.0);
@@ -483,5 +483,5 @@ pub extern "C" fn cull_spheres_occlusion(
             stats[2] = occluded;
         }
         out_count as u32
-    }
+    })
 }

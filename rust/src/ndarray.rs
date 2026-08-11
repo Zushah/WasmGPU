@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::shared::{i32_slice, i32_slice_mut, u32_slice};
+use crate::shared::{i32_slice, i32_slice_mut, u32_slice, with_driver_call};
 
 const ND_ERROR: u32 = 0xFFFF_FFFF;
 
@@ -82,17 +82,19 @@ pub(crate) fn offset_bytes(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ndarray_numel(shape_ptr: u32, ndim: u32) -> u32 {
+pub unsafe extern "C" fn ndarray_numel(shape_ptr: u32, ndim: u32) -> u32 {
     let n = ndim as usize;
     if n == 0 {
         return numel(&[]);
     }
-    let shape = unsafe { u32_slice(shape_ptr, n) };
-    numel(shape)
+    with_driver_call(|call| {
+        let shape = unsafe { u32_slice(call, shape_ptr, n) };
+        numel(shape)
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ndarray_strides_row_major(
+pub unsafe extern "C" fn ndarray_strides_row_major(
     out_strides_ptr: u32,
     shape_ptr: u32,
     ndim: u32,
@@ -102,13 +104,15 @@ pub extern "C" fn ndarray_strides_row_major(
     if n == 0 {
         return strides_row_major(&mut [], &[], elem_bytes);
     }
-    let shape = unsafe { u32_slice(shape_ptr, n) };
-    let out = unsafe { i32_slice_mut(out_strides_ptr, n) };
-    strides_row_major(out, shape, elem_bytes)
+    with_driver_call(|call| {
+        let shape = unsafe { u32_slice(call, shape_ptr, n) };
+        let out = unsafe { i32_slice_mut(call, out_strides_ptr, n) };
+        strides_row_major(out, shape, elem_bytes)
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn ndarray_offset_bytes(
+pub unsafe extern "C" fn ndarray_offset_bytes(
     shape_ptr: u32,
     strides_ptr: u32,
     indices_ptr: u32,
@@ -119,8 +123,10 @@ pub extern "C" fn ndarray_offset_bytes(
     if n == 0 {
         return base_offset_bytes;
     }
-    let shape = unsafe { u32_slice(shape_ptr, n) };
-    let strides = unsafe { i32_slice(strides_ptr, n) };
-    let idxs = unsafe { u32_slice(indices_ptr, n) };
-    offset_bytes(shape, strides, idxs, base_offset_bytes)
+    with_driver_call(|call| {
+        let shape = unsafe { u32_slice(call, shape_ptr, n) };
+        let strides = unsafe { i32_slice(call, strides_ptr, n) };
+        let idxs = unsafe { u32_slice(call, indices_ptr, n) };
+        offset_bytes(shape, strides, idxs, base_offset_bytes)
+    })
 }

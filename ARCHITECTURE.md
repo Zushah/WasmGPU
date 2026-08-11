@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Sunday, August 9, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Tuesday, August 11, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Sunday, August 9, 2026, [**`df233b2`**](https://www.github.com/Zushah/WasmGPU/commit/df233b2).
+Parent commit: Sunday, August 9, 2026, [**`f54415a`**](https://www.github.com/Zushah/WasmGPU/commit/f54415a).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -454,6 +454,8 @@ Rust memory allocation is implemented in `./rust/src/heap.rs` through Rust's sta
 
 The Rust driver separates portable slice and fixed-array computation from WebAssembly-only heap and frame-arena adapters where native testing requires it. The heap and frame-arena modules compile only for `wasm32`; their 32-bit pointer, memory-growth, alignment, capacity, and epoch contracts are tested against the compiled WebAssembly module rather than emulated with native pointers.
 
+Each Rust ABI entry point that borrows WebAssembly memory creates an opaque driver-call scope inside a higher-ranked callback. Slice helpers consume a copy of that capability and return references tied to its generated lifetime, so the compiler prevents those references from escaping the driver call rather than relying on an unconstrained or fabricated static lifetime. Pointer-consuming and deallocation exports are `unsafe extern "C"` functions on the Rust side, so Rust callers must acknowledge their foreign-memory preconditions at each call site; this marker does not change their WebAssembly signatures, so JavaScript callers remain responsible for the same ABI contract. Fixed-width matrix, quaternion, and vector kernels stage their inputs in local arrays before creating mutable output slices, so output may exactly alias or partially overlap an input without violating Rust's reference-aliasing rules. Their `copy` exports use memmove semantics and support exact, forward, and backward overlap. Variable-length accessor, animation, bounds, culling, mesh, ndarray, and transform kernels require every pointer range to be valid, initialized, naturally aligned for its element type, contained within its live allocation, and large enough for the supplied count; mutable output ranges must be mutually disjoint and must not overlap input ranges unless an export explicitly documents otherwise.
+
 Data movement commonly follows these paths:
 
 - TypeScript typed arrays are copied into WebAssembly memory for Rust processing.
@@ -833,15 +835,15 @@ Important files:
 
 The CI selection table below makes the platform decision explicit instead of treating the eighteen-entry operating-system, architecture, and browser product as uniformly useful. A row is included only when GitHub supplies the host, Playwright supplies a native browser for that architecture, WebGPU is expected to exercise WasmGPU rather than fail at browser setup, and the row adds material coverage. Chromium supplies the portable operating-system and CPU-architecture baseline, while Firefox is retained on its supported Windows and Apple Silicon targets. Linux Firefox remains outside CI while its WebGPU implementation exhibits external backend failures, Playwright's WebKit embedder does not expose WebGPU even on a host where Safari supports it, and Windows ARM64 remains outside CI because Playwright currently supplies x64 rather than native ARM64 Windows browser packages. GitHub's `windows-2025` AMD64 image is the available Windows Server 2025 surrogate for the Windows 11 rows rather than a literal Windows 11 client installation.
 
-`✅` marks a combination that is expected to work, `❌` marks a combination that is not expected to work, `⚠️` marks a combination that has known support or reliability limitations, while `🧪` marks a combination whose hosted graphics environment must be confirmed by its real GitHub Actions execution.
+✅ marks a combination that is expected to work, ❌ marks a combination that is not expected to work, ⚠️ marks a combination that has known support or reliability limitations, while ❓ marks a combination whose hosted graphics environment must be confirmed by its real GitHub Actions execution.
 
 | Candidate job | Hosted runner | Native browser | WebGPU ready | Adds distinct coverage | Stable setup | In CI workflow |
 | --- | :---: | :---: | :---: | :---: | :---: | :---: |
 | Windows 11 AMD64 Chromium | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Windows 11 AMD64 Firefox | ⚠️ | ✅ | ✅ | ✅ | 🧪 | ✅ |
+| Windows 11 AMD64 Firefox | ⚠️ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Windows 11 AMD64 WebKit | ⚠️ | ✅ | ❌ | ⚠️ | ❌ | ❌ |
-| Windows 11 ARM64 Chromium | ⚠️ | ❌ | 🧪 | ⚠️ | ❌ | ❌ |
-| Windows 11 ARM64 Firefox | ⚠️ | ❌ | 🧪 | ⚠️ | ❌ | ❌ |
+| Windows 11 ARM64 Chromium | ⚠️ | ❌ | ❓ | ⚠️ | ❌ | ❌ |
+| Windows 11 ARM64 Firefox | ⚠️ | ❌ | ❓ | ⚠️ | ❌ | ❌ |
 | Windows 11 ARM64 WebKit | ⚠️ | ❌ | ❌ | ⚠️ | ❌ | ❌ |
 | Ubuntu 24 AMD64 Chromium | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Ubuntu 24 AMD64 Firefox | ✅ | ✅ | ⚠️ | ✅ | ⚠️ | ❌ |
@@ -856,11 +858,11 @@ The CI selection table below makes the platform decision explicit instead of tre
 | MacOS 15 ARM64 Firefox | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | MacOS 15 ARM64 WebKit | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
 
-`npm run test` first removes prior aggregate artifacts, then uses an ordinary npm command chain to run the Rust tests, two setup checks, the 25 fast browser-module tests, the 16 slower example tests, and report merging. The chain stops at the first failing command. `npm run test:setup`, `npm run test:js`, and `npm run test:ex` select only their respective Playwright projects, so their terminal counts remain 2, 25, and 16 and development iteration does not implicitly rerun setup or examples. The full command and CI explicitly sequence setup before the primary suites. In CI, setup is a prerequisite for the browser-module, example, and merge steps, preventing an unavailable WebGPU implementation from turning every subsequent test into a timeout; after setup passes, the browser-module and example suites still run independently so both can retain diagnostics if either fails.
+`npm run test` first removes prior aggregate artifacts, then uses an ordinary npm command chain to check Rust formatting, run Clippy over all native targets and the WebAssembly library, run the Rust tests, run two setup checks, run the 25 fast browser-module tests, run the 16 slower example tests, and merge reports. The chain stops at the first failing command. `npm run test:setup`, `npm run test:js`, and `npm run test:ex` select only their respective Playwright projects, so their terminal counts remain 2, 25, and 16 and development iteration does not implicitly rerun setup or examples. The full command and CI explicitly sequence setup before the primary suites. In CI, setup is a prerequisite for the browser-module, example, and merge steps, preventing an unavailable WebGPU implementation from turning every subsequent test into a timeout; after setup passes, the browser-module and example suites still run independently so both can retain diagnostics if either fails.
 
 Playwright owns each test server it starts, requests graceful shutdown after its suite, and forcefully terminates the process group if shutdown exceeds the bounded timeout; a server explicitly started with `npm run test:js:serve` remains open until that command is stopped. Each invocation writes separate HTML, blob, attachment, and provenance records; merging rejects missing, filtered, listed-only, or incomplete runs before combining all three blob reports under `./playwright-report/combined/`. Before diagnostics are asserted, every monitored queue is settled so late uncaptured WebGPU errors and device losses are observable.
 
-The CI workflow in `./.github/workflows/test.yaml` runs seven explicit platform/browser entries. Chromium uses bundled SwiftShader on Windows and MacOS; Linux Chromium installs Mesa Lavapipe, restricts native Vulkan and ANGLE presentation to its ICD, and runs headed inside Xvfb. Firefox uses its own WebGPU implementation with `dom.webgpu.enabled`. Firefox runs headed on Windows and MacOS because headless mode can disable its GPU process on those platforms; Linux can remain headless outside the workflow's existing Xvfb execution. GitHub's Windows VM has no Firefox-compatible hardware adapter, so that job writes `gfx.webgpu.ignore-blocklist` and `dom.webgpu.allow-in-parent` into the installed browser's startup preferences before launch, then makes the test monitor add `forceFallbackAdapter: true` to every adapter request to select Firefox's WARP software implementation. Playwright's ordinary `firefoxUserPrefs` update occurs after Firefox has frozen these startup-only graphics decisions and is not used for them. This is test-harness policy rather than a WasmGPU public API change, and applies consistently to setup, browser modules, renderer creation, and examples. The setup suite verifies that the selected adapter identifies itself as a fallback adapter and includes browser WebGPU warnings in adapter-acquisition failures, so browser startup restrictions remain distinguishable from WasmGPU failures in the job log. Real-canvas tests normally use `navigator.gpu.getPreferredCanvasFormat()`, matching the renderer's production default and avoiding a nonpreferred format from turning a browser-backend defect into a false WasmGPU failure; controlled canvas doubles retain explicit format coverage. The monitor settles outstanding work before entering an explicit renderer-teardown scope and classifies errors emitted while that scope is active separately. The runner filters Firefox's exact unlabeled-buffer destruction diagnostic only from that teardown collection; the same diagnostic during normal operations, every other teardown diagnostic, and all other monitor errors remain active.
+The CI workflow in `./.github/workflows/test.yaml` runs seven explicit platform/browser entries. Every entry uses one short-circuiting command chain to check Rust formatting, run Clippy over all native targets and the WebAssembly library with warnings denied, and run the native Rust tests before the browser suites; this preserves fail-fast behavior under the Windows PowerShell runner as well as Unix shells. A successful Rust step is an explicit prerequisite for browser setup, while the browser-module and example suites remain independent after setup succeeds so both can retain diagnostics if either fails. Chromium uses bundled SwiftShader on Windows and MacOS; Linux Chromium installs Mesa Lavapipe, restricts native Vulkan and ANGLE presentation to its ICD, and runs headed inside Xvfb. Firefox uses its own WebGPU implementation with `dom.webgpu.enabled`. Firefox runs headed on Windows and MacOS because headless mode can disable its GPU process on those platforms; Linux can remain headless outside the workflow's existing Xvfb execution. GitHub's Windows VM has no Firefox-compatible hardware adapter, so that job writes `gfx.webgpu.ignore-blocklist` and `dom.webgpu.allow-in-parent` into the installed browser's startup preferences before launch, then makes the test monitor add `forceFallbackAdapter: true` to every adapter request to select Firefox's WARP software implementation. Playwright's ordinary `firefoxUserPrefs` update occurs after Firefox has frozen these startup-only graphics decisions and is not used for them. This is test-harness policy rather than a WasmGPU public API change, and applies consistently to setup, browser modules, renderer creation, and examples. The setup suite verifies that the selected adapter identifies itself as a fallback adapter and includes browser WebGPU warnings in adapter-acquisition failures, so browser startup restrictions remain distinguishable from WasmGPU failures in the job log. Real-canvas tests normally use `navigator.gpu.getPreferredCanvasFormat()`, matching the renderer's production default and avoiding a nonpreferred format from turning a browser-backend defect into a false WasmGPU failure; controlled canvas doubles retain explicit format coverage. The monitor settles outstanding work before entering an explicit renderer-teardown scope and classifies errors emitted while that scope is active separately. The runner filters Firefox's exact unlabeled-buffer destruction diagnostic only from that teardown collection; the same diagnostic during normal operations, every other teardown diagnostic, and all other monitor errors remain active.
 
 The setup presentation resources likewise remain alive until Playwright closes their isolated page, avoiding immediate teardown of a just-presented canvas. The suite tests WasmGPU in its production execution environment: a real DOM, browser WebAssembly, browser image/canvas APIs, and `navigator.gpu`. Renderer-facing integration themes and example tests use real canvas contexts, so controlled doubles remain only where a test must inspect configuration calls, swapchain acquisition counts, injected picking results, event-listener ownership, or similar isolated contracts. Each test module and example gets a fresh page and requests its own device, preventing mutable DOM, WebAssembly, and GPU state from leaking between tests. Example tests use a fixed smaller viewport while retaining normal data sizes and live external dependencies; they fail on page crashes, uncaught exceptions, console errors, required request failures, HTTP error responses, uncaptured WebGPU errors, unexpected device loss, missing completed GPU work, and failed readiness or interaction assertions, while reporting warnings without failing on them. Tests use generated or bundled files when needed.
 
@@ -945,7 +947,7 @@ For history context, inspect recent commits touching the same area. History is u
 
 Match the code around the change. The TypeScript source currently uses strict compiler settings, explicit descriptor types, classes for runtime objects, private fields where useful, and targeted helper functions. Rust code uses small modules with exported `extern "C"` functions for WebAssembly entry points. WGSL files keep shader logic close to the subsystem that imports it.
 
-`./package.json` currently does not define dedicated lint or formatting scripts. Use TypeScript, Rust, and WGSL formatting that is consistent with nearby lines and files.
+`./package.json` defines `npm run fmt:rs` for checking Rust formatting and `npm run lint:rs` for running Clippy over all native targets and the WebAssembly library with warnings denied. Use TypeScript, Rust, and WGSL formatting that is consistent with nearby lines and files.
 
 Do not add broad rewrites while making a focused change. Renderer, transform, compute, glTF, and shader changes should stay close to the behavior being changed.
 
@@ -976,6 +978,7 @@ For Rust changes:
 - edit source under `./rust/src/`;
 - add portable algorithm coverage under `./rust/src/tests/` and WebAssembly-only ABI coverage in `./test/wasm.test.js`;
 - update TypeScript wrappers in `./src/wasm/index.ts` or `./src/wasm/interop.ts` when exports change;
+- run `npm run fmt:rs` and `npm run lint:rs` before committing Rust changes;
 - run `npm run build:rs` to regenerate WebAssembly files;
 - run `npm run test:rs` for native Rust checks and `npm run test` after wrapper changes;
 - keep pointer, length, dtype, stride, and alignment assumptions explicit at call sites.
@@ -1046,7 +1049,7 @@ Use the commands from `./package.json`:
 | `npm run build:rs` | Compile Rust with `./scripts/build-rust-wasm.js`. |
 | `npm run build:ts` | Type-check TypeScript with `./tsconfig.json`. |
 | `npm run build:js` | Bundle the package with `./esbuild.config.js`. |
-| `npm run test` | Run all of the Rust and Node tests. |
+| `npm run test` | Check formatting and linting, then run all of the Rust and Node tests. |
 | `npm run test:rs` | Run Rust tests under `./rust/src/tests/`. |
 | `npm run test:clean` | Remove prior test reports before a new full run. |
 | `npm run test:setup` | Run Node tests for the setup of `npm run test:js` and `npm run test:ex`. |
@@ -1061,6 +1064,10 @@ Use the commands from `./package.json`:
 | `npm run test:js:report` | Open the latest test report generated by `npm run test:js`. |
 | `npm run test:ex:report` | Open the latest test report generated by `npm run test:ex`. |
 | `npm run restore` | Restore `./build/` and `./dist/` from Git. |
+| `npm run fmt` | Check formatting. |
+| `npm run fmt:rs` | Check Rust formatting with rustfmt. |
+| `npm run lint` | Check linting. |
+| `npm run lint:rs` | Check Rust linting with Clippy. |
 | `npm run website` | Build the website into `./website/build/`. |
 | `npm run logo` | Regenerate logo raster assets via `./scripts/rasterize_logo.py`. |
 

@@ -5,7 +5,7 @@
  */
 
 use crate::mat4::mat4_invert_from;
-use crate::shared::{f32_slice, f32_slice_mut, u32_slice};
+use crate::shared::{f32_slice, f32_slice_mut, u32_slice, with_driver_call};
 
 pub(crate) fn compose_local_many(
     out: &mut [f32],
@@ -60,40 +60,40 @@ pub(crate) fn compose_local_many(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn transform_compose_local_many(
+pub unsafe extern "C" fn transform_compose_local_many(
     out_local: u32,
     pos: u32,
     rot: u32,
     scl: u32,
     count: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         let n = count as usize;
-        let p = f32_slice(pos, n * 3);
-        let r = f32_slice(rot, n * 4);
-        let s = f32_slice(scl, n * 3);
-        let o = f32_slice_mut(out_local, n * 16);
+        let p = f32_slice(call, pos, n * 3);
+        let r = f32_slice(call, rot, n * 4);
+        let s = f32_slice(call, scl, n * 3);
+        let o = f32_slice_mut(call, out_local, n * 16);
         compose_local_many(o, p, r, s);
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn transform_update_world_ordered(
+pub unsafe extern "C" fn transform_update_world_ordered(
     out_world: u32,
     local: u32,
     parent_u32: u32,
     order_u32: u32,
     count: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         let n = count as usize;
-        let l = f32_slice(local, n * 16);
-        let w = f32_slice_mut(out_world, n * 16);
-        let parents = u32_slice(parent_u32, n);
-        let order = u32_slice(order_u32, n);
-        for k in 0..n {
-            let idx = order[k] as usize;
+        let l = f32_slice(call, local, n * 16);
+        let w = f32_slice_mut(call, out_world, n * 16);
+        let parents = u32_slice(call, parent_u32, n);
+        let order = u32_slice(call, order_u32, n);
+        for &ordered_index in order {
+            let idx = ordered_index as usize;
             if idx >= n {
                 continue;
             }
@@ -101,9 +101,7 @@ pub extern "C" fn transform_update_world_ordered(
             let dst = idx * 16;
             let src = idx * 16;
             if p == u32::MAX || (p as usize) >= n {
-                for j in 0..16 {
-                    w[dst + j] = l[src + j];
-                }
+                w[dst..dst + 16].copy_from_slice(&l[src..src + 16]);
                 continue;
             }
             let parent_idx = p as usize;
@@ -174,16 +172,14 @@ pub extern "C" fn transform_update_world_ordered(
                 + w[a + 7] * l[b + 13]
                 + w[a + 11] * l[b + 14]
                 + w[a + 15] * l[b + 15];
-            for j in 0..16 {
-                w[dst + j] = t[j];
-            }
+            w[dst..dst + 16].copy_from_slice(&t);
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn transform_update_partial_ordered(
+pub unsafe extern "C" fn transform_update_partial_ordered(
     out_world: u32,
     out_local: u32,
     pos: u32,
@@ -195,23 +191,23 @@ pub extern "C" fn transform_update_partial_ordered(
     dirty_count: u32,
     count: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         let n = count as usize;
         let dcount = dirty_count as usize;
         if n == 0 || dcount == 0 {
             return 0;
         }
-        let p = f32_slice(pos, n * 3);
-        let r = f32_slice(rot, n * 4);
-        let s = f32_slice(scl, n * 3);
-        let l = f32_slice_mut(out_local, n * 16);
-        let w = f32_slice_mut(out_world, n * 16);
-        let parents = u32_slice(parent_u32, n);
-        let order = u32_slice(order_u32, n);
-        let dirty_indices = u32_slice(dirty_indices_u32, dcount);
+        let p = f32_slice(call, pos, n * 3);
+        let r = f32_slice(call, rot, n * 4);
+        let s = f32_slice(call, scl, n * 3);
+        let l = f32_slice_mut(call, out_local, n * 16);
+        let w = f32_slice_mut(call, out_world, n * 16);
+        let parents = u32_slice(call, parent_u32, n);
+        let order = u32_slice(call, order_u32, n);
+        let dirty_indices = u32_slice(call, dirty_indices_u32, dcount);
         let mut dirty = vec![false; n];
-        for i in 0..dcount {
-            let idx = dirty_indices[i] as usize;
+        for &dirty_index in dirty_indices {
+            let idx = dirty_index as usize;
             if idx >= n || dirty[idx] {
                 continue;
             }
@@ -257,8 +253,8 @@ pub extern "C" fn transform_update_partial_ordered(
             l[mi + 15] = 1.0;
         }
         let mut affected = vec![false; n];
-        for k in 0..n {
-            let idx = order[k] as usize;
+        for &ordered_index in order {
+            let idx = ordered_index as usize;
             if idx >= n {
                 continue;
             }
@@ -272,9 +268,7 @@ pub extern "C" fn transform_update_partial_ordered(
             let dst = idx * 16;
             let src = idx * 16;
             if pidx == u32::MAX || (pidx as usize) >= n {
-                for j in 0..16 {
-                    w[dst + j] = l[src + j];
-                }
+                w[dst..dst + 16].copy_from_slice(&l[src..src + 16]);
                 continue;
             }
             let parent_idx = pidx as usize;
@@ -329,27 +323,24 @@ pub extern "C" fn transform_update_partial_ordered(
             w[dst + 14] = a2 * b12 + a6 * b13 + a10 * b14 + a14 * b15;
             w[dst + 15] = a3 * b12 + a7 * b13 + a11 * b14 + a15 * b15;
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn transform_pack_model_normal_mat4_from_ptrs(
+pub unsafe extern "C" fn transform_pack_model_normal_mat4_from_ptrs(
     out: u32,
     mat_ptrs_u32: u32,
     count: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         let n = count as usize;
-        let ptrs = u32_slice(mat_ptrs_u32, n);
-        let out_f32 = f32_slice_mut(out, n * 32);
-        for i in 0..n {
-            let src_ptr = ptrs[i];
-            let src = f32_slice(src_ptr, 16);
+        let ptrs = u32_slice(call, mat_ptrs_u32, n);
+        let out_f32 = f32_slice_mut(call, out, n * 32);
+        for (i, &src_ptr) in ptrs.iter().enumerate() {
+            let src = f32_slice(call, src_ptr, 16);
             let base = i * 32;
-            for j in 0..16 {
-                out_f32[base + j] = src[j];
-            }
+            out_f32[base..base + 16].copy_from_slice(src);
             let mut m = [0.0f32; 16];
             m.copy_from_slice(src);
             let inv = mat4_invert_from(&m);
@@ -374,6 +365,6 @@ pub extern "C" fn transform_pack_model_normal_mat4_from_ptrs(
                 out_f32[base + 16 + j] = normal[j];
             }
         }
-    }
-    0
+        0
+    })
 }

@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::shared::{f32_slice_mut, u8_slice, u8_slice_mut};
+use crate::shared::{f32_slice_mut, u8_slice, u8_slice_mut, with_driver_call};
 
 pub(crate) const CT_I8: u32 = 5120;
 pub(crate) const CT_U8: u32 = 5121;
@@ -209,7 +209,7 @@ pub(crate) fn deinterleave(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn accessor_deinterleave(
+pub unsafe extern "C" fn accessor_deinterleave(
     out_ptr: u32,
     src_ptr: u32,
     count: u32,
@@ -217,7 +217,7 @@ pub extern "C" fn accessor_deinterleave(
     component_bytes_size: u32,
     byte_stride: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         let n = count as usize;
         let comps = num_components as usize;
         let comp_bytes = component_bytes_size as usize;
@@ -234,15 +234,15 @@ pub extern "C" fn accessor_deinterleave(
         }
         let src_len = (n - 1) * stride + elem_bytes;
         let out_len = n * elem_bytes;
-        let src = u8_slice(src_ptr, src_len);
-        let out = u8_slice_mut(out_ptr, out_len);
+        let src = u8_slice(call, src_ptr, src_len);
+        let out = u8_slice_mut(call, out_ptr, out_len);
         deinterleave(out, src, n, comps, comp_bytes, stride);
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn accessor_apply_sparse(
+pub unsafe extern "C" fn accessor_apply_sparse(
     out_ptr: u32,
     out_component_count: u32,
     component_type: u32,
@@ -252,7 +252,7 @@ pub extern "C" fn accessor_apply_sparse(
     values_ptr: u32,
     sparse_count: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         if out_ptr == 0 || indices_ptr == 0 || values_ptr == 0 {
             return 0;
         }
@@ -265,9 +265,9 @@ pub extern "C" fn accessor_apply_sparse(
             return 0;
         }
         let elem_bytes = comps * comp_bytes;
-        let out = u8_slice_mut(out_ptr, out_comps * comp_bytes);
-        let indices = u8_slice(indices_ptr, scount * idx_bytes);
-        let values = u8_slice(values_ptr, scount * elem_bytes);
+        let out = u8_slice_mut(call, out_ptr, out_comps * comp_bytes);
+        let indices = u8_slice(call, indices_ptr, scount * idx_bytes);
+        let values = u8_slice(call, values_ptr, scount * elem_bytes);
         for i in 0..scount {
             let dst_index = read_sparse_index(indices, i, indices_component_type) as usize;
             let dst_component_base = dst_index * comps;
@@ -279,19 +279,19 @@ pub extern "C" fn accessor_apply_sparse(
             out[dst_byte_base..dst_byte_base + elem_bytes]
                 .copy_from_slice(&values[src_byte_base..src_byte_base + elem_bytes]);
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn accessor_convert_to_f32(
+pub unsafe extern "C" fn accessor_convert_to_f32(
     out_ptr: u32,
     src_ptr: u32,
     component_count: u32,
     component_type: u32,
     normalized: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         if out_ptr == 0 || src_ptr == 0 {
             return 0;
         }
@@ -303,23 +303,23 @@ pub extern "C" fn accessor_convert_to_f32(
         if comp_bytes == 0 {
             return 0;
         }
-        let src = u8_slice(src_ptr, count * comp_bytes);
-        let out = f32_slice_mut(out_ptr, count);
-        for i in 0..count {
-            out[i] = component_to_f32(src, i, component_type, normalized != 0);
+        let src = u8_slice(call, src_ptr, count * comp_bytes);
+        let out = f32_slice_mut(call, out_ptr, count);
+        for (i, value) in out.iter_mut().enumerate() {
+            *value = component_to_f32(src, i, component_type, normalized != 0);
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn accessor_convert_to_u16(
+pub unsafe extern "C" fn accessor_convert_to_u16(
     out_ptr: u32,
     src_ptr: u32,
     component_count: u32,
     component_type: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         if out_ptr == 0 || src_ptr == 0 {
             return 0;
         }
@@ -331,8 +331,8 @@ pub extern "C" fn accessor_convert_to_u16(
         if comp_bytes == 0 {
             return 0;
         }
-        let src = u8_slice(src_ptr, count * comp_bytes);
-        let out = u8_slice_mut(out_ptr, count * 2);
+        let src = u8_slice(call, src_ptr, count * comp_bytes);
+        let out = u8_slice_mut(call, out_ptr, count * 2);
         for i in 0..count {
             let out_value = component_to_u16(src, i, component_type);
             let bytes = out_value.to_le_bytes();
@@ -340,18 +340,18 @@ pub extern "C" fn accessor_convert_to_u16(
             out[base] = bytes[0];
             out[base + 1] = bytes[1];
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn accessor_convert_to_u32(
+pub unsafe extern "C" fn accessor_convert_to_u32(
     out_ptr: u32,
     src_ptr: u32,
     component_count: u32,
     component_type: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         if out_ptr == 0 || src_ptr == 0 {
             return 0;
         }
@@ -363,8 +363,8 @@ pub extern "C" fn accessor_convert_to_u32(
         if comp_bytes == 0 {
             return 0;
         }
-        let src = u8_slice(src_ptr, count * comp_bytes);
-        let out = u8_slice_mut(out_ptr, count * 4);
+        let src = u8_slice(call, src_ptr, count * comp_bytes);
+        let out = u8_slice_mut(call, out_ptr, count * 4);
         for i in 0..count {
             let v = read_component_as_f64(src, i, component_type);
             let out_value = js_to_u32(v);
@@ -375,6 +375,6 @@ pub extern "C" fn accessor_convert_to_u32(
             out[base + 2] = bytes[2];
             out[base + 3] = bytes[3];
         }
-    }
-    0
+        0
+    })
 }

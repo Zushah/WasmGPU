@@ -424,6 +424,7 @@ const makeFixture = () => {
 {
     const shapePtr = generatedWasm.wasmgpu_alloc_u32(3);
     const matrixPtr = generatedWasm.wasmgpu_alloc_f32(16);
+    const copyPtr = generatedWasm.wasmgpu_alloc_f32(17);
     const sourcePtr = generatedWasm.wasmgpu_alloc(12);
     const outputPtr = generatedWasm.wasmgpu_alloc(8);
     try {
@@ -432,6 +433,52 @@ const makeFixture = () => {
 
         generatedWasm.mat4_identity(matrixPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(matrixPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+        generatedWasm.mat4_copy(copyPtr, matrixPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+        generatedWasm.mat4_copy(copyPtr, copyPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], "Matrix self-copy must preserve its input");
+        generatedWasm.f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => i + 1));
+        generatedWasm.mat4_copy(copyPtr + 4, copyPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 17)), [1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], "Matrix copy must support forward overlap");
+        generatedWasm.f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => i + 1));
+        generatedWasm.mat4_copy(copyPtr, copyPtr + 4);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 17)), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 17], "Matrix copy must support backward overlap");
+        generatedWasm.f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => -(i + 1)));
+        generatedWasm.mat4_abs(copyPtr + 4, copyPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 17)), [-1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], "Fixed-width math kernels must stage inputs before partially overlapping output writes");
+
+        generatedWasm.f32view(matrixPtr, 4).set([0.25, -0.5, 0.75, 1]);
+        generatedWasm.quat_copy(copyPtr, matrixPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [0.25, -0.5, 0.75, 1]);
+        generatedWasm.quat_copy(copyPtr, copyPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [0.25, -0.5, 0.75, 1], "Quaternion self-copy must preserve its input");
+        generatedWasm.f32view(copyPtr, 5).set([1, 2, 3, 4, 5]);
+        generatedWasm.quat_copy(copyPtr + 4, copyPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 5)), [1, 1, 2, 3, 4], "Quaternion copy must support forward overlap");
+        generatedWasm.f32view(copyPtr, 5).set([1, 2, 3, 4, 5]);
+        generatedWasm.quat_copy(copyPtr, copyPtr + 4);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 5)), [2, 3, 4, 5, 5], "Quaternion copy must support backward overlap");
+        generatedWasm.f32view(copyPtr, 8).set([0, 0, 0, 1, 1, 0, 0, 0]);
+        generatedWasm.quat_mul(copyPtr, copyPtr, copyPtr + 16);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [1, 0, 0, 0], "Quaternion multiplication must support an in-place left operand");
+        generatedWasm.f32view(copyPtr, 4).set([0, 0, 0, 2]);
+        generatedWasm.quat_normalize(copyPtr, copyPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [0, 0, 0, 1], "Quaternion normalization must support in-place output");
+
+        generatedWasm.f32view(matrixPtr, 3).set([1.25, -2.5, 3.75]);
+        generatedWasm.vec3_copy(copyPtr, matrixPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 3)), [1.25, -2.5, 3.75]);
+        generatedWasm.vec3_copy(copyPtr, copyPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 3)), [1.25, -2.5, 3.75], "Vector self-copy must preserve its input");
+        generatedWasm.f32view(copyPtr, 4).set([1, 2, 3, 4]);
+        generatedWasm.vec3_copy(copyPtr + 4, copyPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [1, 1, 2, 3], "Vector copy must support forward overlap");
+        generatedWasm.f32view(copyPtr, 4).set([1, 2, 3, 4]);
+        generatedWasm.vec3_copy(copyPtr, copyPtr + 4);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [2, 3, 4, 4], "Vector copy must support backward overlap");
+        generatedWasm.f32view(copyPtr, 3).set([2, 0, 0]);
+        generatedWasm.vec3_normalize(copyPtr, copyPtr);
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 3)), [1, 0, 0], "Vector normalization must support in-place output");
 
         generatedWasm.u8view(sourcePtr, 12).set([1, 2, 3, 4, 90, 91, 5, 6, 7, 8, 92, 93]);
         generatedWasm.accessor_deinterleave(outputPtr, sourcePtr, 2, 2, 2, 6);
@@ -439,6 +486,7 @@ const makeFixture = () => {
     } finally {
         generatedWasm.wasmgpu_free_u32(shapePtr, 3);
         generatedWasm.wasmgpu_free_f32(matrixPtr, 16);
+        generatedWasm.wasmgpu_free_f32(copyPtr, 17);
         generatedWasm.wasmgpu_free(sourcePtr, 12);
         generatedWasm.wasmgpu_free(outputPtr, 8);
     }

@@ -5,7 +5,7 @@
  */
 
 use crate::quat::quat_from_rotation_mat3;
-use crate::shared::{f32_slice, f32_slice_mut};
+use crate::shared::{copy_f32, f32_slice_mut, read_f32_array, with_driver_call};
 use crate::utils::{rand_f32_01, rand_range, round_js};
 
 #[inline(always)]
@@ -92,46 +92,40 @@ pub(crate) fn mat4_invert_from(m: &[f32; 16]) -> [f32; 16] {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_abs(out: u32, m: u32) -> u32 {
-    unsafe {
-        let o = f32_slice_mut(out, 16);
-        let a = f32_slice(m, 16);
+pub unsafe extern "C" fn mat4_abs(out: u32, m: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
+        let o = f32_slice_mut(call, out, 16);
         for i in 0..16 {
             o[i] = a[i].abs();
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_add(out: u32, m1: u32, m2: u32) -> u32 {
-    unsafe {
-        let o = f32_slice_mut(out, 16);
-        let a = f32_slice(m1, 16);
-        let b = f32_slice(m2, 16);
+pub unsafe extern "C" fn mat4_add(out: u32, m1: u32, m2: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m1);
+        let b = read_f32_array::<16>(m2);
+        let o = f32_slice_mut(call, out, 16);
         for i in 0..16 {
             o[i] = a[i] + b[i];
         }
-    }
+        0
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn mat4_copy(out: u32, m: u32) -> u32 {
+    unsafe { copy_f32(out, m, 16) };
     0
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_copy(out: u32, m: u32) -> u32 {
-    unsafe {
-        let o = f32_slice_mut(out, 16);
-        let a = f32_slice(m, 16);
-        for i in 0..16 {
-            o[i] = a[i];
-        }
-    }
-    0
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn mat4_decompose_trs(out_trs: u32, m: u32) -> u32 {
-    unsafe {
-        let a = f32_slice(m, 16);
+pub unsafe extern "C" fn mat4_decompose_trs(out_trs: u32, m: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
         let tx = a[12];
         let ty = a[13];
         let tz = a[14];
@@ -173,7 +167,7 @@ pub extern "C" fn mat4_decompose_trs(out_trs: u32, m: u32) -> u32 {
         let rz1 = z1 / szn;
         let rz2 = z2 / szn;
         let q = quat_from_rotation_mat3(rx0, ry0, rz0, rx1, ry1, rz1, rx2, ry2, rz2);
-        let out = f32_slice_mut(out_trs, 10);
+        let out = f32_slice_mut(call, out_trs, 10);
         out[0] = tx;
         out[1] = ty;
         out[2] = tz;
@@ -184,24 +178,22 @@ pub extern "C" fn mat4_decompose_trs(out_trs: u32, m: u32) -> u32 {
         out[7] = sxf;
         out[8] = syf;
         out[9] = szf;
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_det(m: u32) -> f32 {
+pub unsafe extern "C" fn mat4_det(m: u32) -> f32 {
     unsafe {
-        let a = f32_slice(m, 16);
-        let mut mm = [0.0f32; 16];
-        mm.copy_from_slice(a);
-        mat4_det_from(&mm)
+        let a = read_f32_array::<16>(m);
+        mat4_det_from(&a)
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_identity(out: u32) -> u32 {
-    unsafe {
-        let o = f32_slice_mut(out, 16);
+pub unsafe extern "C" fn mat4_identity(out: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let o = f32_slice_mut(call, out, 16);
         o[0] = 1.0;
         o[1] = 0.0;
         o[2] = 0.0;
@@ -218,12 +210,12 @@ pub extern "C" fn mat4_identity(out: u32) -> u32 {
         o[13] = 0.0;
         o[14] = 0.0;
         o[15] = 1.0;
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_init(
+pub unsafe extern "C" fn mat4_init(
     out: u32,
     m0: f32,
     m1: f32,
@@ -242,8 +234,8 @@ pub extern "C" fn mat4_init(
     m14: f32,
     m15: f32,
 ) -> u32 {
-    unsafe {
-        let o = f32_slice_mut(out, 16);
+    with_driver_call(|call| unsafe {
+        let o = f32_slice_mut(call, out, 16);
         o[0] = m0;
         o[1] = m1;
         o[2] = m2;
@@ -260,30 +252,26 @@ pub extern "C" fn mat4_init(
         o[13] = m13;
         o[14] = m14;
         o[15] = m15;
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_invert(out: u32, m: u32) -> u32 {
-    unsafe {
-        let a = f32_slice(m, 16);
-        let mut mm = [0.0f32; 16];
-        mm.copy_from_slice(a);
-        let inv = mat4_invert_from(&mm);
-        let o = f32_slice_mut(out, 16);
-        for i in 0..16 {
-            o[i] = inv[i];
-        }
-    }
-    0
+pub unsafe extern "C" fn mat4_invert(out: u32, m: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
+        let inv = mat4_invert_from(&a);
+        let o = f32_slice_mut(call, out, 16);
+        o.copy_from_slice(&inv);
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_isEqual(m1: u32, m2: u32) -> u32 {
+pub unsafe extern "C" fn mat4_isEqual(m1: u32, m2: u32) -> u32 {
     unsafe {
-        let a = f32_slice(m1, 16);
-        let b = f32_slice(m2, 16);
+        let a = read_f32_array::<16>(m1);
+        let b = read_f32_array::<16>(m2);
         for i in 0..16 {
             if a[i] != b[i] {
                 return 0;
@@ -294,9 +282,9 @@ pub extern "C" fn mat4_isEqual(m1: u32, m2: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_isIdentity(m: u32) -> u32 {
+pub unsafe extern "C" fn mat4_isIdentity(m: u32) -> u32 {
     unsafe {
-        let a = f32_slice(m, 16);
+        let a = read_f32_array::<16>(m);
         if a[0] == 1.0
             && a[1] == 0.0
             && a[2] == 0.0
@@ -321,13 +309,11 @@ pub extern "C" fn mat4_isIdentity(m: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_isInverse(m1: u32, m2: u32) -> u32 {
+pub unsafe extern "C" fn mat4_isInverse(m1: u32, m2: u32) -> u32 {
     unsafe {
-        let a = f32_slice(m1, 16);
-        let b = f32_slice(m2, 16);
-        let mut mm = [0.0f32; 16];
-        mm.copy_from_slice(a);
-        let inv = mat4_invert_from(&mm);
+        let a = read_f32_array::<16>(m1);
+        let b = read_f32_array::<16>(m2);
+        let inv = mat4_invert_from(&a);
         for i in 0..16 {
             if inv[i] != b[i] {
                 return 0;
@@ -338,11 +324,11 @@ pub extern "C" fn mat4_isInverse(m1: u32, m2: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_isZero(m: u32) -> u32 {
+pub unsafe extern "C" fn mat4_isZero(m: u32) -> u32 {
     unsafe {
-        let a = f32_slice(m, 16);
-        for i in 0..16 {
-            if a[i] != 0.0 {
+        let a = read_f32_array::<16>(m);
+        for value in a {
+            if value != 0.0 {
                 return 0;
             }
         }
@@ -351,11 +337,11 @@ pub extern "C" fn mat4_isZero(m: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_lookAt(out: u32, eye: u32, center: u32, up: u32) -> u32 {
-    unsafe {
-        let eye = f32_slice(eye, 3);
-        let center = f32_slice(center, 3);
-        let up = f32_slice(up, 3);
+pub unsafe extern "C" fn mat4_lookAt(out: u32, eye: u32, center: u32, up: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let eye = read_f32_array::<3>(eye);
+        let center = read_f32_array::<3>(center);
+        let up = read_f32_array::<3>(up);
         let mut f = [center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]];
         let fnorm = (f[0] * f[0] + f[1] * f[1] + f[2] * f[2]).sqrt();
         f[0] /= fnorm;
@@ -375,7 +361,7 @@ pub extern "C" fn mat4_lookAt(out: u32, eye: u32, center: u32, up: u32) -> u32 {
             s[2] * f[0] - s[0] * f[2],
             s[0] * f[1] - s[1] * f[0],
         ];
-        let o = f32_slice_mut(out, 16);
+        let o = f32_slice_mut(call, out, 16);
         o[0] = s[0];
         o[1] = u[0];
         o[2] = -f[0];
@@ -392,15 +378,15 @@ pub extern "C" fn mat4_lookAt(out: u32, eye: u32, center: u32, up: u32) -> u32 {
         o[13] = -(u[0] * eye[0] + u[1] * eye[1] + u[2] * eye[2]);
         o[14] = f[0] * eye[0] + f[1] * eye[1] + f[2] * eye[2];
         o[15] = 1.0;
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_mul(out: u32, m1: u32, m2: u32) -> u32 {
-    unsafe {
-        let a = f32_slice(m1, 16);
-        let b = f32_slice(m2, 16);
+pub unsafe extern "C" fn mat4_mul(out: u32, m1: u32, m2: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m1);
+        let b = read_f32_array::<16>(m2);
         let mut t = [0.0f32; 16];
         t[0] = a[0] * b[0] + a[4] * b[1] + a[8] * b[2] + a[12] * b[3];
         t[1] = a[1] * b[0] + a[5] * b[1] + a[9] * b[2] + a[13] * b[3];
@@ -418,93 +404,95 @@ pub extern "C" fn mat4_mul(out: u32, m1: u32, m2: u32) -> u32 {
         t[13] = a[1] * b[12] + a[5] * b[13] + a[9] * b[14] + a[13] * b[15];
         t[14] = a[2] * b[12] + a[6] * b[13] + a[10] * b[14] + a[14] * b[15];
         t[15] = a[3] * b[12] + a[7] * b[13] + a[11] * b[14] + a[15] * b[15];
-        let o = f32_slice_mut(out, 16);
-        for i in 0..16 {
-            o[i] = t[i];
-        }
-    }
-    0
+        let o = f32_slice_mut(call, out, 16);
+        o.copy_from_slice(&t);
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_mul_vec4(out: u32, m: u32, v4: u32) -> u32 {
-    unsafe {
-        let m = f32_slice(m, 16);
-        let v = f32_slice(v4, 4);
-        let o = f32_slice_mut(out, 4);
+pub unsafe extern "C" fn mat4_mul_vec4(out: u32, m: u32, v4: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let m = read_f32_array::<16>(m);
+        let v = read_f32_array::<4>(v4);
+        let o = f32_slice_mut(call, out, 4);
         o[0] = m[0] * v[0] + m[4] * v[1] + m[8] * v[2] + m[12] * v[3];
         o[1] = m[1] * v[0] + m[5] * v[1] + m[9] * v[2] + m[13] * v[3];
         o[2] = m[2] * v[0] + m[6] * v[1] + m[10] * v[2] + m[14] * v[3];
         o[3] = m[3] * v[0] + m[7] * v[1] + m[11] * v[2] + m[15] * v[3];
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_neg(out: u32, m: u32) -> u32 {
-    unsafe {
-        let o = f32_slice_mut(out, 16);
-        let a = f32_slice(m, 16);
+pub unsafe extern "C" fn mat4_neg(out: u32, m: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
+        let o = f32_slice_mut(call, out, 16);
         for i in 0..16 {
             o[i] = -a[i];
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_norm(m: u32) -> f32 {
+pub unsafe extern "C" fn mat4_norm(m: u32) -> f32 {
     unsafe {
-        let a = f32_slice(m, 16);
+        let a = read_f32_array::<16>(m);
         let mut s = 0.0f32;
-        for i in 0..16 {
-            s += a[i] * a[i];
+        for value in a {
+            s += value * value;
         }
         s.sqrt()
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_normalize(out: u32, m: u32) -> u32 {
-    unsafe {
-        let a = f32_slice(m, 16);
+pub unsafe extern "C" fn mat4_normalize(out: u32, m: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
         let mut s = 0.0f32;
-        for i in 0..16 {
-            s += a[i] * a[i];
+        for value in a {
+            s += value * value;
         }
         let n = s.sqrt();
-        let o = f32_slice_mut(out, 16);
+        let o = f32_slice_mut(call, out, 16);
         if n == 0.0 {
             let id = mat4_identity_arr();
-            for i in 0..16 {
-                o[i] = id[i];
-            }
+            o.copy_from_slice(&id);
             return 0;
         }
         let inorm = 1.0 / n;
         for i in 0..16 {
             o[i] = a[i] * inorm;
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_normsq(m: u32) -> f32 {
+pub unsafe extern "C" fn mat4_normsq(m: u32) -> f32 {
     unsafe {
-        let a = f32_slice(m, 16);
+        let a = read_f32_array::<16>(m);
         let mut s = 0.0f32;
-        for i in 0..16 {
-            s += a[i] * a[i];
+        for value in a {
+            s += value * value;
         }
         s
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_perspective(out: u32, fov_y: f32, aspect: f32, near: f32, far: f32) -> u32 {
-    unsafe {
-        let o = f32_slice_mut(out, 16);
+pub unsafe extern "C" fn mat4_perspective(
+    out: u32,
+    fov_y: f32,
+    aspect: f32,
+    near: f32,
+    far: f32,
+) -> u32 {
+    with_driver_call(|call| unsafe {
+        let o = f32_slice_mut(call, out, 16);
         let f: f32 = 1.0 / (fov_y * 0.5).tan();
         let range_inv: f32 = 1.0 / (near - far);
         o[0] = f / aspect;
@@ -523,36 +511,36 @@ pub extern "C" fn mat4_perspective(out: u32, fov_y: f32, aspect: f32, near: f32,
         o[13] = 0.0;
         o[14] = near * far * range_inv;
         o[15] = 0.0;
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_random(out: u32) -> u32 {
-    unsafe {
-        let o = f32_slice_mut(out, 16);
-        for i in 0..16 {
-            o[i] = rand_f32_01();
+pub unsafe extern "C" fn mat4_random(out: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let o = f32_slice_mut(call, out, 16);
+        for value in o {
+            *value = rand_f32_01();
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_random_range(out: u32, a: f32, b: f32) -> u32 {
-    unsafe {
-        let o = f32_slice_mut(out, 16);
-        for i in 0..16 {
-            o[i] = rand_range(a, b);
+pub unsafe extern "C" fn mat4_random_range(out: u32, a: f32, b: f32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let o = f32_slice_mut(call, out, 16);
+        for value in o {
+            *value = rand_range(a, b);
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_rotateX(out: u32, m: u32, angle: f32) -> u32 {
-    unsafe {
-        let a = f32_slice(m, 16);
+pub unsafe extern "C" fn mat4_rotateX(out: u32, m: u32, angle: f32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
         let c: f32 = angle.cos();
         let s: f32 = angle.sin();
         let mut t = [0.0f32; 16];
@@ -572,18 +560,16 @@ pub extern "C" fn mat4_rotateX(out: u32, m: u32, angle: f32) -> u32 {
         t[13] = a[13];
         t[14] = a[14];
         t[15] = a[15];
-        let o = f32_slice_mut(out, 16);
-        for i in 0..16 {
-            o[i] = t[i];
-        }
-    }
-    0
+        let o = f32_slice_mut(call, out, 16);
+        o.copy_from_slice(&t);
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_rotateY(out: u32, m: u32, angle: f32) -> u32 {
-    unsafe {
-        let a = f32_slice(m, 16);
+pub unsafe extern "C" fn mat4_rotateY(out: u32, m: u32, angle: f32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
         let c: f32 = angle.cos();
         let s: f32 = angle.sin();
         let mut t = [0.0f32; 16];
@@ -603,18 +589,16 @@ pub extern "C" fn mat4_rotateY(out: u32, m: u32, angle: f32) -> u32 {
         t[13] = a[13];
         t[14] = a[14];
         t[15] = a[15];
-        let o = f32_slice_mut(out, 16);
-        for i in 0..16 {
-            o[i] = t[i];
-        }
-    }
-    0
+        let o = f32_slice_mut(call, out, 16);
+        o.copy_from_slice(&t);
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_rotateZ(out: u32, m: u32, angle: f32) -> u32 {
-    unsafe {
-        let a = f32_slice(m, 16);
+pub unsafe extern "C" fn mat4_rotateZ(out: u32, m: u32, angle: f32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
         let c: f32 = angle.cos();
         let s: f32 = angle.sin();
         let mut t = [0.0f32; 16];
@@ -634,65 +618,63 @@ pub extern "C" fn mat4_rotateZ(out: u32, m: u32, angle: f32) -> u32 {
         t[13] = a[13];
         t[14] = a[14];
         t[15] = a[15];
-        let o = f32_slice_mut(out, 16);
-        for i in 0..16 {
-            o[i] = t[i];
-        }
-    }
-    0
+        let o = f32_slice_mut(call, out, 16);
+        o.copy_from_slice(&t);
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_round(out: u32, m: u32) -> u32 {
-    unsafe {
-        let a = f32_slice(m, 16);
-        let o = f32_slice_mut(out, 16);
+pub unsafe extern "C" fn mat4_round(out: u32, m: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
+        let o = f32_slice_mut(call, out, 16);
         for i in 0..16 {
             o[i] = round_js(a[i]);
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_scl(out: u32, m: u32, n: f32) -> u32 {
-    unsafe {
-        let a = f32_slice(m, 16);
-        let o = f32_slice_mut(out, 16);
+pub unsafe extern "C" fn mat4_scl(out: u32, m: u32, n: f32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
+        let o = f32_slice_mut(call, out, 16);
         for i in 0..16 {
             o[i] = a[i] * n;
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_sub(out: u32, m1: u32, m2: u32) -> u32 {
-    unsafe {
-        let a = f32_slice(m1, 16);
-        let b = f32_slice(m2, 16);
-        let o = f32_slice_mut(out, 16);
+pub unsafe extern "C" fn mat4_sub(out: u32, m1: u32, m2: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m1);
+        let b = read_f32_array::<16>(m2);
+        let o = f32_slice_mut(call, out, 16);
         for i in 0..16 {
             o[i] = a[i] - b[i];
         }
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_trace(m: u32) -> f32 {
+pub unsafe extern "C" fn mat4_trace(m: u32) -> f32 {
     unsafe {
-        let a = f32_slice(m, 16);
+        let a = read_f32_array::<16>(m);
         a[0] + a[5] + a[10] + a[15]
     }
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_translate(out: u32, m: u32, v: u32) -> u32 {
-    unsafe {
-        let a = f32_slice(m, 16);
-        let v = f32_slice(v, 3);
-        let o = f32_slice_mut(out, 16);
+pub unsafe extern "C" fn mat4_translate(out: u32, m: u32, v: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
+        let v = read_f32_array::<3>(v);
+        let o = f32_slice_mut(call, out, 16);
         o[0] = a[0];
         o[1] = a[1];
         o[2] = a[2];
@@ -709,14 +691,14 @@ pub extern "C" fn mat4_translate(out: u32, m: u32, v: u32) -> u32 {
         o[13] = a[13] + v[1];
         o[14] = a[14] + v[2];
         o[15] = a[15];
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mat4_transpose(out: u32, m: u32) -> u32 {
-    unsafe {
-        let a = f32_slice(m, 16);
+pub unsafe extern "C" fn mat4_transpose(out: u32, m: u32) -> u32 {
+    with_driver_call(|call| unsafe {
+        let a = read_f32_array::<16>(m);
         let mut t = [0.0f32; 16];
         t[0] = a[0];
         t[1] = a[4];
@@ -734,12 +716,10 @@ pub extern "C" fn mat4_transpose(out: u32, m: u32) -> u32 {
         t[13] = a[7];
         t[14] = a[11];
         t[15] = a[15];
-        let o = f32_slice_mut(out, 16);
-        for i in 0..16 {
-            o[i] = t[i];
-        }
-    }
-    0
+        let o = f32_slice_mut(call, out, 16);
+        o.copy_from_slice(&t);
+        0
+    })
 }
 
 #[unsafe(no_mangle)]

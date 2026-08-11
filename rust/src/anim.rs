@@ -5,7 +5,7 @@
  */
 
 use crate::mat4::mat4_invert_from;
-use crate::shared::{f32_slice, f32_slice_mut, u32_slice};
+use crate::shared::{f32_slice, f32_slice_mut, u32_slice, with_driver_call};
 
 pub(crate) const INTERP_STEP: u32 = 0;
 pub(crate) const INTERP_LINEAR: u32 = 1;
@@ -16,13 +16,7 @@ pub(crate) const PATH_SCALE: u32 = 2;
 
 #[inline]
 pub(crate) fn clamp01(x: f32) -> f32 {
-    if x < 0.0 {
-        0.0
-    } else if x > 1.0 {
-        1.0
-    } else {
-        x
-    }
+    x.clamp(0.0, 1.0)
 }
 
 #[inline]
@@ -143,9 +137,7 @@ pub(crate) fn sample_vec(
     match interp {
         INTERP_STEP => {
             let base0 = i0 * stride;
-            for k in 0..stride {
-                out[k] = values[base0 + k];
-            }
+            out[..stride].copy_from_slice(&values[base0..base0 + stride]);
         }
         INTERP_CUBIC => {
             let (h00, h10, h01, h11) = hermite(alpha);
@@ -261,7 +253,7 @@ pub(crate) fn sample_quat(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn anim_sample_clip_trs(
+pub unsafe extern "C" fn anim_sample_clip_trs(
     pos_ptr: u32,
     rot_ptr: u32,
     scl_ptr: u32,
@@ -272,13 +264,13 @@ pub extern "C" fn anim_sample_clip_trs(
     channel_count: u32,
     time: f32,
 ) -> u32 {
-    unsafe {
-        let samplers = u32_slice(samplers_ptr, sampler_count as usize * 5);
-        let channels = u32_slice(channels_ptr, channel_count as usize * 3);
+    with_driver_call(|call| unsafe {
+        let samplers = u32_slice(call, samplers_ptr, sampler_count as usize * 5);
+        let channels = u32_slice(call, channels_ptr, channel_count as usize * 3);
         let tcount = transform_count as usize;
-        let pos = f32_slice_mut(pos_ptr, tcount * 3);
-        let rot = f32_slice_mut(rot_ptr, tcount * 4);
-        let scl = f32_slice_mut(scl_ptr, tcount * 3);
+        let pos = f32_slice_mut(call, pos_ptr, tcount * 3);
+        let rot = f32_slice_mut(call, rot_ptr, tcount * 4);
+        let scl = f32_slice_mut(call, scl_ptr, tcount * 3);
         let mut tmp_vec = [0.0f32; 4];
         for c in 0..(channel_count as usize) {
             let co = c * 3;
@@ -300,14 +292,14 @@ pub extern "C" fn anim_sample_clip_trs(
             if count == 0 {
                 continue;
             }
-            let times = f32_slice(times_ptr, count);
+            let times = f32_slice(call, times_ptr, count);
             let (i0, i1, alpha, dt) = find_keyframe(times, time);
             let values_len = if interp == INTERP_CUBIC {
                 count * stride * 3
             } else {
                 count * stride
             };
-            let values = f32_slice(values_ptr, values_len);
+            let values = f32_slice(call, values_ptr, values_len);
             match path {
                 PATH_TRANSLATION => {
                     if stride != 3 {
@@ -341,12 +333,12 @@ pub extern "C" fn anim_sample_clip_trs(
                     rot[base + 3] = w;
                 }
                 _ => {
-                    // weights/morph targets not supported here
+                    // Weights/morph targets not supported here
                 }
             }
         }
-    }
-    0
+        0
+    })
 }
 
 #[inline]
@@ -370,7 +362,7 @@ pub(crate) fn mat4_mul_to(out: &mut [f32; 16], a: &[f32; 16], b: &[f32; 16]) {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn anim_compute_joint_matrices_to(
+pub unsafe extern "C" fn anim_compute_joint_matrices_to(
     out_ptr: u32,
     joint_indices_ptr: u32,
     joint_count: u32,
@@ -378,12 +370,12 @@ pub extern "C" fn anim_compute_joint_matrices_to(
     world_base_ptr: u32,
     mesh_world_ptr: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         let joint_count_usize = joint_count as usize;
-        let joint_indices = u32_slice(joint_indices_ptr, joint_count_usize);
-        let inv_bind = f32_slice(inv_bind_ptr, joint_count_usize * 16);
-        let out = f32_slice_mut(out_ptr, joint_count_usize * 16);
-        let mesh_world = f32_slice(mesh_world_ptr, 16);
+        let joint_indices = u32_slice(call, joint_indices_ptr, joint_count_usize);
+        let inv_bind = f32_slice(call, inv_bind_ptr, joint_count_usize * 16);
+        let out = f32_slice_mut(call, out_ptr, joint_count_usize * 16);
+        let mesh_world = f32_slice(call, mesh_world_ptr, 16);
         let mut mesh_arr = [0.0f32; 16];
         mesh_arr.copy_from_slice(mesh_world);
         let mesh_inv = mat4_invert_from(&mesh_arr);
@@ -391,10 +383,10 @@ pub extern "C" fn anim_compute_joint_matrices_to(
         let mut ib = [0.0f32; 16];
         let mut tmp = [0.0f32; 16];
         let mut res = [0.0f32; 16];
-        for i in 0..joint_count_usize {
-            let j_index = joint_indices[i] as usize;
+        for (i, &joint_index) in joint_indices.iter().enumerate() {
+            let j_index = joint_index as usize;
             let joint_ptr = world_base_ptr.wrapping_add((j_index * 16 * 4) as u32);
-            let joint_world = f32_slice(joint_ptr, 16);
+            let joint_world = f32_slice(call, joint_ptr, 16);
             jw.copy_from_slice(joint_world);
             let base = i * 16;
             ib.copy_from_slice(&inv_bind[base..base + 16]);
@@ -402,6 +394,6 @@ pub extern "C" fn anim_compute_joint_matrices_to(
             mat4_mul_to(&mut res, &mesh_inv, &tmp);
             out[base..base + 16].copy_from_slice(&res);
         }
-    }
-    0
+        0
+    })
 }

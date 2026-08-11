@@ -68,7 +68,7 @@ pub extern "C" fn wasmgpu_alloc(bytes: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn wasmgpu_free(ptr: u32, bytes: u32) {
+pub unsafe extern "C" fn wasmgpu_free(ptr: u32, bytes: u32) {
     unsafe { free_raw(ptr, bytes as usize, 16) }
 }
 
@@ -78,7 +78,7 @@ pub extern "C" fn wasmgpu_alloc_f32(len: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn wasmgpu_free_f32(ptr: u32, len: u32) {
+pub unsafe extern "C" fn wasmgpu_free_f32(ptr: u32, len: u32) {
     unsafe { free_array::<f32>(ptr, len) }
 }
 
@@ -88,6 +88,6 @@ pub extern "C" fn wasmgpu_alloc_u32(len: u32) -> u32 {
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn wasmgpu_free_u32(ptr: u32, len: u32) {
+pub unsafe extern "C" fn wasmgpu_free_u32(ptr: u32, len: u32) {
     unsafe { free_array::<u32>(ptr, len) }
 }

@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::shared::{f32_slice, f32_slice_mut, u32_slice};
+use crate::shared::{f32_slice, f32_slice_mut, u32_slice, with_driver_call};
 
 pub(crate) fn compute_vertex_normals(out: &mut [f32], positions: &[f32], indices: Option<&[u32]>) {
     let vcount = positions.len() / 3;
@@ -70,24 +70,24 @@ pub(crate) fn compute_vertex_normals(out: &mut [f32], positions: &[f32], indices
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn mesh_compute_vertex_normals(
+pub unsafe extern "C" fn mesh_compute_vertex_normals(
     out_normals: u32,
     positions: u32,
     vertex_count: u32,
     indices: u32,
     index_count: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         let vcount = vertex_count as usize;
         let plen = vcount * 3;
-        let pos = f32_slice(positions, plen);
-        let out = f32_slice_mut(out_normals, plen);
+        let pos = f32_slice(call, positions, plen);
+        let out = f32_slice_mut(call, out_normals, plen);
         let idx = if indices != 0 && index_count != 0 {
-            Some(u32_slice(indices, index_count as usize))
+            Some(u32_slice(call, indices, index_count as usize))
         } else {
             None
         };
         compute_vertex_normals(out, pos, idx);
-    }
-    0
+        0
+    })
 }

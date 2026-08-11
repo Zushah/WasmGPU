@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::shared::{f32_slice, f32_slice_mut};
+use crate::shared::{DriverCall, f32_slice, f32_slice_mut, with_driver_call};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct BoundsResult {
@@ -60,6 +60,7 @@ pub(crate) fn bounds_positions_stride(
 }
 
 unsafe fn write_bounds(
+    call: DriverCall<'_>,
     out_box_min_ptr: u32,
     out_box_max_ptr: u32,
     out_sphere_center_ptr: u32,
@@ -67,15 +68,16 @@ unsafe fn write_bounds(
     bounds: BoundsResult,
 ) {
     unsafe {
-        f32_slice_mut(out_box_min_ptr, 3).copy_from_slice(&bounds.min);
-        f32_slice_mut(out_box_max_ptr, 3).copy_from_slice(&bounds.max);
-        f32_slice_mut(out_sphere_center_ptr, 3).copy_from_slice(&bounds.center);
-        f32_slice_mut(out_sphere_radius_ptr, 1)[0] = bounds.radius;
+        f32_slice_mut(call, out_box_min_ptr, 3).copy_from_slice(&bounds.min);
+        f32_slice_mut(call, out_box_max_ptr, 3).copy_from_slice(&bounds.max);
+        f32_slice_mut(call, out_sphere_center_ptr, 3).copy_from_slice(&bounds.center);
+        f32_slice_mut(call, out_sphere_radius_ptr, 1)[0] = bounds.radius;
     }
 }
 
 #[inline(always)]
 unsafe fn write_zero_bounds(
+    call: DriverCall<'_>,
     out_box_min_ptr: u32,
     out_box_max_ptr: u32,
     out_sphere_center_ptr: u32,
@@ -83,6 +85,7 @@ unsafe fn write_zero_bounds(
 ) {
     unsafe {
         write_bounds(
+            call,
             out_box_min_ptr,
             out_box_max_ptr,
             out_sphere_center_ptr,
@@ -94,6 +97,7 @@ unsafe fn write_zero_bounds(
 
 #[inline(always)]
 unsafe fn compute_bounds_positions_stride(
+    call: DriverCall<'_>,
     out_box_min_ptr: u32,
     out_box_max_ptr: u32,
     out_sphere_center_ptr: u32,
@@ -105,6 +109,7 @@ unsafe fn compute_bounds_positions_stride(
     if count == 0 {
         unsafe {
             write_zero_bounds(
+                call,
                 out_box_min_ptr,
                 out_box_max_ptr,
                 out_sphere_center_ptr,
@@ -113,10 +118,11 @@ unsafe fn compute_bounds_positions_stride(
         }
         return;
     }
-    let points = unsafe { f32_slice(points_ptr, count * stride_f32) };
+    let points = unsafe { f32_slice(call, points_ptr, count * stride_f32) };
     let bounds = bounds_positions_stride(points, count, stride_f32);
     unsafe {
         write_bounds(
+            call,
             out_box_min_ptr,
             out_box_max_ptr,
             out_sphere_center_ptr,
@@ -209,7 +215,7 @@ pub(crate) fn bounds_glyphs(
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bounds_pointcloud_xyzs(
+pub unsafe extern "C" fn bounds_pointcloud_xyzs(
     out_box_min_ptr: u32,
     out_box_max_ptr: u32,
     out_sphere_center_ptr: u32,
@@ -218,7 +224,7 @@ pub extern "C" fn bounds_pointcloud_xyzs(
     point_count: u32,
     stride_f32: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         if out_box_min_ptr == 0
             || out_box_max_ptr == 0
             || out_sphere_center_ptr == 0
@@ -230,6 +236,7 @@ pub extern "C" fn bounds_pointcloud_xyzs(
         let count = point_count as usize;
         if count == 0 {
             write_zero_bounds(
+                call,
                 out_box_min_ptr,
                 out_box_max_ptr,
                 out_sphere_center_ptr,
@@ -240,6 +247,7 @@ pub extern "C" fn bounds_pointcloud_xyzs(
         let stride = stride_f32 as usize;
         if stride < 3 {
             write_zero_bounds(
+                call,
                 out_box_min_ptr,
                 out_box_max_ptr,
                 out_sphere_center_ptr,
@@ -248,6 +256,7 @@ pub extern "C" fn bounds_pointcloud_xyzs(
             return 0;
         }
         compute_bounds_positions_stride(
+            call,
             out_box_min_ptr,
             out_box_max_ptr,
             out_sphere_center_ptr,
@@ -256,12 +265,12 @@ pub extern "C" fn bounds_pointcloud_xyzs(
             count,
             stride,
         );
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bounds_geometry_positions(
+pub unsafe extern "C" fn bounds_geometry_positions(
     out_box_min_ptr: u32,
     out_box_max_ptr: u32,
     out_sphere_center_ptr: u32,
@@ -269,7 +278,7 @@ pub extern "C" fn bounds_geometry_positions(
     positions_ptr: u32,
     vertex_count: u32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         if out_box_min_ptr == 0
             || out_box_max_ptr == 0
             || out_sphere_center_ptr == 0
@@ -279,6 +288,7 @@ pub extern "C" fn bounds_geometry_positions(
             return 0;
         }
         compute_bounds_positions_stride(
+            call,
             out_box_min_ptr,
             out_box_max_ptr,
             out_sphere_center_ptr,
@@ -287,12 +297,12 @@ pub extern "C" fn bounds_geometry_positions(
             vertex_count as usize,
             3,
         );
-    }
-    0
+        0
+    })
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn bounds_glyph_instances(
+pub unsafe extern "C" fn bounds_glyph_instances(
     out_box_min_ptr: u32,
     out_box_max_ptr: u32,
     out_sphere_center_ptr: u32,
@@ -304,7 +314,7 @@ pub extern "C" fn bounds_glyph_instances(
     glyph_center_ptr: u32,
     glyph_radius: f32,
 ) -> u32 {
-    unsafe {
+    with_driver_call(|call| unsafe {
         if out_box_min_ptr == 0
             || out_box_max_ptr == 0
             || out_sphere_center_ptr == 0
@@ -318,6 +328,7 @@ pub extern "C" fn bounds_glyph_instances(
         let count = instance_count as usize;
         if count == 0 {
             write_zero_bounds(
+                call,
                 out_box_min_ptr,
                 out_box_max_ptr,
                 out_sphere_center_ptr,
@@ -325,23 +336,24 @@ pub extern "C" fn bounds_glyph_instances(
             );
             return 0;
         }
-        let positions = f32_slice(positions_ptr, count * 4);
-        let scales = f32_slice(scales_ptr, count * 4);
+        let positions = f32_slice(call, positions_ptr, count * 4);
+        let scales = f32_slice(call, scales_ptr, count * 4);
         let rotations = if rotations_ptr != 0 {
-            Some(f32_slice(rotations_ptr, count * 4))
+            Some(f32_slice(call, rotations_ptr, count * 4))
         } else {
             None
         };
-        let glyph_center = f32_slice(glyph_center_ptr, 3);
+        let glyph_center = f32_slice(call, glyph_center_ptr, 3);
         let center = [glyph_center[0], glyph_center[1], glyph_center[2]];
         let bounds = bounds_glyphs(positions, scales, rotations, count, &center, glyph_radius);
         write_bounds(
+            call,
             out_box_min_ptr,
             out_box_max_ptr,
             out_sphere_center_ptr,
             out_sphere_radius_ptr,
             bounds,
         );
-    }
-    0
+        0
+    })
 }

@@ -156,7 +156,7 @@ jobs:
         name: Install Rust dependencies
         run: |
           rustup target add wasm32-unknown-unknown
-          rustup component add rustfmt
+          rustup component add clippy rustfmt
 
       -
         name: Build WasmGPU
@@ -169,20 +169,19 @@ jobs:
 
       -
         name: Run Rust tests
-        run: |
-          cargo fmt --manifest-path ./rust/Cargo.toml -- --check
-          npm run test:rs
+        id: rust
+        run: npm run fmt:rs && npm run lint:rs && npm run test:rs
 
       -
         name: Run setup tests
         id: setup
-        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os != 'Linux' }}
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && steps.rust.outcome == 'success' && runner.os != 'Linux' }}
         run: npm run test:setup
 
       -
         name: Run setup tests with Xvfb
         id: setup-xvfb
-        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && runner.os == 'Linux' }}
+        if: ${{ !cancelled() && steps.prepare.outcome == 'success' && steps.rust.outcome == 'success' && runner.os == 'Linux' }}
         run: xvfb-run --auto-servernum npm run test:setup -- --headed
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
