@@ -2,7 +2,7 @@
 
 Latest commit: Tuesday, August 11, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Tuesday, August 11, 2026, [**`64249d5`**](https://www.github.com/Zushah/WasmGPU/commit/64249d5).
+Parent commit: Tuesday, August 11, 2026, [**`ff0a2d0`**](https://www.github.com/Zushah/WasmGPU/commit/ff0a2d0).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -851,12 +851,12 @@ The CI selection table below makes the platform decision explicit instead of tre
 | Ubuntu 24 ARM64 Chromium | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Ubuntu 24 ARM64 Firefox | ✅ | ✅ | ⚠️ | ✅ | ⚠️ | ❌ |
 | Ubuntu 24 ARM64 WebKit | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| MacOS 15 AMD64 Chromium | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| MacOS 15 AMD64 Firefox | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ | ❌ |
-| MacOS 15 AMD64 WebKit | ✅ | ✅ | ❌ | ⚠️ | ❌ | ❌ |
-| MacOS 15 ARM64 Chromium | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| MacOS 15 ARM64 Firefox | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
-| MacOS 15 ARM64 WebKit | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
+| MacOS 26 AMD64 Chromium | ✅ | ✅ | ✅ | ✅ | ❓ | ✅ |
+| MacOS 26 AMD64 Firefox | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ | ❌ |
+| MacOS 26 AMD64 WebKit | ✅ | ✅ | ❌ | ⚠️ | ❌ | ❌ |
+| MacOS 26 ARM64 Chromium | ✅ | ✅ | ✅ | ✅ | ❓ | ✅ |
+| MacOS 26 ARM64 Firefox | ✅ | ✅ | ✅ | ✅ | ❓ | ✅ |
+| MacOS 26 ARM64 WebKit | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
 
 `npm run test` first removes prior aggregate artifacts, then uses an ordinary npm command chain to check Rust formatting, run Clippy over all native targets and the WebAssembly library, run the Rust tests, run two setup checks, run the 25 fast browser-module tests, run the 16 slower example tests, and merge reports. The chain stops at the first failing command. `npm run test:setup`, `npm run test:js`, and `npm run test:ex` select only their respective Playwright projects, so their terminal counts remain 2, 25, and 16 and development iteration does not implicitly rerun setup or examples. The full command and CI explicitly sequence setup before the primary suites. In CI, setup is a prerequisite for the browser-module, example, and merge steps, preventing an unavailable WebGPU implementation from turning every subsequent test into a timeout; after setup passes, the browser-module and example suites still run independently so both can retain diagnostics if either fails.
 

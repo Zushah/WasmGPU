@@ -90,21 +90,21 @@ jobs:
             browser: chromium
             browsername: Chromium
             browserinstall: --no-shell chromium
-          - name: MacOS 15 AMD64 Chromium
+          - name: MacOS 26 AMD64 Chromium
             id: macos-amd64-chromium
-            os: macos-15-intel
+            os: macos-26-intel
             browser: chromium
             browsername: Chromium
             browserinstall: --no-shell chromium
-          - name: MacOS 15 ARM64 Chromium
+          - name: MacOS 26 ARM64 Chromium
             id: macos-arm64-chromium
-            os: macos-15
+            os: macos-26
             browser: chromium
             browsername: Chromium
             browserinstall: --no-shell chromium
-          - name: MacOS 15 ARM64 Firefox
+          - name: MacOS 26 ARM64 Firefox
             id: macos-arm64-firefox
-            os: macos-15
+            os: macos-26
             browser: firefox
             browsername: Firefox
             browserinstall: firefox
