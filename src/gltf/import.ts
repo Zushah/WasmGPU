@@ -202,6 +202,89 @@ const warn = (opts: ImportGltfOptions | undefined, msg: string): void => {
     opts?.onWarning?.(msg);
 };
 
+type ImportCleanupEntry = {
+    label: string;
+    cleanup: () => void;
+    active: boolean;
+};
+
+type ImportOwnership<T> = {
+    readonly value: T;
+    transfer(): T;
+    dispose(): void;
+};
+
+class ImportTransaction {
+    private _entries: ImportCleanupEntry[] = [];
+    private _settled = false;
+
+    own<T>(value: T, label: string, cleanup: (value: T) => void): ImportOwnership<T> {
+        if (this._settled) throw new Error("glTF import transaction is already settled.");
+        const entry: ImportCleanupEntry = { label, cleanup: () => cleanup(value), active: true };
+        this._entries.push(entry);
+        return {
+            value,
+            transfer(): T {
+                entry.active = false;
+                return value;
+            },
+            dispose(): void {
+                if (!entry.active) return;
+                entry.active = false;
+                entry.cleanup();
+            }
+        };
+    }
+
+    defer(label: string, cleanup: () => void): void {
+        this.own(undefined, label, cleanup);
+    }
+
+    rollback(error: unknown): never {
+        const cleanupErrors = this.settleAndCleanup();
+        if (cleanupErrors.length > 0 && error && (typeof error === "object" || typeof error === "function")) try { Object.defineProperty(error, "cleanupErrors", { value: cleanupErrors, configurable: true }); } catch {}
+        throw error;
+    }
+
+    commit(): () => void {
+        if (this._settled) throw new Error("glTF import transaction is already settled.");
+        this._settled = true;
+        let entries: ImportCleanupEntry[] | null = this._entries.filter((entry) => entry.active);
+        this._entries = [];
+        return (): void => {
+            if (!entries) return;
+            const current = entries;
+            entries = null;
+            const cleanupErrors = ImportTransaction.cleanupEntries(current);
+            if (cleanupErrors.length > 0) throw new AggregateError(cleanupErrors.map((item) => item.error), `glTF import cleanup failed for ${cleanupErrors.map((item) => item.label).join(", ")}.`);
+        };
+    }
+
+    private settleAndCleanup(): Array<{ label: string; error: unknown }> {
+        if (this._settled) return [];
+        this._settled = true;
+        const entries = this._entries;
+        this._entries = [];
+        return ImportTransaction.cleanupEntries(entries);
+    }
+
+    private static cleanupEntries(entries: ImportCleanupEntry[]): Array<{ label: string; error: unknown }> {
+        const errors: Array<{ label: string; error: unknown }> = [];
+        for (let i = entries.length - 1; i >= 0; i--) {
+            const entry = entries[i]!;
+            if (!entry.active) continue;
+            entry.active = false;
+            try {
+                entry.cleanup();
+            } catch (error) {
+                errors.push({ label: entry.label, error });
+            }
+        }
+        entries.length = 0;
+        return errors;
+    }
+}
+
 const getTextureInfoTexCoord = (info: any | undefined): number => {
     const transform = info?.extensions?.KHR_texture_transform;
     const texCoord = transform && typeof transform.texCoord === "number" ? transform.texCoord : info?.texCoord;
@@ -425,6 +508,7 @@ const GLTF_EXTENSION_SUPPORT_STATES: Record<string, GltfImportExtensionSupportSt
 
 const KHR_ANIMATION_POINTER = "KHR_animation_pointer";
 const KHR_GAUSSIAN_SPLATTING_EXTENSION = "KHR_gaussian_splatting";
+const KHR_MATERIALS_PBR_SPECULAR_GLOSSINESS = "KHR_materials_pbrSpecularGlossiness";
 const KHR_DRACO_MESH_COMPRESSION = "KHR_draco_mesh_compression";
 const KHR_TEXTURE_BASISU = "KHR_texture_basisu";
 const EXT_MESH_GPU_INSTANCING = "EXT_mesh_gpu_instancing";
@@ -752,10 +836,14 @@ const reportAnimationPointerLoss = (json: GltfRoot, extensions: GltfImportExtens
     warn(opts, `${KHR_ANIMATION_POINTER}: ${message}`);
 };
 
-const enforceRequiredExtensions = (json: GltfRoot, extensions: GltfImportExtensionsMetadata, assessments: Map<string, ExtensionAssessment>): void => {
+const enforceRequiredExtensions = (json: GltfRoot, extensions: GltfImportExtensionsMetadata, assessments: Map<string, ExtensionAssessment>, opts: ImportGltfOptions): void => {
     for (const name of json.extensionsRequired ?? []) {
         const state = extensions.support[name] ?? "unsupported";
         if (state === "supported") continue;
+        if (name === KHR_MATERIALS_PBR_SPECULAR_GLOSSINESS && state === "partial") {
+            warn(opts, `Required glTF extension '${name}' is only partially supported; importing with diffuse/base-color and glossiness-to-roughness approximations. Specular contribution and specularGlossinessTexture are not fully represented.`);
+            continue;
+        }
         const reason = assessments.get(name)?.reason;
         if (state === "deferred") throw new Error(`Required glTF extension '${name}' is deferred: WasmGPU does not implement its defining behavior${reason ? ` (${reason})` : ""}.`);
         throw new Error(`Required glTF extension '${name}' is ${state} for this asset and cannot be imported without semantic loss${reason ? `: ${reason}` : "."}`);
@@ -818,7 +906,16 @@ const createVariantsController = (initialItems: GltfImportVariantItem[] = []): G
         register(mesh: Mesh, baselineMaterial: Material, variants: Map<number, Material> = new Map()): void {
             if (variants.size === 0) return;
             const retainedMaterials = Array.from(new Set([baselineMaterial, ...variants.values()]));
-            for (const material of retainedMaterials) material.retain();
+            let retainedCount = 0;
+            try {
+                for (const material of retainedMaterials) {
+                    material.retain();
+                    retainedCount++;
+                }
+            } catch (error) {
+                for (let i = retainedCount - 1; i >= 0; i--) retainedMaterials[i]!.release();
+                throw error;
+            }
             registrations.push({ mesh, baselineMaterial, variants, retainedMaterials });
             for (const index of variants.keys()) ensureKnownItem(index);
             if (activeIndex !== null) applyVariant(activeIndex);
@@ -975,15 +1072,17 @@ const getMaterialTangentTexCoords = (mat: GltfMaterial | undefined): number[] =>
     return texCoords;
 };
 
-const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: number | undefined, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, opts?: ImportGltfOptions): Material => {
-    if (materialIndex === undefined) return new StandardMaterial({});
+const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: number | undefined, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, tx: ImportTransaction, opts?: ImportGltfOptions): ImportOwnership<Material> => {
+    const ownReference = (material: Material): ImportOwnership<Material> => tx.own(material, `material ${materialIndex ?? "default"} reference`, (resource) => resource.release());
+    if (materialIndex === undefined) return ownReference(new StandardMaterial({}));
     const existing = materialCache.get(materialIndex);
-    if (existing) return existing.retain();
+    if (existing) return ownReference(existing.retain());
     const mat = json.materials?.[materialIndex];
     if (!mat) {
         const created = new StandardMaterial({});
+        const owned = ownReference(created);
         materialCache.set(materialIndex, created);
-        return created;
+        return owned;
     }
     for (const { name, reason } of getMaterialTextureCombinationLosses(mat, materialIndex)) warn(opts, `${name}: ${reason}; the texture contribution is ignored by the current transmission layout.`);
     const getOrCreateTextureByIndex = (textureIndex: number | undefined, usage: string): Texture2D | null => {
@@ -1051,6 +1150,7 @@ const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: n
                 mipmapFilter
             }
         });
+        tx.own(created, `texture ${textureIndex}`, (texture) => texture.destroy());
         textureCache.set(textureIndex, created);
         return created;
     };
@@ -1255,16 +1355,17 @@ const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: n
             depthWrite
         });
     }
+    const owned = ownReference(created);
     materialCache.set(materialIndex, created);
-    return created;
+    return owned;
 };
 
 type PrimitiveVariantMaterials = {
     variants: Map<number, Material>;
-    ownedMaterials: Material[];
+    ownedMaterials: ImportOwnership<Material>[];
 };
 
-const getPrimitiveVariantMaterials = (doc: GltfDocument, json: GltfRoot, prim: GltfPrimitive, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, opts: ImportGltfOptions | undefined, context: string): PrimitiveVariantMaterials => {
+const getPrimitiveVariantMaterials = (doc: GltfDocument, json: GltfRoot, prim: GltfPrimitive, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, tx: ImportTransaction, opts: ImportGltfOptions | undefined, context: string): PrimitiveVariantMaterials => {
     const ext = (prim.extensions as Record<string, unknown> | undefined)?.["KHR_materials_variants"] as { mappings?: Array<{ material?: number; variants?: number[] }> } | undefined;
     const mappings = Array.isArray(ext?.mappings) ? ext.mappings : [];
     const variantMaterialIndices = new Map<number, number>();
@@ -1277,15 +1378,15 @@ const getPrimitiveVariantMaterials = (doc: GltfDocument, json: GltfRoot, prim: G
         }
     }
     const variants = new Map<number, Material>();
-    const materialByIndex = new Map<number, Material>();
+    const materialByIndex = new Map<number, ImportOwnership<Material>>();
     for (const [variantIndex, materialIndex] of variantMaterialIndices) {
-        let material = materialByIndex.get(materialIndex);
-        if (!material) {
+        let ownedMaterial = materialByIndex.get(materialIndex);
+        if (!ownedMaterial) {
             validateMaterialTextureCoordinates(json.materials?.[materialIndex], prim.attributes, opts, `${context} variant material ${materialIndex}`);
-            material = getOrCreateMaterial(doc, json, materialIndex, materialCache, textureCache, opts);
-            materialByIndex.set(materialIndex, material);
+            ownedMaterial = getOrCreateMaterial(doc, json, materialIndex, materialCache, textureCache, tx, opts);
+            materialByIndex.set(materialIndex, ownedMaterial);
         }
-        variants.set(variantIndex, material);
+        variants.set(variantIndex, ownedMaterial.value);
     }
     return { variants, ownedMaterials: [...materialByIndex.values()] };
 };
@@ -1463,7 +1564,7 @@ const resolveGaussianSplatColorSpace = (value: unknown): SplatFieldColorSpace | 
     return null;
 };
 
-const createSplatFieldFromPrimitive = (doc: GltfDocument, json: GltfRoot, gltfMesh: GltfMesh, meshIndex: number, prim: GltfPrimitive, primIndex: number, node: GltfNode, nodeT: Transform, extensions: GltfImportExtensionsMetadata, opts: ImportGltfOptions): SplatField | null => {
+const createSplatFieldFromPrimitive = (doc: GltfDocument, json: GltfRoot, gltfMesh: GltfMesh, meshIndex: number, prim: GltfPrimitive, primIndex: number, node: GltfNode, nodeT: Transform, extensions: GltfImportExtensionsMetadata, tx: ImportTransaction, opts: ImportGltfOptions): SplatField | null => {
     const context = `Mesh '${gltfMesh.name ?? meshIndex}' primitive ${primIndex}`;
     const extValue = getGaussianSplattingExtension(prim);
     if (!extValue || typeof extValue !== "object" || Array.isArray(extValue)) failGaussianSplatting(context, "extension object is required.");
@@ -1528,6 +1629,7 @@ const createSplatFieldFromPrimitive = (doc: GltfDocument, json: GltfRoot, gltfMe
         shDegree: shAttrs.degree,
         splatCount, colorSpace
     });
+    tx.own(field, `${context} splat field`, (resource) => resource.destroy());
     field.transform.setParent(nodeT);
     return field;
 };
@@ -1660,7 +1762,7 @@ type ImportedMeshNodeObjects = {
     splatFields: SplatField[];
 };
 
-const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: number, node: GltfNode, nodeT: Transform, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, geometryCache: Map<string, Geometry | null>, variantsController: GltfVariantController, extensions: GltfImportExtensionsMetadata, opts: ImportGltfOptions): ImportedMeshNodeObjects => {
+const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: number, node: GltfNode, nodeT: Transform, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, geometryCache: Map<string, Geometry | null>, variantsController: GltfVariantController, extensions: GltfImportExtensionsMetadata, tx: ImportTransaction, opts: ImportGltfOptions): ImportedMeshNodeObjects => {
     if (node.mesh === undefined) return { meshes: [], splatFields: [] };
     const gltfMesh: GltfMesh | undefined = json.meshes?.[node.mesh];
     if (!gltfMesh) { warn(opts, `nodes[].mesh=${node.mesh} missing; skipping mesh node`); return { meshes: [], splatFields: [] }; }
@@ -1680,13 +1782,14 @@ const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: numbe
             warn(opts, `Mesh ${gltfMesh.name ?? node.mesh} primitive ${primIndex}: ignoring optional ${KHR_DRACO_MESH_COMPRESSION} payload and using the uncompressed core primitive.`);
         }
         if (getGaussianSplattingExtension(prim) !== undefined) {
-            const field = createSplatFieldFromPrimitive(doc, json, gltfMesh, node.mesh, prim, primIndex, node, nodeT, extensions, opts);
+            const field = createSplatFieldFromPrimitive(doc, json, gltfMesh, node.mesh, prim, primIndex, node, nodeT, extensions, tx, opts);
             if (field) splatFields.push(field);
             continue;
         }
         const cacheKey = `${node.mesh ?? -1}:${primIndex}`;
         const hasCachedGeometry = geometryCache.has(cacheKey);
         let geom = geometryCache.get(cacheKey);
+        let geometryOwnership: ImportOwnership<Geometry> | null = null;
         const meshName = `${gltfMesh.name ?? `mesh_${node.mesh}`}_${primIndex}`;
         const matJson = prim.material !== undefined ? json.materials?.[prim.material] : undefined;
         validateMaterialTextureCoordinates(matJson, prim.attributes, opts, `Mesh '${gltfMesh.name ?? node.mesh}' primitive ${primIndex}`);
@@ -1701,12 +1804,18 @@ const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: numbe
                 built = null;
             }
             geom = built;
+            if (geom) geometryOwnership = tx.own(geom, `Mesh '${meshName}' geometry reference`, (resource) => resource.release());
             geometryCache.set(cacheKey, geom);
         }
         if (!geom) continue;
-        if (hasCachedGeometry) geom.retain();
-        const mat = getOrCreateMaterial(doc, json, prim.material, materialCache, textureCache, opts);
+        if (hasCachedGeometry) geometryOwnership = tx.own(geom.retain(), `Mesh '${meshName}' geometry reference`, (resource) => resource.release());
+        if (!geometryOwnership) throw new Error(`Mesh '${meshName}': geometry ownership was not registered.`);
+        const materialOwnership = getOrCreateMaterial(doc, json, prim.material, materialCache, textureCache, tx, opts);
+        const mat = materialOwnership.value;
         const mesh = new Mesh(geom, mat);
+        tx.own(mesh, `Mesh '${meshName}'`, (resource) => resource.destroy());
+        geometryOwnership.transfer();
+        materialOwnership.transfer();
         mesh.name = node.name ?? gltfMesh.name ?? `gltf_mesh_${node.mesh}_${primIndex}`;
         mesh.transform.setParent(nodeT);
         const resolvedWeights = resolveMorphWeights(node.weights ?? gltfMesh.weights, geom.morphTargets.length | 0, opts, `Mesh '${mesh.name}' primitive ${primIndex}`);
@@ -1730,14 +1839,14 @@ const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: numbe
             }
         };
         meshes.push(mesh);
-        const variantMaterials = getPrimitiveVariantMaterials(doc, json, prim, materialCache, textureCache, opts, `Mesh '${gltfMesh.name ?? node.mesh}' primitive ${primIndex}`);
+        const variantMaterials = getPrimitiveVariantMaterials(doc, json, prim, materialCache, textureCache, tx, opts, `Mesh '${gltfMesh.name ?? node.mesh}' primitive ${primIndex}`);
         variantsController.register(mesh, mesh.material, variantMaterials.variants);
-        for (const material of variantMaterials.ownedMaterials) material.release();
+        for (const material of variantMaterials.ownedMaterials) material.dispose();
     }
     return { meshes, splatFields };
 };
 
-const instantiateCameraNode = (json: GltfRoot, node: GltfNode, nodeT: Transform, opts: ImportGltfOptions): Camera | null => {
+const instantiateCameraNode = (json: GltfRoot, node: GltfNode, nodeT: Transform, tx: ImportTransaction, opts: ImportGltfOptions): Camera | null => {
     if (node.camera === undefined) return null;
     const cam: GltfCamera | undefined = json.cameras?.[node.camera];
     if (!cam) { warn(opts, `nodes[].camera=${node.camera} missing; skipping camera`); return null; }
@@ -1751,6 +1860,7 @@ const instantiateCameraNode = (json: GltfRoot, node: GltfNode, nodeT: Transform,
         if (!o) { warn(opts, `camera[${node.camera}] missing orthographic block; skipping`); return null; }
         out = new OrthographicCamera({ left: -o.xmag, right: o.xmag, top: o.ymag, bottom: -o.ymag, near: o.znear, far: o.zfar });
     }
+    tx.own(out, `camera ${node.camera}`, (camera) => camera.destroy());
     out.transform.setParent(nodeT);
     return out;
 };
@@ -1800,7 +1910,7 @@ const instantiateLightNode = (light: KHRLightsPunctualLight, nodeT: Transform): 
     return null;
 };
 
-const parseSkins = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedNode[], opts: ImportGltfOptions): ImportedSkin[] => {
+const parseSkins = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedNode[], tx: ImportTransaction, opts: ImportGltfOptions): ImportedSkin[] => {
     const skins = json.skins ?? [];
     const out: ImportedSkin[] = [];
     for (let i = 0; i < skins.length; i++) {
@@ -1819,6 +1929,7 @@ const parseSkins = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedNode[]
         if (inverseBind && inverseBind.length !== s.joints.length * 16) { warn(opts, `skin[${i}] inverseBindMatrices length ${inverseBind.length} does not match ${s.joints.length} joints; using identity inverse binds.`); runtimeInverseBind = undefined; }
         const skel = s.skeleton !== undefined ? nodes[s.skeleton]?.transform : undefined;
         const runtime = missingJoint || joints.length === 0 ? null : new Skin(s.name ?? `skin_${i}`, joints, runtimeInverseBind ?? null);
+        if (runtime) tx.own(runtime, `skin ${i}`, (skin) => skin.dispose());
         if (!runtime) warn(opts, `skin[${i}] has no valid runtime; meshes referencing it will render unskinned.`);
         out.push({ name: s.name, joints, inverseBindMatrices: inverseBind, skeleton: skel, runtime });
     }
@@ -2203,7 +2314,7 @@ const trackAnimationTarget = (seen: Set<string>, canonical: string, animationNam
     seen.add(canonical);
 };
 
-const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedNode[], materialCache: Map<number, Material>, cameraRuntimeMap: Map<number, Camera[]>, lightRuntimeMap: Map<number, Light[]>, extensions: GltfImportExtensionsMetadata, opts: ImportGltfOptions): ImportedAnimation[] => {
+const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedNode[], materialCache: Map<number, Material>, cameraRuntimeMap: Map<number, Camera[]>, lightRuntimeMap: Map<number, Light[]>, extensions: GltfImportExtensionsMetadata, tx: ImportTransaction, opts: ImportGltfOptions): ImportedAnimation[] => {
     const anims = json.animations ?? [];
     const out: ImportedAnimation[] = [];
     const interpToCode = (interp: string): number => {
@@ -2379,9 +2490,10 @@ const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedN
                         pointerSamplers: valueSamplers as AnimationPointerSampler[],
                         pointerChannels
                     });
+                    tx.own(clip, `animation clip '${clip.name}'`, (resource) => resource.dispose());
+                    allocationsTransferred = true;
                 }
                 out.push({ name: a.name, samplers, channels, clip });
-                allocationsTransferred = clip !== null;
             } finally {
                 if (!allocationsTransferred) {
                     for (let ai = ownedF32Allocs.length - 1; ai >= 0; ai--) wasm.freeF32(ownedF32Allocs[ai]!.ptr, ownedF32Allocs[ai]!.len);
@@ -2389,10 +2501,7 @@ const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedN
                 }
             }
         }
-    } catch (error) {
-        for (const animation of out) animation.clip?.dispose();
-        throw error;
-    }
+    } catch (error) { throw error; }
     return out;
 };
 
@@ -2400,124 +2509,143 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
     const json = doc.json;
     validateGltfCompatibility(json);
     const { metadata: extensions, assessments } = buildExtensionsMetadata(json, opts);
-    enforceRequiredExtensions(json, extensions, assessments);
-    const scene = opts.targetScene ?? new Scene();
-    const addToScene = opts.addToScene !== false;
-    const sceneIndex = getSceneIndex(json, opts);
-    const gltfNodes = json.nodes ?? [];
-    const nodes: GltfImportedNode[] = new Array(gltfNodes.length);
-    for (let i = 0; i < gltfNodes.length; i++) {
-        const n: GltfNode = gltfNodes[i]!;
-        const t = new Transform();
-        if (n.matrix && n.matrix.length >= 16) applyNodeMatrixViaWasmDecompose(t, n.matrix);
-        else {
-            const tr = n.translation ?? [0, 0, 0];
-            const ro = n.rotation ?? [0, 0, 0, 1];
-            const sc = n.scale ?? [1, 1, 1];
-            t.setPosition(tr[0], tr[1], tr[2]);
-            t.setRotation(ro[0], ro[1], ro[2], ro[3]);
-            t.setScale(sc[0], sc[1], sc[2]);
-        }
-        nodes[i] = new GltfImportedNode(i, t, n);
-    }
-    for (let i = 0; i < gltfNodes.length; i++) {
-        const n = gltfNodes[i]!;
-        const parentNode = nodes[i]!;
-        for (const child of n.children ?? []) {
-            const childNode = nodes[child];
-            if (childNode) {
-                childNode.transform.setParent(parentNode.transform);
-                childNode.parentIndex = i;
-                childNode.setParentNode(parentNode);
-            }
-            else warn(opts, `Node ${i} child ${child} missing transform`);
-        }
-    }
-    const xmp = buildXmpMetadata(json);
-    const variantsController = createVariantsController(getDeclaredVariants(json, xmp.packets));
-    const skins = parseSkins(doc, json, nodes, opts);
-    const materialCache = new Map<number, Material>();
-    const textureCache = new Map<number, Texture2D>();
-    const geometryCache = new Map<string, Geometry | null>();
-    const meshes: Mesh[] = [];
-    const splatFields: SplatField[] = [];
-    const cameras: Camera[] = [];
-    const lights: Light[] = [];
-    const cameraRuntimeMap = new Map<number, Camera[]>();
-    const lightRuntimeMap = new Map<number, Light[]>();
-    const khrLights = getKHRLightsFromRoot(json);
-    const instantiateNodeRecursive = (nodeIndex: number, inheritedSkinIndex: number | undefined): void => {
-        const node = gltfNodes[nodeIndex];
-        if (!node) return;
-        const importedNode = nodes[nodeIndex];
-        const nodeT = importedNode?.transform;
-        if (!importedNode || !nodeT) return;
-        if (node.extensions?.[EXT_MESH_GPU_INSTANCING] !== undefined && !isExtensionRequired(json, EXT_MESH_GPU_INSTANCING)) warn(opts, `Node ${node.name ?? nodeIndex}: ignoring optional ${EXT_MESH_GPU_INSTANCING}; using the single core node instance because instancing is deferred.`);
-        const createdObjects = instantiateMeshNode(doc, json, nodeIndex, node, nodeT, materialCache, textureCache, geometryCache, variantsController, extensions, opts);
-        const createdMeshes = createdObjects.meshes;
-        const createdSplatFields = createdObjects.splatFields;
-        importedNode.meshes = createdMeshes;
-        importedNode.splatFields = createdSplatFields;
-        importedNode.applyVisibility();
-        const skinIndex = node.skin !== undefined ? (node.skin | 0) : inheritedSkinIndex;
-        if (skinIndex !== undefined) {
-            const skinDef = skins[skinIndex];
-            if (!skinDef || !skinDef.runtime) warn(opts, `nodes[${nodeIndex}].skin=${skinIndex} missing or invalid; skipping skin binding`);
+    enforceRequiredExtensions(json, extensions, assessments, opts);
+    const tx = new ImportTransaction();
+    try {
+        const scene = opts.targetScene ?? new Scene();
+        const addToScene = opts.addToScene !== false;
+        const sceneIndex = getSceneIndex(json, opts);
+        const gltfNodes = json.nodes ?? [];
+        const nodes: GltfImportedNode[] = new Array(gltfNodes.length);
+        for (let i = 0; i < gltfNodes.length; i++) {
+            const n: GltfNode = gltfNodes[i]!;
+            const t = new Transform();
+            tx.own(t, `node ${i} transform`, (transform) => transform.dispose());
+            if (n.matrix && n.matrix.length >= 16) applyNodeMatrixViaWasmDecompose(t, n.matrix);
             else {
-                for (const m of createdMeshes) {
-                    if (m.geometry.joints === null || m.geometry.weights === null) { warn(opts, `Mesh '${m.name}' is skinned (node.skin) but is missing JOINTS_0/WEIGHTS_0; it will render unskinned.`); continue; }
-                    m.skin = skinDef.runtime.createInstance(m.transform);
+                const tr = n.translation ?? [0, 0, 0];
+                const ro = n.rotation ?? [0, 0, 0, 1];
+                const sc = n.scale ?? [1, 1, 1];
+                t.setPosition(tr[0], tr[1], tr[2]);
+                t.setRotation(ro[0], ro[1], ro[2], ro[3]);
+                t.setScale(sc[0], sc[1], sc[2]);
+            }
+            nodes[i] = new GltfImportedNode(i, t, n);
+        }
+        for (let i = 0; i < gltfNodes.length; i++) {
+            const n = gltfNodes[i]!;
+            const parentNode = nodes[i]!;
+            for (const child of n.children ?? []) {
+                const childNode = nodes[child];
+                if (childNode) {
+                    childNode.transform.setParent(parentNode.transform);
+                    childNode.parentIndex = i;
+                    childNode.setParentNode(parentNode);
                 }
+                else warn(opts, `Node ${i} child ${child} missing transform`);
             }
         }
-        for (const m of createdMeshes) { meshes.push(m); if (addToScene) scene.add(m); }
-        for (const s of createdSplatFields) { splatFields.push(s); if (addToScene) scene.add(s); }
-        if (opts.importCameras) { const cam = instantiateCameraNode(json, node, nodeT, opts); if (cam) { cameras.push(cam); importedNode.camera = cam; if (node.camera !== undefined) { const cameraIndex = node.camera | 0; const list = cameraRuntimeMap.get(cameraIndex) ?? []; list.push(cam); cameraRuntimeMap.set(cameraIndex, list); } } }
-        if (opts.importLights && khrLights) {
-            const nodeLight = getNodeKHRLight(node);
-            if (nodeLight) {
-                const lightDef = khrLights.lights[nodeLight.light];
-                if (!lightDef) warn(opts, `KHR_lights_punctual node references missing light ${nodeLight.light}`);
+        const xmp = buildXmpMetadata(json);
+        const variantsController = createVariantsController(getDeclaredVariants(json, xmp.packets));
+        tx.own(variantsController, "material variants controller", (controller) => controller.destroy());
+        const skins = parseSkins(doc, json, nodes, tx, opts);
+        const materialCache = new Map<number, Material>();
+        const textureCache = new Map<number, Texture2D>();
+        const geometryCache = new Map<string, Geometry | null>();
+        const meshes: Mesh[] = [];
+        const splatFields: SplatField[] = [];
+        const cameras: Camera[] = [];
+        const lights: Light[] = [];
+        const cameraRuntimeMap = new Map<number, Camera[]>();
+        const lightRuntimeMap = new Map<number, Light[]>();
+        const khrLights = getKHRLightsFromRoot(json);
+        const instantiateNodeRecursive = (nodeIndex: number, inheritedSkinIndex: number | undefined): void => {
+            const node = gltfNodes[nodeIndex];
+            if (!node) return;
+            const importedNode = nodes[nodeIndex];
+            const nodeT = importedNode?.transform;
+            if (!importedNode || !nodeT) return;
+            if (node.extensions?.[EXT_MESH_GPU_INSTANCING] !== undefined && !isExtensionRequired(json, EXT_MESH_GPU_INSTANCING)) warn(opts, `Node ${node.name ?? nodeIndex}: ignoring optional ${EXT_MESH_GPU_INSTANCING}; using the single core node instance because instancing is deferred.`);
+            const createdObjects = instantiateMeshNode(doc, json, nodeIndex, node, nodeT, materialCache, textureCache, geometryCache, variantsController, extensions, tx, opts);
+            const createdMeshes = createdObjects.meshes;
+            const createdSplatFields = createdObjects.splatFields;
+            importedNode.meshes = createdMeshes;
+            importedNode.splatFields = createdSplatFields;
+            importedNode.applyVisibility();
+            const skinIndex = node.skin !== undefined ? (node.skin | 0) : inheritedSkinIndex;
+            if (skinIndex !== undefined) {
+                const skinDef = skins[skinIndex];
+                if (!skinDef || !skinDef.runtime) warn(opts, `nodes[${nodeIndex}].skin=${skinIndex} missing or invalid; skipping skin binding`);
                 else {
-                    const created = instantiateLightNode(lightDef, nodeT);
-                    if (created) {
-                        bindLightToTransform(created, nodeT);
-                        lights.push(created);
-                        importedNode.light = created;
-                        const lightIndex = nodeLight.light | 0;
-                        const list = lightRuntimeMap.get(lightIndex) ?? [];
-                        list.push(created);
-                        lightRuntimeMap.set(lightIndex, list);
-                        importedNode.applyVisibility();
-                        if (addToScene) scene.addLight(created);
-                    } else warn(opts, `Light '${node.name ?? `index ${nodeIndex}`}' has unsupported type '${lightDef.type}' and was skipped.`);
+                    for (const m of createdMeshes) {
+                        if (m.geometry.joints === null || m.geometry.weights === null) { warn(opts, `Mesh '${m.name}' is skinned (node.skin) but is missing JOINTS_0/WEIGHTS_0; it will render unskinned.`); continue; }
+                        m.skin = skinDef.runtime.createInstance(m.transform);
+                    }
                 }
             }
-        }
-        for (const child of node.children ?? []) instantiateNodeRecursive(child, skinIndex);
-    };
-    const gltfScene: GltfScene | undefined = json.scenes?.[sceneIndex];
-    const roots = gltfScene?.nodes ?? [];
-    for (const root of roots) instantiateNodeRecursive(root, undefined);
-    const animations = parseAnimations(doc, json, nodes, materialCache, cameraRuntimeMap, lightRuntimeMap, extensions, opts);
-    const clips = animations.map((a) => a.clip).filter((c): c is AnimationClip => c !== null);
-    const metadata = buildImportMetadata(json, sceneIndex, extensions, xmp, variantsController.public);
-    let destroyed = false;
-    return {
-        scene, meshes, splatFields, nodes, lights, cameras, skins, animations, clips, metadata,
-        destroy(): void {
-            if (destroyed) return;
-            destroyed = true;
-            if (addToScene) { for (const m of meshes) scene.remove(m); for (const s of splatFields) scene.remove(s); for (const light of lights) scene.removeLight(light); }
-            for (const light of lights) unbindLightTransform(light);
-            for (const m of meshes) m.destroy();
-            for (const s of splatFields) s.destroy();
-            for (const camera of cameras) camera.destroy();
-            for (const a of animations) a.clip?.dispose();
-            for (const s of skins) s.runtime?.dispose();
-            variantsController.destroy();
-            for (const tex of textureCache.values()) tex.destroy();
-            for (const node of nodes) node.transform.dispose();
-        }
-    };
+            for (const m of createdMeshes) {
+                meshes.push(m);
+                if (addToScene) {
+                    scene.add(m);
+                    tx.defer(`scene mesh '${m.name}' membership`, () => scene.remove(m));
+                }
+            }
+            for (const s of createdSplatFields) {
+                splatFields.push(s);
+                if (addToScene) {
+                    scene.add(s);
+                    tx.defer(`scene splat field '${s.name}' membership`, () => scene.remove(s));
+                }
+            }
+            if (opts.importCameras) {
+                const cam = instantiateCameraNode(json, node, nodeT, tx, opts);
+                if (cam) {
+                    cameras.push(cam);
+                    importedNode.camera = cam;
+                    if (node.camera !== undefined) {
+                        const cameraIndex = node.camera | 0;
+                        const list = cameraRuntimeMap.get(cameraIndex) ?? [];
+                        list.push(cam);
+                        cameraRuntimeMap.set(cameraIndex, list);
+                    }
+                }
+            }
+            if (opts.importLights && khrLights) {
+                const nodeLight = getNodeKHRLight(node);
+                if (nodeLight) {
+                    const lightDef = khrLights.lights[nodeLight.light];
+                    if (!lightDef) warn(opts, `KHR_lights_punctual node references missing light ${nodeLight.light}`);
+                    else {
+                        const created = instantiateLightNode(lightDef, nodeT);
+                        if (created) {
+                            bindLightToTransform(created, nodeT);
+                            tx.defer(`light ${nodeLight.light} transform binding`, () => unbindLightTransform(created));
+                            lights.push(created);
+                            importedNode.light = created;
+                            const lightIndex = nodeLight.light | 0;
+                            const list = lightRuntimeMap.get(lightIndex) ?? [];
+                            list.push(created);
+                            lightRuntimeMap.set(lightIndex, list);
+                            importedNode.applyVisibility();
+                            if (addToScene) {
+                                scene.addLight(created);
+                                tx.defer(`scene light ${nodeLight.light} membership`, () => scene.removeLight(created));
+                            }
+                        } else warn(opts, `Light '${node.name ?? `index ${nodeIndex}`}' has unsupported type '${lightDef.type}' and was skipped.`);
+                    }
+                }
+            }
+            for (const child of node.children ?? []) instantiateNodeRecursive(child, skinIndex);
+        };
+        const gltfScene: GltfScene | undefined = json.scenes?.[sceneIndex];
+        const roots = gltfScene?.nodes ?? [];
+        for (const root of roots) instantiateNodeRecursive(root, undefined);
+        const animations = parseAnimations(doc, json, nodes, materialCache, cameraRuntimeMap, lightRuntimeMap, extensions, tx, opts);
+        const clips = animations.map((a) => a.clip).filter((c): c is AnimationClip => c !== null);
+        const metadata = buildImportMetadata(json, sceneIndex, extensions, xmp, variantsController.public);
+        const destroy = tx.commit();
+        return { scene, meshes, splatFields, nodes, lights, cameras, skins, animations, clips, metadata, destroy };
+    } catch (error) {
+        return tx.rollback(error);
+    }
 };

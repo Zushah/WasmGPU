@@ -2,7 +2,7 @@
 
 Latest commit: Thursday, August 13, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Tuesday, August 11, 2026, [**`d203dfb`**](https://www.github.com/Zushah/WasmGPU/commit/d203dfb).
+Parent commit: Thursday, August 13, 2026, [**`a1098b5`**](https://www.github.com/Zushah/WasmGPU/commit/a1098b5).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -420,9 +420,11 @@ Accessor decoding is split between TypeScript and Rust. `./src/gltf/accessors.ts
 
 `./src/gltf/import.ts` converts loaded asset data into scene resources. Current import code covers geometry, materials, textures, skins, animations, morph targets, node transforms, node visibility, animation pointers, scene selection, metadata, material variants, cameras, punctual lights including spot lights, texture transforms, XMP metadata, Gaussian splat primitives from `KHR_gaussian_splatting` into `SplatField`, and material extensions for clearcoat, specular, transmission, volume, diffuse transmission, dispersion, sheen, iridescence, anisotropy, index of refraction, and emissive strength. `KHR_gaussian_splatting` import keeps spherical harmonic degree 0 through degree 3 data as `SplatField` coefficients when complete degree data is present.
 
-Import performs a pure required-extension preflight before constructing scene or runtime resources. `extensionsRequired` failures are strict, while optional deferred features may use usable core representations with explicit warnings. `metadata.extensions.support` reports the per-asset outcome using `supported`, `partial`, `deferred`, and `unsupported`; outcomes degrade monotonically as asset-specific fallback or loss is discovered, and the same assessment feeds required-extension enforcement.
+Import performs a pure required-extension preflight before constructing scene or runtime resources. `extensionsRequired` failures are strict except for explicitly declared approximation policies: required `KHR_materials_pbrSpecularGlossiness` assets may import through the existing diffuse/base-color and glossiness-to-roughness approximation with explicit warnings while remaining reported as `partial`. Optional deferred features may use usable core representations with explicit warnings. `metadata.extensions.support` reports the per-asset outcome using `supported`, `partial`, `deferred`, and `unsupported`; outcomes degrade monotonically as asset-specific fallback or loss is discovered, and the same assessment feeds required-extension enforcement.
 
 The importer mutates scenes, meshes, splatfields, geometry, materials, textures, animations, skin instances, camera data, and light bindings. It reads loaded asset data, WebAssembly decoding helpers, material extension descriptors, texture resources, and transform state. Before changing glTF import, check `./test/gltf.test.js`, examples using glTF, renderer material paths, texture upload behavior, and animation sampling.
+
+`importGltf()` is failure-atomic. A reverse-order ownership transaction registers every transform, resource reference, scene insertion, and light binding immediately after acquisition. Geometry and material reference entries are transferred to a mesh only after the mesh assumes them; the successful `GltfImportResult` adopts the remaining ledger as its idempotent `destroy()` implementation. If any synchronous import phase throws, rollback continues through all registered disposers while preserving the original error, removes only imported objects from a caller-owned target scene, and never truncates the global transform store or destroys the target scene itself. Texture destruction invalidates pending decode/upload generations so asynchronous completion after rollback cannot recreate a GPU resource.
 
 ### 1.16. Animating, skinning, and morphing
 

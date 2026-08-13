@@ -6,7 +6,7 @@
 
 import assert from "./utils/assert.js";
 import { createApproxHelpers, setupTest } from "./utils/helpers.js";
-import { initWebAssembly, readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32, parseGLB, loadGltf, importGltf, isDataUri, decodeDataUri, dirnameUrl, resolveUri, Scene, TransformStore, UnlitMaterial, StandardMaterial, SplatField, wasm } from "../dist/WasmGPU.js";
+import { initWebAssembly, readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32, parseGLB, loadGltf, importGltf, isDataUri, decodeDataUri, dirnameUrl, resolveUri, Scene, Transform, TransformStore, Geometry, Material, Texture2D, AnimationClip, Skin, SkinInstance, Camera, Mesh, PointLight, UnlitMaterial, StandardMaterial, SplatField, wasm } from "../dist/WasmGPU.js";
 
 const pad4 = (n) => (n + 3) & ~3;
 const makeGLB = (gltfJson, binBytes) => {
@@ -760,6 +760,7 @@ await setupTest({ initWebAssembly });
 
 // 9) Failed animation import releases allocations accumulated before the error.
 {
+    const baseTransformCount = TransformStore.global().count;
     const times = new Float32Array([0, 1]);
     const values = new Float32Array([0, 1]);
     const bin = new Uint8Array(times.byteLength + values.byteLength);
@@ -780,7 +781,8 @@ await setupTest({ initWebAssembly });
             samplers: [{ input: 0, output: 1 }, { input: 99, output: 1 }],
             channels: []
         }],
-        scenes: [{ nodes: [] }],
+        nodes: [{}],
+        scenes: [{ nodes: [0] }],
         scene: 0
     }, bin.buffer));
     const originalFreeF32 = wasm.freeF32;
@@ -797,6 +799,7 @@ await setupTest({ initWebAssembly });
     }
     assert.equal(freedF32.filter(([, len]) => len === 2).length, 2, "Failed animation import must free its uploaded times and values");
     assert.ok(freedU32.some(([, len]) => len === 10), "Failed animation import must free its sampler table");
+    assert.equal(TransformStore.global().count, baseTransformCount, "Failed import must dispose node transforms created before animation parsing");
 }
 
 // 10) Validates compatibility and identifies roots from bytes rather than URL spelling.
@@ -913,8 +916,7 @@ await setupTest({ initWebAssembly });
         "KHR_texture_basisu",
         "EXT_mesh_gpu_instancing",
         "EXT_meshopt_compression",
-        "EXT_texture_webp",
-        "KHR_materials_pbrSpecularGlossiness"
+        "EXT_texture_webp"
     ];
     for (const name of requiredNames) {
         const before = TransformStore.global().count;
@@ -943,8 +945,33 @@ await setupTest({ initWebAssembly });
     assert.ok(warnings.some((message) => message.includes("EXT_mesh_gpu_instancing") && message.includes("single core node instance")));
     fallback.destroy();
 
-    const specGloss = importGltf({ json: { asset: { version: "2.0" }, extensionsUsed: ["KHR_materials_pbrSpecularGlossiness"], materials: [{ extensions: { KHR_materials_pbrSpecularGlossiness: { diffuseFactor: [1, 1, 1, 1] } } }] }, buffers: [], baseUrl: "" }, { addToScene: false });
+    const specGlossWarnings = [];
+    const specGloss = importGltf({
+        json: {
+            asset: { version: "2.0" },
+            extensionsUsed: ["KHR_materials_pbrSpecularGlossiness"],
+            extensionsRequired: ["KHR_materials_pbrSpecularGlossiness"],
+            buffers: [{ byteLength: positions.byteLength }],
+            bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: positions.byteLength }],
+            accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3" }],
+            materials: [{ extensions: { KHR_materials_pbrSpecularGlossiness: { diffuseFactor: [0.25, 0.5, 0.75, 0.8], glossinessFactor: 0.2 } } }],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0 }, material: 0 }] }],
+            nodes: [{ mesh: 0 }],
+            scenes: [{ nodes: [0] }],
+            scene: 0
+        },
+        buffers: [positions.buffer],
+        baseUrl: ""
+    }, { addToScene: false, onWarning: (message) => specGlossWarnings.push(message) });
     expectSupport(specGloss.metadata, ["KHR_materials_pbrSpecularGlossiness"], "partial");
+    assert.equal(specGloss.meshes.length, 1);
+    assert.ok(specGloss.meshes[0].material instanceof StandardMaterial);
+    arraysApproxEqual(specGloss.meshes[0].material.color, [0.25, 0.5, 0.75]);
+    numberApproxEqual(specGloss.meshes[0].material.opacity, 0.8);
+    numberApproxEqual(specGloss.meshes[0].material.metallic, 0);
+    numberApproxEqual(specGloss.meshes[0].material.roughness, 0.8);
+    assert.ok(specGlossWarnings.some((message) => message.includes("Required glTF extension") && message.includes("only partially supported")));
+    assert.ok(specGlossWarnings.some((message) => message.includes("approximating using diffuse as baseColor")));
     specGloss.destroy();
 
     const optionalMeshopt = {
@@ -1073,4 +1100,364 @@ await setupTest({ initWebAssembly });
     const gaussianPreflightCount = TransformStore.global().count;
     assert.throws(() => importGltf({ json: gaussianIncompleteSH, buffers: [], baseUrl: "" }, { addToScene: false }), /spherical harmonic attributes must be complete/);
     assert.equal(TransformStore.global().count, gaussianPreflightCount);
+}
+
+// 13) Every import phase rolls back in reverse acquisition order and preserves caller state.
+{
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const joints = new Uint16Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+    const weights = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+    const times = new Float32Array([0, 1]);
+    const translations = new Float32Array([0, 0, 0, 1, 0, 0]);
+    const scalars = new Float32Array([0, 1]);
+    const splatPosition = new Float32Array([0, 0, 0]);
+    const splatRotation = new Float32Array([0, 0, 0, 1]);
+    const splatScale = new Float32Array([1, 1, 1]);
+    const splatOpacity = new Float32Array([1]);
+    const splatSH0 = new Float32Array([0.1, 0.2, 0.3]);
+    const chunks = [positions, joints, weights, times, translations, scalars, splatPosition, splatRotation, splatScale, splatOpacity, splatSH0];
+    let byteLength = 0;
+    const offsets = chunks.map((chunk) => { const offset = byteLength; byteLength += pad4(chunk.byteLength); return offset; });
+    const bin = new Uint8Array(byteLength);
+    chunks.forEach((chunk, index) => copyBytes(bin, offsets[index], chunk));
+    const bufferViews = chunks.map((chunk, index) => ({ buffer: 0, byteOffset: offsets[index], byteLength: chunk.byteLength }));
+    const accessors = [
+        { bufferView: 0, componentType: 5126, count: 3, type: "VEC3" },
+        { bufferView: 1, componentType: 5123, count: 3, type: "VEC4" },
+        { bufferView: 2, componentType: 5126, count: 3, type: "VEC4" },
+        { bufferView: 3, componentType: 5126, count: 2, type: "SCALAR" },
+        { bufferView: 4, componentType: 5126, count: 2, type: "VEC3" },
+        { bufferView: 5, componentType: 5126, count: 2, type: "SCALAR" },
+        { bufferView: 6, componentType: 5126, count: 1, type: "VEC3" },
+        { bufferView: 7, componentType: 5126, count: 1, type: "VEC4" },
+        { bufferView: 8, componentType: 5126, count: 1, type: "VEC3" },
+        { bufferView: 9, componentType: 5126, count: 1, type: "SCALAR" },
+        { bufferView: 10, componentType: 5126, count: 1, type: "VEC3" }
+    ];
+    const goodPrimitive = () => ({
+        attributes: { POSITION: 0, JOINTS_0: 1, WEIGHTS_0: 2 },
+        material: 0,
+        extensions: { KHR_materials_variants: { mappings: [{ material: 1, variants: [0] }] } }
+    });
+    const badPrimitive = () => ({ attributes: { POSITION: 999 } });
+    const makeDocument = () => ({
+        json: {
+            asset: { version: "2.0" },
+            extensionsUsed: ["KHR_materials_variants"],
+            extensions: { KHR_materials_variants: { variants: [{ name: "alternate" }] } },
+            buffers: [{ byteLength: bin.byteLength }],
+            bufferViews: bufferViews.map((view) => ({ ...view })),
+            accessors: accessors.map((accessor) => ({ ...accessor })),
+            images: [{ uri: "data:image/png;base64,AA==" }],
+            textures: [{ source: 0 }],
+            materials: [
+                { pbrMetallicRoughness: { baseColorTexture: { index: 0 } } },
+                { pbrMetallicRoughness: { baseColorFactor: [0, 1, 0, 1] } }
+            ],
+            meshes: [{ primitives: [goodPrimitive()] }],
+            skins: [{ joints: [0] }],
+            nodes: [{ name: "Joint" }, { name: "OwnedMesh", mesh: 0, skin: 0 }],
+            scenes: [{ nodes: [0, 1] }],
+            scene: 0
+        },
+        buffers: [bin.buffer],
+        baseUrl: ""
+    });
+    const appendBadRoot = (doc) => {
+        const meshIndex = doc.json.meshes.length;
+        doc.json.meshes.push({ primitives: [badPrimitive()] });
+        const nodeIndex = doc.json.nodes.length;
+        doc.json.nodes.push({ name: "LateFailure", mesh: meshIndex });
+        doc.json.scenes[0].nodes.push(nodeIndex);
+    };
+    const validAnimation = (name = "valid") => ({
+        name,
+        samplers: [{ input: 3, output: 4 }],
+        channels: [{ sampler: 0, target: { node: 1, path: "translation" } }]
+    });
+    const invalidAnimation = (name = "invalid") => ({
+        name,
+        samplers: [{ input: 3, output: 5 }, { input: 999, output: 5 }],
+        channels: []
+    });
+    const splatPrimitive = {
+        mode: 0,
+        attributes: {
+            POSITION: 6,
+            "KHR_gaussian_splatting:ROTATION": 7,
+            "KHR_gaussian_splatting:SCALE": 8,
+            "KHR_gaussian_splatting:OPACITY": 9,
+            "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0": 10
+        },
+        extensions: { KHR_gaussian_splatting: { kernel: "ellipse", colorSpace: "lin_rec709_display" } }
+    };
+    const scenarios = [
+        {
+            name: "node hierarchy after matrix decomposition",
+            make: () => ({ json: { asset: { version: "2.0" }, nodes: [{ matrix: [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], children: [1] }, { children: [0] }], scenes: [{ nodes: [0] }], scene: 0 }, buffers: [], baseUrl: "" }),
+            options: { addToScene: false },
+            error: /cycle/i
+        },
+        {
+            name: "skin runtime before geometry decode",
+            make: () => { const doc = makeDocument(); doc.json.meshes[0].primitives = [badPrimitive()]; return doc; },
+            options: { addToScene: false },
+            error: /Invalid accessor index: 999/
+        },
+        {
+            name: "first geometry accessor decode",
+            make: () => { const doc = makeDocument(); doc.json.skins = []; doc.json.nodes[1].skin = undefined; doc.json.meshes[0].primitives = [badPrimitive()]; return doc; },
+            options: { addToScene: false },
+            error: /Invalid accessor index: 999/
+        },
+        {
+            name: "cached geometry before material failure",
+            make: () => { const doc = makeDocument(); doc.json.images[0].uri = "data:image/png,%0"; return doc; },
+            options: {},
+            error: /malformed percent escape/i
+        },
+        {
+            name: "scene mesh before a later primitive",
+            make: () => { const doc = makeDocument(); appendBadRoot(doc); return doc; },
+            options: {},
+            error: /Invalid accessor index: 999/
+        },
+        {
+            name: "variant registration before a later primitive",
+            make: () => { const doc = makeDocument(); appendBadRoot(doc); return doc; },
+            options: {},
+            error: /Invalid accessor index: 999/
+        },
+        {
+            name: "texture construction before a later primitive",
+            make: () => { const doc = makeDocument(); appendBadRoot(doc); return doc; },
+            options: {},
+            error: /Invalid accessor index: 999/
+        },
+        {
+            name: "camera construction before a later node",
+            make: () => { const doc = makeDocument(); doc.json.cameras = [{ type: "perspective", perspective: { yfov: 1, znear: 0.1 } }]; doc.json.nodes[0].camera = 0; appendBadRoot(doc); return doc; },
+            options: { importCameras: true },
+            error: /Invalid accessor index: 999/
+        },
+        {
+            name: "light binding and scene insertion before a later node",
+            make: () => { const doc = makeDocument(); doc.json.extensionsUsed.push("KHR_lights_punctual"); doc.json.extensions.KHR_lights_punctual = { lights: [{ type: "point", intensity: 2 }] }; doc.json.nodes[0].extensions = { KHR_lights_punctual: { light: 0 } }; appendBadRoot(doc); return doc; },
+            options: { importLights: true },
+            error: /Invalid accessor index: 999/
+        },
+        {
+            name: "splat field construction before a later node",
+            make: () => { const doc = makeDocument(); doc.json.extensionsUsed.push("KHR_gaussian_splatting"); doc.json.meshes[0].primitives = [splatPrimitive]; doc.json.nodes[1].skin = undefined; appendBadRoot(doc); return doc; },
+            options: {},
+            error: /Invalid accessor index: 999/
+        },
+        {
+            name: "animation allocation after scene objects",
+            make: () => { const doc = makeDocument(); doc.json.animations = [invalidAnimation()]; return doc; },
+            options: {},
+            error: /Invalid accessor index: 999/
+        },
+        {
+            name: "second animation after a completed clip",
+            make: () => { const doc = makeDocument(); doc.json.animations = [validAnimation("first"), invalidAnimation("second")]; return doc; },
+            options: {},
+            error: /Invalid accessor index: 999/
+        }
+    ];
+
+    const cleanupCalls = new Map();
+    const createdTextures = new Set();
+    const addedMeshes = new Set();
+    const addedSplatFields = new Set();
+    const addedLights = new Set();
+    const unboundLights = new Set();
+    const restorers = [];
+    const trackCleanup = (prototype, method, label) => {
+        const original = prototype[method];
+        prototype[method] = function(...args) {
+            const record = cleanupCalls.get(this) ?? { label, count: 0 };
+            record.count++;
+            cleanupCalls.set(this, record);
+            return original.apply(this, args);
+        };
+        restorers.push(() => { prototype[method] = original; });
+    };
+    trackCleanup(Transform.prototype, "dispose", "transform");
+    trackCleanup(Geometry.prototype, "disposeResources", "geometry");
+    trackCleanup(Material.prototype, "disposeResources", "material");
+    trackCleanup(Texture2D.prototype, "destroy", "texture");
+    trackCleanup(AnimationClip.prototype, "dispose", "animation clip");
+    trackCleanup(Skin.prototype, "dispose", "skin");
+    trackCleanup(SkinInstance.prototype, "dispose", "skin instance");
+    trackCleanup(Camera.prototype, "destroy", "camera");
+    trackCleanup(Mesh.prototype, "destroy", "mesh");
+    trackCleanup(SplatField.prototype, "destroy", "splat field");
+    const originalCreateTexture = Texture2D.createFrom;
+    Texture2D.createFrom = (descriptor) => { const texture = originalCreateTexture.call(Texture2D, descriptor); createdTextures.add(texture); return texture; };
+    restorers.push(() => { Texture2D.createFrom = originalCreateTexture; });
+    const originalSceneAdd = Scene.prototype.add;
+    Scene.prototype.add = function(object) {
+        if (object instanceof Mesh) addedMeshes.add(object);
+        if (object instanceof SplatField) addedSplatFields.add(object);
+        return originalSceneAdd.call(this, object);
+    };
+    restorers.push(() => { Scene.prototype.add = originalSceneAdd; });
+    const originalSceneAddLight = Scene.prototype.addLight;
+    Scene.prototype.addLight = function(light) { addedLights.add(light); return originalSceneAddLight.call(this, light); };
+    restorers.push(() => { Scene.prototype.addLight = originalSceneAddLight; });
+    const originalWeakMapDelete = WeakMap.prototype.delete;
+    WeakMap.prototype.delete = function(key) { if (key instanceof PointLight) unboundLights.add(key); return originalWeakMapDelete.call(this, key); };
+    restorers.push(() => { WeakMap.prototype.delete = originalWeakMapDelete; });
+
+    const originalAllocF32 = wasm.allocF32;
+    const originalAllocU32 = wasm.allocU32;
+    const originalFreeF32 = wasm.freeF32;
+    const originalFreeU32 = wasm.freeU32;
+    let liveWasmAllocations = new Map();
+    const allocationKey = (kind, ptr, len) => `${kind}:${ptr}:${len}`;
+    const recordAllocation = (kind, ptr, len) => {
+        if (!ptr) return;
+        const key = allocationKey(kind, ptr, len);
+        liveWasmAllocations.set(key, (liveWasmAllocations.get(key) ?? 0) + 1);
+    };
+    const recordFree = (kind, ptr, len) => {
+        if (!ptr) return;
+        const key = allocationKey(kind, ptr, len);
+        const count = liveWasmAllocations.get(key) ?? 0;
+        assert.ok(count > 0, `Unexpected ${kind} free for ptr=${ptr} len=${len}`);
+        if (count === 1) liveWasmAllocations.delete(key);
+        else liveWasmAllocations.set(key, count - 1);
+    };
+    wasm.allocF32 = (len) => { const ptr = originalAllocF32(len); recordAllocation("f32", ptr, len); return ptr; };
+    wasm.allocU32 = (len) => { const ptr = originalAllocU32(len); recordAllocation("u32", ptr, len); return ptr; };
+    wasm.freeF32 = (ptr, len) => { recordFree("f32", ptr, len); originalFreeF32(ptr, len); };
+    wasm.freeU32 = (ptr, len) => { recordFree("u32", ptr, len); originalFreeU32(ptr, len); };
+    restorers.push(() => { wasm.allocF32 = originalAllocF32; wasm.allocU32 = originalAllocU32; wasm.freeF32 = originalFreeF32; wasm.freeU32 = originalFreeU32; });
+
+    try {
+        for (const scenario of scenarios) {
+            const beforeCallerResources = TransformStore.global().count;
+            const scene = new Scene();
+            const callerGeometry = new Geometry({ positions });
+            const callerMaterial = new StandardMaterial({ color: [0.2, 0.3, 0.4] });
+            const callerMesh = new Mesh(callerGeometry, callerMaterial);
+            const callerSplatField = new SplatField({ splatCount: 0 });
+            const callerLight = new PointLight({ position: [9, 8, 7] });
+            scene.add(callerMesh);
+            scene.add(callerSplatField);
+            scene.addLight(callerLight);
+            const beforeTransforms = TransformStore.global().count;
+            liveWasmAllocations = new Map();
+            const beforeMeshes = [...scene.meshes];
+            const beforeSplatFields = [...scene.splatFields];
+            const beforeLights = [...scene.lights];
+            let error = null;
+            try {
+                const result = importGltf(scenario.make(), { targetScene: scene, ...scenario.options });
+                result.destroy();
+                assert.fail(`${scenario.name}: expected import to fail`);
+            } catch (caught) {
+                error = caught;
+            }
+            assert.ok(scenario.error.test(error?.message ?? String(error)), `${scenario.name}: original contextual error must be preserved`);
+            assert.equal(error?.cleanupErrors, undefined, `${scenario.name}: rollback cleanup must not introduce secondary errors`);
+            assert.equal(TransformStore.global().count, beforeTransforms, `${scenario.name}: transform count must be restored exactly`);
+            assert.deepEqual(scene.meshes, beforeMeshes, `${scenario.name}: target scene meshes must be unchanged`);
+            assert.deepEqual(scene.splatFields, beforeSplatFields, `${scenario.name}: target scene splat fields must be unchanged`);
+            assert.deepEqual(scene.lights, beforeLights, `${scenario.name}: target scene lights must be unchanged`);
+            assert.equal(liveWasmAllocations.size, 0, `${scenario.name}: successful Wasm allocations must be freed (${JSON.stringify([...liveWasmAllocations])})`);
+            scene.remove(callerMesh);
+            scene.remove(callerSplatField);
+            scene.removeLight(callerLight);
+            callerMesh.destroy();
+            callerSplatField.destroy();
+            assert.equal(TransformStore.global().count, beforeCallerResources, `${scenario.name}: caller-owned resources must remain independently destructible after rollback`);
+        }
+
+        const cleanupFailureScene = new Scene();
+        const beforeCleanupFailureTransforms = TransformStore.global().count;
+        const originalRemove = cleanupFailureScene.remove.bind(cleanupFailureScene);
+        let rejectFirstRemoval = true;
+        cleanupFailureScene.remove = (object) => {
+            if (rejectFirstRemoval) {
+                rejectFirstRemoval = false;
+                throw new Error("injected scene removal failure");
+            }
+            return originalRemove(object);
+        };
+        const cleanupFailureDocument = makeDocument();
+        appendBadRoot(cleanupFailureDocument);
+        liveWasmAllocations = new Map();
+        let originalError = null;
+        try {
+            importGltf(cleanupFailureDocument, { targetScene: cleanupFailureScene });
+        } catch (error) {
+            originalError = error;
+        }
+        assert.ok(/Invalid accessor index: 999/.test(originalError?.message ?? String(originalError)), "Rollback must preserve the original import error when one disposer throws");
+        assert.equal(originalError?.cleanupErrors?.length, 1, "Rollback must attach secondary cleanup failures without replacing the import error");
+        assert.equal(cleanupFailureScene.meshes.length, 0, "Best-effort rollback must continue after a scene removal failure");
+        assert.equal(TransformStore.global().count, beforeCleanupFailureTransforms, "Best-effort rollback must continue through transform disposal");
+        assert.equal(liveWasmAllocations.size, 0, "Best-effort rollback must continue through Wasm resource disposal");
+
+        const trackedCreateTexture = Texture2D.createFrom;
+        const originalCreateImageBitmap = globalThis.createImageBitmap;
+        let resolveBitmap;
+        let pendingTexture = null;
+        let gpuTextureCreations = 0;
+        let bitmapCloses = 0;
+        globalThis.createImageBitmap = () => new Promise((resolve) => { resolveBitmap = resolve; });
+        const fakeDevice = {
+            createTexture: () => {
+                gpuTextureCreations++;
+                return { createView: () => ({}), destroy: () => {} };
+            }
+        };
+        const fakeQueue = { copyExternalImageToTexture: () => {} };
+        Texture2D.createFrom = (descriptor) => {
+            const texture = trackedCreateTexture(descriptor);
+            pendingTexture = texture;
+            texture.ensureUploaded(fakeDevice, fakeQueue, "linear");
+            return texture;
+        };
+        try {
+            const pendingUploadDocument = makeDocument();
+            appendBadRoot(pendingUploadDocument);
+            assert.throws(() => importGltf(pendingUploadDocument), /Invalid accessor index: 999/);
+            assert.ok(pendingTexture, "The fault fixture must start a texture upload before the late import failure");
+            resolveBitmap({ width: 1, height: 1, close: () => { bitmapCloses++; } });
+            await Promise.resolve();
+            await Promise.resolve();
+            assert.equal(gpuTextureCreations, 0, "A rolled-back pending texture must not create a GPU resource after decode completes");
+            assert.equal(pendingTexture.uploaded, false, "A rolled-back pending texture must not become uploaded after destruction");
+            assert.equal(bitmapCloses, 1, "A canceled pending byte-source decode must still close its bitmap");
+        } finally {
+            Texture2D.createFrom = trackedCreateTexture;
+            globalThis.createImageBitmap = originalCreateImageBitmap;
+        }
+
+        const beforeSuccessTransforms = TransformStore.global().count;
+        liveWasmAllocations = new Map();
+        const success = importGltf(makeDocument(), { addToScene: false });
+        const successMesh = success.meshes[0];
+        const successGeometry = successMesh.geometry;
+        const successMaterials = [successMesh.material];
+        success.metadata.variants.setActive("alternate");
+        successMaterials.push(successMesh.material);
+        success.destroy();
+        assert.doesNotThrow(() => success.destroy(), "Successful result destruction must remain idempotent");
+        assert.equal(successGeometry._destroyed, true, "Shared imported geometry must release its final reference");
+        for (const material of successMaterials) assert.equal(material._destroyed, true, "Imported baseline and variant materials must release their final references");
+        assert.equal(TransformStore.global().count, beforeSuccessTransforms);
+        assert.equal(liveWasmAllocations.size, 0, "Successful result destruction must free owned Wasm allocations");
+    } finally {
+        for (let i = restorers.length - 1; i >= 0; i--) restorers[i]();
+    }
+
+    for (const [resource, record] of cleanupCalls) assert.equal(record.count, 1, `${record.label} cleanup must run exactly once`);
+    for (const texture of createdTextures) assert.equal(cleanupCalls.get(texture)?.count, 1, "Every constructed texture must be destroyed exactly once");
+    for (const mesh of addedMeshes) assert.equal(mesh.destroyed, true, "Every imported mesh inserted into a scene must be destroyed during rollback");
+    for (const splatField of addedSplatFields) assert.equal(cleanupCalls.get(splatField)?.count, 1, "Every imported splat field inserted into a scene must be destroyed during rollback");
+    for (const light of addedLights) if (light !== undefined && light.type === "point" && light.position[0] !== 9) assert.ok(unboundLights.has(light), "Every imported light binding must be removed during rollback");
 }

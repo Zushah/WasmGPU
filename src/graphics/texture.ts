@@ -90,6 +90,7 @@ export class Texture2D {
     private _sampler: GPUSampler | null = null;
     private _uploadPromise: Promise<void> | null = null;
     private _uploadStarted = false;
+    private _uploadGeneration = 0;
     private _revision = 0;
     private _width = 0;
     private _height = 0;
@@ -150,6 +151,7 @@ export class Texture2D {
     }
 
     destroy(): void {
+        this._uploadGeneration++;
         this._gpuTexture?.destroy();
         this._gpuTexture = null;
         this._viewLinear = null;
@@ -163,6 +165,7 @@ export class Texture2D {
 
     ensureUploaded(device: GPUDevice, queue: GPUQueue, colorSpace: TextureColorSpace = "linear"): void {
         if (this._uploadStarted) return;
+        const uploadGeneration = this._uploadGeneration;
         this._uploadStarted = true;
         this._mipmapColorSpace = colorSpace;
         this._uploadPromise = (async () => {
@@ -170,6 +173,7 @@ export class Texture2D {
             let texture: GPUTexture | null = null;
             try {
                 bitmap = await this.decodeBitmap();
+                if (uploadGeneration !== this._uploadGeneration) return;
                 const w = bitmap.width | 0;
                 const h = bitmap.height | 0;
                 const mipLevelCount = this._mipmaps ? mipLevelCountForSize(w, h) : 1;
@@ -193,9 +197,11 @@ export class Texture2D {
                 this._gpuTexture = texture;
                 this._revision++;
             } catch (e) {
-                this._uploadStarted = false;
-                this._uploadPromise = null;
-                this._mipmapColorSpace = null;
+                if (uploadGeneration === this._uploadGeneration) {
+                    this._uploadStarted = false;
+                    this._uploadPromise = null;
+                    this._mipmapColorSpace = null;
+                }
                 try { texture?.destroy(); } catch { /* ignore */ }
                 throw e;
             } finally {
