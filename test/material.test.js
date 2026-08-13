@@ -66,7 +66,8 @@ const vertexBuffersWithUv1 = [
     { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: "float32x2" }] },
     { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] }
 ];
-const vertexBuffersWithTangent = [...vertexBuffersWithUv1, { arrayStride: 16, attributes: [{ shaderLocation: 12, offset: 0, format: "float32x4" }] }];
+const vertexBuffersWithColor = [...vertexBuffersWithUv1, { arrayStride: 16, attributes: [{ shaderLocation: 13, offset: 0, format: "float32x4" }] }];
+const vertexBuffersWithTangent = [...vertexBuffersWithUv1, { arrayStride: 16, attributes: [{ shaderLocation: 12, offset: 0, format: "float32x4" }] }, { arrayStride: 16, attributes: [{ shaderLocation: 13, offset: 0, format: "float32x4" }] }];
 const vertexBuffersInstancedStandard = [
     ...vertexBuffersWithTangent,
     {
@@ -439,7 +440,7 @@ let cleanupPipeline = null;
     const unlitSceneLayout = createSceneLayout(device, false);
     const skinLayout = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } }] });
     const materialPipelinePromises = [
-        createPipelineAsync(device, unlit.getShaderCode(), [unlitSceneLayout, unlit.createBindGroupLayout(device)], vertexBuffersWithUv1),
+        createPipelineAsync(device, unlit.getShaderCode(), [unlitSceneLayout, unlit.createBindGroupLayout(device)], vertexBuffersWithColor),
         createPipelineAsync(device, standard.getShaderCode(), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersWithTangent),
         createPipelineAsync(device, standard.getShaderCode({ skinned8: true, transmission: true }), [sceneLayout, standard.createBindGroupLayout(device), skinLayout], vertexBuffersSkinned8Standard),
         createPipelineAsync(device, data.getShaderCode(), [sceneLayout, data.createBindGroupLayout(device)], vertexBuffersWithUv0),

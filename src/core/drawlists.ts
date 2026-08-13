@@ -8,7 +8,7 @@ import { TransformStore } from "./transform";
 import { Geometry } from "../graphics/geometry";
 import { BlendMode, Material, StandardMaterial } from "../graphics/material";
 import type { Camera } from "../world/camera";
-import { Mesh, getMeshLocalBoundsSource, getMeshVertexBuffers, getMeshVertexSource } from "../world/mesh";
+import { Mesh, getMeshLocalBoundsSource, getMeshVertexBuffers, getMeshVertexSource, hasMeshMorphRuntime } from "../world/mesh";
 import type { Scene } from "../world/scene";
 import { PointCloud } from "../world/pointcloud";
 import { SplatField } from "../world/splatfield";
@@ -783,22 +783,26 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
             if (geometry !== lastGeometry) geometry.upload(ctx.device);
             if (material !== lastMaterial) ensureMaterialBindGroup(ctx, material);
             if (material !== lastMaterial) { pass.setBindGroup(1, material.bindGroup!); lastMaterial = material; }
-            if (geometry !== lastGeometry || drawItem.vertexSourceId !== lastVertexSourceId || drawItem.skinned !== lastSkinned || drawItem.skinned8 !== lastSkinned8) {
+            const vertexSourceChanged = geometry !== lastGeometry || drawItem.vertexSourceId !== lastVertexSourceId || drawItem.skinned !== lastSkinned || drawItem.skinned8 !== lastSkinned8;
+            if (vertexSourceChanged) {
                 const buffers = getMeshVertexBuffers(mesh, ctx.device, ctx.queue);
                 pass.setVertexBuffer(0, buffers.positionBuffer);
                 pass.setVertexBuffer(1, buffers.normalBuffer);
                 pass.setVertexBuffer(2, geometry.uvBuffer);
                 pass.setVertexBuffer(3, geometry.uv1Buffer);
                 const standardMaterial = material instanceof StandardMaterial;
-                if (standardMaterial) pass.setVertexBuffer(4, geometry.tangentBuffer);
+                if (standardMaterial) {
+                    pass.setVertexBuffer(4, geometry.tangentBuffer);
+                    pass.setVertexBuffer(5, buffers.colorBuffer);
+                } else pass.setVertexBuffer(4, buffers.colorBuffer);
                 if (drawItem.skinned) {
-                    if (standardMaterial) pass.setVertexBuffer(5, geometry.skinInfluenceBuffer!);
+                    if (standardMaterial) pass.setVertexBuffer(6, geometry.skinInfluenceBuffer!);
                     else {
-                        pass.setVertexBuffer(4, geometry.jointsBuffer!);
-                        pass.setVertexBuffer(5, geometry.weightsBuffer!);
+                        pass.setVertexBuffer(5, geometry.jointsBuffer!);
+                        pass.setVertexBuffer(6, geometry.weightsBuffer!);
                         if (drawItem.skinned8) {
-                            pass.setVertexBuffer(6, geometry.joints1Buffer!);
-                            pass.setVertexBuffer(7, geometry.weights1Buffer!);
+                            pass.setVertexBuffer(7, geometry.joints1Buffer!);
+                            pass.setVertexBuffer(8, geometry.weights1Buffer!);
                         }
                     }
                 }
@@ -807,14 +811,14 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
                 lastVertexSourceId = drawItem.vertexSourceId;
                 lastSkinned = drawItem.skinned;
                 lastSkinned8 = drawItem.skinned8;
-            }
+            } else if (hasMeshMorphRuntime(mesh)) getMeshVertexBuffers(mesh, ctx.device, ctx.queue);
             if (drawItem.skinned) {
                 const skin = mesh.skin;
                 if (skin) {
                     skin.ensureGpuResources(ctx.device, ctx.skinBindGroupLayout);
                     const jointCount = skin.jointCount | 0;
                     const jointMatPtr = frameArena.allocF32(jointCount * 16) as WasmPtr;
-                    animf.computeJointMatricesTo(jointMatPtr, skin.skin.jointIndicesPtr, jointCount, skin.skin.invBindPtr, TransformStore.global().worldPtr as WasmPtr, skin.bindMatrixPtr);
+                    animf.computeJointMatricesTo(jointMatPtr, skin.skin.jointIndicesPtr, jointCount, skin.skin.invBindPtr, TransformStore.global().worldPtr as WasmPtr, skin.meshWorldMatrixPtr);
                     ctx.queue.writeBuffer(skin.boneBuffer!, 0, bytes, jointMatPtr, jointCount * 64);
                     pass.setBindGroup(2, skin.bindGroup!);
                 }

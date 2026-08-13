@@ -304,6 +304,5 @@ export type GltfDocument = {
     json: GltfRoot;
     buffers: ArrayBuffer[];
     images?: ArrayBuffer[];
-    baseUrl: string;
-    resourceBaseUrl?: string;
+    resourceBaseUrl: string;
 };

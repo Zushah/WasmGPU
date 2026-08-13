@@ -34,6 +34,7 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
             { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: "float32x2" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] },
             { arrayStride: 16, attributes: [{ shaderLocation: 12, offset: 0, format: "float32x4" }] },
+            { arrayStride: 16, attributes: [{ shaderLocation: 13, offset: 0, format: "float32x4" }] },
             {
                 arrayStride: ctx.INSTANCE_STRIDE_BYTES,
                 stepMode: "instance",
@@ -55,6 +56,7 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
             { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: "float32x3" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: "float32x2" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] },
+            { arrayStride: 16, attributes: [{ shaderLocation: 13, offset: 0, format: "float32x4" }] },
             {
                 arrayStride: ctx.INSTANCE_STRIDE_BYTES,
                 stepMode: "instance",
@@ -77,6 +79,7 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
             { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: "float32x2" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] },
             { arrayStride: 16, attributes: [{ shaderLocation: 12, offset: 0, format: "float32x4" }] },
+            { arrayStride: 16, attributes: [{ shaderLocation: 13, offset: 0, format: "float32x4" }] },
             {
                 arrayStride: 48,
                 attributes: [
@@ -93,6 +96,7 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
             { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: "float32x3" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: "float32x2" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] },
+            { arrayStride: 16, attributes: [{ shaderLocation: 13, offset: 0, format: "float32x4" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" }] },
             { arrayStride: 16, attributes: [{ shaderLocation: 4, offset: 0, format: "float32x4" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 5, offset: 0, format: "uint16x4" }] },
@@ -105,6 +109,7 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
             { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: "float32x2" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] },
             { arrayStride: 16, attributes: [{ shaderLocation: 12, offset: 0, format: "float32x4" }] },
+            { arrayStride: 16, attributes: [{ shaderLocation: 13, offset: 0, format: "float32x4" }] },
             {
                 arrayStride: 24,
                 attributes: [
@@ -119,6 +124,7 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
             { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: "float32x3" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: "float32x2" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] },
+            { arrayStride: 16, attributes: [{ shaderLocation: 13, offset: 0, format: "float32x4" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 3, offset: 0, format: "uint16x4" }] },
             { arrayStride: 16, attributes: [{ shaderLocation: 4, offset: 0, format: "float32x4" }] }
         ];
@@ -128,14 +134,16 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
             { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: "float32x3" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: "float32x2" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] },
-            { arrayStride: 16, attributes: [{ shaderLocation: 12, offset: 0, format: "float32x4" }] }
+            { arrayStride: 16, attributes: [{ shaderLocation: 12, offset: 0, format: "float32x4" }] },
+            { arrayStride: 16, attributes: [{ shaderLocation: 13, offset: 0, format: "float32x4" }] }
         ];
     } else {
         buffers = [
             { arrayStride: 12, attributes: [{ shaderLocation: 0, offset: 0, format: "float32x3" }] },
             { arrayStride: 12, attributes: [{ shaderLocation: 1, offset: 0, format: "float32x3" }] },
             { arrayStride: 8, attributes: [{ shaderLocation: 2, offset: 0, format: "float32x2" }] },
-            { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] }
+            { arrayStride: 8, attributes: [{ shaderLocation: 11, offset: 0, format: "float32x2" }] },
+            { arrayStride: 16, attributes: [{ shaderLocation: 13, offset: 0, format: "float32x4" }] }
         ];
     }
     pipeline = ctx.device.createRenderPipeline({

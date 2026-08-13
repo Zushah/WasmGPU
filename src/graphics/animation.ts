@@ -333,7 +333,6 @@ export class Skin {
 export class SkinInstance {
     readonly skin: Skin;
     readonly meshTransform: Transform;
-    private _bindMatrixPtr: WasmPtr = 0;
     private _disposed: boolean = false;
     boneBuffer: GPUBuffer | null = null;
     bindGroup: GPUBindGroup | null = null;
@@ -342,26 +341,15 @@ export class SkinInstance {
         if (skin.disposed) throw new Error(`Skin '${skin.name}' is disposed (use-after-dispose).`);
         this.skin = skin;
         this.meshTransform = meshTransform;
-        const m = meshTransform.worldMatrix;
-        const bindMatrixPtr = wasm.allocF32(16) as WasmPtr;
-        if (!bindMatrixPtr) throw new Error(`SkinInstance '${skin.name}': bind matrix allocation failed.`);
-        try {
-            const dst = wasm.f32view(bindMatrixPtr, 16);
-            for (let i = 0; i < 16; i++) dst[i] = (m[i] ?? (i % 5 === 0 ? 1 : 0)) as number;
-        } catch (error) {
-            wasm.freeF32(bindMatrixPtr, 16);
-            throw error;
-        }
-        this._bindMatrixPtr = bindMatrixPtr;
     }
 
     get disposed(): boolean {
         return this._disposed;
     }
 
-    get bindMatrixPtr(): WasmPtr {
+    get meshWorldMatrixPtr(): WasmPtr {
         this.assertAlive();
-        return this._bindMatrixPtr;
+        return this.meshTransform.worldMatrixPtr as WasmPtr;
     }
 
     private assertAlive(): void {
@@ -393,8 +381,6 @@ export class SkinInstance {
         this.boneBuffer?.destroy();
         this.boneBuffer = null;
         this.bindGroup = null;
-        if (this._bindMatrixPtr) wasm.freeF32(this._bindMatrixPtr, 16);
-        this._bindMatrixPtr = 0;
         this._disposed = true;
     }
 }

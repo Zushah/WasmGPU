@@ -19,6 +19,7 @@ const { device } = await setupTest({ initWebAssembly, webgpu: true });
     const uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
     const uvs1 = new Float32Array([1, 1, 0, 1, 1, 0]);
     const tangents = new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]);
+    const colors = new Float32Array([1, 0, 0, 0.5, 0, 1, 0, 0.75, 0, 0, 1, 1]);
     const joints = new Uint16Array([0, 1, 0, 0, 1, 2, 0, 0, 2, 3, 0, 0]);
     const weights = new Float32Array([0.75, 0.25, 0, 0, 0.5, 0.5, 0, 0, 0.2, 0.8, 0, 0]);
     const joints1 = new Uint16Array([4, 5, 0, 0, 5, 6, 0, 0, 6, 7, 0, 0]);
@@ -26,7 +27,7 @@ const { device } = await setupTest({ initWebAssembly, webgpu: true });
     const indices = new Uint32Array([0, 1, 2]);
     const morphPositions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
     const geometry = new Geometry({
-        positions, normals, tangents, uvs, uvs1, joints, weights, joints1, weights1, indices,
+        positions, normals, tangents, colors, uvs, uvs1, joints, weights, joints1, weights1, indices,
         morphTargets: [{ positions: morphPositions }],
         authoredNormals: true
     });
@@ -35,6 +36,7 @@ const { device } = await setupTest({ initWebAssembly, webgpu: true });
     assert.equal(geometry.indexCount, 3);
     assert.equal(geometry.authoredNormals, true);
     assert.equal(geometry.tangents, tangents);
+    assert.equal(geometry.colors, colors);
     assert.equal(geometry.morphTargets.length, 1);
     assert.equal(geometry.morphTargets[0].positions, morphPositions);
     arraysApproxEqual(Array.from(geometry.boundsMin), [-1, -2, -3]);
@@ -45,6 +47,7 @@ const { device } = await setupTest({ initWebAssembly, webgpu: true });
     assert.equal(geometry.isSkinned8, false);
     assert.throws(() => geometry.positionBuffer, /not uploaded/);
     assert.throws(() => geometry.tangentBuffer, /not uploaded/);
+    assert.throws(() => geometry.colorBuffer, /not uploaded/);
     geometry.destroy();
     assert.throws(() => geometry.positionBuffer, /already been released/);
 }
@@ -165,10 +168,12 @@ const { device } = await setupTest({ initWebAssembly, webgpu: true });
     const fallbackPositions = makeView(9, "f32", "geometry:wasm:fallback:positions", 9);
     const fallbackNormals = makeView(9, "f32", "geometry:wasm:fallback:normals", 9);
     const fallbackTangents = makeView(12, "f32", "geometry:wasm:fallback:tangents", 12);
+    const fallbackColors = makeView(12, "f32", "geometry:wasm:fallback:colors", 12);
     const fallbackUvs = makeView(6, "f32", "geometry:wasm:fallback:uvs", 6);
     setPositions(fallbackPositions.data, 3, 0);
     fallbackNormals.data.fill(0.5);
     fallbackTangents.data.fill(0.25);
+    fallbackColors.data.fill(0.125);
     fallbackUvs.data.fill(0.75);
     const { result: fallback, messages: tangentWarnings } = safelySilence(
         "warn",
@@ -176,6 +181,7 @@ const { device } = await setupTest({ initWebAssembly, webgpu: true });
             wasmPositions: fallbackPositions.view,
             wasmNormals: fallbackNormals.view,
             wasmTangents: fallbackTangents.view,
+            wasmColors: fallbackColors.view,
             wasmUvs: fallbackUvs.view
         })
     );
@@ -191,7 +197,12 @@ const { device } = await setupTest({ initWebAssembly, webgpu: true });
     fallback.upload(device);
     assert.ok(fallback.normalBuffer.size >= 9 * 4, "Fallback normals should upload after clearing wasmNormals");
     assert.ok(fallback.tangentBuffer.size >= 12 * 4, "Fallback tangents should upload after clearing wasmTangents");
+    assert.ok(fallback.colorBuffer.size >= 12 * 4, "Wasm colors should upload as a four-component vertex stream");
     assert.ok(fallback.uvBuffer.size >= 6 * 4, "Fallback UVs should upload after clearing wasmUvs");
+    fallback.setWasmColors(null);
+    assert.equal(fallback.colors.length, 12, "Clearing wasmColors should restore the white RGBA fallback");
+    assert.ok(fallback.colors.every((value) => value === 1), "Missing colors should default to white RGBA values");
+    fallback.upload(device);
     const fallbackNormalBuffer = fallback.normalBuffer;
     const tooShortFallbackNormals = makeView(6, "f32", "geometry:wasm:fallback:short:normals", 6);
     assert.throws(() => fallback.setWasmNormals(tooShortFallbackNormals.view, { vertexCount: 3 }), /wasmNormals length must be at least vertexCount\*3/i, "Rejected wasmNormals should validate before clearing fallback state");

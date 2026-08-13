@@ -54,12 +54,13 @@ export const warmMeshDrawList = (ctx: RendererContext, items: DrawItem[]): void 
             j++;
         }
         const runCount = j - i;
-        if (geometry !== lastGeometry || vertexSourceId !== lastVertexSourceId) {
+        const vertexSourceChanged = geometry !== lastGeometry || vertexSourceId !== lastVertexSourceId;
+        if (vertexSourceChanged) {
             geometry.upload(ctx.device);
             getMeshVertexBuffers(first.mesh, ctx.device, ctx.queue);
             lastGeometry = geometry;
             lastVertexSourceId = vertexSourceId;
-        }
+        } else if (hasMeshMorphRuntime(first.mesh)) getMeshVertexBuffers(first.mesh, ctx.device, ctx.queue);
         if (material !== lastMaterial) {
             ensureMaterialBindGroup(ctx, material);
             lastMaterial = material;
@@ -83,7 +84,7 @@ export const warmSkinResources = (ctx: RendererContext, skin: Mesh["skin"]): voi
     skin.ensureGpuResources(ctx.device, ctx.skinBindGroupLayout);
     const jointCount = skin.jointCount | 0;
     const jointMatPtr = frameArena.allocF32(jointCount * 16) as WasmPtr;
-    animf.computeJointMatricesTo(jointMatPtr, skin.skin.jointIndicesPtr, jointCount, skin.skin.invBindPtr, TransformStore.global().worldPtr as WasmPtr, skin.bindMatrixPtr);
+    animf.computeJointMatricesTo(jointMatPtr, skin.skin.jointIndicesPtr, jointCount, skin.skin.invBindPtr, TransformStore.global().worldPtr as WasmPtr, skin.meshWorldMatrixPtr);
     const bytes = driver.bytes();
     ctx.queue.writeBuffer(skin.boneBuffer!, 0, bytes, jointMatPtr, jointCount * 64);
 };
@@ -166,33 +167,37 @@ export const executeDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder
             j++;
         }
         const runCount = j - i;
-        if (geometry !== lastGeometry || vertexSourceId !== lastVertexSourceId) geometry.upload(ctx.device);
+        const vertexSourceChanged = pipeline !== lastPipeline || geometry !== lastGeometry || vertexSourceId !== lastVertexSourceId;
+        if (vertexSourceChanged) geometry.upload(ctx.device);
         if (material !== lastMaterial) ensureMaterialBindGroup(ctx, material);
         if (pipeline !== lastPipeline) { pass.setPipeline(pipeline); lastPipeline = pipeline; }
         if (material !== lastMaterial) { pass.setBindGroup(1, material.bindGroup!); lastMaterial = material; }
-        if (geometry !== lastGeometry || vertexSourceId !== lastVertexSourceId) {
+        if (vertexSourceChanged) {
             const buffers = getMeshVertexBuffers(first.mesh, ctx.device, ctx.queue);
             pass.setVertexBuffer(0, buffers.positionBuffer);
             pass.setVertexBuffer(1, buffers.normalBuffer);
             pass.setVertexBuffer(2, geometry.uvBuffer);
             pass.setVertexBuffer(3, geometry.uv1Buffer);
             const standardMaterial = material instanceof StandardMaterial;
-            if (standardMaterial) pass.setVertexBuffer(4, geometry.tangentBuffer);
+            if (standardMaterial) {
+                pass.setVertexBuffer(4, geometry.tangentBuffer);
+                pass.setVertexBuffer(5, buffers.colorBuffer);
+            } else pass.setVertexBuffer(4, buffers.colorBuffer);
             if (first.skinned) {
-                if (standardMaterial) pass.setVertexBuffer(5, geometry.skinInfluenceBuffer!);
+                if (standardMaterial) pass.setVertexBuffer(6, geometry.skinInfluenceBuffer!);
                 else {
-                    pass.setVertexBuffer(4, geometry.jointsBuffer!);
-                    pass.setVertexBuffer(5, geometry.weightsBuffer!);
+                    pass.setVertexBuffer(5, geometry.jointsBuffer!);
+                    pass.setVertexBuffer(6, geometry.weightsBuffer!);
                     if (first.skinned8) {
-                        pass.setVertexBuffer(6, geometry.joints1Buffer!);
-                        pass.setVertexBuffer(7, geometry.weights1Buffer!);
+                        pass.setVertexBuffer(7, geometry.joints1Buffer!);
+                        pass.setVertexBuffer(8, geometry.weights1Buffer!);
                     }
                 }
             }
             if (geometry.isIndexed) pass.setIndexBuffer(geometry.indexBuffer!, "uint32");
             lastGeometry = geometry;
             lastVertexSourceId = vertexSourceId;
-        }
+        } else if (hasMeshMorphRuntime(first.mesh)) getMeshVertexBuffers(first.mesh, ctx.device, ctx.queue);
         const canInstance = runCount > 1 && !first.skinned && !hasMeshMorphRuntime(first.mesh) && materialSupportsInstancing(ctx, material) && items === ctx.opaqueDrawList;
         if (canInstance) {
             const instancedPipeline = getOrCreatePipeline(ctx, material, true, false, false, first.mirrored);
@@ -214,7 +219,7 @@ export const executeDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder
                     skin.ensureGpuResources(ctx.device, ctx.skinBindGroupLayout);
                     const jointCount = skin.jointCount | 0;
                     const jointMatPtr = frameArena.allocF32(jointCount * 16) as WasmPtr;
-                    animf.computeJointMatricesTo(jointMatPtr, skin.skin.jointIndicesPtr, jointCount, skin.skin.invBindPtr, TransformStore.global().worldPtr as WasmPtr, skin.bindMatrixPtr);
+                    animf.computeJointMatricesTo(jointMatPtr, skin.skin.jointIndicesPtr, jointCount, skin.skin.invBindPtr, TransformStore.global().worldPtr as WasmPtr, skin.meshWorldMatrixPtr);
                     ctx.queue.writeBuffer(skin.boneBuffer!, 0, bytes, jointMatPtr, jointCount * 64);
                     pass.setBindGroup(2, skin.bindGroup!);
                 }
@@ -448,8 +453,12 @@ export const drawInstancedRun = (ctx: RendererContext, pass: GPURenderPassEncode
     pass.setBindGroup(0, ctx.globalBindGroups[0]);
     if (material instanceof StandardMaterial) {
         pass.setVertexBuffer(4, geometry.tangentBuffer);
+        pass.setVertexBuffer(5, geometry.colorBuffer);
+        pass.setVertexBuffer(6, ctx.instanceBuffer!, dstOffset, outBytes);
+    } else {
+        pass.setVertexBuffer(4, geometry.colorBuffer);
         pass.setVertexBuffer(5, ctx.instanceBuffer!, dstOffset, outBytes);
-    } else pass.setVertexBuffer(4, ctx.instanceBuffer!, dstOffset, outBytes);
+    }
     if (geometry.isIndexed) pass.drawIndexed(geometry.indexCount, count);
     else pass.draw(geometry.vertexCount, count);
     ctx.instanceBufferOffset = dstEnd;

@@ -208,6 +208,69 @@ pub(crate) fn deinterleave(
     true
 }
 
+pub(crate) fn compact(
+    out: &mut [u8],
+    src: &[u8],
+    count: usize,
+    rows: usize,
+    columns: usize,
+    component_bytes_size: usize,
+    column_stride: usize,
+    element_stride: usize,
+) -> bool {
+    if count == 0 || rows == 0 || columns == 0 || component_bytes_size == 0 {
+        return false;
+    }
+    let logical_column_bytes = match rows.checked_mul(component_bytes_size) {
+        Some(v) => v,
+        None => return false,
+    };
+    if column_stride < logical_column_bytes {
+        return false;
+    }
+    let natural_element_stride = match column_stride.checked_mul(columns) {
+        Some(v) => v,
+        None => return false,
+    };
+    if element_stride < natural_element_stride {
+        return false;
+    }
+    let logical_element_bytes = match logical_column_bytes.checked_mul(columns) {
+        Some(v) => v,
+        None => return false,
+    };
+    let final_column_offset = match column_stride.checked_mul(columns - 1) {
+        Some(v) => v,
+        None => return false,
+    };
+    let final_source_end = match (count - 1)
+        .checked_mul(element_stride)
+        .and_then(|v| v.checked_add(final_column_offset))
+        .and_then(|v| v.checked_add(logical_column_bytes))
+    {
+        Some(v) => v,
+        None => return false,
+    };
+    let output_len = match count.checked_mul(logical_element_bytes) {
+        Some(v) => v,
+        None => return false,
+    };
+    if src.len() < final_source_end || out.len() < output_len {
+        return false;
+    }
+    for element in 0..count {
+        let src_element = element * element_stride;
+        let dst_element = element * logical_element_bytes;
+        for column in 0..columns {
+            let src_column = src_element + column * column_stride;
+            let dst_column = dst_element + column * logical_column_bytes;
+            out[dst_column..dst_column + logical_column_bytes]
+                .copy_from_slice(&src[src_column..src_column + logical_column_bytes]);
+        }
+    }
+    true
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn accessor_deinterleave(
     out_ptr: u32,
@@ -219,24 +282,78 @@ pub unsafe extern "C" fn accessor_deinterleave(
 ) -> u32 {
     with_driver_call(|call| unsafe {
         let n = count as usize;
-        let comps = num_components as usize;
+        let encoded_components = num_components;
+        let matrix = encoded_components & 0x8000_0000 != 0;
+        let logical_components = (encoded_components & 0x7fff_ffff) as usize;
+        let (rows, columns) = if matrix {
+            let side = (logical_components as f64).sqrt() as usize;
+            (side, side)
+        } else {
+            (logical_components, 1)
+        };
         let comp_bytes = component_bytes_size as usize;
         let stride = byte_stride as usize;
-        if out_ptr == 0 || src_ptr == 0 || comps == 0 || comp_bytes == 0 {
+        if out_ptr == 0
+            || src_ptr == 0
+            || logical_components == 0
+            || comp_bytes == 0
+            || rows == 0
+            || columns == 0
+            || rows.checked_mul(columns) != Some(logical_components)
+        {
             return 0;
         }
         if n == 0 {
             return 0;
         }
-        let elem_bytes = comps * comp_bytes;
-        if stride < elem_bytes {
-            return 0;
-        }
-        let src_len = (n - 1) * stride + elem_bytes;
-        let out_len = n * elem_bytes;
+        let logical_column_bytes = match rows.checked_mul(comp_bytes) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let column_stride = if matrix && comp_bytes < 4 {
+            match logical_column_bytes.checked_add(3) {
+                Some(v) => v & !3,
+                None => return 0,
+            }
+        } else {
+            logical_column_bytes
+        };
+        let logical_element_bytes = match logical_column_bytes.checked_mul(columns) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let final_column_offset = match (columns - 1).checked_mul(column_stride) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let src_len = match (n - 1)
+            .checked_mul(stride)
+            .and_then(|v| v.checked_add(final_column_offset))
+            .and_then(|v| v.checked_add(logical_column_bytes))
+        {
+            Some(v) => v,
+            None => return 0,
+        };
+        let out_len = match n.checked_mul(logical_element_bytes) {
+            Some(v) => v,
+            None => return 0,
+        };
         let src = u8_slice(call, src_ptr, src_len);
         let out = u8_slice_mut(call, out_ptr, out_len);
-        deinterleave(out, src, n, comps, comp_bytes, stride);
+        if matrix {
+            compact(
+                out,
+                src,
+                n,
+                rows,
+                columns,
+                comp_bytes,
+                column_stride,
+                stride,
+            );
+        } else {
+            deinterleave(out, src, n, logical_components, comp_bytes, stride);
+        }
         0
     })
 }
@@ -264,20 +381,55 @@ pub unsafe extern "C" fn accessor_apply_sparse(
         if comp_bytes == 0 || idx_bytes == 0 || comps == 0 || scount == 0 || out_comps == 0 {
             return 0;
         }
-        let elem_bytes = comps * comp_bytes;
-        let out = u8_slice_mut(call, out_ptr, out_comps * comp_bytes);
-        let indices = u8_slice(call, indices_ptr, scount * idx_bytes);
-        let values = u8_slice(call, values_ptr, scount * elem_bytes);
+        let elem_bytes = match comps.checked_mul(comp_bytes) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let out_bytes = match out_comps.checked_mul(comp_bytes) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let indices_bytes = match scount.checked_mul(idx_bytes) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let values_bytes = match scount.checked_mul(elem_bytes) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let out = u8_slice_mut(call, out_ptr, out_bytes);
+        let indices = u8_slice(call, indices_ptr, indices_bytes);
+        let values = u8_slice(call, values_ptr, values_bytes);
         for i in 0..scount {
             let dst_index = read_sparse_index(indices, i, indices_component_type) as usize;
-            let dst_component_base = dst_index * comps;
-            if dst_component_base + comps > out_comps {
+            let dst_component_base = match dst_index.checked_mul(comps) {
+                Some(v) => v,
+                None => continue,
+            };
+            let dst_component_end = match dst_component_base.checked_add(comps) {
+                Some(v) => v,
+                None => continue,
+            };
+            if dst_component_end > out_comps {
                 continue;
             }
-            let dst_byte_base = dst_component_base * comp_bytes;
-            let src_byte_base = i * elem_bytes;
-            out[dst_byte_base..dst_byte_base + elem_bytes]
-                .copy_from_slice(&values[src_byte_base..src_byte_base + elem_bytes]);
+            let dst_byte_base = match dst_component_base.checked_mul(comp_bytes) {
+                Some(v) => v,
+                None => continue,
+            };
+            let src_byte_base = match i.checked_mul(elem_bytes) {
+                Some(v) => v,
+                None => continue,
+            };
+            let dst_byte_end = match dst_byte_base.checked_add(elem_bytes) {
+                Some(v) => v,
+                None => continue,
+            };
+            let src_byte_end = match src_byte_base.checked_add(elem_bytes) {
+                Some(v) => v,
+                None => continue,
+            };
+            out[dst_byte_base..dst_byte_end].copy_from_slice(&values[src_byte_base..src_byte_end]);
         }
         0
     })
@@ -303,7 +455,11 @@ pub unsafe extern "C" fn accessor_convert_to_f32(
         if comp_bytes == 0 {
             return 0;
         }
-        let src = u8_slice(call, src_ptr, count * comp_bytes);
+        let src_len = match count.checked_mul(comp_bytes) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let src = u8_slice(call, src_ptr, src_len);
         let out = f32_slice_mut(call, out_ptr, count);
         for (i, value) in out.iter_mut().enumerate() {
             *value = component_to_f32(src, i, component_type, normalized != 0);
@@ -331,8 +487,16 @@ pub unsafe extern "C" fn accessor_convert_to_u16(
         if comp_bytes == 0 {
             return 0;
         }
-        let src = u8_slice(call, src_ptr, count * comp_bytes);
-        let out = u8_slice_mut(call, out_ptr, count * 2);
+        let src_len = match count.checked_mul(comp_bytes) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let out_len = match count.checked_mul(2) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let src = u8_slice(call, src_ptr, src_len);
+        let out = u8_slice_mut(call, out_ptr, out_len);
         for i in 0..count {
             let out_value = component_to_u16(src, i, component_type);
             let bytes = out_value.to_le_bytes();
@@ -363,8 +527,16 @@ pub unsafe extern "C" fn accessor_convert_to_u32(
         if comp_bytes == 0 {
             return 0;
         }
-        let src = u8_slice(call, src_ptr, count * comp_bytes);
-        let out = u8_slice_mut(call, out_ptr, count * 4);
+        let src_len = match count.checked_mul(comp_bytes) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let out_len = match count.checked_mul(4) {
+            Some(v) => v,
+            None => return 0,
+        };
+        let src = u8_slice(call, src_ptr, src_len);
+        let out = u8_slice_mut(call, out_ptr, out_len);
         for i in 0..count {
             let v = read_component_as_f64(src, i, component_type);
             let out_value = js_to_u32(v);

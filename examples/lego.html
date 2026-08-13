@@ -61,7 +61,7 @@
             try {
                 const gltf = await wgpu.gltf.loadAndImport(ASSET_URL, {
                     load: {
-                        baseUrl: ASSET_BASE_URL,
+                        resourceBaseUrl: ASSET_BASE_URL,
                         fetch: createProgressFetch("Loading splatfield glTF asset"),
                         onWarning: console.warn
                     },

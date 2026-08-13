@@ -2,7 +2,7 @@
 
 Latest commit: Thursday, August 13, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Thursday, August 13, 2026, [**`a1098b5`**](https://www.github.com/Zushah/WasmGPU/commit/a1098b5).
+Parent commit: Thursday, August 13, 2026, [**`a13ddea`**](https://www.github.com/Zushah/WasmGPU/commit/a13ddea).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -298,7 +298,7 @@ Capacity growth allocates and copies replacement structure-of-arrays blocks befo
 
 Graphics data is implemented under `./src/graphics/`.
 
-`./src/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It can also borrow external `WasmMemoryView` sources for mesh vertex attributes and indices, explicitly refresh them, and upload active ranges into geometry-owned GPU buffers without owning or freeing the external WebAssembly memory. It calls Rust bounds and normal-generation functions through `./src/wasm/index.ts`; these synchronous operations use scoped WebAssembly heap scratch that is released after results are copied into JavaScript-owned arrays. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry.
+`./src/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, RGBA vertex colors, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It can also borrow external `WasmMemoryView` sources for mesh vertex attributes, colors, and indices, explicitly refresh them, and upload active ranges into geometry-owned GPU buffers without owning or freeing the external WebAssembly memory. It calls Rust bounds and normal-generation functions through `./src/wasm/index.ts`; these synchronous operations use scoped WebAssembly heap scratch that is released after results are copied into JavaScript-owned arrays. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry.
 
 `./src/graphics/material.ts` implements `Material`, `UnlitMaterial`, `StandardMaterial`, `DataMaterial`, and `CustomMaterial`. Materials own uniform buffers, bind groups, texture references, WebGPU state flags, and dirty state. `StandardMaterial` currently includes glTF-style properties for base color, metallic roughness, normal maps, occlusion, emissive maps, clearcoat, transmission, volume, diffuse transmission, dispersion, specular, sheen, iridescence, anisotropy, index of refraction, and emissive strength.
 
@@ -414,9 +414,9 @@ Changing scaling behavior requires checking `./src/scaling/`, data-source object
 
 glTF loading and import are implemented under `./src/gltf/`. The loader reads JSON `.gltf` files, binary `.glb` files, external buffers, embedded buffers, and image resources. URI resolution is implemented in `./src/gltf/uri.ts`; GLB parsing is in `./src/gltf/glb.ts`.
 
-Root sources are fetched or read once, classified from the first four bytes, decoded with fatal UTF-8 JSON parsing when they are not GLB, and passed through the shared glTF compatibility gate. URL loads retain the exact response URL as `GltfDocument.resourceBaseUrl` for WHATWG external-resource resolution, while `baseUrl` remains the backward-compatible directory-style value; explicit bases and in-memory sources are normalized as directories. Data URLs are parsed as RFC 2397 octets, including percent-decoded bytes, literal plus signs, media-type parameters, and percent-escaped base64.
+Root sources are fetched or read once, classified from the first four bytes, decoded with fatal UTF-8 JSON parsing when they are not GLB, and passed through the shared glTF compatibility gate. URL loads retain the final response URL as `GltfDocument.resourceBaseUrl` for WHATWG external-resource resolution, while an explicit `LoadGltfOptions.resourceBaseUrl` and in-memory sources are normalized as directories. Data URLs are parsed as RFC 2397 octets, including percent-decoded bytes, literal plus signs, media-type parameters, and percent-escaped base64.
 
-Accessor decoding is split between TypeScript and Rust. `./src/gltf/accessors.ts` reads accessor descriptors, buffer views, sparse data, component types, normalization rules, and typed-array output requirements. Numeric conversion, deinterleaving, and sparse patching call Rust functions in `./rust/src/accessors.rs`.
+Accessor decoding is split between TypeScript and Rust. `./src/gltf/accessors.ts` reads accessor descriptors, buffer views, sparse data, component types, normalization rules, and typed-array output requirements. It compacts padded MAT2/MAT3/MAT4 column layouts, including interleaved and sparse values, into logical typed arrays while retaining tight aligned zero-copy access. Numeric conversion, generalized compaction/deinterleaving, and sparse patching call Rust functions in `./rust/src/accessors.rs`.
 
 `./src/gltf/import.ts` converts loaded asset data into scene resources. Current import code covers geometry, materials, textures, skins, animations, morph targets, node transforms, node visibility, animation pointers, scene selection, metadata, material variants, cameras, punctual lights including spot lights, texture transforms, XMP metadata, Gaussian splat primitives from `KHR_gaussian_splatting` into `SplatField`, and material extensions for clearcoat, specular, transmission, volume, diffuse transmission, dispersion, sheen, iridescence, anisotropy, index of refraction, and emissive strength. `KHR_gaussian_splatting` import keeps spherical harmonic degree 0 through degree 3 data as `SplatField` coefficients when complete degree data is present.
 
@@ -432,9 +432,9 @@ Animation code is implemented in `./src/graphics/animation.ts`. `AnimationClip` 
 
 `AnimationPlayer` advances time, handles looping and clamping, and samples a clip. It mutates target transforms, morph weights, imported node visibility, material factors, texture transforms, camera projection properties, and punctual-light properties when a clip contains those channels.
 
-`Skin` stores joint transform indices and inverse bind matrices in WebAssembly memory. `SkinInstance` owns a GPU bone buffer, bind group, and bind matrix memory. The renderer updates joint matrices through Rust before drawing skinned meshes. Shader variants under `./src/wgsl/graphics/` cover normal, skinned, and skinned8 paths.
+`Skin` stores joint transform indices and inverse bind matrices in WebAssembly memory. `SkinInstance` owns a GPU bone buffer and bind group, and exposes the mesh transform's live world-matrix pointer for joint-matrix evaluation. The renderer updates joint matrices through Rust before drawing skinned meshes. Shader variants under `./src/wgsl/graphics/` cover normal, skinned, and skinned8 paths.
 
-Morph target runtime state is attached to meshes in `./src/world/mesh.ts`. When morph weights change, the mesh updates CPU-side morphed positions and normals, updates GPU buffers, and recomputes bounds used by the renderer.
+Morph target runtime state is attached to meshes in `./src/world/mesh.ts`. When morph weights change, the mesh updates CPU-side morphed positions, normals, and RGBA colors, clamps morphed colors to `[0,1]`, updates GPU buffers, and recomputes bounds used by the renderer. glTF node skins are node-local; they are not inherited by child mesh nodes.
 
 Animation changes should be checked against glTF import, mesh morph handling, skin buffer layout, shader variants, and renderer draw-list paths.
 
@@ -614,7 +614,7 @@ Architectural role:
 
 Important files:
 
-- `./src/graphics/geometry.ts`: vertex data, index data, WASM-memory upload, tangent generation, normal generation, bounds, morph target arrays, GPU buffers, reference counting, and primitive geometry factories.
+- `./src/graphics/geometry.ts`: vertex data, index data, RGBA color channels, WASM-memory upload, tangent generation, normal generation, bounds, morph target arrays, GPU buffers, reference counting, and primitive geometry factories.
 - `./src/graphics/material.ts`: material base class, unlit material, standard material, data material, custom material, uniform packing, texture references, bind groups, and reference counting.
 - `./src/graphics/texture.ts`: texture descriptors, image loading, GPU texture upload, mipmap generation, sampler setup, fallback behavior, and destruction.
 - `./src/graphics/colormap.ts`: built-in and caller-provided color stops, CPU lookup tables, optional external GPU texture views, GPU resource caching, and CPU sampling helpers.
@@ -674,7 +674,7 @@ Important files:
 - `./src/gltf/loader.ts`: asset loading, buffer loading, image loading, and resource resolution.
 - `./src/gltf/glb.ts`: binary GLB parsing.
 - `./src/gltf/uri.ts`: URI handling.
-- `./src/gltf/accessors.ts`: accessor decoding and conversion.
+- `./src/gltf/accessors.ts`: accessor decoding, padded matrix compaction, sparse handling, and conversion.
 - `./src/gltf/import.ts`: conversion from loaded asset data to scene resources.
 
 Common interactions:
@@ -758,7 +758,7 @@ Important files:
 - `./rust/src/mat4.rs`, `./rust/src/vec3.rs`, and `./rust/src/quat.rs`: math helpers.
 - `./rust/src/ndarray.rs`: shape, stride, and offset helpers.
 - `./rust/src/mesh.rs`: normal generation.
-- `./rust/src/accessors.rs`: glTF accessor conversion, deinterleaving, sparse patching, and numeric conversion.
+- `./rust/src/accessors.rs`: glTF accessor conversion, generalized padded-layout compaction/deinterleaving, sparse patching, and numeric conversion.
 - `./rust/src/anim.rs`: animation sampling and joint matrix generation.
 - `./rust/src/bounds.rs`: geometry, pointcloud, and glyph bounds helpers.
 - `./rust/src/cull.rs`: frustum plane extraction, sphere culling, and conservative hierarchical-Z occlusion culling over packed world-space spheres.
@@ -778,7 +778,7 @@ Common interactions:
 Architectural role:
 
 - Implements renderer, picking, material, world-object, compute, scaling, blit, and post-processing GPU programs.
-- Must match TypeScript bind group layouts, buffer layouts, vertex layouts, and uniform packing.
+- Must match TypeScript bind group layouts, buffer layouts, vertex layouts, and uniform packing. Mesh material variants carry a four-component vertex color stream through unlit, standard, transmission, instanced, and skinned paths before alpha testing.
 
 Important directories:
 

@@ -15,7 +15,7 @@ import { Mesh, initializeMeshMorphRuntime, setMeshMorphWeight } from "../world/m
 import { SplatField, type SplatFieldColorSpace, type SplatFieldSHDegree } from "../world/splatfield";
 import { DirectionalLight, PointLight, SpotLight, bindLightToTransform, unbindLightTransform, type Light } from "../world/light";
 import { Transform } from "../core/transform";
-import type { GltfDocument, GltfAnimation, GltfAnimationChannel, GltfAnimationSampler, GltfAsset, GltfCamera, GltfExtensions, GltfExtras, GltfMaterial, GltfMesh, GltfNode, GltfPrimitive, GltfPrimitiveAttributes, GltfRoot, GltfScene, GltfSkin, KHRLightsPunctualLight, KHRLightsPunctualNode, KHRLightsPunctualRoot } from "./types";
+import type { GltfAccessor, GltfDocument, GltfAnimation, GltfAnimationChannel, GltfAnimationSampler, GltfAsset, GltfCamera, GltfExtensions, GltfExtras, GltfMaterial, GltfMesh, GltfNode, GltfPrimitive, GltfPrimitiveAttributes, GltfRoot, GltfScene, GltfSkin, KHRLightsPunctualLight, KHRLightsPunctualNode, KHRLightsPunctualRoot } from "./types";
 import { decodeDataUri, isDataUri, resolveUri } from "./uri";
 import { readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32 } from "./accessors";
 import { validateGltfCompatibility } from "./compatibility";
@@ -1072,6 +1072,17 @@ const getMaterialTangentTexCoords = (mat: GltfMaterial | undefined): number[] =>
     return texCoords;
 };
 
+const getPrimitiveTangentTexCoords = (json: GltfRoot, prim: GltfPrimitive): number[] => {
+    const texCoords: number[] = [];
+    const add = (material: GltfMaterial | undefined): void => {
+        for (const texCoord of getMaterialTangentTexCoords(material)) if (!texCoords.includes(texCoord)) texCoords.push(texCoord);
+    };
+    add(prim.material !== undefined ? json.materials?.[prim.material] : undefined);
+    const mappings = ((prim.extensions as Record<string, unknown> | undefined)?.["KHR_materials_variants"] as { mappings?: Array<{ material?: number }> } | undefined)?.mappings;
+    for (const mapping of Array.isArray(mappings) ? mappings : []) if (typeof mapping.material === "number" && Number.isSafeInteger(mapping.material)) add(json.materials?.[mapping.material]);
+    return texCoords;
+};
+
 const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: number | undefined, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, tx: ImportTransaction, opts?: ImportGltfOptions): ImportOwnership<Material> => {
     const ownReference = (material: Material): ImportOwnership<Material> => tx.own(material, `material ${materialIndex ?? "default"} reference`, (resource) => resource.release());
     if (materialIndex === undefined) return ownReference(new StandardMaterial({}));
@@ -1120,25 +1131,25 @@ const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: n
         } else if (img.bufferView !== undefined) {
             const bv = json.bufferViews?.[img.bufferView];
             const buf = bv ? doc.buffers[bv.buffer] : undefined;
-            if (bv && buf) {
-                const start = (bv.byteOffset ?? 0) | 0;
-                source = { kind: "bytes", bytes: buf.slice(start, start + bv.byteLength), mimeType };
-            } else {
-                warn(opts, `glTF image bufferView ${img.bufferView} missing (texture=${textureIndex}, usage=${usage}).`);
-            }
+            const bufferLength = bv ? json.buffers?.[bv.buffer]?.byteLength : undefined;
+            const start = bv?.byteOffset ?? 0;
+            const byteLength = bv?.byteLength;
+            const startValue = typeof start === "number" && Number.isSafeInteger(start) && start >= 0 ? start : -1;
+            const byteLengthValue = typeof byteLength === "number" && Number.isSafeInteger(byteLength) && byteLength >= 0 ? byteLength : -1;
+            const bufferLengthValue = typeof bufferLength === "number" && Number.isSafeInteger(bufferLength) && bufferLength >= 0 ? bufferLength : -1;
+            const end = startValue >= 0 && byteLengthValue >= 0 ? startValue + byteLengthValue : -1;
+            if (bv && buf && startValue >= 0 && byteLengthValue >= 0 && bufferLengthValue >= 0 && Number.isSafeInteger(end) && end <= bufferLengthValue && end <= buf.byteLength) source = { kind: "bytes", bytes: buf.slice(startValue, end), mimeType };
+            else warn(opts, `glTF image bufferView ${img.bufferView} missing (texture=${textureIndex}, usage=${usage}).`);
         } else if (img.uri) {
             if (isDataUri(img.uri)) {
                 const decoded = decodeDataUri(img.uri);
                 source = { kind: "bytes", bytes: decoded.data, mimeType: mimeType ?? decoded.mimeType ?? undefined };
             } else {
-                const url = resolveUri(doc.resourceBaseUrl ?? doc.baseUrl, img.uri);
+                const url = resolveUri(doc.resourceBaseUrl, img.uri);
                 source = { kind: "url", url, mimeType };
             }
         }
-        if (!source) {
-            warn(opts, `Could not resolve image source for texture=${textureIndex} (usage=${usage}).`);
-            return null;
-        }
+        if (!source) { warn(opts, `Could not resolve image source for texture=${textureIndex} (usage=${usage}).`); return null; }
         const created = Texture2D.createFrom({
             source,
             mipmaps: useMipmaps,
@@ -1469,6 +1480,111 @@ const gatherFloatAttribute = (src: Float32Array, componentCount: number, indices
     return out;
 };
 
+type GatherableAttribute = Float32Array | Uint16Array;
+
+const expandIndexedAttribute = <T extends GatherableAttribute>(src: T, itemSize: number, indices: Uint32Array, context: string): T => {
+    if (itemSize <= 0 || src.length % itemSize !== 0) throw new Error(`${context}: attribute length ${src.length} is not divisible by item size ${itemSize}.`);
+    const sourceCount = src.length / itemSize;
+    const out = src instanceof Uint16Array ? new Uint16Array(indices.length * itemSize) : new Float32Array(indices.length * itemSize);
+    for (let i = 0; i < indices.length; i++) {
+        const sourceIndex = indices[i] ?? 0;
+        if (sourceIndex >= sourceCount) throw new Error(`${context}: index ${sourceIndex} at ${i} is out of range for ${sourceCount} vertices.`);
+        const sourceBase = sourceIndex * itemSize;
+        const targetBase = i * itemSize;
+        for (let component = 0; component < itemSize; component++) out[targetBase + component] = src[sourceBase + component] ?? 0;
+    }
+    return out as T;
+};
+
+const validatePrimitiveAccessor = (json: GltfRoot, accessorIndex: number, expectedType: string, expectedCount: number | undefined, opts: ImportGltfOptions, context: string, semantic: string): GltfAccessor | null => {
+    const accessor = Number.isSafeInteger(accessorIndex) && accessorIndex >= 0 ? json.accessors?.[accessorIndex] : undefined;
+    if (!accessor) { warn(opts, `${context}: ${semantic} references missing accessor ${accessorIndex}; ignoring ${semantic}.`); return null; }
+    if (accessor.type !== expectedType) { warn(opts, `${context}: ${semantic} accessor ${accessorIndex} has type ${accessor.type}; expected ${expectedType}. Ignoring ${semantic}.`); return null; }
+    if (!Number.isSafeInteger(accessor.count) || accessor.count < 0) { warn(opts, `${context}: ${semantic} accessor ${accessorIndex} has invalid count ${String(accessor.count)}; ignoring ${semantic}.`); return null; }
+    if (expectedCount !== undefined && accessor.count !== expectedCount) { warn(opts, `${context}: ${semantic} accessor ${accessorIndex} count ${accessor.count} does not match expected count ${expectedCount}; ignoring ${semantic}.`); return null; }
+    return accessor;
+};
+
+const requirePrimitiveAccessor = (json: GltfRoot, accessorIndex: number, expectedType: string, context: string, semantic: string): GltfAccessor => {
+    const accessor = Number.isSafeInteger(accessorIndex) && accessorIndex >= 0 ? json.accessors?.[accessorIndex] : undefined;
+    if (!accessor) throw new Error(`${context}: Invalid accessor index: ${accessorIndex} for ${semantic}.`);
+    if (accessor.type !== expectedType) throw new Error(`${context}: ${semantic} accessor ${accessorIndex} must have type ${expectedType}, got ${accessor.type}.`);
+    if (!Number.isSafeInteger(accessor.count) || accessor.count < 0) throw new Error(`${context}: ${semantic} accessor ${accessorIndex} has invalid count ${String(accessor.count)}.`);
+    return accessor;
+};
+
+const readPrimitiveFloatAttribute = (doc: GltfDocument, json: GltfRoot, accessorIndex: number, expectedType: string, componentCount: number, expectedCount: number, opts: ImportGltfOptions, context: string, semantic: string, required: boolean = false): Float32Array | null => {
+    const accessor = validatePrimitiveAccessor(json, accessorIndex, expectedType, expectedCount, opts, context, semantic);
+    if (!accessor) return null;
+    let data: Float32Array;
+    try {
+        data = readAccessorAsFloat32(doc, accessorIndex);
+    } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const message = `${context}: ${semantic} accessor ${accessorIndex} could not be decoded (${detail}); ignoring ${semantic}.`;
+        if (required) throw new Error(message);
+        warn(opts, message);
+        return null;
+    }
+    const expectedLength = expectedCount * componentCount;
+    if (data.length !== expectedLength) {
+        const message = `${context}: ${semantic} accessor ${accessorIndex} decoded length ${data.length} does not match expected length ${expectedLength}; ignoring ${semantic}.`;
+        if (required) throw new Error(message);
+        warn(opts, message);
+        return null;
+    }
+    return data;
+};
+
+const validatePrimitiveIndexAccessor = (json: GltfRoot, accessorIndex: number, context: string): void => {
+    const accessor = json.accessors?.[accessorIndex];
+    if (!accessor) throw new Error(`${context}: indices references missing accessor ${accessorIndex}.`);
+    if (accessor.type !== "SCALAR") throw new Error(`${context}: indices accessor ${accessorIndex} must have type SCALAR, got ${accessor.type}.`);
+    if (accessor.componentType !== 5121 && accessor.componentType !== 5123 && accessor.componentType !== 5125) throw new Error(`${context}: indices accessor ${accessorIndex} has unsupported componentType ${accessor.componentType}.`);
+    if (!Number.isSafeInteger(accessor.count) || accessor.count < 0) throw new Error(`${context}: indices accessor ${accessorIndex} has invalid count ${String(accessor.count)}.`);
+    if (accessor.normalized === true) throw new Error(`${context}: indices accessor ${accessorIndex} must not be normalized.`);
+};
+
+const isJointAccessorEncoding = (accessor: GltfAccessor): boolean => (accessor.componentType === 5121 || accessor.componentType === 5123) && accessor.normalized !== true;
+
+const isWeightAccessorEncoding = (accessor: GltfAccessor): boolean => (accessor.componentType === 5126 && accessor.normalized !== true) || ((accessor.componentType === 5121 || accessor.componentType === 5123) && accessor.normalized === true);
+
+const readGltfColorAccessor = (doc: GltfDocument, json: GltfRoot, accessorIndex: number, baseVertexCount: number, morph: boolean, opts: ImportGltfOptions, context: string): Float32Array | null => {
+    const accessor = json.accessors?.[accessorIndex];
+    if (!accessor) { warn(opts, `${context}: COLOR_0 references missing accessor ${accessorIndex}; ignoring colors.`); return null; }
+    const componentCount = accessor.type === "VEC3" ? 3 : accessor.type === "VEC4" ? 4 : 0;
+    const validFloat = accessor.componentType === 5126 && accessor.normalized !== true;
+    const validNormalized = accessor.normalized === true && (morph ? [5120, 5121, 5122, 5123].includes(accessor.componentType) : [5121, 5123].includes(accessor.componentType));
+    if (componentCount === 0 || (!validFloat && !validNormalized)) { warn(opts, `${context}: COLOR_0 accessor ${accessorIndex} has unsupported type/encoding; expected VEC3/VEC4 float${morph ? " or normalized byte/short" : " or normalized unsigned byte/short"}.`); return null; }
+    if (accessor.count !== baseVertexCount) { warn(opts, `${context}: COLOR_0 accessor ${accessorIndex} count ${accessor.count} does not match base vertex count ${baseVertexCount}; ignoring colors.`); return null; }
+    let source: Float32Array;
+    try {
+        source = readAccessorAsFloat32(doc, accessorIndex);
+    } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        warn(opts, `${context}: COLOR_0 accessor ${accessorIndex} could not be decoded (${detail}); ignoring colors.`);
+        return null;
+    }
+    if (source.length !== baseVertexCount * componentCount) { warn(opts, `${context}: COLOR_0 accessor ${accessorIndex} decoded length ${source.length} does not match expected length ${baseVertexCount * componentCount}; ignoring colors.`); return null; }
+    const out = new Float32Array(baseVertexCount * 4);
+    const finiteOrZero = (value: number): number => Number.isFinite(value) ? value : 0;
+    for (let vertex = 0; vertex < baseVertexCount; vertex++) {
+        const sourceBase = vertex * componentCount;
+        const targetBase = vertex * 4;
+        out[targetBase + 0] = finiteOrZero(source[sourceBase + 0] ?? 0);
+        out[targetBase + 1] = finiteOrZero(source[sourceBase + 1] ?? 0);
+        out[targetBase + 2] = finiteOrZero(source[sourceBase + 2] ?? 0);
+        out[targetBase + 3] = componentCount === 4 ? finiteOrZero(source[sourceBase + 3] ?? 0) : (morph ? 0 : 1);
+        if (!morph) {
+            out[targetBase + 0] = Math.max(0, Math.min(1, out[targetBase + 0]));
+            out[targetBase + 1] = Math.max(0, Math.min(1, out[targetBase + 1]));
+            out[targetBase + 2] = Math.max(0, Math.min(1, out[targetBase + 2]));
+            out[targetBase + 3] = Math.max(0, Math.min(1, out[targetBase + 3]));
+        }
+    }
+    return out;
+};
+
 const validateSplatIndices = (indices: Uint32Array | null, sourceCount: number, context: string): void => {
     if (!indices) return;
     for (let i = 0; i < indices.length; i++) {
@@ -1638,19 +1754,30 @@ const buildGeometryFromPrimitive = (doc: GltfDocument, json: GltfRoot, prim: Glt
     const attrs = prim.attributes;
     const posAcc = attrs["POSITION"];
     if (posAcc === undefined) { warn(opts, "Primitive missing POSITION; skipping"); return null; }
-    const positions = readAccessorAsFloat32(doc, posAcc);
+    const context = "Primitive";
+    const positionAccessor = requirePrimitiveAccessor(json, posAcc, "VEC3", context, "POSITION");
+    const baseVertexCount = positionAccessor.count;
+    let positions = readPrimitiveFloatAttribute(doc, json, posAcc, "VEC3", 3, baseVertexCount, opts, context, "POSITION", true);
+    if (!positions) return null;
     let normals: Float32Array | null = null;
-    const nAcc = attrs["NORMAL"];
-    if (nAcc !== undefined) normals = readAccessorAsFloat32(doc, nAcc);
+    let nAcc: number | undefined;
+    const normalAcc = attrs["NORMAL"];
+    if (normalAcc !== undefined) {
+        const normalData = readPrimitiveFloatAttribute(doc, json, normalAcc, "VEC3", 3, baseVertexCount, opts, context, "NORMAL");
+        if (normalData) { nAcc = normalAcc; normals = normalData; }
+    }
     let tangents: Float32Array | null = null;
     const tangentAcc = attrs["TANGENT"];
-    if (tangentAcc !== undefined) tangents = readAccessorAsFloat32(doc, tangentAcc);
+    if (tangentAcc !== undefined) tangents = readPrimitiveFloatAttribute(doc, json, tangentAcc, "VEC4", 4, baseVertexCount, opts, context, "TANGENT");
+    let colors: Float32Array | null = null;
+    const colorAcc = attrs["COLOR_0"];
+    if (colorAcc !== undefined) colors = readGltfColorAccessor(doc, json, colorAcc, baseVertexCount, false, opts, "Primitive");
     let uvs: Float32Array | null = null;
     const uvAcc = attrs["TEXCOORD_0"];
-    if (uvAcc !== undefined) uvs = readAccessorAsFloat32(doc, uvAcc);
+    if (uvAcc !== undefined) uvs = readPrimitiveFloatAttribute(doc, json, uvAcc, "VEC2", 2, baseVertexCount, opts, context, "TEXCOORD_0");
     let uvs1: Float32Array | null = null;
     const uv1Acc = attrs["TEXCOORD_1"];
-    if (uv1Acc !== undefined) uvs1 = readAccessorAsFloat32(doc, uv1Acc);
+    if (uv1Acc !== undefined) uvs1 = readPrimitiveFloatAttribute(doc, json, uv1Acc, "VEC2", 2, baseVertexCount, opts, context, "TEXCOORD_1");
     let joints: Uint16Array | null = null;
     let weights: Float32Array | null = null;
     let joints1: Uint16Array | null = null;
@@ -1659,30 +1786,39 @@ const buildGeometryFromPrimitive = (doc: GltfDocument, json: GltfRoot, prim: Glt
     const wAcc0 = attrs["WEIGHTS_0"];
     const jAcc1 = attrs["JOINTS_1"];
     const wAcc1 = attrs["WEIGHTS_1"];
-    if (jAcc0 !== undefined && wAcc0 !== undefined) {
-        const joints0 = readAccessorAsUint16(doc, jAcc0);
-        const weights0 = readAccessorAsFloat32(doc, wAcc0);
-        if (jAcc1 !== undefined && wAcc1 !== undefined) {
-            const joints1Raw = readAccessorAsUint16(doc, jAcc1);
-            const weights1Raw = readAccessorAsFloat32(doc, wAcc1);
-            if (joints1Raw.length === joints0.length && weights1Raw.length === weights0.length) {
-                const norm = normalizeWeightsTo8(weights0, weights1Raw);
+    const joints0Accessor = jAcc0 !== undefined ? validatePrimitiveAccessor(json, jAcc0, "VEC4", baseVertexCount, opts, context, "JOINTS_0") : null;
+    const weights0Accessor = wAcc0 !== undefined ? validatePrimitiveAccessor(json, wAcc0, "VEC4", baseVertexCount, opts, context, "WEIGHTS_0") : null;
+    if (jAcc0 !== undefined && wAcc0 !== undefined && joints0Accessor && weights0Accessor && isJointAccessorEncoding(joints0Accessor) && isWeightAccessorEncoding(weights0Accessor)) {
+        try {
+            const joints0 = readAccessorAsUint16(doc, jAcc0);
+            const weights0 = readAccessorAsFloat32(doc, wAcc0);
+            const joints1Accessor = jAcc1 !== undefined ? validatePrimitiveAccessor(json, jAcc1, "VEC4", baseVertexCount, opts, context, "JOINTS_1") : null;
+            const weights1Accessor = wAcc1 !== undefined ? validatePrimitiveAccessor(json, wAcc1, "VEC4", baseVertexCount, opts, context, "WEIGHTS_1") : null;
+            if (jAcc1 !== undefined && wAcc1 !== undefined && joints1Accessor && weights1Accessor && isJointAccessorEncoding(joints1Accessor) && isWeightAccessorEncoding(weights1Accessor)) {
+                const joints1Raw = readAccessorAsUint16(doc, jAcc1);
+                const weights1Raw = readAccessorAsFloat32(doc, wAcc1);
+                if (joints1Raw.length === joints0.length && weights1Raw.length === weights0.length) {
+                    const norm = normalizeWeightsTo8(weights0, weights1Raw);
+                    joints = joints0;
+                    weights = norm.weights0;
+                    joints1 = joints1Raw;
+                    weights1 = norm.weights1;
+                } else {
+                    warn(opts, "Primitive has JOINTS_1/WEIGHTS_1 but lengths don't match JOINTS_0/WEIGHTS_0; ignoring additional influences");
+                    joints = joints0;
+                    weights = normalizeWeightsTo4(weights0);
+                }
+            } else if (jAcc1 !== undefined || wAcc1 !== undefined) {
+                warn(opts, "Primitive has JOINTS_1/WEIGHTS_1 mismatch; ignoring additional influences");
                 joints = joints0;
-                weights = norm.weights0;
-                joints1 = joints1Raw;
-                weights1 = norm.weights1;
+                weights = normalizeWeightsTo4(weights0);
             } else {
-                warn(opts, "Primitive has JOINTS_1/WEIGHTS_1 but lengths don't match JOINTS_0/WEIGHTS_0; ignoring additional influences");
                 joints = joints0;
                 weights = normalizeWeightsTo4(weights0);
             }
-        } else if (jAcc1 !== undefined || wAcc1 !== undefined) {
-            warn(opts, "Primitive has JOINTS_1/WEIGHTS_1 mismatch; ignoring additional influences");
-            joints = joints0;
-            weights = normalizeWeightsTo4(weights0);
-        } else {
-            joints = joints0;
-            weights = normalizeWeightsTo4(weights0);
+        } catch (error) {
+            const detail = error instanceof Error ? error.message : String(error);
+            warn(opts, `Primitive skinning accessors could not be decoded (${detail}); ignoring skinning attributes.`);
         }
     } else if (jAcc0 !== undefined || wAcc0 !== undefined) {
         warn(opts, "Primitive has JOINTS_0/WEIGHTS_0 mismatch; ignoring skinning attributes for this primitive");
@@ -1690,12 +1826,19 @@ const buildGeometryFromPrimitive = (doc: GltfDocument, json: GltfRoot, prim: Glt
     const mode = prim.mode ?? 4;
     let indices: Uint32Array | null = null;
     if (prim.indices !== undefined) {
+        validatePrimitiveIndexAccessor(json, prim.indices, context);
         indices = readIndicesAsUint32(doc, prim.indices);
     } else {
         const vcount = (positions.length / 3) | 0;
         const seq = new Uint32Array(vcount);
         for (let i = 0; i < vcount; i++) seq[i] = i >>> 0;
         indices = mode === 4 ? null : seq;
+    }
+    if (indices) {
+        for (let index = 0; index < indices.length; index++) {
+            const vertexIndex = indices[index]!;
+            if (vertexIndex >= baseVertexCount) throw new Error(`Primitive index ${vertexIndex} at ${index} is out of range for ${baseVertexCount} vertices.`);
+        }
     }
     if (mode === 5) {
         const idx = indices ?? new Uint32Array(0);
@@ -1715,23 +1858,47 @@ const buildGeometryFromPrimitive = (doc: GltfDocument, json: GltfRoot, prim: Glt
             const targetPosAcc = targetAttrs["POSITION"];
             const targetNormalAcc = targetAttrs["NORMAL"];
             if (targetPosAcc !== undefined) {
-                const targetPositions = readAccessorAsFloat32(doc, targetPosAcc);
-                if (targetPositions.length === positions.length) target.positions = targetPositions;
-                else warn(opts, `Primitive morph target ${targetIndex} POSITION length ${targetPositions.length} does not match base POSITION length ${positions.length}; ignoring POSITION deltas.`);
+                const targetPositions = readPrimitiveFloatAttribute(doc, json, targetPosAcc, "VEC3", 3, baseVertexCount, opts, `Primitive morph target ${targetIndex}`, "POSITION");
+                if (targetPositions) target.positions = targetPositions;
             }
             if (targetNormalAcc !== undefined) {
-                const targetNormals = readAccessorAsFloat32(doc, targetNormalAcc);
-                if (targetNormals.length === positions.length) target.normals = targetNormals;
-                else warn(opts, `Primitive morph target ${targetIndex} NORMAL length ${targetNormals.length} does not match base NORMAL length ${positions.length}; ignoring NORMAL deltas.`);
+                if (nAcc === undefined) warn(opts, `Primitive morph target ${targetIndex} provides NORMAL deltas while base NORMAL is absent; ignoring NORMAL deltas for flat-normal generation.`);
+                else {
+                    const targetNormals = readPrimitiveFloatAttribute(doc, json, targetNormalAcc, "VEC3", 3, baseVertexCount, opts, `Primitive morph target ${targetIndex}`, "NORMAL");
+                    if (targetNormals) target.normals = targetNormals;
+                }
+            }
+            const targetColorAcc = targetAttrs["COLOR_0"];
+            if (targetColorAcc !== undefined) {
+                if (!colors) warn(opts, `Primitive morph target ${targetIndex} provides COLOR_0 but the base primitive has no valid COLOR_0; ignoring color deltas.`);
+                else target.colors = readGltfColorAccessor(doc, json, targetColorAcc, baseVertexCount, true, opts, `Primitive morph target ${targetIndex}`) ?? undefined;
             }
             if (targetAttrs["TANGENT"] !== undefined) warn(opts, `Primitive morph target ${targetIndex} provides TANGENT deltas; WasmGPU ignores tangent morph data.`);
-            if (!target.positions && !target.normals) warn(opts, `Primitive morph target ${targetIndex} has no supported POSITION or NORMAL deltas; preserving target slot with no runtime effect.`);
+            if (!target.positions && !target.normals && !target.colors) warn(opts, `Primitive morph target ${targetIndex} has no supported POSITION, NORMAL, or COLOR_0 deltas; preserving target slot with no runtime effect.`);
             morphTargets.push(target);
         }
     }
-    const tangentTexCoords = getMaterialTangentTexCoords(prim.material !== undefined ? json.materials?.[prim.material] : undefined);
+    const tangentTexCoords = getPrimitiveTangentTexCoords(json, prim);
     const tangentSpaceNeeded = tangentTexCoords.length > 0;
-    if (!normals && (computeMissingNormals || tangentSpaceNeeded)) normals = computeGeometryVertexNormals(positions, indices);
+    const missingNormals = nAcc === undefined;
+    if (missingNormals) tangents = null;
+    const generateMissingNormals = missingNormals && (computeMissingNormals || tangentSpaceNeeded);
+    if (generateMissingNormals && indices) {
+        positions = expandIndexedAttribute(positions, 3, indices, "Primitive POSITION");
+        if (uvs) uvs = expandIndexedAttribute(uvs, 2, indices, "Primitive TEXCOORD_0");
+        if (uvs1) uvs1 = expandIndexedAttribute(uvs1, 2, indices, "Primitive TEXCOORD_1");
+        if (colors) colors = expandIndexedAttribute(colors, 4, indices, "Primitive COLOR_0");
+        if (joints) joints = expandIndexedAttribute(joints, 4, indices, "Primitive JOINTS_0");
+        if (weights) weights = expandIndexedAttribute(weights, 4, indices, "Primitive WEIGHTS_0");
+        if (joints1) joints1 = expandIndexedAttribute(joints1, 4, indices, "Primitive JOINTS_1");
+        if (weights1) weights1 = expandIndexedAttribute(weights1, 4, indices, "Primitive WEIGHTS_1");
+        for (const target of morphTargets) {
+            if (target.positions) target.positions = expandIndexedAttribute(target.positions, 3, indices, "Primitive morph POSITION");
+            if (target.colors) target.colors = expandIndexedAttribute(target.colors, 4, indices, "Primitive morph COLOR_0");
+        }
+        indices = null;
+    }
+    if (generateMissingNormals) normals = computeGeometryVertexNormals(positions, null);
     if (!tangents && tangentSpaceNeeded) {
         const tangentTexCoord = tangentTexCoords[0]!;
         if (tangentTexCoords.length > 1) warn(opts, "Primitive uses tangent-space textures on multiple texture coordinate sets; shader will fall back to derivative tangent space.");
@@ -1745,6 +1912,7 @@ const buildGeometryFromPrimitive = (doc: GltfDocument, json: GltfRoot, prim: Glt
         positions,
         normals: normals ?? undefined,
         tangents: tangents ?? undefined,
+        colors: colors ?? undefined,
         uvs: uvs ?? undefined,
         uvs1: uvs1 ?? undefined,
         joints: joints ?? undefined,
@@ -1753,7 +1921,7 @@ const buildGeometryFromPrimitive = (doc: GltfDocument, json: GltfRoot, prim: Glt
         weights1: weights1 ?? undefined,
         indices: indices ?? undefined,
         morphTargets,
-        authoredNormals: nAcc !== undefined
+        authoredNormals: nAcc !== undefined || !generateMissingNormals
     });
 };
 
@@ -2559,7 +2727,7 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
         const cameraRuntimeMap = new Map<number, Camera[]>();
         const lightRuntimeMap = new Map<number, Light[]>();
         const khrLights = getKHRLightsFromRoot(json);
-        const instantiateNodeRecursive = (nodeIndex: number, inheritedSkinIndex: number | undefined): void => {
+        const instantiateNodeRecursive = (nodeIndex: number): void => {
             const node = gltfNodes[nodeIndex];
             if (!node) return;
             const importedNode = nodes[nodeIndex];
@@ -2572,7 +2740,7 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
             importedNode.meshes = createdMeshes;
             importedNode.splatFields = createdSplatFields;
             importedNode.applyVisibility();
-            const skinIndex = node.skin !== undefined ? (node.skin | 0) : inheritedSkinIndex;
+            const skinIndex = node.skin !== undefined ? (node.skin | 0) : undefined;
             if (skinIndex !== undefined) {
                 const skinDef = skins[skinIndex];
                 if (!skinDef || !skinDef.runtime) warn(opts, `nodes[${nodeIndex}].skin=${skinIndex} missing or invalid; skipping skin binding`);
@@ -2635,11 +2803,11 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
                     }
                 }
             }
-            for (const child of node.children ?? []) instantiateNodeRecursive(child, skinIndex);
+            for (const child of node.children ?? []) instantiateNodeRecursive(child);
         };
         const gltfScene: GltfScene | undefined = json.scenes?.[sceneIndex];
         const roots = gltfScene?.nodes ?? [];
-        for (const root of roots) instantiateNodeRecursive(root, undefined);
+        for (const root of roots) instantiateNodeRecursive(root);
         const animations = parseAnimations(doc, json, nodes, materialCache, cameraRuntimeMap, lightRuntimeMap, extensions, tx, opts);
         const clips = animations.map((a) => a.clip).filter((c): c is AnimationClip => c !== null);
         const metadata = buildImportMetadata(json, sceneIndex, extensions, xmp, variantsController.public);

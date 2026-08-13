@@ -55,6 +55,7 @@ struct VertexInput {
     @location(2) uv: vec2<f32>,
     @location(11) uv1: vec2<f32>,
     @location(12) tangent: vec4<f32>,
+    @location(13) color: vec4<f32>,
     @location(3) m0: vec4<f32>,
     @location(4) m1: vec4<f32>,
     @location(5) m2: vec4<f32>,
@@ -72,6 +73,7 @@ struct VertexOutput {
     @location(2) uv: vec2<f32>,
     @location(3) uv1: vec2<f32>,
     @location(4) tangent: vec4<f32>,
+    @location(5) color: vec4<f32>,
 }
 
 struct CameraUniforms {
@@ -437,6 +439,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.tangent = vec4<f32>((normal_m * vec4<f32>(in.tangent.xyz, 0.0)).xyz, in.tangent.w);
     out.uv = in.uv;
     out.uv1 = in.uv1;
+    out.color = in.color;
     return out;
 }
 
@@ -533,7 +536,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         material.anisotropy_transform1,
     );
     let base_sample = textureSample(base_color_tex, base_color_sampler, base_uv);
-    let base_color = material.color * base_sample;
+    let base_color = material.color * base_sample * in.color;
     let alpha_cutoff = material.params2.x;
     if (alpha_cutoff > 0.0 && base_color.a < alpha_cutoff) {
         discard;

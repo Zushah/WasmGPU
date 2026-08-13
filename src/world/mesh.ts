@@ -21,20 +21,29 @@ type MeshBoundsSource = {
 type MeshMorphRuntime = MeshBoundsSource & {
     targetCount: number;
     weights: Float32Array;
+    sourceRevision: number;
     positions: Float32Array;
     normals: Float32Array;
+    colors: Float32Array;
     device: GPUDevice | null;
     positionBuffer: GPUBuffer | null;
     normalBuffer: GPUBuffer | null;
+    colorBuffer: GPUBuffer | null;
     dirty: boolean;
     gpuDirty: boolean;
+    positionDirty: boolean;
+    normalDirty: boolean;
+    colorDirty: boolean;
+    hasPositionTargets: boolean;
     hasNormalTargets: boolean;
+    hasColorTargets: boolean;
     recomputeNormals: boolean;
 };
 
 type MeshVertexBuffers = {
     positionBuffer: GPUBuffer;
     normalBuffer: GPUBuffer;
+    colorBuffer: GPUBuffer;
 };
 
 const meshMorphRuntimes = new WeakMap<Mesh, MeshMorphRuntime>();
@@ -48,18 +57,26 @@ const resolveWeights = (weights: ArrayLike<number> | null | undefined, targetCou
 };
 
 const updateMeshMorphCPUState = (runtime: MeshMorphRuntime, geometry: Geometry): boolean => {
-    if (!runtime.dirty) return false;
-    runtime.positions.set(geometry.positions);
+    const sourceRevision = geometry.morphBaseRevision;
+    const sourceChanged = runtime.sourceRevision !== sourceRevision;
+    if (!runtime.dirty && !sourceChanged) return false;
+    runtime.positions.set(geometry.getMorphBaseChannel("positions"));
+    runtime.colors.set(geometry.getMorphBaseChannel("colors"));
+    runtime.positionDirty = sourceChanged || runtime.hasPositionTargets;
+    runtime.normalDirty = sourceChanged || (runtime.recomputeNormals ? runtime.hasPositionTargets : runtime.hasNormalTargets);
+    runtime.colorDirty = sourceChanged || runtime.hasColorTargets;
     for (let i = 0; i < runtime.targetCount; i++) {
         const weight = runtime.weights[i] ?? 0;
         if (weight === 0) continue;
         const target = geometry.morphTargets[i];
         const pos = target?.positions;
         if (pos) for (let j = 0; j < pos.length; j++) runtime.positions[j] += pos[j] * weight;
+        const colors = target?.colors;
+        if (colors) for (let j = 0; j < colors.length; j++) runtime.colors[j] += colors[j] * weight;
     }
-    if (runtime.recomputeNormals) runtime.normals.set(computeGeometryVertexNormals(runtime.positions, geometry.indices));
+    if (runtime.recomputeNormals) runtime.normals.set(computeGeometryVertexNormals(runtime.positions, geometry.getMorphIndices()));
     else if (runtime.hasNormalTargets) {
-        runtime.normals.set(geometry.normals);
+        runtime.normals.set(geometry.getMorphBaseChannel("normals"));
         for (let i = 0; i < runtime.targetCount; i++) {
             const weight = runtime.weights[i] ?? 0;
             if (weight === 0) continue;
@@ -68,22 +85,29 @@ const updateMeshMorphCPUState = (runtime: MeshMorphRuntime, geometry: Geometry):
             if (!normals) continue;
             for (let j = 0; j < normals.length; j++) runtime.normals[j] += normals[j] * weight;
         }
-    } else runtime.normals.set(geometry.normals);
+    } else runtime.normals.set(geometry.getMorphBaseChannel("normals"));
+    if (runtime.hasColorTargets) for (let i = 0; i < runtime.colors.length; i++) {
+        const value = runtime.colors[i] ?? 0;
+        runtime.colors[i] = Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : 0;
+    }
     const bounds = computeGeometryBounds(runtime.positions);
     runtime.boundsMin = bounds.boxMin;
     runtime.boundsMax = bounds.boxMax;
     runtime.boundsCenter = bounds.sphereCenter;
     runtime.boundsRadius = bounds.sphereRadius;
     runtime.dirty = false;
-    runtime.gpuDirty = true;
+    runtime.sourceRevision = sourceRevision;
+    runtime.gpuDirty = runtime.positionDirty || runtime.normalDirty || runtime.colorDirty;
     return true;
 };
 
 const destroyMeshMorphBuffers = (runtime: MeshMorphRuntime): void => {
     runtime.positionBuffer?.destroy();
     runtime.normalBuffer?.destroy();
+    runtime.colorBuffer?.destroy();
     runtime.positionBuffer = null;
     runtime.normalBuffer = null;
+    runtime.colorBuffer = null;
     runtime.device = null;
 };
 
@@ -93,15 +117,23 @@ export const initializeMeshMorphRuntime = (mesh: Mesh, weights: ArrayLike<number
     const runtime: MeshMorphRuntime = {
         targetCount,
         weights: resolveWeights(weights, targetCount),
-        positions: new Float32Array(mesh.geometry.positions),
-        normals: new Float32Array(mesh.geometry.normals),
+        sourceRevision: mesh.geometry.morphBaseRevision,
+        positions: new Float32Array(mesh.geometry.getMorphBaseChannel("positions")),
+        normals: new Float32Array(mesh.geometry.getMorphBaseChannel("normals")),
+        colors: new Float32Array(mesh.geometry.getMorphBaseChannel("colors")),
         device: null,
         positionBuffer: null,
         normalBuffer: null,
+        colorBuffer: null,
         dirty: true,
         gpuDirty: true,
+        positionDirty: true,
+        normalDirty: true,
+        colorDirty: true,
+        hasPositionTargets: mesh.geometry.morphTargets.some((target) => !!target.positions),
         hasNormalTargets: mesh.geometry.morphTargets.some((target) => !!target.normals),
-        recomputeNormals: !mesh.geometry.authoredNormals,
+        hasColorTargets: mesh.geometry.morphTargets.some((target) => !!target.colors),
+        recomputeNormals: !mesh.geometry.authoredNormals && mesh.geometry.morphTargets.some((target) => !!target.positions),
         boundsMin: mesh.geometry.boundsMin,
         boundsMax: mesh.geometry.boundsMax,
         boundsCenter: mesh.geometry.boundsCenter,
@@ -170,21 +202,29 @@ export const getMeshVertexBuffers = (mesh: Mesh, device: GPUDevice, queue: GPUQu
     const runtime = meshMorphRuntimes.get(mesh);
     if (!runtime) {
         mesh.geometry.upload(device);
-        return { positionBuffer: mesh.geometry.positionBuffer, normalBuffer: mesh.geometry.normalBuffer };
+        return { positionBuffer: mesh.geometry.positionBuffer, normalBuffer: mesh.geometry.normalBuffer, colorBuffer: mesh.geometry.colorBuffer };
     }
     const updated = updateMeshMorphCPUState(runtime, mesh.geometry);
-    if (runtime.device !== device || !runtime.positionBuffer || !runtime.normalBuffer) {
+    if (runtime.device !== device || !runtime.positionBuffer || !runtime.normalBuffer || !runtime.colorBuffer) {
         destroyMeshMorphBuffers(runtime);
         runtime.positionBuffer = createBuffer(device, runtime.positions, GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST);
         runtime.normalBuffer = createBuffer(device, runtime.normals, GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST);
+        runtime.colorBuffer = createBuffer(device, runtime.colors, GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST);
         runtime.device = device;
+        runtime.positionDirty = false;
+        runtime.normalDirty = false;
+        runtime.colorDirty = false;
         runtime.gpuDirty = false;
     } else if (updated || runtime.gpuDirty) {
-        queue.writeBuffer(runtime.positionBuffer, 0, runtime.positions.buffer, runtime.positions.byteOffset, runtime.positions.byteLength);
-        queue.writeBuffer(runtime.normalBuffer, 0, runtime.normals.buffer, runtime.normals.byteOffset, runtime.normals.byteLength);
+        if (runtime.positionDirty) queue.writeBuffer(runtime.positionBuffer, 0, runtime.positions.buffer, runtime.positions.byteOffset, runtime.positions.byteLength);
+        if (runtime.normalDirty) queue.writeBuffer(runtime.normalBuffer, 0, runtime.normals.buffer, runtime.normals.byteOffset, runtime.normals.byteLength);
+        if (runtime.colorDirty) queue.writeBuffer(runtime.colorBuffer, 0, runtime.colors.buffer, runtime.colors.byteOffset, runtime.colors.byteLength);
+        runtime.positionDirty = false;
+        runtime.normalDirty = false;
+        runtime.colorDirty = false;
         runtime.gpuDirty = false;
     }
-    return { positionBuffer: runtime.positionBuffer, normalBuffer: runtime.normalBuffer };
+    return { positionBuffer: runtime.positionBuffer, normalBuffer: runtime.normalBuffer, colorBuffer: runtime.colorBuffer };
 };
 
 export class Mesh {

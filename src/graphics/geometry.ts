@@ -15,12 +15,14 @@ export type GeometryAttribute = {
 export type GeometryMorphTargetDescriptor = {
     positions?: Float32Array;
     normals?: Float32Array;
+    colors?: Float32Array;
 };
 
 export type GeometryDescriptor = {
     positions?: Float32Array;
     normals?: Float32Array;
     tangents?: Float32Array;
+    colors?: Float32Array;
     uvs?: Float32Array;
     uvs1?: Float32Array;
     joints?: Uint16Array;
@@ -31,6 +33,7 @@ export type GeometryDescriptor = {
     wasmPositions?: WasmMemoryView<Float32Array>;
     wasmNormals?: WasmMemoryView<Float32Array>;
     wasmTangents?: WasmMemoryView<Float32Array>;
+    wasmColors?: WasmMemoryView<Float32Array>;
     wasmUvs?: WasmMemoryView<Float32Array>;
     wasmUvs1?: WasmMemoryView<Float32Array>;
     wasmJoints?: WasmMemoryView<Uint16Array>;
@@ -71,6 +74,7 @@ export type GeometryWasmSources = {
     positions?: WasmMemoryView<Float32Array> | null;
     normals?: WasmMemoryView<Float32Array> | null;
     tangents?: WasmMemoryView<Float32Array> | null;
+    colors?: WasmMemoryView<Float32Array> | null;
     uvs?: WasmMemoryView<Float32Array> | null;
     uvs1?: WasmMemoryView<Float32Array> | null;
     joints?: WasmMemoryView<Uint16Array> | null;
@@ -288,7 +292,7 @@ const packSkinInfluences = (joints: Uint16Array, weights: Float32Array, joints1:
 
 type GeometryBoundsSourceMode = "none" | "explicit" | "computed";
 
-type GeometryWasmVertexChannel = "positions" | "normals" | "tangents" | "uvs" | "uvs1" | "joints" | "weights" | "joints1" | "weights1";
+type GeometryWasmVertexChannel = "positions" | "normals" | "tangents" | "colors" | "uvs" | "uvs1" | "joints" | "weights" | "joints1" | "weights1";
 
 type GeometryWasmChannel = GeometryWasmVertexChannel | "indices";
 
@@ -302,7 +306,7 @@ type GeometryWasmState<T extends GeometryWasmTypedArray> = {
     capacityHint: number;
 };
 
-const GEOMETRY_WASM_VERTEX_CHANNELS: GeometryWasmVertexChannel[] = ["positions", "normals", "tangents", "uvs", "uvs1", "joints", "weights", "joints1", "weights1"];
+const GEOMETRY_WASM_VERTEX_CHANNELS: GeometryWasmVertexChannel[] = ["positions", "normals", "tangents", "colors", "uvs", "uvs1", "joints", "weights", "joints1", "weights1"];
 
 const makeGeometryWasmState = <T extends GeometryWasmTypedArray>(): GeometryWasmState<T> => ({ source: null, dirty: false, managed: false, capacity: 0, capacityHint: 0 });
 
@@ -311,6 +315,7 @@ const geometryWasmFieldName = (channel: GeometryWasmChannel): string => {
         case "positions": return "wasmPositions";
         case "normals": return "wasmNormals";
         case "tangents": return "wasmTangents";
+        case "colors": return "wasmColors";
         case "uvs": return "wasmUvs";
         case "uvs1": return "wasmUvs1";
         case "joints": return "wasmJoints";
@@ -327,6 +332,7 @@ const geometryWasmComponents = (channel: GeometryWasmChannel): number => {
         case "normals":
             return 3;
         case "tangents":
+        case "colors":
         case "joints":
         case "weights":
         case "joints1":
@@ -344,7 +350,7 @@ const geometryWasmBytesPerElement = (channel: GeometryWasmChannel): number => (c
 
 const isGeometryWasmVertexChannel = (channel: GeometryWasmChannel): channel is GeometryWasmVertexChannel => channel !== "indices";
 
-const hasGeometryWasmInputs = (desc: GeometryDescriptor): boolean => !!(desc.wasmPositions || desc.wasmNormals || desc.wasmTangents || desc.wasmUvs || desc.wasmUvs1 || desc.wasmJoints || desc.wasmWeights || desc.wasmJoints1 || desc.wasmWeights1 || desc.wasmIndices);
+const hasGeometryWasmInputs = (desc: GeometryDescriptor): boolean => !!(desc.wasmPositions || desc.wasmNormals || desc.wasmTangents || desc.wasmColors || desc.wasmUvs || desc.wasmUvs1 || desc.wasmJoints || desc.wasmWeights || desc.wasmJoints1 || desc.wasmWeights1 || desc.wasmIndices);
 
 const assertNoDuplicateGeometrySource = (cpuSource: unknown, wasmSource: unknown, cpuLabel: string, wasmLabel: string): void => {
     assert(!(cpuSource && wasmSource), `Geometry: ${cpuLabel} and ${wasmLabel} cannot both be provided for the same attribute.`);
@@ -353,6 +359,12 @@ const assertNoDuplicateGeometrySource = (cpuSource: unknown, wasmSource: unknown
 const createFallbackNormals = (vertexCount: number): Float32Array => {
     const out = new Float32Array(vertexCount * 3);
     for (let i = 1; i < out.length; i += 3) out[i] = 1;
+    return out;
+};
+
+const createFallbackColors = (vertexCount: number): Float32Array => {
+    const out = new Float32Array(vertexCount * 4);
+    out.fill(1);
     return out;
 };
 
@@ -366,6 +378,7 @@ export class Geometry {
     positions!: Float32Array;
     normals!: Float32Array;
     tangents!: Float32Array;
+    colors!: Float32Array;
     uvs!: Float32Array;
     uvs1!: Float32Array;
     joints: Uint16Array | null = null;
@@ -390,6 +403,7 @@ export class Geometry {
     private _positionBuffer: GPUBuffer | null = null;
     private _normalBuffer: GPUBuffer | null = null;
     private _tangentBuffer: GPUBuffer | null = null;
+    private _colorBuffer: GPUBuffer | null = null;
     private _uvBuffer: GPUBuffer | null = null;
     private _uv1Buffer: GPUBuffer | null = null;
     private _indexBuffer: GPUBuffer | null = null;
@@ -397,11 +411,13 @@ export class Geometry {
     private _refCount: number = 1;
     private _destroyed: boolean = false;
     private _keepCPUData: boolean = false;
+    private _morphBaseRevision: number = 0;
     private _skinInfluenceDirty: boolean = true;
     private readonly _wasm = {
         positions: makeGeometryWasmState<Float32Array>(),
         normals: makeGeometryWasmState<Float32Array>(),
         tangents: makeGeometryWasmState<Float32Array>(),
+        colors: makeGeometryWasmState<Float32Array>(),
         uvs: makeGeometryWasmState<Float32Array>(),
         uvs1: makeGeometryWasmState<Float32Array>(),
         joints: makeGeometryWasmState<Uint16Array>(),
@@ -414,6 +430,7 @@ export class Geometry {
         positions: false,
         normals: false,
         tangents: false,
+        colors: false,
         uvs: false,
         uvs1: false,
         joints: false,
@@ -426,6 +443,7 @@ export class Geometry {
         positions: true,
         normals: true,
         tangents: true,
+        colors: true,
         uvs: true,
         uvs1: true,
         joints: true,
@@ -439,6 +457,7 @@ export class Geometry {
         assertNoDuplicateGeometrySource(descriptor.positions, descriptor.wasmPositions, "positions", "wasmPositions");
         assertNoDuplicateGeometrySource(descriptor.normals, descriptor.wasmNormals, "normals", "wasmNormals");
         assertNoDuplicateGeometrySource(descriptor.tangents, descriptor.wasmTangents, "tangents", "wasmTangents");
+        assertNoDuplicateGeometrySource(descriptor.colors, descriptor.wasmColors, "colors", "wasmColors");
         assertNoDuplicateGeometrySource(descriptor.uvs, descriptor.wasmUvs, "uvs", "wasmUvs");
         assertNoDuplicateGeometrySource(descriptor.uvs1, descriptor.wasmUvs1, "uvs1", "wasmUvs1");
         assertNoDuplicateGeometrySource(descriptor.joints, descriptor.wasmJoints, "joints", "wasmJoints");
@@ -464,7 +483,7 @@ export class Geometry {
             this.positions = this._keepCPUData ? this.copyWasmActiveRange(wasmPositions!, this.vertexCount * 3) as Float32Array : new Float32Array(0);
         }
         const expectedNormalLength = this.vertexCount * 3;
-        let authoredNormals = descriptor.normals ? (descriptor.authoredNormals ?? true) : false;
+        let authoredNormals = descriptor.authoredNormals ?? (!!descriptor.normals || !!descriptor.wasmNormals);
         let normals = descriptor.normals ?? (descriptor.wasmNormals ? new Float32Array(0) : createFallbackNormals(this.vertexCount));
         if (descriptor.normals && normals.length !== expectedNormalLength) {
             console.warn(`[Geometry] normals length mismatch (got ${normals.length}, expected ${expectedNormalLength}). Using fallback normals.`);
@@ -473,7 +492,7 @@ export class Geometry {
         } else if (descriptor.normals) this._cpuProvided.normals = true;
         if (!descriptor.normals && !descriptor.wasmNormals) {
             normals = createFallbackNormals(this.vertexCount);
-            authoredNormals = false;
+            if (descriptor.authoredNormals === undefined) authoredNormals = false;
         }
         this.authoredNormals = authoredNormals;
         this.normals = normals;
@@ -491,6 +510,13 @@ export class Geometry {
         } else if (descriptor.uvs) this._cpuProvided.uvs = true;
         this.uvs = uvs;
         this.tangents = tangents ?? (descriptor.wasmTangents ? new Float32Array(0) : createDerivativeFallbackTangents(this.vertexCount));
+        const expectedColorLength = this.vertexCount * 4;
+        let colors = descriptor.colors ?? (descriptor.wasmColors ? new Float32Array(0) : createFallbackColors(this.vertexCount));
+        if (descriptor.colors && colors.length !== expectedColorLength) {
+            console.warn(`[Geometry] colors length mismatch (got ${colors.length}, expected ${expectedColorLength}). Using default white colors.`);
+            colors = createFallbackColors(this.vertexCount);
+        } else if (descriptor.colors) this._cpuProvided.colors = true;
+        this.colors = colors;
         let uvs1 = descriptor.uvs1 ?? (descriptor.wasmUvs1 ? new Float32Array(0) : new Float32Array(expectedUvLength));
         if (descriptor.uvs1 && uvs1.length !== expectedUvLength) {
             console.warn(`[Geometry] uvs1 length mismatch (got ${uvs1.length}, expected ${expectedUvLength}). TEXCOORD_1 disabled.`);
@@ -560,6 +586,7 @@ export class Geometry {
                 positions: descriptor.wasmPositions ?? null,
                 normals: descriptor.wasmNormals ?? null,
                 tangents: descriptor.wasmTangents ?? null,
+                colors: descriptor.wasmColors ?? null,
                 uvs: descriptor.wasmUvs ?? null,
                 uvs1: descriptor.wasmUvs1 ?? null,
                 joints: descriptor.wasmJoints ?? null,
@@ -613,6 +640,7 @@ export class Geometry {
             case "positions": return this.positions;
             case "normals": return this.normals;
             case "tangents": return this.tangents;
+            case "colors": return this.colors;
             case "uvs": return this.uvs;
             case "uvs1": return this.uvs1;
             case "joints": return this.joints;
@@ -628,6 +656,7 @@ export class Geometry {
             case "positions": this.positions = (data ?? new Float32Array(0)) as Float32Array; break;
             case "normals": this.normals = (data ?? createFallbackNormals(this.vertexCount)) as Float32Array; break;
             case "tangents": this.tangents = (data ?? createDerivativeFallbackTangents(this.vertexCount)) as Float32Array; break;
+            case "colors": this.colors = (data ?? createFallbackColors(this.vertexCount)) as Float32Array; break;
             case "uvs": this.uvs = (data ?? new Float32Array(this.vertexCount * 2)) as Float32Array; break;
             case "uvs1": this.uvs1 = (data ?? new Float32Array(this.vertexCount * 2)) as Float32Array; break;
             case "joints": this.joints = data as Uint16Array | null; break;
@@ -646,6 +675,7 @@ export class Geometry {
             case "positions": this.positions = new Float32Array(0); break;
             case "normals": this.normals = new Float32Array(0); this.authoredNormals = false; break;
             case "tangents": this.tangents = new Float32Array(0); break;
+            case "colors": this.colors = new Float32Array(0); break;
             case "uvs": this.uvs = new Float32Array(0); break;
             case "uvs1": this.uvs1 = new Float32Array(0); break;
             case "joints": this.joints = null; break;
@@ -662,6 +692,7 @@ export class Geometry {
             case "positions": return this._positionBuffer;
             case "normals": return this._normalBuffer;
             case "tangents": return this._tangentBuffer;
+            case "colors": return this._colorBuffer;
             case "uvs": return this._uvBuffer;
             case "uvs1": return this._uv1Buffer;
             case "joints": return this._jointsBuffer;
@@ -677,6 +708,7 @@ export class Geometry {
             case "positions": this._positionBuffer = buffer; break;
             case "normals": this._normalBuffer = buffer; break;
             case "tangents": this._tangentBuffer = buffer; break;
+            case "colors": this._colorBuffer = buffer; break;
             case "uvs": this._uvBuffer = buffer; break;
             case "uvs1": this._uv1Buffer = buffer; break;
             case "joints": this._jointsBuffer = buffer; break;
@@ -709,6 +741,7 @@ export class Geometry {
     private resizeFallbackVertexChannels(vertexCount: number): void {
         if (!this._wasm.normals.source && !this._cpuProvided.normals) { this.normals = createFallbackNormals(vertexCount); this.authoredNormals = false; this._cpuDirty.normals = true; }
         if (!this._wasm.tangents.source && !this._cpuProvided.tangents) { this.tangents = createDerivativeFallbackTangents(vertexCount); this._cpuDirty.tangents = true; }
+        if (!this._wasm.colors.source && !this._cpuProvided.colors) { this.colors = createFallbackColors(vertexCount); this._cpuDirty.colors = true; }
         if (!this._wasm.uvs.source && !this._cpuProvided.uvs) { this.uvs = new Float32Array(vertexCount * 2); this._cpuDirty.uvs = true; }
         if (!this._wasm.uvs1.source && !this._cpuProvided.uvs1) { this.uvs1 = new Float32Array(vertexCount * 2); this._cpuDirty.uvs1 = true; }
     }
@@ -735,6 +768,12 @@ export class Geometry {
             if (this._cpuProvided.tangents && current && current.length >= expected) return;
             this.tangents = createDerivativeFallbackTangents(this.vertexCount);
             this._cpuProvided.tangents = false;
+            return;
+        }
+        if (channel === "colors") {
+            if (this._cpuProvided.colors && current && current.length >= expected) return;
+            this.colors = createFallbackColors(this.vertexCount);
+            this._cpuProvided.colors = false;
             return;
         }
         if (channel === "uvs") {
@@ -854,6 +893,7 @@ export class Geometry {
         state.capacity = 0;
         this.restoreCPUFallbackAfterWasmClear(channel);
         this._cpuDirty[channel] = true;
+        if (channel === "positions" || channel === "normals" || channel === "colors" || channel === "indices") this._morphBaseRevision = (this._morphBaseRevision + 1) >>> 0;
         if (channel === "joints" || channel === "weights" || channel === "joints1" || channel === "weights1") {
             this.normalizeSkinPairsAfterWasmClear();
             this._skinInfluenceDirty = true;
@@ -912,6 +952,10 @@ export class Geometry {
         if (this.setWasmVertexSource("tangents", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
     }
 
+    setWasmColors(source: WasmMemoryView<Float32Array> | null, options: GeometryWasmAttributeOptions = {}): void {
+        if (this.setWasmVertexSource("colors", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
+    }
+
     setWasmUvs(source: WasmMemoryView<Float32Array> | null, options: GeometryWasmAttributeOptions = {}): void {
         if (this.setWasmVertexSource("uvs", source as WasmMemoryView<GeometryWasmTypedArray> | null, options.capacity, options.keepCPUData, options.vertexCount)) this.refreshWasmVertices(options);
     }
@@ -948,6 +992,7 @@ export class Geometry {
         if (Object.prototype.hasOwnProperty.call(sources, "positions")) touchedVertex = this.setWasmVertexSource("positions", sources.positions as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
         if (Object.prototype.hasOwnProperty.call(sources, "normals")) touchedVertex = this.setWasmVertexSource("normals", sources.normals as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
         if (Object.prototype.hasOwnProperty.call(sources, "tangents")) touchedVertex = this.setWasmVertexSource("tangents", sources.tangents as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
+        if (Object.prototype.hasOwnProperty.call(sources, "colors")) touchedVertex = this.setWasmVertexSource("colors", sources.colors as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
         if (Object.prototype.hasOwnProperty.call(sources, "uvs")) touchedVertex = this.setWasmVertexSource("uvs", sources.uvs as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
         if (Object.prototype.hasOwnProperty.call(sources, "uvs1")) touchedVertex = this.setWasmVertexSource("uvs1", sources.uvs1 as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
         if (Object.prototype.hasOwnProperty.call(sources, "joints")) touchedVertex = this.setWasmVertexSource("joints", sources.joints as WasmMemoryView<GeometryWasmTypedArray> | null, vertexCapacity, options.keepCPUData, options.vertexCount) || touchedVertex;
@@ -978,6 +1023,7 @@ export class Geometry {
             this.wasmState(channel).dirty = true;
             if (options.keepCPUData ?? this._keepCPUData) this.setCPUChannelData(channel, this.copyWasmActiveRange(source, this.vertexCount * geometryWasmComponents(channel)));
         }
+        this._morphBaseRevision = (this._morphBaseRevision + 1) >>> 0;
         this.updateWasmBounds(options);
     }
 
@@ -991,11 +1037,42 @@ export class Geometry {
         validateWasmRecordRange(source, this.indexCount, 1, "Geometry: wasmIndices", "indexCount");
         this._wasm.indices.dirty = true;
         if (options.keepCPUData ?? this._keepCPUData) this.setCPUChannelData("indices", this.copyWasmActiveRange(source, this.indexCount));
+        this._morphBaseRevision = (this._morphBaseRevision + 1) >>> 0;
     }
 
     refreshFromWasm(options: GeometryWasmVertexRefreshOptions & GeometryWasmIndexRefreshOptions = {}): void {
         if (this.hasWasmVertexSources()) this.refreshWasmVertices(options);
         if (this._wasm.indices.source) this.refreshWasmIndices(options);
+    }
+
+    get morphBaseRevision(): number {
+        return this._morphBaseRevision;
+    }
+
+    getMorphBaseChannel(channel: "positions" | "normals" | "colors"): Float32Array {
+        this.assertAlive(`access ${channel} morph base data`);
+        const expected = this.vertexCount * geometryWasmComponents(channel);
+        const source = this.wasmState(channel).source as WasmMemoryView<Float32Array> | null;
+        if (source) {
+            source.refresh();
+            validateWasmRecordRange(source, this.vertexCount, geometryWasmComponents(channel), `Geometry: ${geometryWasmFieldName(channel)}`, "vertexCount");
+            return this.copyWasmActiveRange(source, expected);
+        }
+        const data = this.getCPUChannelData(channel) as Float32Array | null;
+        if (data && data.length >= expected) return data.subarray(0, expected);
+        if (channel === "positions") throw new Error("Geometry: positions are required for morph base data.");
+        return channel === "colors" ? createFallbackColors(this.vertexCount) : createFallbackNormals(this.vertexCount);
+    }
+
+    getMorphIndices(): Uint32Array | null {
+        this.assertAlive("access morph index data");
+        const source = this._wasm.indices.source as WasmMemoryView<Uint32Array> | null;
+        if (source) {
+            source.refresh();
+            validateWasmRecordRange(source, this.indexCount, 1, "Geometry: wasmIndices", "indexCount");
+            return this.copyWasmActiveRange(source, this.indexCount);
+        }
+        return this.indices ? this.indices.subarray(0, this.indexCount) : null;
     }
 
     clearWasmSources(): void {
@@ -1125,6 +1202,12 @@ export class Geometry {
         return this._tangentBuffer;
     }
 
+    get colorBuffer(): GPUBuffer {
+        this.assertAlive("access colorBuffer");
+        if (!this._colorBuffer) throw new Error("Geometry not uploaded. Call upload(device) first.");
+        return this._colorBuffer;
+    }
+
     get uvBuffer(): GPUBuffer {
         this.assertAlive("access uvBuffer");
         if (!this._uvBuffer) throw new Error("Geometry not uploaded. Call upload(device) first.");
@@ -1205,6 +1288,7 @@ export class Geometry {
         this._positionBuffer?.destroy();
         this._normalBuffer?.destroy();
         this._tangentBuffer?.destroy();
+        this._colorBuffer?.destroy();
         this._uvBuffer?.destroy();
         this._uv1Buffer?.destroy();
         this._jointsBuffer?.destroy();
@@ -1221,6 +1305,7 @@ export class Geometry {
         this._positionBuffer = null;
         this._normalBuffer = null;
         this._tangentBuffer = null;
+        this._colorBuffer = null;
         this._uvBuffer = null;
         this._uv1Buffer = null;
         this._indexBuffer = null;

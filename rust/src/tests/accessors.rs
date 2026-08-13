@@ -5,7 +5,7 @@
  */
 
 use crate::accessors::{
-    CT_F32, CT_I8, CT_I16, CT_I32, CT_U8, CT_U16, CT_U32, component_bits, component_bytes,
+    CT_F32, CT_I8, CT_I16, CT_I32, CT_U8, CT_U16, CT_U32, compact, component_bits, component_bytes,
     component_signed, component_to_f32, component_to_u16, deinterleave, js_to_u32,
     read_component_as_f64, read_sparse_index,
 };
@@ -80,6 +80,33 @@ fn deinterleave_validates_layout_and_copies_only_components() {
     assert!(!deinterleave(&mut out, &src, 0, 2, 2, 6));
     assert!(!deinterleave(&mut out[..7], &src, 2, 2, 2, 6));
     assert!(!deinterleave(&mut out, &src[..9], 2, 2, 2, 6));
+}
+
+#[test]
+fn compact_removes_matrix_column_padding_and_allows_final_padding_omission() {
+    let src = [
+        1, 2, 3, 0xaa, 4, 5, 6, 0xbb, 7, 8, 9, 0xcc, 10, 11, 12, 0xdd, 13, 14, 15, 0xee, 16, 17, 18,
+    ];
+    let mut out = [0; 18];
+    assert!(compact(&mut out, &src, 2, 3, 3, 1, 4, 12));
+    assert_eq!(
+        out,
+        [
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18,
+        ]
+    );
+    let src_u16 = [1, 0, 2, 0, 3, 0, 0xaa, 0xbb, 4, 0, 5, 0, 6, 0, 0xcc, 0xdd];
+    let mut out_u16 = [0; 12];
+    assert!(compact(&mut out_u16, &src_u16, 1, 3, 2, 2, 8, 16));
+    assert_eq!(out_u16, [1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0]);
+}
+
+#[test]
+fn compact_rejects_short_source_and_invalid_strides() {
+    let mut out = [0; 9];
+    assert!(!compact(&mut out, &[0; 10], 1, 3, 3, 1, 4, 12));
+    assert!(!compact(&mut out, &[0; 12], 1, 3, 3, 1, 2, 6));
+    assert!(!compact(&mut out[..8], &[0; 12], 1, 3, 3, 1, 4, 12));
 }
 
 #[test]

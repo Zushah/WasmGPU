@@ -428,8 +428,10 @@ export const frameArena = {
 setWebAssemblyDriverHost(wasm, frameArena);
 
 export const accessorf = {
-    deinterleave: (outPtr: WasmPtr, srcPtr: WasmPtr, count: number, numComponents: number, componentBytes: number, byteStride: number): void => {
-        ensure().accessor_deinterleave(outPtr >>> 0, srcPtr >>> 0, count >>> 0, numComponents >>> 0, componentBytes >>> 0, byteStride >>> 0);
+    compact: (outPtr: WasmPtr, srcPtr: WasmPtr, count: number, rows: number, columns: number, componentBytes: number, elementStride: number): void => {
+        const logicalComponents = (rows * columns) >>> 0;
+        const encodedComponents = columns > 1 ? (logicalComponents | 0x80000000) : logicalComponents;
+        ensure().accessor_deinterleave(outPtr >>> 0, srcPtr >>> 0, count >>> 0, encodedComponents >>> 0, componentBytes >>> 0, elementStride >>> 0);
     },
     applySparse: (outPtr: WasmPtr, outComponentCount: number, componentType: number, numComponents: number, indicesPtr: WasmPtr, indicesComponentType: number, valuesPtr: WasmPtr, sparseCount: number): void => {
         ensure().accessor_apply_sparse(outPtr >>> 0, outComponentCount >>> 0, componentType >>> 0, numComponents >>> 0, indicesPtr >>> 0, indicesComponentType >>> 0, valuesPtr >>> 0, sparseCount >>> 0);

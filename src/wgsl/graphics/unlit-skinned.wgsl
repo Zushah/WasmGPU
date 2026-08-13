@@ -16,6 +16,7 @@ struct VertexInput {
     @location(1) normal: vec3<f32>,
     @location(2) uv: vec2<f32>,
     @location(11) uv1: vec2<f32>,
+    @location(13) color: vec4<f32>,
     @location(3) joints: vec4<u32>,
     @location(4) weights: vec4<f32>,
 }
@@ -24,6 +25,7 @@ struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) uv1: vec2<f32>,
+    @location(2) color: vec4<f32>,
 }
 
 struct CameraUniforms {
@@ -79,6 +81,7 @@ fn vs_main(in: VertexInput) -> VertexOutput {
     out.position = camera.view_projection * model.model * local_pos;
     out.uv = in.uv;
     out.uv1 = in.uv1;
+    out.color = in.color;
     return out;
 }
 
@@ -91,7 +94,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         material.base_color_transform1,
     );
     let base_color_sample = textureSample(base_color_texture, base_color_sampler, base_uv);
-    var out_color = material.color * base_color_sample;
+    var out_color = material.color * base_color_sample * in.color;
     let alpha_cutoff = material.params.x;
     if (alpha_cutoff > 0.0 && out_color.a < alpha_cutoff) {
         discard;

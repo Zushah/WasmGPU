@@ -7,10 +7,10 @@
 import type { GltfBuffer, GltfImage, GltfRoot, GltfDocument } from "./types";
 import { decodeGltfJson, validateGltfCompatibility } from "./compatibility";
 import { parseGLB } from "./glb";
-import { decodeDataUri, dirnameUrl, isDataUri, normalizeDirectoryUrl, resolveUri } from "./uri";
+import { decodeDataUri, isDataUri, normalizeDirectoryUrl, resolveUri } from "./uri";
 
 export type LoadGltfOptions = {
-    baseUrl?: string;
+    resourceBaseUrl?: string;
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     loadImages?: boolean;
     onWarning?: (message: string) => void;
@@ -39,22 +39,33 @@ const fetchArrayBuffer = async (url: string, opts?: LoadGltfOptions): Promise<Fe
 
 const isGLB = (bytes: ArrayBuffer): boolean => bytes.byteLength >= 4 && new DataView(bytes).getUint32(0, true) === 0x46546c67;
 
+const requireBufferLength = (value: number, context: string): number => {
+    if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${context} must be a non-negative safe integer, got ${String(value)}.`);
+    return value;
+};
+
+const restrictBufferToDeclaredLength = (bytes: ArrayBuffer, length: number, context: string): ArrayBuffer => {
+    if (bytes.byteLength < length) throw new Error(`${context} contains ${bytes.byteLength} bytes, but ${length} were declared.`);
+    return bytes.slice(0, length);
+};
+
 const resolveBuffers = async (json: GltfRoot, resourceBaseUrl: string, opts?: LoadGltfOptions, glbBinChunk?: ArrayBuffer | null): Promise<ArrayBuffer[]> => {
     const buffers: GltfBuffer[] = json.buffers ?? [];
     const out: ArrayBuffer[] = new Array(buffers.length);
     for (let i = 0; i < buffers.length; i++) {
         const b = buffers[i]!;
-        if (!b.uri) {
-            if (!glbBinChunk) throw new Error(`buffers[${i}] has no uri but no GLB BIN chunk was provided`);
-            out[i] = glbBinChunk;
+        const length = requireBufferLength(b.byteLength, `buffers[${i}].byteLength`);
+        if (b.uri === undefined) {
+            if (glbBinChunk === null || glbBinChunk === undefined) throw new Error(`buffers[${i}] has no uri but no GLB BIN chunk was provided`);
+            out[i] = restrictBufferToDeclaredLength(glbBinChunk, length, `buffers[${i}] GLB BIN chunk`);
             continue;
         }
         if (isDataUri(b.uri)) {
-            out[i] = decodeDataUri(b.uri).data;
+            out[i] = restrictBufferToDeclaredLength(decodeDataUri(b.uri).data, length, `buffers[${i}] data URI`);
             continue;
         }
         const url = resolveUri(resourceBaseUrl, b.uri);
-        out[i] = (await fetchArrayBuffer(url, opts)).bytes;
+        out[i] = restrictBufferToDeclaredLength((await fetchArrayBuffer(url, opts)).bytes, length, `buffers[${i}] resource`);
     }
     return out;
 };
@@ -64,7 +75,7 @@ const resolveImages = async (json: GltfRoot, buffers: ArrayBuffer[], resourceBas
     const out: ArrayBuffer[] = new Array(images.length);
     for (let i = 0; i < images.length; i++) {
         const img = images[i]!;
-        if (img.uri) {
+        if (img.uri !== undefined) {
             if (isDataUri(img.uri)) {
                 out[i] = decodeDataUri(img.uri).data;
             } else {
@@ -78,11 +89,11 @@ const resolveImages = async (json: GltfRoot, buffers: ArrayBuffer[], resourceBas
             if (!bv) throw new Error(`Invalid images[${i}].bufferView: ${img.bufferView}`);
             const buffer = buffers[bv.buffer];
             if (!buffer) throw new Error(`Missing buffer[${bv.buffer}] for images[${i}]`);
-            const start = (bv.byteOffset ?? 0) | 0;
-            const length = bv.byteLength | 0;
-            const copy = new Uint8Array(length);
-            copy.set(new Uint8Array(buffer, start, length));
-            out[i] = copy.buffer;
+            const start = requireBufferLength(bv.byteOffset ?? 0, `images[${i}].bufferView.byteOffset`);
+            const length = requireBufferLength(bv.byteLength, `images[${i}].bufferView.byteLength`);
+            const end = start + length;
+            if (!Number.isSafeInteger(end) || end > buffer.byteLength) throw new Error(`images[${i}].bufferView exceeds its buffer.`);
+            out[i] = buffer.slice(start, end);
             continue;
         }
         warn(opts, `images[${i}] has neither uri nor bufferView; skipping`);
@@ -91,10 +102,10 @@ const resolveImages = async (json: GltfRoot, buffers: ArrayBuffer[], resourceBas
     return out;
 };
 
-const finalizeDocument = async (json: GltfRoot, baseUrl: string, resourceBaseUrl: string, opts?: LoadGltfOptions, glbBinChunk?: ArrayBuffer | null): Promise<GltfDocument> => {
+const finalizeDocument = async (json: GltfRoot, resourceBaseUrl: string, opts?: LoadGltfOptions, glbBinChunk?: ArrayBuffer | null): Promise<GltfDocument> => {
     validateGltfCompatibility(json);
     const buffers = await resolveBuffers(json, resourceBaseUrl, opts, glbBinChunk);
-    const doc: GltfDocument = { json, buffers, baseUrl, resourceBaseUrl };
+    const doc: GltfDocument = { json, buffers, resourceBaseUrl };
     if (opts?.loadImages) doc.images = await resolveImages(json, buffers, resourceBaseUrl, opts);
     return doc;
 };
@@ -107,13 +118,11 @@ const parseRootBytes = (bytes: ArrayBuffer, context: string): { json: GltfRoot; 
 export const loadGltf = async (source: string | ArrayBuffer, opts?: LoadGltfOptions): Promise<GltfDocument> => {
     if (typeof source === "string") {
         const fetched = await fetchArrayBuffer(source, opts);
-        const resourceBaseUrl = opts?.baseUrl !== undefined ? normalizeDirectoryUrl(opts.baseUrl) : fetched.responseUrl;
-        const baseUrl = opts?.baseUrl !== undefined ? resourceBaseUrl : dirnameUrl(resourceBaseUrl);
+        const resourceBaseUrl = opts?.resourceBaseUrl !== undefined ? normalizeDirectoryUrl(opts.resourceBaseUrl) : fetched.responseUrl;
         const { json, binChunk } = parseRootBytes(fetched.bytes, `source '${source}'`);
-        return finalizeDocument(json, baseUrl, resourceBaseUrl, opts, binChunk);
+        return finalizeDocument(json, resourceBaseUrl, opts, binChunk);
     }
-    const resourceBaseUrl = opts?.baseUrl !== undefined ? normalizeDirectoryUrl(opts.baseUrl) : "";
-    const baseUrl = resourceBaseUrl;
+    const resourceBaseUrl = opts?.resourceBaseUrl !== undefined ? normalizeDirectoryUrl(opts.resourceBaseUrl) : "";
     const { json, binChunk } = parseRootBytes(source, "in-memory source");
-    return finalizeDocument(json, baseUrl, resourceBaseUrl, opts, binChunk);
+    return finalizeDocument(json, resourceBaseUrl, opts, binChunk);
 };

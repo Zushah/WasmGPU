@@ -9,7 +9,7 @@ import { Geometry } from "../graphics/geometry";
 import { Material } from "../graphics/material";
 import { TransformStore } from "./transform";
 import { Camera } from "../world/camera";
-import { Mesh, getMeshVertexBuffers } from "../world/mesh";
+import { Mesh, getMeshVertexBuffers, hasMeshMorphRuntime } from "../world/mesh";
 import { PointCloud } from "../world/pointcloud";
 import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
@@ -386,7 +386,8 @@ const executeMeshPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncode
             lastSkinned = false;
             lastSkinned8 = false;
         }
-        if (geometry !== lastGeometry || item.vertexSourceId !== lastVertexSourceId || item.skinned !== lastSkinned || item.skinned8 !== lastSkinned8) {
+        const vertexSourceChanged = geometry !== lastGeometry || item.vertexSourceId !== lastVertexSourceId || item.skinned !== lastSkinned || item.skinned8 !== lastSkinned8;
+        if (vertexSourceChanged) {
             geometry.upload(ctx.device);
             const buffers = getMeshVertexBuffers(mesh, ctx.device, ctx.queue);
             pass.setVertexBuffer(0, buffers.positionBuffer);
@@ -403,7 +404,7 @@ const executeMeshPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncode
             lastVertexSourceId = item.vertexSourceId;
             lastSkinned = item.skinned;
             lastSkinned8 = item.skinned8;
-        }
+        } else if (hasMeshMorphRuntime(mesh)) getMeshVertexBuffers(mesh, ctx.device, ctx.queue);
         if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
         const slot = ctx.modelBufferIndex++;
         const modelBuffer = ctx.modelUniformBuffers[slot];
@@ -430,7 +431,7 @@ const executeMeshPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncode
                     jointCount,
                     skin.skin.invBindPtr,
                     TransformStore.global().worldPtr as WasmPtr,
-                    skin.bindMatrixPtr
+                    skin.meshWorldMatrixPtr
                 );
                 ctx.queue.writeBuffer(skin.boneBuffer!, 0, bytes, jointMatPtr, jointCount * 64);
                 pass.setBindGroup(2, skin.bindGroup!);

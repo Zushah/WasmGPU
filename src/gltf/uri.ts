@@ -154,21 +154,23 @@ export const normalizeDirectoryUrl = (url: string): string => {
     return path.endsWith("/") ? url : `${path}/${suffix}`;
 };
 
-export const resolveUri = (baseUrl: string, uri: string): string => {
+export const resolveUri = (baseUri: string, uri: string): string => {
     if (isAbsoluteUri(uri)) return uri;
-    if (!baseUrl) return uri;
-    if (isAbsoluteUri(baseUrl) || baseUrl.startsWith("//")) {
-        const absoluteBase = baseUrl.startsWith("//") ? `https:${baseUrl}` : baseUrl;
+    if (!baseUri) return uri;
+    if (isAbsoluteUri(baseUri) || baseUri.startsWith("//")) {
+        const protocolRelative = baseUri.startsWith("//");
+        const absoluteBase = protocolRelative ? `https:${baseUri}` : baseUri;
         try {
-            return new URL(uri, absoluteBase).href;
+            const resolved = new URL(uri, absoluteBase).href;
+            return protocolRelative ? resolved.slice("https:".length) : resolved;
         } catch {
             return uri;
         }
     }
     if (uri.startsWith("//")) return new URL(uri, RELATIVE_URI_ORIGIN).href.slice("https:".length);
-    const sentinelBase = new URL(baseUrl.startsWith("/") ? baseUrl : `/${baseUrl}`, RELATIVE_URI_ORIGIN);
+    const sentinelBase = new URL(baseUri.startsWith("/") ? baseUri : `/${baseUri}`, RELATIVE_URI_ORIGIN);
     const resolved = new URL(uri, sentinelBase);
     if (resolved.origin !== RELATIVE_URI_ORIGIN) return resolved.href;
     const path = resolved.href.slice(RELATIVE_URI_ORIGIN.length);
-    return uri.startsWith("/") ? path : path.slice(1);
+    return uri.startsWith("/") || baseUri.startsWith("/") ? path : path.slice(1);
 };
