@@ -890,6 +890,7 @@ export class NavigationControls {
 
     private getAspect(aspectOverride?: number): number {
         if (aspectOverride && aspectOverride > 0) return aspectOverride;
+        if (this.camera instanceof PerspectiveCamera && !this.camera.autoAspect && Number.isFinite(this.camera.aspect) && this.camera.aspect > 0) return this.camera.aspect;
         return this.getViewportWidth() / Math.max(1, this.getViewportHeight());
     }
 
@@ -930,16 +931,22 @@ export class NavigationControls {
                 far: lerp(a.far, b.far, t)
             };
         }
+        const lerpFar = (farA: number, farB: number, factor: number): number => {
+            const invA = Number.isFinite(farA) && farA > 0 ? 1 / farA : 0;
+            const invB = Number.isFinite(farB) && farB > 0 ? 1 / farB : 0;
+            const inv = lerp(invA, invB, factor);
+            return inv <= 1e-12 ? Infinity : 1 / inv;
+        };
         return {
             type: "perspective",
             near: lerp((a as ProjectionState).near, (b as ProjectionState).near, t),
-            far: lerp((a as ProjectionState).far, (b as ProjectionState).far, t)
+            far: lerpFar((a as ProjectionState).far, (b as ProjectionState).far, t)
         };
     }
 
     private applyPose(position: Vec3, target: Vec3, up: Vec3): void {
         this.target = vec3clone(target);
-        this.camera.transform.setPosition(position[0], position[1], position[2]);
+        this.camera.setWorldPosition(position[0], position[1], position[2]);
         this.camera.lookAtWithUp(target, up);
     }
 
@@ -1016,7 +1023,7 @@ export class NavigationControls {
         const position = vec3add(this.target, offset);
         const forward = vec3normalize(vec3sub(this.target, position), vec3scl(this._axisConvention.forward, -1));
         const up = this.getOrbitUp(forward);
-        this.camera.transform.setPosition(position[0], position[1], position[2]);
+        this.camera.setWorldPosition(position[0], position[1], position[2]);
         this.camera.lookAtWithUp(this.target, up);
         if (this.camera.type === "orthographic") this.applyOrthographicZoom();
         else this.relaxPerspectiveClipForZoom();
@@ -1041,7 +1048,7 @@ export class NavigationControls {
         if (radius > EPSILON) this._trackballEye = vec3scl(this._trackballEye, this._radius / radius);
         else this._trackballEye = vec3scl(this._axisConvention.forward, this._radius);
         const position = vec3add(this.target, this._trackballEye);
-        this.camera.transform.setPosition(position[0], position[1], position[2]);
+        this.camera.setWorldPosition(position[0], position[1], position[2]);
         this.camera.lookAtWithUp(this.target, this._trackballUp);
         if (this.camera.type === "orthographic") this.applyOrthographicZoom();
         else this.relaxPerspectiveClipForZoom();
@@ -1121,7 +1128,8 @@ export class NavigationControls {
         } else {
             const camera = this.camera as PerspectiveCamera;
             const targetDistance = this._radius * Math.tan((camera.fov * Math.PI / 180) * 0.5);
-            panX = (2 * deltaX * targetDistance / h) * this.panSpeed;
+            const aspect = (!camera.autoAspect && Number.isFinite(camera.aspect) && camera.aspect > 0) ? camera.aspect : (w / h);
+            panX = (2 * deltaX * targetDistance * aspect / w) * this.panSpeed;
             panY = (2 * deltaY * targetDistance / h) * this.panSpeed;
         }
         this._panOffset = vec3add(this._panOffset, vec3add(vec3scl(basis.right, -panX), vec3scl(basis.up, panY)));
@@ -1145,7 +1153,7 @@ export class NavigationControls {
         }
         const camera = this.camera as PerspectiveCamera;
         const tanHalfFov = Math.tan((camera.fov * Math.PI / 180) * 0.5);
-        const aspect = rect.width / rect.height;
+        const aspect = (!camera.autoAspect && Number.isFinite(camera.aspect) && camera.aspect > 0) ? camera.aspect : (rect.width / rect.height);
         const oldHalfH = prevRadius * tanHalfFov;
         const newHalfH = this._radius * tanHalfFov;
         const oldHalfW = oldHalfH * aspect;
@@ -1171,11 +1179,13 @@ export class NavigationControls {
         const camera = this.camera as PerspectiveCamera;
         const minNear = 1e-5;
         const desiredNear = Math.max(minNear, this._radius * 1e-3);
-        const maxNear = Math.max(minNear, camera.far - 0.01);
+        const maxNear = Number.isFinite(camera.far) ? Math.max(minNear, camera.far - 0.01) : desiredNear;
         const nextNear = clamp(desiredNear, minNear, maxNear);
         if (Math.abs(nextNear - camera.near) > Math.max(minNear, camera.near) * 1e-3) camera.near = nextNear;
-        const desiredFar = Math.max(this._radius * 4, camera.near + 0.01);
-        if (desiredFar > camera.far) camera.far = desiredFar;
+        if (Number.isFinite(camera.far)) {
+            const desiredFar = Math.max(this._radius * 4, camera.near + 0.01);
+            if (desiredFar > camera.far) camera.far = desiredFar;
+        }
     }
 
     private offsetToSpherical(offset: readonly number[]): { theta: number; phi: number; } {
@@ -1217,10 +1227,9 @@ export class NavigationControls {
     }
 
     private computeFlyBasis(): Basis3 {
-        const m = this.camera.transform.worldMatrix;
-        const right = vec3normalize([m[0], m[1], m[2]], this._axisConvention.right);
-        const up = vec3normalize([m[4], m[5], m[6]], this._axisConvention.up);
-        const forward = vec3normalize([-m[8], -m[9], -m[10]], vec3scl(this._axisConvention.forward, -1));
+        const q = this.camera.transform.worldRotation;
+        const forward = quatrotvec(0, 0, -1, q[0], q[1], q[2], q[3]);
+        const up = quatrotvec(0, 1, 0, q[0], q[1], q[2], q[3]);
         return this.computeLookBasis(forward, up);
     }
 
@@ -1251,7 +1260,7 @@ export class NavigationControls {
     }
 
     private applyFlyPose(position: Vec3, forward: Vec3, up: Vec3): void {
-        this.camera.transform.setPosition(position[0], position[1], position[2]);
+        this.camera.setWorldPosition(position[0], position[1], position[2]);
         this.camera.lookAtWithUp(vec3add(position, forward), up);
         this.target = vec3add(position, vec3scl(forward, Math.max(EPSILON, this._radius)));
     }

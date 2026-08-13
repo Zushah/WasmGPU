@@ -6,7 +6,7 @@
 
 use crate::cull::{extract_plane, mul_clip, near_plane_from_view_projection, write_all_visible};
 use crate::mat4::mat4_identity_arr;
-use crate::tests::common::assert_slice_approx;
+use crate::tests::common::{assert_approx, assert_slice_approx};
 
 #[test]
 fn plane_and_clip_helpers_follow_webgpu_column_major_conventions() {
@@ -50,4 +50,35 @@ fn conservative_fallback_preserves_stable_valid_indices_and_statistics() {
     let mut short_stats = [7; 2];
     write_all_visible(&mut out, &centers, &radii, Some(&mut short_stats));
     assert_eq!(short_stats, [7; 2]);
+}
+
+#[test]
+fn infinite_perspective_produces_inactive_far_plane_without_culling_distant_geometry() {
+    use crate::cull::write_planes_from_view_projection;
+    use crate::mat4::mat4_perspective_from;
+    let proj = mat4_perspective_from(std::f32::consts::FRAC_PI_2, 1.0, 0.1, f32::INFINITY);
+    let mut planes = [0.0f32; 24];
+    write_planes_from_view_projection(&mut planes, &proj);
+    let far_plane = &planes[20..24];
+    assert_eq!(far_plane[0], 0.0);
+    assert_eq!(far_plane[1], 0.0);
+    assert_eq!(far_plane[2], 0.0);
+    assert_approx(far_plane[3], 0.1, 1e-6);
+    let cx = 0.0f32;
+    let cy = 0.0f32;
+    let cz = -50000.0f32;
+    let r = 10.0f32;
+    let mut inside = true;
+    for p in 0..6 {
+        let j = p * 4;
+        let dist = planes[j + 0] * cx + planes[j + 1] * cy + planes[j + 2] * cz + planes[j + 3];
+        if dist < -r {
+            inside = false;
+            break;
+        }
+    }
+    assert!(
+        inside,
+        "sphere at z=-50000 must not be culled under infinite perspective"
+    );
 }

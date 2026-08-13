@@ -228,8 +228,7 @@ await setupTest({ initWebAssembly });
 
     const res = importGltf(await loadGltf(makeGLB(gltfJson, bin.buffer), { resourceBaseUrl: "https://example.test/models/" }), { addToScene: false, computeMissingNormals: true });
 
-    expectSupport(res.metadata, supportedNames.filter((name) => name !== "KHR_materials_anisotropy"), "supported");
-    expectSupport(res.metadata, ["KHR_materials_anisotropy"], "partial");
+    expectSupport(res.metadata, supportedNames, "supported");
     assert.equal(res.meshes.length, 3);
 
     const standardMesh = res.meshes[0];
@@ -1283,4 +1282,168 @@ await setupTest({ initWebAssembly });
     assert.equal(result.meshes[0].name, "ChildMesh");
     assert.equal(result.meshes[0].skin, null);
     result.destroy();
+}
+
+// 17) Transfer-function-aware texture caching distinguishes sRGB and linear usages for shared images.
+{
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
+    const chunks = [positions, uvs];
+    let byteLength = 0;
+    const offsets = chunks.map((chunk) => { const offset = byteLength; byteLength += pad4(chunk.byteLength); return offset; });
+    const bin = new Uint8Array(byteLength);
+    chunks.forEach((chunk, index) => copyBytes(bin, offsets[index], chunk));
+    const document = {
+        json: {
+            asset: { version: "2.0" },
+            buffers: [{ byteLength: bin.byteLength }],
+            bufferViews: chunks.map((chunk, index) => ({ buffer: 0, byteOffset: offsets[index], byteLength: chunk.byteLength })),
+            accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3" }, { bufferView: 1, componentType: 5126, count: 3, type: "VEC2" }],
+            images: [{ uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" }],
+            textures: [{ source: 0 }],
+            extensionsUsed: ["KHR_materials_variants", "KHR_materials_transmission", "KHR_materials_diffuse_transmission", "KHR_materials_sheen"],
+            extensions: { KHR_materials_variants: { variants: [{ name: "SharedTextureVariant" }] } },
+            materials: [
+                {
+                    name: "DualColorSpaceMaterial",
+                    pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicRoughnessTexture: { index: 0 } },
+                    emissiveTexture: { index: 0 },
+                    extensions: { KHR_materials_transmission: { transmissionFactor: 1, transmissionTexture: { index: 0 } }, KHR_materials_diffuse_transmission: { diffuseTransmissionFactor: 1, diffuseTransmissionTexture: { index: 0 }, diffuseTransmissionColorTexture: { index: 0 } } }
+                },
+                { normalTexture: { index: 0 }, extensions: { KHR_materials_sheen: { sheenColorTexture: { index: 0 } } } }
+            ],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 }, material: 0, extensions: { KHR_materials_variants: { mappings: [{ material: 1, variants: [0] }] } } }] }], nodes: [{ mesh: 0 }],
+            scenes: [{ nodes: [0] }], scene: 0
+        },
+        buffers: [bin.buffer], resourceBaseUrl: ""
+    };
+    const result = importGltf(document, { addToScene: false });
+    assert.equal(result.meshes.length, 1);
+    const mat = result.meshes[0].material;
+    assert.ok(mat instanceof StandardMaterial);
+    assert.ok(mat.baseColorTexture);
+    assert.ok(mat.metallicRoughnessTexture);
+    assert.ok(mat.emissiveTexture);
+    assert.notEqual(mat.baseColorTexture, mat.metallicRoughnessTexture);
+    assert.equal(mat.baseColorTexture, mat.emissiveTexture, "Slots using the same transfer function must reuse one runtime texture");
+    assert.equal(mat.extensions.transmission.texture, mat.metallicRoughnessTexture);
+    assert.equal(mat.extensions.diffuseTransmission.texture, mat.metallicRoughnessTexture);
+    assert.equal(mat.extensions.diffuseTransmission.colorTexture, mat.baseColorTexture);
+    assert.deepEqual(mat.baseColorTexture.samplerDesc, mat.metallicRoughnessTexture.samplerDesc);
+    result.metadata.variants.setActive("SharedTextureVariant");
+    const variantMat = result.meshes[0].material;
+    assert.ok(variantMat instanceof StandardMaterial);
+    assert.equal(variantMat.normalTexture, mat.metallicRoughnessTexture, "Variants must reuse the linear runtime texture");
+    assert.equal(variantMat.extensions.sheen.colorTexture, mat.baseColorTexture, "Variants must reuse the sRGB runtime texture");
+
+    const destroyedTextureIds = [];
+    const originalTextureDestroy = Texture2D.prototype.destroy;
+    Texture2D.prototype.destroy = function trackedDestroy() { destroyedTextureIds.push(this.id); return originalTextureDestroy.call(this); };
+    try { result.destroy(); } finally { Texture2D.prototype.destroy = originalTextureDestroy; }
+    assert.equal(destroyedTextureIds.length, 2, "Import-result cleanup must destroy each transfer-function resource exactly once");
+    assert.equal(new Set(destroyedTextureIds).size, 2);
+}
+
+// 18) Imported byte and URL images enforce strict raw-sample decode options and share URL fetches.
+{
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
+    const chunks = [positions, uvs];
+    let byteLength = 0;
+    const offsets = chunks.map((chunk) => { const offset = byteLength; byteLength += pad4(chunk.byteLength); return offset; });
+    const bin = new Uint8Array(byteLength);
+    chunks.forEach((chunk, index) => copyBytes(bin, offsets[index], chunk));
+    const makeDocument = (uri) => ({
+        json: {
+            asset: { version: "2.0" },
+            buffers: [{ byteLength: bin.byteLength }],
+            bufferViews: chunks.map((chunk, index) => ({ buffer: 0, byteOffset: offsets[index], byteLength: chunk.byteLength })),
+            accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3" }, { bufferView: 1, componentType: 5126, count: 3, type: "VEC2" }],
+            images: [{ uri }], textures: [{ source: 0 }], materials: [{ pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicRoughnessTexture: { index: 0 } } }],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 }, material: 0 }] }], nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }], scene: 0
+        },
+        buffers: [bin.buffer], resourceBaseUrl: "https://example.invalid/models/"
+    });
+    const bitmapDescriptor = Object.getOwnPropertyDescriptor(globalThis, "createImageBitmap");
+    const fetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+    const setGlobal = (name, value) => Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+    const restoreGlobal = (name, descriptor) => descriptor ? Object.defineProperty(globalThis, name, descriptor) : delete globalThis[name];
+    const decodeOptions = [];
+    let fetchCalls = 0;
+    const fakeDevice = { createTexture: () => ({ createView: () => ({}), destroy: () => {} }) };
+    const fakeQueue = { copyExternalImageToTexture: () => {} };
+    const waitForUploads = async (textures) => { for (let i = 0; i < 100 && textures.some((texture) => !texture.uploaded); i++) await new Promise((resolve) => setTimeout(resolve, 0)); assert.ok(textures.every((texture) => texture.uploaded), "Imported textures did not finish mocked upload"); };
+    try {
+        setGlobal("createImageBitmap", async (_blob, options) => { decodeOptions.push(options); return { width: 1, height: 1, close: () => {} }; });
+        setGlobal("fetch", async (url) => { fetchCalls++; assert.equal(url, "https://example.invalid/models/image.png"); return { ok: true, status: 200, statusText: "OK", blob: async () => new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }) }; });
+        for (const uri of ["data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "image.png"]) {
+            const result = importGltf(makeDocument(uri), { addToScene: false });
+            const material = result.meshes[0].material;
+            const textures = [material.baseColorTexture, material.metallicRoughnessTexture];
+            textures[0].ensureUploaded(fakeDevice, fakeQueue, "srgb");
+            textures[1].ensureUploaded(fakeDevice, fakeQueue, "linear");
+            await waitForUploads(textures);
+            result.destroy();
+        }
+        assert.equal(fetchCalls, 1, "Mixed URL transfer functions must share one encoded-source fetch");
+        assert.equal(decodeOptions.length, 4);
+        for (const options of decodeOptions) assert.deepEqual(options, { premultiplyAlpha: "none", imageOrientation: "none", colorSpaceConversion: "none" });
+    } finally { restoreGlobal("createImageBitmap", bitmapDescriptor); restoreGlobal("fetch", fetchDescriptor); }
+}
+
+// 19) Material texture combination over WebGPU baseline limit (16) reports partial assessment.
+{
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const uvs = new Float32Array([0, 0, 1, 0, 0, 1]);
+    const chunks = [positions, uvs];
+    let byteLength = 0;
+    const offsets = chunks.map((chunk) => { const offset = byteLength; byteLength += pad4(chunk.byteLength); return offset; });
+    const bin = new Uint8Array(byteLength);
+    chunks.forEach((chunk, index) => copyBytes(bin, offsets[index], chunk));
+    const textures = [];
+    for (let i = 0; i < 20; i++) textures.push({ source: 0 });
+    const document = {
+        json: {
+            asset: { version: "2.0" },
+            extensionsUsed: ["KHR_materials_clearcoat", "KHR_materials_specular", "KHR_materials_sheen", "KHR_materials_iridescence", "KHR_materials_anisotropy", "KHR_materials_transmission", "KHR_materials_volume", "KHR_materials_diffuse_transmission"],
+            buffers: [{ byteLength: bin.byteLength }],
+            bufferViews: chunks.map((chunk, index) => ({ buffer: 0, byteOffset: offsets[index], byteLength: chunk.byteLength })),
+            accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3" }, { bufferView: 1, componentType: 5126, count: 3, type: "VEC2" }],
+            images: [{ uri: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==" }],
+            textures,
+            materials: [
+                {
+                    name: "OverLimitMaterial",
+                    pbrMetallicRoughness: { baseColorTexture: { index: 0 }, metallicRoughnessTexture: { index: 1 } },
+                    normalTexture: { index: 2 },
+                    occlusionTexture: { index: 3 },
+                    emissiveTexture: { index: 4 },
+                    extensions: {
+                        KHR_materials_clearcoat: { clearcoatTexture: { index: 5 }, clearcoatRoughnessTexture: { index: 6 }, clearcoatNormalTexture: { index: 7 } },
+                        KHR_materials_specular: { specularTexture: { index: 8 }, specularColorTexture: { index: 9 } },
+                        KHR_materials_sheen: { sheenColorTexture: { index: 10 }, sheenRoughnessTexture: { index: 11 } },
+                        KHR_materials_iridescence: { iridescenceTexture: { index: 12 }, iridescenceThicknessTexture: { index: 13 } },
+                        KHR_materials_anisotropy: { anisotropyTexture: { index: 14 } },
+                        KHR_materials_transmission: { transmissionFactor: 1, transmissionTexture: { index: 15 } },
+                        KHR_materials_volume: { thicknessFactor: 1, thicknessTexture: { index: 16 } },
+                        KHR_materials_diffuse_transmission: { diffuseTransmissionFactor: 1, diffuseTransmissionTexture: { index: 17 }, diffuseTransmissionColorTexture: { index: 18 } }
+                    }
+                }
+            ],
+            meshes: [{ primitives: [{ attributes: { POSITION: 0, TEXCOORD_0: 1 }, material: 0 }] }], nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }], scene: 0
+        },
+        buffers: [bin.buffer], resourceBaseUrl: ""
+    };
+    const warnings = [];
+    const result = importGltf(document, { addToScene: false, onWarning: (message) => warnings.push(message) });
+    for (const extensionName of document.json.extensionsUsed) assert.equal(result.metadata.extensions.support[extensionName], "partial", `${extensionName} must be downgraded for the over-limit combination`);
+    const combinationWarnings = warnings.filter((message) => message.includes("combines textures requiring"));
+    assert.equal(combinationWarnings.length, 1, "An optional over-limit material must emit one contextual warning");
+    assert.ok(combinationWarnings[0].includes("material 0"));
+    assert.ok(combinationWarnings[0].includes("20 sampled textures"));
+    result.destroy();
+
+    const requiredDocument = { ...document, json: { ...document.json, extensionsRequired: ["KHR_materials_transmission"] } };
+    const requiredError = assert.throws(() => importGltf(requiredDocument, { addToScene: false }), /KHR_materials_transmission/);
+    assert.ok(requiredError.message.includes("material 0 combines textures requiring 20 sampled textures"), requiredError.message);
 }

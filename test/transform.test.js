@@ -10,27 +10,10 @@ import { initWebAssembly, Transform, TransformStore, wasm } from "../dist/WasmGP
 
 const approx = (a, b, tol = 1e-6) => Math.abs(a - b) <= tol;
 const { arraysApproxEqual } = createApproxHelpers();
-
-const approxMatArray = (a, b, tol = 1e-6, msg = "Matrix array mismatch") => {
-    assert.strictEqual(a.length, b.length, `${msg}: list length mismatch`);
-    for (let i = 0; i < a.length; i++) arraysApproxEqual(a[i], b[i], tol, `${msg} at matrix ${i}`);
-};
-
-const assertUnitQuat = (q, tol = 1e-6) => {
-    const n = Math.hypot(q[0], q[1], q[2], q[3]);
-    assert.ok(approx(n, 1, tol), `Quaternion is not normalized: ${n}`);
-};
-
-const snapshotWorld = (nodes) => {
-    const out = new Array(nodes.length);
-    for (let i = 0; i < nodes.length; i++) out[i] = nodes[i].worldMatrix.slice();
-    return out;
-};
-
-const cleanup = (nodes) => {
-    for (let i = nodes.length - 1; i >= 0; i--) nodes[i].dispose();
-};
-
+const approxMatArray = (a, b, tol = 1e-6, msg = "Matrix array mismatch") => { assert.strictEqual(a.length, b.length, `${msg}: list length mismatch`); for (let i = 0; i < a.length; i++) arraysApproxEqual(a[i], b[i], tol, `${msg} at matrix ${i}`); };
+const assertUnitQuat = (q, tol = 1e-6) => { const n = Math.hypot(q[0], q[1], q[2], q[3]); assert.ok(approx(n, 1, tol), `Quaternion is not normalized: ${n}`); };
+const snapshotWorld = (nodes) => { const out = new Array(nodes.length); for (let i = 0; i < nodes.length; i++) out[i] = nodes[i].worldMatrix.slice(); return out; };
+const cleanup = (nodes) => { for (let i = nodes.length - 1; i >= 0; i--) nodes[i].dispose(); };
 const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
 
 await setupTest({ initWebAssembly });
@@ -315,5 +298,49 @@ await setupTest({ initWebAssembly });
         originalFreeU32(store.orderPtr, store.cap);
         originalFreeF32(store.tmpAxisPtr, 4);
         originalFreeF32(store.tmpQuatPtr, 4);
+    }
+}
+
+// 10) getWorldRotation computes scale-free composed rotation along hierarchy with defensive normalization.
+{
+    const nodes = [new Transform(), new Transform(), new Transform()];
+    const [root, parent, child] = nodes;
+
+    try {
+        root.addChild(parent);
+        parent.addChild(child);
+
+        root.setRotationFromAxisAngle([0, 1, 0], Math.PI / 2);
+        root.setScale(2, 5, 0.1);
+
+        parent.setRotationFromAxisAngle([1, 0, 0], Math.PI / 2);
+        parent.setScale(0.5, 0.5, 0.5);
+
+        child.setRotationFromAxisAngle([0, 0, 1], Math.PI / 2);
+        child.setScale(10, 0.01, 100);
+
+        Transform.updateAll();
+
+        const rootRot = root.worldRotation;
+        assertUnitQuat(rootRot, 1e-5);
+        arraysApproxEqual(rootRot, root.rotation, 1e-5, "Root worldRotation must match root local rotation");
+
+        const childRot = child.worldRotation;
+        assertUnitQuat(childRot, 1e-5);
+
+        root.setScale(1, 1, 1);
+        parent.setScale(1, 1, 1);
+        child.setScale(1, 1, 1);
+        Transform.updateAll();
+
+        const unscaledChildRot = child.worldRotation;
+        arraysApproxEqual(childRot, unscaledChildRot, 1e-5, "worldRotation must be completely invariant to hierarchy scaling");
+
+        child.setRotation(0, 0, 0, 0);
+        const safeRot = child.worldRotation;
+        assertUnitQuat(safeRot, 1e-5);
+        for (const val of safeRot) assert.ok(Number.isFinite(val), "worldRotation entries must be finite numbers");
+    } finally {
+        cleanup(nodes);
     }
 }

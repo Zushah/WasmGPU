@@ -483,6 +483,24 @@ pub unsafe extern "C" fn mat4_normsq(m: u32) -> f32 {
     }
 }
 
+pub(crate) fn mat4_perspective_from(fov_y: f32, aspect: f32, near: f32, far: f32) -> [f32; 16] {
+    let mut o = [0.0f32; 16];
+    let f: f32 = 1.0 / (fov_y * 0.5).tan();
+    o[0] = f / aspect;
+    o[5] = f;
+    if far.is_infinite() && far.is_sign_positive() {
+        o[10] = -1.0;
+        o[11] = -1.0;
+        o[14] = -near;
+    } else {
+        let range_inv: f32 = 1.0 / (near - far);
+        o[10] = far * range_inv;
+        o[11] = -1.0;
+        o[14] = near * far * range_inv;
+    }
+    o
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mat4_perspective(
     out: u32,
@@ -493,24 +511,8 @@ pub unsafe extern "C" fn mat4_perspective(
 ) -> u32 {
     with_driver_call(|call| unsafe {
         let o = f32_slice_mut(call, out, 16);
-        let f: f32 = 1.0 / (fov_y * 0.5).tan();
-        let range_inv: f32 = 1.0 / (near - far);
-        o[0] = f / aspect;
-        o[1] = 0.0;
-        o[2] = 0.0;
-        o[3] = 0.0;
-        o[4] = 0.0;
-        o[5] = f;
-        o[6] = 0.0;
-        o[7] = 0.0;
-        o[8] = 0.0;
-        o[9] = 0.0;
-        o[10] = far * range_inv;
-        o[11] = -1.0;
-        o[12] = 0.0;
-        o[13] = 0.0;
-        o[14] = near * far * range_inv;
-        o[15] = 0.0;
+        let m = mat4_perspective_from(fov_y, aspect, near, far);
+        o.copy_from_slice(&m);
         0
     })
 }

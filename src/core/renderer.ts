@@ -10,7 +10,7 @@ import { Geometry } from "../graphics/geometry";
 import { Material, BlendMode, CullMode } from "../graphics/material";
 import { frameArena, mat4, WasmPtr } from "../wasm";
 import { Scene } from "../world/scene";
-import { Camera } from "../world/camera";
+import { Camera, PerspectiveCamera } from "../world/camera";
 import { Mesh } from "../world/mesh";
 import { PointCloud } from "../world/pointcloud";
 import { GlyphField } from "../world/glyphfield";
@@ -534,7 +534,7 @@ export class Renderer {
         this.cameraUniformStagingPtr = frameArena.allocF32(20);
         this.lightingUniformStagingPtr = frameArena.allocF32(8 + (Scene.MAX_LIGHTS * 16));
         this.modelUniformStagingPtr = frameArena.allocF32(32);
-        if ("aspect" in camera) (camera as { aspect: number }).aspect = this.aspectRatio;
+        if (camera instanceof PerspectiveCamera && camera.autoAspect) camera.aspect = this.aspectRatio;
         Transform.updateAll();
         this.writeCameraUniforms(camera);
         this.writeLightingUniforms(scene);

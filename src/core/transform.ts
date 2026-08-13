@@ -380,6 +380,7 @@ export class Transform {
     private _localMatrix: number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
     private _worldMatrix: number[] = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
     private _disposed: boolean = false;
+    private static _chainScratch: Transform[] = [];
 
     constructor() {
         const store = TransformStore.global();
@@ -664,13 +665,59 @@ export class Transform {
         return this._worldMatrix;
     }
 
-    get worldPosition(): number[] {
+    getWorldPosition(out?: number[] | Float32Array): number[] | Float32Array {
         this.assertAlive();
         const T = TransformStore.global();
         T.updateIfNeeded();
         const base = (T.worldPtr >>> 2) + this.index * 16;
         const f32 = T.f32();
+        if (out) {
+            out[0] = f32[base + 12];
+            out[1] = f32[base + 13];
+            out[2] = f32[base + 14];
+            return out;
+        }
         return [f32[base + 12], f32[base + 13], f32[base + 14]];
+    }
+
+    get worldPosition(): number[] {
+        return this.getWorldPosition() as number[];
+    }
+
+    getWorldRotation(out?: number[]): number[] {
+        this.assertAlive();
+        TransformStore.global().updateIfNeeded();
+        Transform._chainScratch.length = 0;
+        let curr: Transform | null = this;
+        while (curr) { Transform._chainScratch.push(curr); curr = curr._parent; }
+        let x = 0, y = 0, z = 0, w = 1;
+        for (let i = Transform._chainScratch.length - 1; i >= 0; i--) {
+            const t = Transform._chainScratch[i]!;
+            const r = t._rotation;
+            let rx = r[0] ?? 0;
+            let ry = r[1] ?? 0;
+            let rz = r[2] ?? 0;
+            let rw = r[3] ?? 1;
+            let rlen2 = rx * rx + ry * ry + rz * rz + rw * rw;
+            if (!Number.isFinite(rlen2) || rlen2 <= 1e-12) { rx = 0; ry = 0; rz = 0; rw = 1; }
+            else { const inv = 1 / Math.sqrt(rlen2); rx *= inv; ry *= inv; rz *= inv; rw *= inv; }
+            const nx = w * rx + x * rw + y * rz - z * ry;
+            const ny = w * ry - x * rz + y * rw + z * rx;
+            const nz = w * rz + x * ry - y * rx + z * rw;
+            const nw = w * rw - x * rx - y * ry - z * rz;
+            x = nx; y = ny; z = nz; w = nw;
+        }
+        Transform._chainScratch.length = 0;
+        let len2 = x * x + y * y + z * z + w * w;
+        if (!Number.isFinite(len2) || len2 <= 1e-12) { x = 0; y = 0; z = 0; w = 1; }
+        else { const inv = 1 / Math.sqrt(len2); x *= inv; y *= inv; z *= inv; w *= inv; }
+        const res = out ?? [0, 0, 0, 1];
+        res[0] = x; res[1] = y; res[2] = z; res[3] = w;
+        return res;
+    }
+
+    get worldRotation(): number[] {
+        return this.getWorldRotation();
     }
 
     setParent(parent: Transform | null): this {
@@ -680,12 +727,8 @@ export class Transform {
         for (let p = parent; p; p = p._parent) if (p === this) throw new Error("Transform parenting would create a cycle.");
         this.removeFromParent();
         this._parent = parent;
-        if (parent) {
-            parent._children.push(this);
-            TransformStore.global().setParent(this.index, parent.index);
-        } else {
-            TransformStore.global().setParent(this.index, null);
-        }
+        if (parent) { parent._children.push(this); TransformStore.global().setParent(this.index, parent.index); }
+        else { TransformStore.global().setParent(this.index, null); }
         return this;
     }
 

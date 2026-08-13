@@ -209,8 +209,8 @@ export const writeCameraUniforms = (ctx: RendererContext, camera: Camera): void 
     refreshWasmStagingViews(ctx);
     const proj = camera.getProjectionMatrix();
     ctx.modelUniformStagingView.set(proj, 0);
-    const viewPtr = ctx.modelUniformStagingPtr + 16 * 4;
-    mat4f.invert(viewPtr, camera.transform.worldMatrixPtr);
+    const viewPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
+    camera.writeViewMatrixTo(viewPtr);
     mat4f.mul(ctx.cameraUniformStagingPtr, ctx.modelUniformStagingPtr, viewPtr);
     const store = TransformStore.global();
     const storeF32 = store.f32();

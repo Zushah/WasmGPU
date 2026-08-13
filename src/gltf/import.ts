@@ -6,8 +6,8 @@
 
 import { wasm, mat4f, WasmPtr } from "../wasm";
 import { Geometry, computeGeometryTangents, computeGeometryVertexNormals, type GeometryMorphTargetDescriptor } from "../graphics/geometry";
-import { BlendMode, CullMode, Material, StandardMaterial, UnlitMaterial, type StandardMaterialExtensionsDescriptor, type TextureTransformDescriptor } from "../graphics/material";
-import { Texture2D } from "../graphics/texture";
+import { BlendMode, CullMode, Material, StandardMaterial, StandardMaterialFeatureFlag, UnlitMaterial, WEBGPU_BASELINE_MAX_SAMPLED_TEXTURES_PER_SHADER_STAGE, WEBGPU_BASELINE_MAX_SAMPLERS_PER_SHADER_STAGE, getStandardMaterialTextureColorSpace, planStandardMaterialLayout, type StandardMaterialExtensionsDescriptor, type StandardMaterialTextureSlot, type TextureTransformDescriptor } from "../graphics/material";
+import { Texture2D, type TextureSource } from "../graphics/texture";
 import { AnimationClip, Skin, type AnimationPointerChannel, type AnimationPointerSampler } from "../graphics/animation";
 import { Camera, OrthographicCamera, PerspectiveCamera } from "../world/camera";
 import { Scene } from "../world/scene";
@@ -789,15 +789,63 @@ const assessGaussianSplatting = (json: GltfRoot): ExtensionAssessment => {
     return unsupportedReason ? { state: "partial", reason: unsupportedReason } : { state: "supported" };
 };
 
+const getGltfMaterialRequiredTextureCount = (material: GltfMaterial): { sampledTextureCount: number; samplerCount: number; contributingExtensions: string[] } => {
+    const contributingExtensions = new Set<string>();
+    const pbr = material.pbrMetallicRoughness;
+    const ext = material.extensions as Record<string, any> | undefined;
+    const clearcoat = ext?.KHR_materials_clearcoat;
+    const specular = ext?.KHR_materials_specular;
+    const sheen = ext?.KHR_materials_sheen;
+    const iridescence = ext?.KHR_materials_iridescence;
+    const anisotropy = ext?.KHR_materials_anisotropy;
+    const transmission = ext?.KHR_materials_transmission;
+    const volume = ext?.KHR_materials_volume;
+    const diffuseTransmission = ext?.KHR_materials_diffuse_transmission;
+    let featureMask = 0;
+    if (pbr?.baseColorTexture) featureMask |= StandardMaterialFeatureFlag.BaseColorTexture;
+    if (pbr?.metallicRoughnessTexture) featureMask |= StandardMaterialFeatureFlag.MetallicRoughnessTexture;
+    if (material.normalTexture) featureMask |= StandardMaterialFeatureFlag.NormalTexture;
+    if (material.occlusionTexture) featureMask |= StandardMaterialFeatureFlag.OcclusionTexture;
+    if (material.emissiveTexture) featureMask |= StandardMaterialFeatureFlag.EmissiveTexture;
+    if (clearcoat?.clearcoatTexture) featureMask |= StandardMaterialFeatureFlag.ClearcoatTexture;
+    if (clearcoat?.clearcoatRoughnessTexture) featureMask |= StandardMaterialFeatureFlag.ClearcoatRoughnessTexture;
+    if (clearcoat?.clearcoatNormalTexture) featureMask |= StandardMaterialFeatureFlag.ClearcoatNormalTexture;
+    if (specular?.specularTexture) featureMask |= StandardMaterialFeatureFlag.SpecularTexture;
+    if (specular?.specularColorTexture) featureMask |= StandardMaterialFeatureFlag.SpecularColorTexture;
+    if (sheen?.sheenColorTexture) featureMask |= StandardMaterialFeatureFlag.SheenColorTexture;
+    if (sheen?.sheenRoughnessTexture) featureMask |= StandardMaterialFeatureFlag.SheenRoughnessTexture;
+    if (iridescence?.iridescenceTexture) featureMask |= StandardMaterialFeatureFlag.IridescenceTexture;
+    if (iridescence?.iridescenceThicknessTexture) featureMask |= StandardMaterialFeatureFlag.IridescenceThicknessTexture;
+    if (anisotropy?.anisotropyTexture) featureMask |= StandardMaterialFeatureFlag.AnisotropyTexture;
+    if (transmission !== undefined) featureMask |= StandardMaterialFeatureFlag.Transmission;
+    if (transmission?.transmissionTexture) featureMask |= StandardMaterialFeatureFlag.TransmissionTexture;
+    if (volume?.thicknessTexture) featureMask |= StandardMaterialFeatureFlag.ThicknessTexture;
+    if (diffuseTransmission !== undefined) featureMask |= StandardMaterialFeatureFlag.DiffuseTransmission;
+    if (diffuseTransmission?.diffuseTransmissionTexture) featureMask |= StandardMaterialFeatureFlag.DiffuseTransmissionTexture;
+    if (diffuseTransmission?.diffuseTransmissionColorTexture) featureMask |= StandardMaterialFeatureFlag.DiffuseTransmissionColorTexture;
+    const extensionSlots: Array<[string, boolean]> = [
+        ["KHR_materials_clearcoat", !!(featureMask & (StandardMaterialFeatureFlag.ClearcoatTexture | StandardMaterialFeatureFlag.ClearcoatRoughnessTexture | StandardMaterialFeatureFlag.ClearcoatNormalTexture))],
+        ["KHR_materials_specular", !!(featureMask & (StandardMaterialFeatureFlag.SpecularTexture | StandardMaterialFeatureFlag.SpecularColorTexture))],
+        ["KHR_materials_sheen", !!(featureMask & (StandardMaterialFeatureFlag.SheenColorTexture | StandardMaterialFeatureFlag.SheenRoughnessTexture))],
+        ["KHR_materials_iridescence", !!(featureMask & (StandardMaterialFeatureFlag.IridescenceTexture | StandardMaterialFeatureFlag.IridescenceThicknessTexture))],
+        ["KHR_materials_anisotropy", !!(featureMask & StandardMaterialFeatureFlag.AnisotropyTexture)],
+        ["KHR_materials_transmission", !!(featureMask & StandardMaterialFeatureFlag.Transmission)],
+        ["KHR_materials_volume", !!(featureMask & StandardMaterialFeatureFlag.ThicknessTexture)],
+        ["KHR_materials_diffuse_transmission", !!(featureMask & StandardMaterialFeatureFlag.DiffuseTransmission)],
+        ["KHR_materials_dispersion", ext?.KHR_materials_dispersion !== undefined && !!(featureMask & (StandardMaterialFeatureFlag.Transmission | StandardMaterialFeatureFlag.DiffuseTransmission))],
+    ];
+    for (const [name, contributes] of extensionSlots) if (contributes) contributingExtensions.add(name);
+    const plan = planStandardMaterialLayout(featureMask);
+    return { sampledTextureCount: plan.sampledTextureCount, samplerCount: plan.samplerCount, contributingExtensions: Array.from(contributingExtensions) };
+};
+
 const getMaterialTextureCombinationLosses = (material: GltfMaterial, materialIndex: number): Array<{ name: string; reason: string }> => {
     const losses: Array<{ name: string; reason: string }> = [];
-    const extensions = material.extensions as Record<string, any> | undefined;
-    const transmissionFactor = Number(extensions?.KHR_materials_transmission?.transmissionFactor ?? 0);
-    const diffuseTransmissionFactor = Number(extensions?.KHR_materials_diffuse_transmission?.diffuseTransmissionFactor ?? 0);
-    if (!(transmissionFactor > 0 || diffuseTransmissionFactor > 0)) return losses;
-    if (extensions?.KHR_materials_sheen?.sheenColorTexture || extensions?.KHR_materials_sheen?.sheenRoughnessTexture) losses.push({ name: "KHR_materials_sheen", reason: `material ${materialIndex} uses sheen textures in the current transmission layout, where those bindings are unavailable` });
-    if (extensions?.KHR_materials_iridescence?.iridescenceTexture || extensions?.KHR_materials_iridescence?.iridescenceThicknessTexture) losses.push({ name: "KHR_materials_iridescence", reason: `material ${materialIndex} uses iridescence textures in the current transmission layout, where those bindings are unavailable` });
-    if (extensions?.KHR_materials_anisotropy?.anisotropyTexture) losses.push({ name: "KHR_materials_anisotropy", reason: `material ${materialIndex} uses an anisotropy texture in the current transmission layout, where that binding is unavailable` });
+    const required = getGltfMaterialRequiredTextureCount(material);
+    if (required.sampledTextureCount > WEBGPU_BASELINE_MAX_SAMPLED_TEXTURES_PER_SHADER_STAGE || required.samplerCount > WEBGPU_BASELINE_MAX_SAMPLERS_PER_SHADER_STAGE) {
+        const reason = `material ${materialIndex} combines textures requiring ${required.sampledTextureCount} sampled textures and ${required.samplerCount} samplers, which exceeds the WebGPU baseline limits of ${WEBGPU_BASELINE_MAX_SAMPLED_TEXTURES_PER_SHADER_STAGE} and ${WEBGPU_BASELINE_MAX_SAMPLERS_PER_SHADER_STAGE}`;
+        for (const extName of required.contributingExtensions) losses.push({ name: extName, reason });
+    }
     return losses;
 };
 
@@ -1074,37 +1122,36 @@ const getMaterialTangentTexCoords = (mat: GltfMaterial | undefined): number[] =>
 
 const getPrimitiveTangentTexCoords = (json: GltfRoot, prim: GltfPrimitive): number[] => {
     const texCoords: number[] = [];
-    const add = (material: GltfMaterial | undefined): void => {
-        for (const texCoord of getMaterialTangentTexCoords(material)) if (!texCoords.includes(texCoord)) texCoords.push(texCoord);
-    };
+    const add = (material: GltfMaterial | undefined): void => { for (const texCoord of getMaterialTangentTexCoords(material)) if (!texCoords.includes(texCoord)) texCoords.push(texCoord); };
     add(prim.material !== undefined ? json.materials?.[prim.material] : undefined);
     const mappings = ((prim.extensions as Record<string, unknown> | undefined)?.["KHR_materials_variants"] as { mappings?: Array<{ material?: number }> } | undefined)?.mappings;
     for (const mapping of Array.isArray(mappings) ? mappings : []) if (typeof mapping.material === "number" && Number.isSafeInteger(mapping.material)) add(json.materials?.[mapping.material]);
     return texCoords;
 };
 
-const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: number | undefined, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, tx: ImportTransaction, opts?: ImportGltfOptions): ImportOwnership<Material> => {
+type TextureTransferFunction = "srgb" | "linear";
+
+const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: number | undefined, materialCache: Map<number, Material>, textureCache: Map<string, Texture2D>, imageSourceCache: Map<number, TextureSource>, tx: ImportTransaction, opts?: ImportGltfOptions): ImportOwnership<Material> => {
     const ownReference = (material: Material): ImportOwnership<Material> => tx.own(material, `material ${materialIndex ?? "default"} reference`, (resource) => resource.release());
-    if (materialIndex === undefined) return ownReference(new StandardMaterial({}));
+    if (materialIndex === undefined) return ownReference(new StandardMaterial({ label: "glTF default material" }));
     const existing = materialCache.get(materialIndex);
     if (existing) return ownReference(existing.retain());
     const mat = json.materials?.[materialIndex];
     if (!mat) {
-        const created = new StandardMaterial({});
+        const created = new StandardMaterial({ label: `glTF material ${materialIndex}` });
         const owned = ownReference(created);
         materialCache.set(materialIndex, created);
         return owned;
     }
-    for (const { name, reason } of getMaterialTextureCombinationLosses(mat, materialIndex)) warn(opts, `${name}: ${reason}; the texture contribution is ignored by the current transmission layout.`);
-    const getOrCreateTextureByIndex = (textureIndex: number | undefined, usage: string): Texture2D | null => {
+    const textureCombinationLosses = getMaterialTextureCombinationLosses(mat, materialIndex);
+    if (textureCombinationLosses.length > 0) warn(opts, `${textureCombinationLosses.map((loss) => loss.name).join(", ")}: ${textureCombinationLosses[0]!.reason}`);
+    const getOrCreateTextureByIndex = (textureIndex: number | undefined, transferFunction: TextureTransferFunction, usage: string): Texture2D | null => {
         if (textureIndex === undefined) return null;
-        const cached = textureCache.get(textureIndex);
+        const cacheKey = `${textureIndex}:${transferFunction}`;
+        const cached = textureCache.get(cacheKey);
         if (cached) return cached;
         const texDef = json.textures?.[textureIndex];
-        if (!texDef) {
-            warn(opts, `glTF texture index ${textureIndex} missing (usage=${usage}).`);
-            return null;
-        }
+        if (!texDef) { warn(opts, `glTF texture index ${textureIndex} missing (usage=${usage}).`); return null; }
         const textureExtensions = texDef.extensions as Record<string, unknown> | undefined;
         const alternativeSourceExtensions = [KHR_TEXTURE_BASISU, EXT_TEXTURE_WEBP].filter((name) => textureExtensions?.[name] !== undefined);
         const imageIndex = texDef.source;
@@ -1114,60 +1161,55 @@ const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: n
             if (hasCoreImageSource) warn(opts, `glTF texture ${textureIndex}: ignoring optional ${extensionName} alternative source and using the core texture.source (usage=${usage}).`);
             else warn(opts, `glTF texture ${textureIndex}: optional ${extensionName} has no usable core texture.source; its deferred alternative source is unavailable (usage=${usage}).`);
         }
-        if (imageIndex === undefined || !img) {
-            warn(opts, `glTF texture ${textureIndex} has no valid source image (usage=${usage}).`);
-            return null;
+        if (imageIndex === undefined || !img) { warn(opts, `glTF texture ${textureIndex} has no valid source image (usage=${usage}).`); return null; }
+        let source: TextureSource | null = imageIndex !== undefined ? (imageSourceCache.get(imageIndex) ?? null) : null;
+        if (!source) {
+            const loadedBytes = doc.images?.[imageIndex];
+            const mimeType = img.mimeType ?? inferMimeTypeFromUri(img.uri);
+            if (loadedBytes && loadedBytes.byteLength > 0) {
+                source = { kind: "bytes", bytes: loadedBytes, mimeType };
+            } else if (img.bufferView !== undefined) {
+                const bv = json.bufferViews?.[img.bufferView];
+                const buf = bv ? doc.buffers[bv.buffer] : undefined;
+                const bufferLength = bv ? json.buffers?.[bv.buffer]?.byteLength : undefined;
+                const start = bv?.byteOffset ?? 0;
+                const byteLength = bv?.byteLength;
+                const startValue = typeof start === "number" && Number.isSafeInteger(start) && start >= 0 ? start : -1;
+                const byteLengthValue = typeof byteLength === "number" && Number.isSafeInteger(byteLength) && byteLength >= 0 ? byteLength : -1;
+                const bufferLengthValue = typeof bufferLength === "number" && Number.isSafeInteger(bufferLength) && bufferLength >= 0 ? bufferLength : -1;
+                const end = startValue >= 0 && byteLengthValue >= 0 ? startValue + byteLengthValue : -1;
+                if (bv && buf && startValue >= 0 && byteLengthValue >= 0 && bufferLengthValue >= 0 && Number.isSafeInteger(end) && end <= bufferLengthValue && end <= buf.byteLength) source = { kind: "bytes", bytes: buf.slice(startValue, end), mimeType };
+                else warn(opts, `glTF image bufferView ${img.bufferView} missing (texture=${textureIndex}, usage=${usage}).`);
+            } else if (img.uri) {
+                if (isDataUri(img.uri)) {
+                    const decoded = decodeDataUri(img.uri);
+                    source = { kind: "bytes", bytes: decoded.data, mimeType: mimeType ?? decoded.mimeType ?? undefined };
+                } else {
+                    const url = resolveUri(doc.resourceBaseUrl, img.uri);
+                    source = { kind: "url", url, mimeType };
+                }
+            }
+            if (source && imageIndex !== undefined) imageSourceCache.set(imageIndex, source);
         }
+        if (!source) { warn(opts, `Could not resolve image source for texture=${textureIndex} (usage=${usage}).`); return null; }
         const sampler = texDef.sampler !== undefined ? json.samplers?.[texDef.sampler] : undefined;
         const addressModeU = gltfWrapToAddressMode(sampler?.wrapS);
         const addressModeV = gltfWrapToAddressMode(sampler?.wrapT);
         const magFilter = gltfMagToFilterMode(sampler?.magFilter);
         const { minFilter, mipmapFilter, useMipmaps } = gltfMinToFilterModes(sampler?.minFilter);
-        let source: { kind: "bytes"; bytes: ArrayBuffer; mimeType?: string } | { kind: "url"; url: string; mimeType?: string } | null = null;
-        const loadedBytes = doc.images?.[imageIndex];
-        const mimeType = img.mimeType ?? inferMimeTypeFromUri(img.uri);
-        if (loadedBytes && loadedBytes.byteLength > 0) {
-            source = { kind: "bytes", bytes: loadedBytes, mimeType };
-        } else if (img.bufferView !== undefined) {
-            const bv = json.bufferViews?.[img.bufferView];
-            const buf = bv ? doc.buffers[bv.buffer] : undefined;
-            const bufferLength = bv ? json.buffers?.[bv.buffer]?.byteLength : undefined;
-            const start = bv?.byteOffset ?? 0;
-            const byteLength = bv?.byteLength;
-            const startValue = typeof start === "number" && Number.isSafeInteger(start) && start >= 0 ? start : -1;
-            const byteLengthValue = typeof byteLength === "number" && Number.isSafeInteger(byteLength) && byteLength >= 0 ? byteLength : -1;
-            const bufferLengthValue = typeof bufferLength === "number" && Number.isSafeInteger(bufferLength) && bufferLength >= 0 ? bufferLength : -1;
-            const end = startValue >= 0 && byteLengthValue >= 0 ? startValue + byteLengthValue : -1;
-            if (bv && buf && startValue >= 0 && byteLengthValue >= 0 && bufferLengthValue >= 0 && Number.isSafeInteger(end) && end <= bufferLengthValue && end <= buf.byteLength) source = { kind: "bytes", bytes: buf.slice(startValue, end), mimeType };
-            else warn(opts, `glTF image bufferView ${img.bufferView} missing (texture=${textureIndex}, usage=${usage}).`);
-        } else if (img.uri) {
-            if (isDataUri(img.uri)) {
-                const decoded = decodeDataUri(img.uri);
-                source = { kind: "bytes", bytes: decoded.data, mimeType: mimeType ?? decoded.mimeType ?? undefined };
-            } else {
-                const url = resolveUri(doc.resourceBaseUrl, img.uri);
-                source = { kind: "url", url, mimeType };
-            }
-        }
-        if (!source) { warn(opts, `Could not resolve image source for texture=${textureIndex} (usage=${usage}).`); return null; }
         const created = Texture2D.createFrom({
             source,
             mipmaps: useMipmaps,
-            sampler: {
-                addressModeU,
-                addressModeV,
-                magFilter,
-                minFilter,
-                mipmapFilter
-            }
+            sampler: { addressModeU, addressModeV, magFilter, minFilter, mipmapFilter },
+            imageDecode: { colorSpaceConversion: "none", fallbackWithoutOptions: false }
         });
-        tx.own(created, `texture ${textureIndex}`, (texture) => texture.destroy());
-        textureCache.set(textureIndex, created);
+        tx.own(created, `texture ${textureIndex} (${transferFunction})`, (texture) => texture.destroy());
+        textureCache.set(cacheKey, created);
         return created;
     };
-    const getTex = (info: any | undefined, usage: string): Texture2D | null => {
+    const getTex = (info: any | undefined, slot: Exclude<StandardMaterialTextureSlot, "transmissionSource">): Texture2D | null => {
         if (!info) return null;
-        return getOrCreateTextureByIndex(info.index, usage);
+        return getOrCreateTextureByIndex(info.index, getStandardMaterialTextureColorSpace(slot), slot);
     };
     const getTextureTransform = (info: any | undefined): TextureTransformDescriptor | null => {
         if (!info) return null;
@@ -1341,6 +1383,7 @@ const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: n
         });
     } else {
         created = new StandardMaterial({
+            label: mat.name ? `${mat.name} (glTF material ${materialIndex})` : `glTF material ${materialIndex}`,
             color: [baseColorFactor[0] ?? 1, baseColorFactor[1] ?? 1, baseColorFactor[2] ?? 1],
             opacity: baseColorFactor[3] ?? 1,
             metallic: metallicFactor,
@@ -1376,7 +1419,7 @@ type PrimitiveVariantMaterials = {
     ownedMaterials: ImportOwnership<Material>[];
 };
 
-const getPrimitiveVariantMaterials = (doc: GltfDocument, json: GltfRoot, prim: GltfPrimitive, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, tx: ImportTransaction, opts: ImportGltfOptions | undefined, context: string): PrimitiveVariantMaterials => {
+const getPrimitiveVariantMaterials = (doc: GltfDocument, json: GltfRoot, prim: GltfPrimitive, materialCache: Map<number, Material>, textureCache: Map<string, Texture2D>, imageSourceCache: Map<number, TextureSource>, tx: ImportTransaction, opts: ImportGltfOptions | undefined, context: string): PrimitiveVariantMaterials => {
     const ext = (prim.extensions as Record<string, unknown> | undefined)?.["KHR_materials_variants"] as { mappings?: Array<{ material?: number; variants?: number[] }> } | undefined;
     const mappings = Array.isArray(ext?.mappings) ? ext.mappings : [];
     const variantMaterialIndices = new Map<number, number>();
@@ -1394,12 +1437,12 @@ const getPrimitiveVariantMaterials = (doc: GltfDocument, json: GltfRoot, prim: G
         let ownedMaterial = materialByIndex.get(materialIndex);
         if (!ownedMaterial) {
             validateMaterialTextureCoordinates(json.materials?.[materialIndex], prim.attributes, opts, `${context} variant material ${materialIndex}`);
-            ownedMaterial = getOrCreateMaterial(doc, json, materialIndex, materialCache, textureCache, tx, opts);
+            ownedMaterial = getOrCreateMaterial(doc, json, materialIndex, materialCache, textureCache, imageSourceCache, tx, opts);
             materialByIndex.set(materialIndex, ownedMaterial);
         }
         variants.set(variantIndex, ownedMaterial.value);
     }
-    return { variants, ownedMaterials: [...materialByIndex.values()] };
+    return { variants, ownedMaterials: Array.from(materialByIndex.values()) };
 };
 
 type KHRGaussianSplattingPrimitiveExtension = {
@@ -1930,7 +1973,7 @@ type ImportedMeshNodeObjects = {
     splatFields: SplatField[];
 };
 
-const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: number, node: GltfNode, nodeT: Transform, materialCache: Map<number, Material>, textureCache: Map<number, Texture2D>, geometryCache: Map<string, Geometry | null>, variantsController: GltfVariantController, extensions: GltfImportExtensionsMetadata, tx: ImportTransaction, opts: ImportGltfOptions): ImportedMeshNodeObjects => {
+const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: number, node: GltfNode, nodeT: Transform, materialCache: Map<number, Material>, textureCache: Map<string, Texture2D>, imageSourceCache: Map<number, TextureSource>, geometryCache: Map<string, Geometry | null>, variantsController: GltfVariantController, extensions: GltfImportExtensionsMetadata, tx: ImportTransaction, opts: ImportGltfOptions): ImportedMeshNodeObjects => {
     if (node.mesh === undefined) return { meshes: [], splatFields: [] };
     const gltfMesh: GltfMesh | undefined = json.meshes?.[node.mesh];
     if (!gltfMesh) { warn(opts, `nodes[].mesh=${node.mesh} missing; skipping mesh node`); return { meshes: [], splatFields: [] }; }
@@ -1978,7 +2021,7 @@ const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: numbe
         if (!geom) continue;
         if (hasCachedGeometry) geometryOwnership = tx.own(geom.retain(), `Mesh '${meshName}' geometry reference`, (resource) => resource.release());
         if (!geometryOwnership) throw new Error(`Mesh '${meshName}': geometry ownership was not registered.`);
-        const materialOwnership = getOrCreateMaterial(doc, json, prim.material, materialCache, textureCache, tx, opts);
+        const materialOwnership = getOrCreateMaterial(doc, json, prim.material, materialCache, textureCache, imageSourceCache, tx, opts);
         const mat = materialOwnership.value;
         const mesh = new Mesh(geom, mat);
         tx.own(mesh, `Mesh '${meshName}'`, (resource) => resource.destroy());
@@ -2007,7 +2050,7 @@ const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: numbe
             }
         };
         meshes.push(mesh);
-        const variantMaterials = getPrimitiveVariantMaterials(doc, json, prim, materialCache, textureCache, tx, opts, `Mesh '${gltfMesh.name ?? node.mesh}' primitive ${primIndex}`);
+        const variantMaterials = getPrimitiveVariantMaterials(doc, json, prim, materialCache, textureCache, imageSourceCache, tx, opts, `Mesh '${gltfMesh.name ?? node.mesh}' primitive ${primIndex}`);
         variantsController.register(mesh, mesh.material, variantMaterials.variants);
         for (const material of variantMaterials.ownedMaterials) material.dispose();
     }
@@ -2022,7 +2065,7 @@ const instantiateCameraNode = (json: GltfRoot, node: GltfNode, nodeT: Transform,
     if (cam.type === "perspective") {
         const p = cam.perspective;
         if (!p) { warn(opts, `camera[${node.camera}] missing perspective block; skipping`); return null; }
-        out = new PerspectiveCamera({ fov: (p.yfov * 180) / Math.PI, aspect: p.aspectRatio, near: p.znear, far: p.zfar ?? 1000 });
+        out = new PerspectiveCamera({ fov: (p.yfov * 180) / Math.PI, aspect: p.aspectRatio, autoAspect: p.aspectRatio === undefined, near: p.znear, far: p.zfar ?? Infinity });
     } else {
         const o = cam.orthographic;
         if (!o) { warn(opts, `camera[${node.camera}] missing orthographic block; skipping`); return null; }
@@ -2718,7 +2761,8 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
         tx.own(variantsController, "material variants controller", (controller) => controller.destroy());
         const skins = parseSkins(doc, json, nodes, tx, opts);
         const materialCache = new Map<number, Material>();
-        const textureCache = new Map<number, Texture2D>();
+        const textureCache = new Map<string, Texture2D>();
+        const imageSourceCache = new Map<number, TextureSource>();
         const geometryCache = new Map<string, Geometry | null>();
         const meshes: Mesh[] = [];
         const splatFields: SplatField[] = [];
@@ -2734,7 +2778,7 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
             const nodeT = importedNode?.transform;
             if (!importedNode || !nodeT) return;
             if (node.extensions?.[EXT_MESH_GPU_INSTANCING] !== undefined && !isExtensionRequired(json, EXT_MESH_GPU_INSTANCING)) warn(opts, `Node ${node.name ?? nodeIndex}: ignoring optional ${EXT_MESH_GPU_INSTANCING}; using the single core node instance because instancing is deferred.`);
-            const createdObjects = instantiateMeshNode(doc, json, nodeIndex, node, nodeT, materialCache, textureCache, geometryCache, variantsController, extensions, tx, opts);
+            const createdObjects = instantiateMeshNode(doc, json, nodeIndex, node, nodeT, materialCache, textureCache, imageSourceCache, geometryCache, variantsController, extensions, tx, opts);
             const createdMeshes = createdObjects.meshes;
             const createdSplatFields = createdObjects.splatFields;
             importedNode.meshes = createdMeshes;

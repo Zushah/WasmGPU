@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { BlendMode, CullMode, DataMaterial, Material, StandardMaterial, UnlitMaterial } from "../graphics/material";
+import { BlendMode, CullMode, DataMaterial, Material, StandardMaterial, UnlitMaterial, getMaterialTextureForSlot } from "../graphics/material";
 import type { RendererContext } from "./context";
 import { getObjectId } from "./resources";
 
@@ -14,8 +14,7 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
     const key = getPipelineCacheKey(ctx, material, instanced, skinned, skinned8, mirrored, forceNoDepthWrite);
     let pipeline = ctx.pipelineCache.get(key);
     if (pipeline) return pipeline;
-    const transmissionShader = material instanceof StandardMaterial && material.usesTransmissionLayout();
-    const shaderCode = material.getShaderCode({ instanced, skinned, skinned8, transmission: transmissionShader });
+    const shaderCode = material.getShaderCode({ instanced, skinned, skinned8 });
     let shaderModule = ctx.shaderCache.get(shaderCode);
     if (!shaderModule) {
         shaderModule = ctx.device.createShaderModule({ code: shaderCode });
@@ -181,10 +180,13 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
 export const getPipelineCacheKey = (ctx: RendererContext, material: Material, instanced: boolean, skinned: boolean, skinned8: boolean, mirrored: boolean, forceNoDepthWrite: boolean = false): string => {
     const ctorId = getObjectId(ctx, material.constructor as unknown as object);
     const isBuiltin = material.constructor === UnlitMaterial || material.constructor === StandardMaterial || material.constructor === DataMaterial;
-    const matKey = isBuiltin ? `${ctorId}` : `${ctorId}_${getObjectId(ctx, material)}`;
     const depthWriteKey = forceNoDepthWrite ? "no-depth-write" : material.depthWrite ? "depth-write" : "no-depth-write";
-    const transmissionShader = material instanceof StandardMaterial && material.usesTransmissionLayout();
-    return `${matKey}_${material.blendMode}_${material.cullMode}_${depthWriteKey}_${material.depthTest}_${transmissionShader ? "transmission" : "standard"}_${mirrored ? "cw" : "ccw"}_${instanced ? "inst" : "mesh"}_${skinned8 ? "skin8" : skinned ? "skin4" : "noskin"}`;
+    if (material instanceof StandardMaterial) {
+        const plan = material.getLayoutPlan();
+        return `${ctorId}_${material.blendMode}_${material.cullMode}_${depthWriteKey}_${material.depthTest}_${plan.featureKey}_${mirrored ? "cw" : "ccw"}_${instanced ? "inst" : "mesh"}_${skinned8 ? "skin8" : skinned ? "skin4" : "noskin"}`;
+    }
+    const matKey = isBuiltin ? `${ctorId}` : `${ctorId}_${getObjectId(ctx, material)}`;
+    return `${matKey}_${material.blendMode}_${material.cullMode}_${depthWriteKey}_${material.depthTest}_${mirrored ? "cw" : "ccw"}_${instanced ? "inst" : "mesh"}_${skinned8 ? "skin8" : skinned ? "skin4" : "noskin"}`;
 };
 
 export const isMirroredWorldMatrix = (_ctx: RendererContext, storeF32: Float32Array, base: number): boolean => {
@@ -273,35 +275,16 @@ export const getMaterialBindGroupKey = (ctx: RendererContext, material: Material
         return `unlit:${bc?.id ?? 0}:${bc?.revision ?? 0}`;
     }
     if (material instanceof StandardMaterial) {
-        const bc = material.baseColorTexture;
-        const mr = material.metallicRoughnessTexture;
-        const n = material.normalTexture;
-        const o = material.occlusionTexture;
-        const e = material.emissiveTexture;
-        const extensions = material.extensions;
-        const cc = extensions.clearcoat;
-        const sp = extensions.specular;
-        const sh = extensions.sheen;
-        const ir = extensions.iridescence;
-        const an = extensions.anisotropy;
-        const tr = extensions.transmission;
-        const vol = extensions.volume;
-        const dt = extensions.diffuseTransmission;
-        const ccTex = cc?.texture ?? null;
-        const ccRough = cc?.roughnessTexture ?? null;
-        const ccNormal = cc?.normalTexture ?? null;
-        const spTex = sp?.texture ?? null;
-        const spColor = sp?.colorTexture ?? null;
-        const shColor = sh?.colorTexture ?? null;
-        const shRough = sh?.roughnessTexture ?? null;
-        const irTex = ir?.texture ?? null;
-        const irThick = ir?.thicknessTexture ?? null;
-        const anTex = an?.texture ?? null;
-        const trTex = tr?.texture ?? null;
-        const thicknessTex = vol?.thicknessTexture ?? null;
-        const dtTex = dt?.texture ?? null;
-        const dtColor = dt?.colorTexture ?? null;
-        return `standard:${bc?.id ?? 0}:${bc?.revision ?? 0}:${mr?.id ?? 0}:${mr?.revision ?? 0}:${n?.id ?? 0}:${n?.revision ?? 0}:${o?.id ?? 0}:${o?.revision ?? 0}:${e?.id ?? 0}:${e?.revision ?? 0}:${ccTex?.id ?? 0}:${ccTex?.revision ?? 0}:${ccRough?.id ?? 0}:${ccRough?.revision ?? 0}:${ccNormal?.id ?? 0}:${ccNormal?.revision ?? 0}:${spTex?.id ?? 0}:${spTex?.revision ?? 0}:${spColor?.id ?? 0}:${spColor?.revision ?? 0}:${shColor?.id ?? 0}:${shColor?.revision ?? 0}:${shRough?.id ?? 0}:${shRough?.revision ?? 0}:${irTex?.id ?? 0}:${irTex?.revision ?? 0}:${irThick?.id ?? 0}:${irThick?.revision ?? 0}:${anTex?.id ?? 0}:${anTex?.revision ?? 0}:${trTex?.id ?? 0}:${trTex?.revision ?? 0}:${thicknessTex?.id ?? 0}:${thicknessTex?.revision ?? 0}:${dtTex?.id ?? 0}:${dtTex?.revision ?? 0}:${dtColor?.id ?? 0}:${dtColor?.revision ?? 0}:${ctx.transmissionSourceRevision}`;
+        const plan = material.getLayoutPlan();
+        const parts: string[] = ["standard", plan.featureKey];
+        for (const b of plan.bindings) {
+            if (b.slot === "transmissionSource") parts.push(`src:${ctx.transmissionSourceRevision}`);
+            else {
+                const tex = getMaterialTextureForSlot(material, b.slot);
+                parts.push(`${b.slot}:${tex?.id ?? 0}:${tex?.revision ?? 0}`);
+            }
+        }
+        return parts.join(":");
     }
     if (material instanceof DataMaterial) {
         const bufId = material.dataBuffer ? getObjectId(ctx, material.dataBuffer) : 0;
@@ -344,83 +327,25 @@ export const ensureMaterialBindGroup = (ctx: RendererContext, material: Material
         return;
     }
     if (material instanceof StandardMaterial) {
-        const bc = material.baseColorTexture;
-        const mr = material.metallicRoughnessTexture;
-        const n = material.normalTexture;
-        const o = material.occlusionTexture;
-        const e = material.emissiveTexture;
-        const extensions = material.extensions;
-        const cc = extensions.clearcoat;
-        const sp = extensions.specular;
-        const sh = extensions.sheen;
-        const ir = extensions.iridescence;
-        const an = extensions.anisotropy;
-        const tr = extensions.transmission;
-        const vol = extensions.volume;
-        const dt = extensions.diffuseTransmission;
-        const ccTex = cc?.texture ?? null;
-        const ccRough = cc?.roughnessTexture ?? null;
-        const ccNormal = cc?.normalTexture ?? null;
-        const spTex = sp?.texture ?? null;
-        const spColor = sp?.colorTexture ?? null;
-        const shColor = sh?.colorTexture ?? null;
-        const shRough = sh?.roughnessTexture ?? null;
-        const irTex = ir?.texture ?? null;
-        const irThick = ir?.thicknessTexture ?? null;
-        const anTex = an?.texture ?? null;
-        const trTex = tr?.texture ?? null;
-        const thicknessTex = vol?.thicknessTexture ?? null;
-        const dtTex = dt?.texture ?? null;
-        const dtColor = dt?.colorTexture ?? null;
+        const plan = material.getLayoutPlan();
         const entries: GPUBindGroupEntry[] = [
-            { binding: 0, resource: { buffer: material.uniformBuffer } },
-            { binding: 1, resource: bc ? bc.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-            { binding: 2, resource: bc ? bc.getView(ctx.device, ctx.queue, "srgb", ctx.fallbackWhiteViewSrgb) : ctx.fallbackWhiteViewSrgb },
-            { binding: 3, resource: mr ? mr.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-            { binding: 4, resource: mr ? mr.getView(ctx.device, ctx.queue, "linear", ctx.fallbackMRViewLinear) : ctx.fallbackMRViewLinear },
-            { binding: 5, resource: n ? n.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-            { binding: 6, resource: n ? n.getView(ctx.device, ctx.queue, "linear", ctx.fallbackNormalViewLinear) : ctx.fallbackNormalViewLinear },
-            { binding: 7, resource: o ? o.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-            { binding: 8, resource: o ? o.getView(ctx.device, ctx.queue, "linear", ctx.fallbackOcclusionViewLinear) : ctx.fallbackOcclusionViewLinear },
-            { binding: 9, resource: e ? e.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-            { binding: 10, resource: e ? e.getView(ctx.device, ctx.queue, "srgb", ctx.fallbackWhiteViewSrgb) : ctx.fallbackWhiteViewSrgb },
-            { binding: 11, resource: ccTex ? ccTex.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-            { binding: 12, resource: ccTex ? ccTex.getView(ctx.device, ctx.queue, "linear", ctx.fallbackWhiteViewLinear) : ctx.fallbackWhiteViewLinear },
-            { binding: 13, resource: ccRough ? ccRough.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-            { binding: 14, resource: ccRough ? ccRough.getView(ctx.device, ctx.queue, "linear", ctx.fallbackWhiteViewLinear) : ctx.fallbackWhiteViewLinear },
-            { binding: 15, resource: ccNormal ? ccNormal.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-            { binding: 16, resource: ccNormal ? ccNormal.getView(ctx.device, ctx.queue, "linear", ctx.fallbackNormalViewLinear) : ctx.fallbackNormalViewLinear },
-            { binding: 17, resource: spTex ? spTex.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-            { binding: 18, resource: spTex ? spTex.getView(ctx.device, ctx.queue, "linear", ctx.fallbackWhiteViewLinear) : ctx.fallbackWhiteViewLinear },
-            { binding: 19, resource: spColor ? spColor.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-            { binding: 20, resource: spColor ? spColor.getView(ctx.device, ctx.queue, "srgb", ctx.fallbackWhiteViewSrgb) : ctx.fallbackWhiteViewSrgb }
+            { binding: 0, resource: { buffer: material.uniformBuffer } }
         ];
-        if (material.usesTransmissionLayout()) {
-            entries.push(
-                { binding: 21, resource: trTex ? trTex.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-                { binding: 22, resource: trTex ? trTex.getView(ctx.device, ctx.queue, "linear", ctx.fallbackWhiteViewLinear) : ctx.fallbackWhiteViewLinear },
-                { binding: 23, resource: thicknessTex ? thicknessTex.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-                { binding: 24, resource: thicknessTex ? thicknessTex.getView(ctx.device, ctx.queue, "linear", ctx.fallbackWhiteViewLinear) : ctx.fallbackWhiteViewLinear },
-                { binding: 25, resource: dtTex ? dtTex.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-                { binding: 26, resource: dtTex ? dtTex.getView(ctx.device, ctx.queue, "linear", ctx.fallbackWhiteViewLinear) : ctx.fallbackWhiteViewLinear },
-                { binding: 27, resource: dtColor ? dtColor.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-                { binding: 28, resource: dtColor ? dtColor.getView(ctx.device, ctx.queue, "srgb", ctx.fallbackWhiteViewSrgb) : ctx.fallbackWhiteViewSrgb },
-                { binding: 29, resource: ctx.fallbackSampler },
-                { binding: 30, resource: ctx.transmissionSourceView ?? ctx.fallbackWhiteViewLinear }
-            );
-        } else {
-            entries.push(
-                { binding: 21, resource: shColor ? shColor.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-                { binding: 22, resource: shColor ? shColor.getView(ctx.device, ctx.queue, "srgb", ctx.fallbackWhiteViewSrgb) : ctx.fallbackWhiteViewSrgb },
-                { binding: 23, resource: shRough ? shRough.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-                { binding: 24, resource: shRough ? shRough.getView(ctx.device, ctx.queue, "linear", ctx.fallbackWhiteViewLinear) : ctx.fallbackWhiteViewLinear },
-                { binding: 25, resource: irTex ? irTex.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-                { binding: 26, resource: irTex ? irTex.getView(ctx.device, ctx.queue, "linear", ctx.fallbackWhiteViewLinear) : ctx.fallbackWhiteViewLinear },
-                { binding: 27, resource: irThick ? irThick.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-                { binding: 28, resource: irThick ? irThick.getView(ctx.device, ctx.queue, "linear", ctx.fallbackWhiteViewLinear) : ctx.fallbackWhiteViewLinear },
-                { binding: 29, resource: anTex ? anTex.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler },
-                { binding: 30, resource: anTex ? anTex.getView(ctx.device, ctx.queue, "linear", ctx.fallbackAnisotropyViewLinear) : ctx.fallbackAnisotropyViewLinear }
-            );
+        for (const b of plan.bindings) {
+            if (b.slot === "transmissionSource") {
+                entries.push({ binding: b.samplerBinding, resource: ctx.fallbackSampler }, { binding: b.textureBinding, resource: ctx.transmissionSourceView ?? ctx.fallbackWhiteViewLinear });
+                continue;
+            }
+            const tex = getMaterialTextureForSlot(material, b.slot);
+            let fallbackView = ctx.fallbackWhiteViewLinear;
+            if (b.colorSpace === "srgb") fallbackView = ctx.fallbackWhiteViewSrgb;
+            else if (b.slot === "metallicRoughness") fallbackView = ctx.fallbackMRViewLinear;
+            else if (b.slot === "normal" || b.slot === "clearcoatNormal") fallbackView = ctx.fallbackNormalViewLinear;
+            else if (b.slot === "occlusion") fallbackView = ctx.fallbackOcclusionViewLinear;
+            else if (b.slot === "anisotropy") fallbackView = ctx.fallbackAnisotropyViewLinear;
+            const sampler = tex ? tex.getSampler(ctx.device, ctx.fallbackSampler) : ctx.fallbackSampler;
+            const view = tex ? tex.getView(ctx.device, ctx.queue, b.colorSpace, fallbackView) : fallbackView;
+            entries.push({ binding: b.samplerBinding, resource: sampler }, { binding: b.textureBinding, resource: view });
         }
         material.bindGroup = ctx.device.createBindGroup({ layout, entries });
         material.bindGroupKey = key;
@@ -455,10 +380,6 @@ export const ensureMaterialBindGroup = (ctx: RendererContext, material: Material
     material.bindGroupKey = key;
 };
 
-export const materialSupportsInstancing = (_ctx: RendererContext, material: Material): boolean => {
-    return material instanceof UnlitMaterial || material instanceof StandardMaterial;
-};
+export const materialSupportsInstancing = (_ctx: RendererContext, material: Material): boolean => material instanceof UnlitMaterial || material instanceof StandardMaterial;
 
-export const materialSupportsSkinning = (_ctx: RendererContext, material: Material): boolean => {
-    return material instanceof UnlitMaterial || material instanceof StandardMaterial;
-};
+export const materialSupportsSkinning = (_ctx: RendererContext, material: Material): boolean => material instanceof UnlitMaterial || material instanceof StandardMaterial;

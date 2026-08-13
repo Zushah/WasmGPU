@@ -140,6 +140,7 @@ export const createWebGPUCanvasDouble = (width = 640, height = 480, { additional
         style: {},
         configureCalls: [],
         currentTextureCount: 0,
+        lastCurrentTexture: null,
         addEventListener() {},
         removeEventListener() {},
         getBoundingClientRect() { return { left: 0, top: 0, width: this.clientWidth, height: this.clientHeight, right: this.clientWidth, bottom: this.clientHeight }; }
@@ -160,11 +161,13 @@ export const createWebGPUCanvasDouble = (width = 640, height = 480, { additional
         getCurrentTexture() {
             assert.ok(device, "GPUCanvasContext.configure() must be called before getCurrentTexture().");
             canvas.currentTextureCount++;
-            return device.createTexture({
+            const texture = device.createTexture({
                 size: { width: Math.max(1, canvas.width | 0), height: Math.max(1, canvas.height | 0), depthOrArrayLayers: 1 },
                 format,
                 usage: usage | GPUTextureUsage.RENDER_ATTACHMENT | additionalUsage
             });
+            canvas.lastCurrentTexture = texture;
+            return texture;
         }
     };
     canvas.getContext = (kind) => kind === "webgpu" ? context : null;

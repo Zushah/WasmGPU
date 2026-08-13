@@ -278,6 +278,18 @@ let cleanupPipeline = null;
     expectPackedTextureTransform(uniforms, 188, diffuseTransmissionTransform, "standard.diffuseTransmissionTextureTransform");
     expectPackedTextureTransform(uniforms, 196, diffuseTransmissionColorTransform, "standard.diffuseTransmissionColorTextureTransform");
 
+    const fullCombinationShader = material.getShaderCode();
+    for (const shaderSlot of [
+        "base_color", "metallic_roughness", "normal", "occlusion", "emissive",
+        "clearcoat", "clearcoat_roughness", "clearcoat_normal", "specular", "specular_color",
+        "sheen_color", "sheen_roughness", "iridescence", "iridescence_thickness", "anisotropy",
+        "transmission", "volume_thickness", "diffuse_transmission", "diffuse_transmission_color",
+        "transmission_source"
+    ]) {
+        assert.ok(fullCombinationShader.includes(`${shaderSlot}_tex`), `Combined transmission shader omitted ${shaderSlot}`);
+    }
+    await assertShaderCompiles(device, fullCombinationShader);
+
     material.metallic = 2;
     material.roughness = -1;
     numberApproxEqual(material.getUniformData()[8], 1);
@@ -354,6 +366,7 @@ let cleanupPipeline = null;
 {
     const unlit = new UnlitMaterial();
     const standard = new StandardMaterial();
+    const standardTransmission = new StandardMaterial({ extensions: { transmission: { factor: 1 } } });
     const data = new DataMaterial({
         data: new Float32Array([0, 1, 2, 3]),
         scaleTransform: {
@@ -377,6 +390,7 @@ let cleanupPipeline = null;
 
     const unlitBuffer = createUniformBuffer(device, device.queue, unlit.getUniformData());
     const standardBuffer = createUniformBuffer(device, device.queue, standard.getUniformData());
+    const standardTransmissionBuffer = createUniformBuffer(device, device.queue, standardTransmission.getUniformData());
     const dataBuffer = createUniformBuffer(device, device.queue, data.getUniformData());
     const customBuffer = createUniformBuffer(device, device.queue, custom.getUniformData());
     const dataColormap = data.getColormapForBinding().getGPUResources(device, device.queue);
@@ -392,37 +406,15 @@ let cleanupPipeline = null;
     assert.ok(device.createBindGroup({
         layout: standard.createBindGroupLayout(device),
         entries: [
-            { binding: 0, resource: { buffer: standardBuffer } },
-            { binding: 1, resource: fallbackSampler },
-            { binding: 2, resource: white.srgb },
-            { binding: 3, resource: fallbackSampler },
-            { binding: 4, resource: metallicRoughness.linear },
-            { binding: 5, resource: fallbackSampler },
-            { binding: 6, resource: normal.linear },
-            { binding: 7, resource: fallbackSampler },
-            { binding: 8, resource: occlusion.linear },
-            { binding: 9, resource: fallbackSampler },
-            { binding: 10, resource: white.srgb },
-            { binding: 11, resource: fallbackSampler },
-            { binding: 12, resource: white.linear },
-            { binding: 13, resource: fallbackSampler },
-            { binding: 14, resource: white.linear },
-            { binding: 15, resource: fallbackSampler },
-            { binding: 16, resource: normal.linear },
-            { binding: 17, resource: fallbackSampler },
-            { binding: 18, resource: white.linear },
-            { binding: 19, resource: fallbackSampler },
-            { binding: 20, resource: white.srgb },
-            { binding: 21, resource: fallbackSampler },
-            { binding: 22, resource: white.srgb },
-            { binding: 23, resource: fallbackSampler },
-            { binding: 24, resource: white.linear },
-            { binding: 25, resource: fallbackSampler },
-            { binding: 26, resource: white.linear },
-            { binding: 27, resource: fallbackSampler },
-            { binding: 28, resource: white.linear },
-            { binding: 29, resource: fallbackSampler },
-            { binding: 30, resource: anisotropy.linear }
+            { binding: 0, resource: { buffer: standardBuffer } }
+        ]
+    }));
+    assert.ok(device.createBindGroup({
+        layout: standardTransmission.createBindGroupLayout(device),
+        entries: [
+            { binding: 0, resource: { buffer: standardTransmissionBuffer } },
+            { binding: 39, resource: fallbackSampler },
+            { binding: 40, resource: white.linear }
         ]
     }));
     assert.ok(device.createBindGroup({
@@ -442,7 +434,7 @@ let cleanupPipeline = null;
     const materialPipelinePromises = [
         createPipelineAsync(device, unlit.getShaderCode(), [unlitSceneLayout, unlit.createBindGroupLayout(device)], vertexBuffersWithColor),
         createPipelineAsync(device, standard.getShaderCode(), [sceneLayout, standard.createBindGroupLayout(device)], vertexBuffersWithTangent),
-        createPipelineAsync(device, standard.getShaderCode({ skinned8: true, transmission: true }), [sceneLayout, standard.createBindGroupLayout(device), skinLayout], vertexBuffersSkinned8Standard),
+        createPipelineAsync(device, standardTransmission.getShaderCode({ skinned8: true }), [sceneLayout, standardTransmission.createBindGroupLayout(device), skinLayout], vertexBuffersSkinned8Standard),
         createPipelineAsync(device, data.getShaderCode(), [sceneLayout, data.createBindGroupLayout(device)], vertexBuffersWithUv0),
         createPipelineAsync(device, custom.getShaderCode(), [unlitSceneLayout, custom.createBindGroupLayout(device)], vertexBuffersWithUv0)
     ];
@@ -451,9 +443,9 @@ let cleanupPipeline = null;
         assertShaderCompiles(device, standard.getShaderCode({ instanced: true })),
         assertShaderCompiles(device, standard.getShaderCode({ skinned: true })),
         assertShaderCompiles(device, standard.getShaderCode({ skinned8: true })),
-        assertShaderCompiles(device, standard.getShaderCode({ transmission: true })),
-        assertShaderCompiles(device, standard.getShaderCode({ instanced: true, transmission: true })),
-        assertShaderCompiles(device, standard.getShaderCode({ skinned: true, transmission: true }))
+        assertShaderCompiles(device, standardTransmission.getShaderCode()),
+        assertShaderCompiles(device, standardTransmission.getShaderCode({ instanced: true })),
+        assertShaderCompiles(device, standardTransmission.getShaderCode({ skinned: true }))
     ];
     const materialPipelines = await Promise.all(materialPipelinePromises);
     await Promise.all(shaderCompilePromises);
@@ -465,9 +457,9 @@ let cleanupPipeline = null;
     assert.ok(standard.getShaderCode().includes("fn iridescent_fresnel"));
     assert.ok(standard.getShaderCode().includes("fn distribution_ggx_anisotropic"));
     assert.ok(standard.getShaderCode().includes("fn sheen_visibility"));
-    assert.ok(standard.getShaderCode().includes("let anisotropy_frame = build_tangent_frame("));
+    assert.ok(standard.getShaderCode().includes("fn build_tangent_frame("));
     assert.ok(standard.getShaderCode().includes("in.world_pos"));
-    assert.ok(standard.getShaderCode({ transmission: true }).includes("material.transmission_params.x"));
+    assert.ok(standardTransmission.getShaderCode().includes("material.transmission_params.x"));
     assert.ok(standard.getShaderCode().includes("model.normal_matrix * vec4<f32>(in.tangent.xyz"));
     assert.ok(standard.getShaderCode({ instanced: true }).includes("normal_m * vec4<f32>(in.tangent.xyz"));
     assert.ok(standard.getShaderCode({ skinned: true }).includes("model.normal_matrix * vec4<f32>(local_tangent"));
@@ -475,6 +467,7 @@ let cleanupPipeline = null;
 
     unlit.destroy();
     standard.destroy();
+    standardTransmission.destroy();
     data.destroy();
     custom.destroy();
 }
@@ -639,7 +632,208 @@ let cleanupPipeline = null;
     assert.throws(() => data.upload(device, device.queue), /already been released/);
 }
 
-// 9) Cleanup releases shared textures before their browser GPU device.
+// 9) Feature-specialized material layouts and double-sided normal reversal.
+{
+    const specializedMaterial = new StandardMaterial({
+        baseColorTexture: white.texture,
+        normalTexture: normal.texture,
+        extensions: { transmission: { factor: 0.8 }, sheen: { colorTexture: white.texture }, iridescence: { factor: 0.5, texture: white.texture }, anisotropy: { strength: 0.5, texture: anisotropy.texture } }
+    });
+
+    const plan = specializedMaterial.getLayoutPlan();
+    assert.ok(Object.isFrozen(plan));
+    assert.ok(Object.isFrozen(plan.bindings));
+    assert.ok(Object.isFrozen(plan.bindings[0]));
+    assert.ok(plan.sampledTextureCount <= 16);
+    assert.ok(plan.bindings.some((b) => b.slot === "sheenColor"));
+    assert.ok(plan.bindings.some((b) => b.slot === "iridescence"));
+    assert.ok(plan.bindings.some((b) => b.slot === "anisotropy"));
+    assert.ok(plan.bindings.some((b) => b.slot === "transmissionSource"));
+    assert.deepEqual(
+        plan.bindings.filter((binding) => ["baseColor", "normal", "sheenColor", "transmissionSource"].includes(binding.slot)).map((binding) => [binding.slot, binding.samplerBinding, binding.textureBinding]),
+        [["baseColor", 1, 2], ["normal", 5, 6], ["sheenColor", 21, 22], ["transmissionSource", 39, 40]],
+        "Layout plans must preserve canonical WGSL binding numbers"
+    );
+
+    const bgLayout = specializedMaterial.createBindGroupLayout(device);
+    assert.ok(bgLayout);
+
+    const shaderCode = specializedMaterial.getShaderCode();
+    assert.ok(shaderCode.includes("@builtin(front_facing) is_front: bool"));
+    assert.ok(shaderCode.includes("let face_sign = select(-1.0, 1.0, is_front)"));
+    assert.ok(shaderCode.includes("let front_geom_normal = normalize(in.normal)"));
+    assert.ok(shaderCode.includes("let geom_normal = front_geom_normal * face_sign"));
+    assert.ok(shaderCode.includes("sheen_color_tex"));
+    assert.ok(shaderCode.includes("iridescence_tex"));
+    assert.ok(shaderCode.includes("anisotropy_tex"));
+    assert.ok(shaderCode.includes("transmission_source_tex"));
+    assert.ok(shaderCode.includes("light.position.w == 2.0"), "Canonical spot-light type tag must be preserved");
+    assert.ok(!shaderCode.includes("light.direction.w != 0.0"), "Shader must not invent a direction.w spot-light tag");
+    assert.ok(shaderCode.includes("lo = lo / (lo + vec3<f32>(1.0))"), "Canonical tone mapping must be preserved");
+    assert.ok(shaderCode.includes("textureSample(sheen_color_tex, sheen_color_sampler, sheen_color_uv)"));
+
+    await Promise.all([assertShaderCompiles(device, shaderCode), assertShaderCompiles(device, specializedMaterial.getShaderCode({ instanced: true })), assertShaderCompiles(device, specializedMaterial.getShaderCode({ skinned: true })), assertShaderCompiles(device, specializedMaterial.getShaderCode({ skinned8: true }))]);
+
+    const factorZero = new StandardMaterial({ extensions: { transmission: { factor: 0 } } });
+    const zeroPlan = factorZero.getLayoutPlan();
+    assert.equal(zeroPlan.usesTransmission, true, "Structural transmission presence must reserve its shader path at factor zero");
+    assert.ok(zeroPlan.bindings.some((binding) => binding.slot === "transmissionSource"));
+    const factorZeroLayout = factorZero.createBindGroupLayout(device);
+    factorZero.bindGroupKey = "numeric-factor-state";
+    factorZero.setExtensions({ transmission: { factor: 1 } });
+    assert.equal(factorZero.getLayoutPlan().featureKey, zeroPlan.featureKey);
+    assert.equal(factorZero.createBindGroupLayout(device), factorZeroLayout, "Numeric factor animation must reuse the layout");
+    assert.equal(factorZero.bindGroupKey, "numeric-factor-state", "Numeric factor animation must not rebuild an unchanged bind group");
+
+    const uniformOnlyExtensions = new StandardMaterial();
+    const uniformOnlyPlan = uniformOnlyExtensions.getLayoutPlan();
+    const uniformOnlyLayout = uniformOnlyExtensions.createBindGroupLayout(device);
+    uniformOnlyExtensions.bindGroupKey = "uniform-only-state";
+    uniformOnlyExtensions.setExtensions({ clearcoat: { factor: 0.5 }, specular: { factor: 0.75 }, sheen: { roughness: 0.25 } });
+    assert.equal(uniformOnlyExtensions.getLayoutPlan().featureKey, uniformOnlyPlan.featureKey, "Uniform-only extensions must not split structural cache keys");
+    assert.equal(uniformOnlyExtensions.createBindGroupLayout(device), uniformOnlyLayout);
+    assert.equal(uniformOnlyExtensions.bindGroupKey, "uniform-only-state", "Uniform-only extensions must not rebuild an unchanged bind group");
+
+    const structuralMutation = new StandardMaterial();
+    const untexturedPlan = structuralMutation.getLayoutPlan();
+    const untexturedLayout = structuralMutation.createBindGroupLayout(device);
+    const untexturedShader = structuralMutation.getShaderCode();
+    assert.ok(/@binding\(1\)\s*var\s+base_color_sampler/.test(untexturedShader), "Specialization must preserve canonical unused declarations");
+    assert.ok(!/textureSample\(\s*base_color_tex/.test(untexturedShader), "Specialization must remove absent sampling paths");
+    structuralMutation.bindGroupKey = "stale-structural-state";
+    structuralMutation.baseColorTexture = white.texture;
+    assert.notEqual(structuralMutation.getLayoutPlan().featureKey, untexturedPlan.featureKey);
+    assert.notEqual(structuralMutation.createBindGroupLayout(device), untexturedLayout, "Structural texture changes must select a distinct layout cache entry");
+    assert.equal(structuralMutation.bindGroupKey, null);
+
+    const overLimitMaterial = new StandardMaterial({
+        label: "OverLimitMaterial",
+        baseColorTexture: white.texture,
+        metallicRoughnessTexture: white.texture,
+        normalTexture: normal.texture,
+        occlusionTexture: white.texture,
+        emissiveTexture: white.texture,
+        extensions: { clearcoat: { texture: white.texture, roughnessTexture: white.texture, normalTexture: normal.texture }, specular: { texture: white.texture, colorTexture: white.texture }, sheen: { colorTexture: white.texture, roughnessTexture: white.texture }, iridescence: { texture: white.texture, thicknessTexture: white.texture }, anisotropy: { texture: anisotropy.texture }, transmission: { factor: 0, texture: white.texture } }
+    });
+    let fakeLayoutCreations = 0;
+    const capableDevice = { limits: { maxSampledTexturesPerShaderStage: 32, maxSamplersPerShaderStage: 32 }, createBindGroupLayout: () => ({ fake: ++fakeLayoutCreations }) };
+    assert.equal(overLimitMaterial.createBindGroupLayout(capableDevice), overLimitMaterial.createBindGroupLayout(capableDevice));
+    assert.equal(fakeLayoutCreations, 1, "Feature-keyed layouts must be cached per device");
+    const limitedDevice = { limits: { maxSampledTexturesPerShaderStage: 16, maxSamplersPerShaderStage: 16 }, createBindGroupLayout: () => { throw new Error("layout creation must not be reached"); } };
+    assert.throws(() => overLimitMaterial.createBindGroupLayout(limitedDevice), /OverLimitMaterial.*required 17 sampled textures.*limit: 16.*transmissionSource/);
+
+    overLimitMaterial.destroy();
+    uniformOnlyExtensions.destroy();
+    structuralMutation.destroy();
+    factorZero.destroy();
+    specializedMaterial.destroy();
+}
+
+// 10) Strict decode, contextual errors, shared URL fetches, and generation-safe cancellation.
+{
+    const bitmapDescriptor = Object.getOwnPropertyDescriptor(globalThis, "createImageBitmap");
+    const fetchDescriptor = Object.getOwnPropertyDescriptor(globalThis, "fetch");
+    const setGlobal = (name, value) => Object.defineProperty(globalThis, name, { configurable: true, writable: true, value });
+    const restoreGlobal = (name, descriptor) => descriptor ? Object.defineProperty(globalThis, name, descriptor) : delete globalThis[name];
+    const waitFor = async (predicate, message) => { for (let i = 0; i < 100; i++) { if (predicate()) return; await new Promise((resolve) => setTimeout(resolve, 0)); } assert.fail(message); };
+    const fakeUploadDevice = { createTexture: () => ({ createView: () => ({}), destroy: () => {} }) };
+    const fakeUploadQueue = { copyExternalImageToTexture: () => {} };
+
+    try {
+        const strictCalls = [];
+        setGlobal("createImageBitmap", async (_blob, options) => { strictCalls.push(options); throw new DOMException("strict decode rejected", "NotSupportedError"); });
+        const strictTexture = Texture2D.createFrom({ source: { kind: "bytes", bytes: new Uint8Array([0, 1, 2, 3]).buffer, mimeType: "image/png" }, mipmaps: false, imageDecode: { colorSpaceConversion: "none", fallbackWithoutOptions: false } });
+        strictTexture.ensureUploaded(fakeUploadDevice, fakeUploadQueue, "srgb");
+        await waitFor(() => strictTexture.uploadError !== null, "Strict decode error was not published");
+        assert.equal(strictCalls.length, 1, "Strict glTF decoding must not retry without options");
+        assert.deepEqual(strictCalls[0], { premultiplyAlpha: "none", imageOrientation: "none", colorSpaceConversion: "none" });
+        assert.ok(/Texture2D \d+: failed to upload image\/png byte source: strict decode rejected/.test(strictTexture.uploadError.message));
+        assert.throws(() => strictTexture.ensureUploaded(fakeUploadDevice, fakeUploadQueue, "srgb"), /strict decode rejected/);
+        strictTexture.destroy();
+
+        let generalDecodeCalls = 0;
+        let generalCloseCalls = 0;
+        setGlobal("createImageBitmap", async (_blob, options) => { generalDecodeCalls++; if (options) throw new DOMException("options unsupported", "NotSupportedError"); return { width: 1, height: 1, close: () => { generalCloseCalls++; } }; });
+        const generalTexture = Texture2D.createFrom({ source: { kind: "bytes", bytes: new Uint8Array([0]).buffer, mimeType: "image/png" }, mipmaps: false });
+        generalTexture.ensureUploaded(fakeUploadDevice, fakeUploadQueue, "srgb");
+        await waitFor(() => generalTexture.uploaded, "General texture fallback decode did not complete");
+        assert.equal(generalDecodeCalls, 2, "General-purpose decoding must retain its compatibility fallback");
+        assert.equal(generalCloseCalls, 1, "Decoded bitmap must close exactly once");
+        generalTexture.destroy();
+
+        let fetchCalls = 0;
+        let urlDecodeCalls = 0;
+        let urlCloseCalls = 0;
+        setGlobal("fetch", async () => { fetchCalls++; return { ok: true, blob: async () => new Blob([new Uint8Array([1, 2, 3])], { type: "image/png" }) }; });
+        setGlobal("createImageBitmap", async () => { urlDecodeCalls++; return { width: 1, height: 1, close: () => { urlCloseCalls++; } }; });
+        const sharedUrlSource = { kind: "url", url: "https://example.invalid/shared.png", mimeType: "image/png" };
+        const linearTexture = Texture2D.createFrom({ source: sharedUrlSource, mipmaps: false });
+        const srgbTexture = Texture2D.createFrom({ source: sharedUrlSource, mipmaps: false });
+        linearTexture.ensureUploaded(fakeUploadDevice, fakeUploadQueue, "linear");
+        srgbTexture.ensureUploaded(fakeUploadDevice, fakeUploadQueue, "srgb");
+        await waitFor(() => linearTexture.uploaded && srgbTexture.uploaded, "Shared URL textures did not upload");
+        assert.equal(fetchCalls, 1, "Mixed transfer functions must share one URL fetch promise");
+        assert.equal(urlDecodeCalls, 2, "Each GPU texture must decode its own bitmap from the shared encoded payload");
+        assert.equal(urlCloseCalls, 2);
+        linearTexture.destroy();
+        srgbTexture.destroy();
+
+        let resolveDecode;
+        let staleCloseCalls = 0;
+        let staleTextureCreations = 0;
+        setGlobal("createImageBitmap", () => new Promise((resolve) => { resolveDecode = resolve; }));
+        const pendingTexture = Texture2D.createFrom({ source: { kind: "bytes", bytes: new Uint8Array([0]).buffer, mimeType: "image/png" }, mipmaps: false, imageDecode: { colorSpaceConversion: "none", fallbackWithoutOptions: false } });
+        pendingTexture.ensureUploaded({ createTexture: () => { staleTextureCreations++; return fakeUploadDevice.createTexture(); } }, fakeUploadQueue, "linear");
+        await waitFor(() => typeof resolveDecode === "function", "Deferred decode did not start");
+        pendingTexture.destroy();
+        resolveDecode({ width: 1, height: 1, close: () => { staleCloseCalls++; } });
+        await waitFor(() => staleCloseCalls === 1, "Stale bitmap was not closed");
+        assert.equal(staleTextureCreations, 0, "Destroyed texture must not create a late GPU resource");
+        assert.equal(pendingTexture.uploaded, false);
+    } finally { restoreGlobal("createImageBitmap", bitmapDescriptor); restoreGlobal("fetch", fetchDescriptor); }
+}
+
+// 11) Linear and sRGB interpretations own distinct GPU textures and numerically distinct mip chains.
+{
+    const pixels = new Uint8ClampedArray([255, 255, 255, 255, 0, 0, 0, 255, 0, 0, 0, 255, 0, 0, 0, 255]);
+    const bitmap = await createImageBitmap(new ImageData(pixels, 2, 2), { premultiplyAlpha: "none", imageOrientation: "none", colorSpaceConversion: "none" });
+    const linearTexture = Texture2D.createFrom({ source: { kind: "bitmap", bitmap }, mipmaps: true });
+    const srgbTexture = Texture2D.createFrom({ source: { kind: "bitmap", bitmap }, mipmaps: true });
+    const waitForUpload = async (texture) => { texture.ensureUploaded(device, device.queue, texture === linearTexture ? "linear" : "srgb"); for (let i = 0; i < 100 && !texture.uploaded; i++) await new Promise((resolve) => setTimeout(resolve, 0)); assert.ok(texture.uploaded, `Texture ${texture.id} did not upload`); };
+    const mipReadLayout = device.createBindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } }] });
+    const mipReadModule = device.createShaderModule({ code: `@group(0) @binding(0) var source: texture_2d<f32>; @vertex fn vs_main(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> { let positions = array(vec2(-1.0, -1.0), vec2(3.0, -1.0), vec2(-1.0, 3.0)); return vec4<f32>(positions[index], 0.0, 1.0); } @fragment fn fs_main() -> @location(0) vec4<f32> { return textureLoad(source, vec2<i32>(0, 0), 0); } `});
+    const mipReadPipeline = device.createRenderPipeline({ layout: device.createPipelineLayout({ bindGroupLayouts: [mipReadLayout] }), vertex: { module: mipReadModule, entryPoint: "vs_main" }, fragment: { module: mipReadModule, entryPoint: "fs_main", targets: [{ format: "rgba8unorm" }] }, primitive: { topology: "triangle-list" } });
+    const readMip1 = async (texture) => {
+        const output = device.createTexture({ size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC });
+        const buffer = device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        const encoder = device.createCommandEncoder();
+        const pass = encoder.beginRenderPass({ colorAttachments: [{ view: output.createView(), clearValue: [0, 0, 0, 0], loadOp: "clear", storeOp: "store" }] });
+        pass.setPipeline(mipReadPipeline);
+        pass.setBindGroup(0, device.createBindGroup({ layout: mipReadLayout, entries: [{ binding: 0, resource: texture._gpuTexture.createView({ baseMipLevel: 1, mipLevelCount: 1, format: "rgba8unorm" }) }] }));
+        pass.draw(3);
+        pass.end();
+        encoder.copyTextureToBuffer({ texture: output }, { buffer, bytesPerRow: 256, rowsPerImage: 1 }, { width: 1, height: 1, depthOrArrayLayers: 1 });
+        device.queue.submit([encoder.finish()]);
+        await buffer.mapAsync(GPUMapMode.READ);
+        const pixel = Array.from(new Uint8Array(buffer.getMappedRange()).slice(0, 4));
+        buffer.unmap();
+        buffer.destroy();
+        output.destroy();
+        return pixel;
+    };
+    await Promise.all([waitForUpload(linearTexture), waitForUpload(srgbTexture)]);
+    assert.notEqual(linearTexture._gpuTexture, srgbTexture._gpuTexture);
+    const linearMip = await readMip1(linearTexture);
+    const srgbMip = await readMip1(srgbTexture);
+    assert.ok(Math.abs(linearMip[0] - 64) <= 2, `Linear mip expected encoded average 64, got ${linearMip}`);
+    assert.ok(Math.abs(srgbMip[0] - 137) <= 3, `sRGB mip expected linear-light average encoded near 137, got ${srgbMip}`);
+    assert.ok(srgbMip[0] > linearMip[0] + 60, `Transfer-specific mip chains were not distinct: ${linearMip} vs ${srgbMip}`);
+    linearTexture.destroy();
+    srgbTexture.destroy();
+    bitmap.close();
+}
+
+// 12) Cleanup releases shared textures before their browser GPU device.
 {
     white.texture.destroy();
     normal.texture.destroy();

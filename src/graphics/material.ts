@@ -12,6 +12,7 @@ import unlitInstancedWGSL from "../wgsl/graphics/unlit-instanced.wgsl";
 import unlitSkinnedWGSL from "../wgsl/graphics/unlit-skinned.wgsl";
 import unlitSkinned8WGSL from "../wgsl/graphics/unlit-skinned8.wgsl";
 import standardWGSL from "../wgsl/graphics/standard.wgsl";
+import standardDefaultsWGSL from "../wgsl/graphics/standard-defaults.wgsl";
 import standardInstancedWGSL from "../wgsl/graphics/standard-instanced.wgsl";
 import standardSkinnedWGSL from "../wgsl/graphics/standard-skinned.wgsl";
 import standardSkinned8WGSL from "../wgsl/graphics/standard-skinned8.wgsl";
@@ -90,6 +91,7 @@ export enum CullMode {
 }
 
 export type MaterialDescriptor = {
+    label?: string;
     blendMode?: BlendMode;
     cullMode?: CullMode;
     depthWrite?: boolean;
@@ -97,6 +99,7 @@ export type MaterialDescriptor = {
 };
 
 export abstract class Material {
+    readonly label?: string;
     readonly blendMode: BlendMode;
     readonly cullMode: CullMode;
     readonly depthWrite: boolean;
@@ -111,6 +114,7 @@ export abstract class Material {
     private _destroyed: boolean = false;
 
     constructor(descriptor: MaterialDescriptor = {}) {
+        this.label = descriptor.label;
         this.blendMode = descriptor.blendMode ?? BlendMode.Opaque;
         this.cullMode = descriptor.cullMode ?? CullMode.Back;
         this.depthWrite = descriptor.depthWrite ?? true;
@@ -152,7 +156,7 @@ export abstract class Material {
     }
 
     abstract getUniformData(): Float32Array;
-    abstract getShaderCode(opts?: { instanced?: boolean; skinned?: boolean; skinned8?: boolean; transmission?: boolean }): string;
+    abstract getShaderCode(opts?: { instanced?: boolean; skinned?: boolean; skinned8?: boolean }): string;
     abstract getUniformBufferSize(): number;
     abstract createBindGroupLayout(device: GPUDevice): GPUBindGroupLayout;
 
@@ -508,31 +512,22 @@ export const enum StandardMaterialFeatureFlag {
     NormalTexture = 1 << 2,
     OcclusionTexture = 1 << 3,
     EmissiveTexture = 1 << 4,
-    Clearcoat = 1 << 5,
     ClearcoatTexture = 1 << 6,
     ClearcoatRoughnessTexture = 1 << 7,
     ClearcoatNormalTexture = 1 << 8,
     Transmission = 1 << 9,
     TransmissionTexture = 1 << 10,
-    Volume = 1 << 11,
     ThicknessTexture = 1 << 12,
-    Specular = 1 << 13,
     SpecularTexture = 1 << 14,
     SpecularColorTexture = 1 << 15,
-    Sheen = 1 << 16,
     SheenColorTexture = 1 << 17,
     SheenRoughnessTexture = 1 << 18,
-    Iridescence = 1 << 19,
     IridescenceTexture = 1 << 20,
     IridescenceThicknessTexture = 1 << 21,
-    Anisotropy = 1 << 22,
     AnisotropyTexture = 1 << 23,
-    Ior = 1 << 24,
-    EmissiveStrength = 1 << 25,
     DiffuseTransmission = 1 << 26,
     DiffuseTransmissionTexture = 1 << 27,
-    DiffuseTransmissionColorTexture = 1 << 28,
-    Dispersion = 1 << 29
+    DiffuseTransmissionColorTexture = 1 << 28
 }
 
 const cloneColor = (value: Color | undefined, fallback: Color): Color => {
@@ -616,8 +611,144 @@ const normalizeStandardMaterialExtensions = (descriptor?: StandardMaterialExtens
     };
 };
 
-const cloneStandardMaterialExtensions = (extensions: StandardMaterialExtensions): StandardMaterialExtensions => {
-    return normalizeStandardMaterialExtensions(extensions);
+const cloneStandardMaterialExtensions = (extensions: StandardMaterialExtensions): StandardMaterialExtensions => normalizeStandardMaterialExtensions(extensions);
+
+export const WEBGPU_BASELINE_MAX_SAMPLED_TEXTURES_PER_SHADER_STAGE = 16, WEBGPU_BASELINE_MAX_SAMPLERS_PER_SHADER_STAGE = 16;
+
+export type StandardMaterialTextureSlot = "baseColor" | "metallicRoughness" | "normal" | "occlusion" | "emissive" | "clearcoat" | "clearcoatRoughness" | "clearcoatNormal" | "specular" | "specularColor" | "sheenColor" | "sheenRoughness" | "iridescence" | "iridescenceThickness" | "anisotropy" | "transmission" | "volumeThickness" | "diffuseTransmission" | "diffuseTransmissionColor" | "transmissionSource";
+
+export type StandardMaterialLayoutBinding = Readonly<{
+    slot: StandardMaterialTextureSlot;
+    samplerBinding: number;
+    textureBinding: number;
+    colorSpace: "srgb" | "linear";
+}>;
+
+export type StandardMaterialLayoutPlan = Readonly<{
+    featureKey: string;
+    bindings: readonly StandardMaterialLayoutBinding[];
+    sampledTextureCount: number;
+    samplerCount: number;
+    usesTransmission: boolean;
+}>;
+
+type StandardMaterialTextureSlotDefinition = {
+    slot: StandardMaterialTextureSlot;
+    feature: StandardMaterialFeatureFlag | null;
+    shaderName: string;
+    colorSpace: "srgb" | "linear";
+};
+
+const STANDARD_MATERIAL_TEXTURE_SLOTS: readonly StandardMaterialTextureSlotDefinition[] = [
+    { slot: "baseColor", feature: StandardMaterialFeatureFlag.BaseColorTexture, shaderName: "base_color", colorSpace: "srgb" },
+    { slot: "metallicRoughness", feature: StandardMaterialFeatureFlag.MetallicRoughnessTexture, shaderName: "metallic_roughness", colorSpace: "linear" },
+    { slot: "normal", feature: StandardMaterialFeatureFlag.NormalTexture, shaderName: "normal", colorSpace: "linear" },
+    { slot: "occlusion", feature: StandardMaterialFeatureFlag.OcclusionTexture, shaderName: "occlusion", colorSpace: "linear" },
+    { slot: "emissive", feature: StandardMaterialFeatureFlag.EmissiveTexture, shaderName: "emissive", colorSpace: "srgb" },
+    { slot: "clearcoat", feature: StandardMaterialFeatureFlag.ClearcoatTexture, shaderName: "clearcoat", colorSpace: "linear" },
+    { slot: "clearcoatRoughness", feature: StandardMaterialFeatureFlag.ClearcoatRoughnessTexture, shaderName: "clearcoat_roughness", colorSpace: "linear" },
+    { slot: "clearcoatNormal", feature: StandardMaterialFeatureFlag.ClearcoatNormalTexture, shaderName: "clearcoat_normal", colorSpace: "linear" },
+    { slot: "specular", feature: StandardMaterialFeatureFlag.SpecularTexture, shaderName: "specular", colorSpace: "linear" },
+    { slot: "specularColor", feature: StandardMaterialFeatureFlag.SpecularColorTexture, shaderName: "specular_color", colorSpace: "srgb" },
+    { slot: "sheenColor", feature: StandardMaterialFeatureFlag.SheenColorTexture, shaderName: "sheen_color", colorSpace: "srgb" },
+    { slot: "sheenRoughness", feature: StandardMaterialFeatureFlag.SheenRoughnessTexture, shaderName: "sheen_roughness", colorSpace: "linear" },
+    { slot: "iridescence", feature: StandardMaterialFeatureFlag.IridescenceTexture, shaderName: "iridescence", colorSpace: "linear" },
+    { slot: "iridescenceThickness", feature: StandardMaterialFeatureFlag.IridescenceThicknessTexture, shaderName: "iridescence_thickness", colorSpace: "linear" },
+    { slot: "anisotropy", feature: StandardMaterialFeatureFlag.AnisotropyTexture, shaderName: "anisotropy", colorSpace: "linear" },
+    { slot: "transmission", feature: StandardMaterialFeatureFlag.TransmissionTexture, shaderName: "transmission", colorSpace: "linear" },
+    { slot: "volumeThickness", feature: StandardMaterialFeatureFlag.ThicknessTexture, shaderName: "volume_thickness", colorSpace: "linear" },
+    { slot: "diffuseTransmission", feature: StandardMaterialFeatureFlag.DiffuseTransmissionTexture, shaderName: "diffuse_transmission", colorSpace: "linear" },
+    { slot: "diffuseTransmissionColor", feature: StandardMaterialFeatureFlag.DiffuseTransmissionColorTexture, shaderName: "diffuse_transmission_color", colorSpace: "srgb" },
+    { slot: "transmissionSource", feature: null, shaderName: "transmission_source", colorSpace: "linear" },
+];
+
+const STANDARD_MATERIAL_TEXTURE_SLOT_BY_SHADER_NAME = new Map(STANDARD_MATERIAL_TEXTURE_SLOTS.map((definition) => [definition.shaderName, definition]));
+
+const STANDARD_MATERIAL_TEXTURE_SLOT_BY_NAME = new Map(STANDARD_MATERIAL_TEXTURE_SLOTS.map((definition) => [definition.slot, definition]));
+
+export const getStandardMaterialTextureColorSpace = (slot: StandardMaterialTextureSlot): "srgb" | "linear" => {
+    const definition = STANDARD_MATERIAL_TEXTURE_SLOT_BY_NAME.get(slot);
+    if (!definition) throw new Error(`StandardMaterial: unknown texture slot '${slot}'.`);
+    return definition.colorSpace;
+};
+
+export const planStandardMaterialLayout = (featureMask: number): StandardMaterialLayoutPlan => {
+    const mask = featureMask >>> 0;
+    const usesTransmission = (mask & (StandardMaterialFeatureFlag.Transmission | StandardMaterialFeatureFlag.DiffuseTransmission)) !== 0;
+    const bindings: StandardMaterialLayoutBinding[] = [];
+    for (let index = 0; index < STANDARD_MATERIAL_TEXTURE_SLOTS.length; index++) {
+        const definition = STANDARD_MATERIAL_TEXTURE_SLOTS[index]!;
+        const active = definition.feature === null ? usesTransmission : (mask & definition.feature) !== 0;
+        if (!active) continue;
+        const binding: StandardMaterialLayoutBinding = Object.freeze({ slot: definition.slot, samplerBinding: 1 + (index * 2), textureBinding: 2 + (index * 2), colorSpace: definition.colorSpace });
+        bindings.push(binding);
+    }
+    const featureKey = `${usesTransmission ? "transmission" : "standard"}:${bindings.map((binding) => binding.slot).join(",")}`;
+    return Object.freeze({ featureKey, bindings: Object.freeze(bindings), sampledTextureCount: bindings.length, samplerCount: bindings.length, usesTransmission });
+};
+
+const STANDARD_SHADER_SAMPLE_DEFAULTS = new Map<string, string>();
+for (const match of standardDefaultsWGSL.matchAll(/const\s+(standard_default_([A-Za-z0-9_]+))\s*=/g)) STANDARD_SHADER_SAMPLE_DEFAULTS.set(match[2]!, match[1]!);
+
+const standardShaderSourceCache = new Map<string, string>();
+
+const specializeStandardShader = (source: string, plan: StandardMaterialLayoutPlan, variant: string): string => {
+    const cacheKey = `${plan.featureKey}|${variant}`;
+    const cached = standardShaderSourceCache.get(cacheKey);
+    if (cached) return cached;
+    const activeSlots = new Set(plan.bindings.map((binding) => binding.slot));
+    const samplePattern = /textureSample\(\s*([A-Za-z0-9_]+)_tex\s*,\s*\1_sampler\s*,\s*[A-Za-z0-9_]+\s*,?\s*\)/g;
+    let specialized = source.replace(samplePattern, (sample, shaderName: string) => {
+        const definition = STANDARD_MATERIAL_TEXTURE_SLOT_BY_SHADER_NAME.get(shaderName);
+        if (!definition || activeSlots.has(definition.slot)) return sample;
+        const fallback = STANDARD_SHADER_SAMPLE_DEFAULTS.get(shaderName);
+        if (!fallback) throw new Error(`StandardMaterial: canonical ${variant} WGSL has no imported default for ${definition.slot}.`);
+        return fallback;
+    });
+    for (const definition of STANDARD_MATERIAL_TEXTURE_SLOTS) {
+        if (activeSlots.has(definition.slot) || definition.slot === "transmissionSource") continue;
+        const unresolvedSample = new RegExp(`\\btextureSample\\s*\\(\\s*${definition.shaderName}_tex\\b`);
+        if (unresolvedSample.test(specialized)) throw new Error(`StandardMaterial: canonical ${variant} WGSL contains an unsupported ${definition.slot} sampling path.`);
+    }
+    specialized = standardDefaultsWGSL.concat(specialized);
+    standardShaderSourceCache.set(cacheKey, specialized);
+    return specialized;
+};
+
+const getSpecializedStandardShader = (plan: StandardMaterialLayoutPlan, opts: { instanced?: boolean; skinned?: boolean; skinned8?: boolean } = {}): string => {
+    const transmission = plan.usesTransmission;
+    if (opts.instanced) return specializeStandardShader(transmission ? standardTransmissionInstancedWGSL : standardInstancedWGSL, plan, transmission ? "transmission-instanced" : "instanced");
+    if (opts.skinned8) return specializeStandardShader(transmission ? standardTransmissionSkinned8WGSL : standardSkinned8WGSL, plan, transmission ? "transmission-skinned8" : "skinned8");
+    if (opts.skinned) return specializeStandardShader(transmission ? standardTransmissionSkinnedWGSL : standardSkinnedWGSL, plan, transmission ? "transmission-skinned" : "skinned");
+    return specializeStandardShader(transmission ? standardTransmissionWGSL : standardWGSL, plan, transmission ? "transmission" : "standard");
+};
+
+const standardMaterialBindGroupLayouts = new WeakMap<GPUDevice, Map<string, GPUBindGroupLayout>>();
+
+export const getMaterialTextureForSlot = (material: StandardMaterial, slot: StandardMaterialTextureSlot): Texture2D | null => {
+    const ext = material.extensions;
+    switch (slot) {
+        case "baseColor": return material.baseColorTexture;
+        case "metallicRoughness": return material.metallicRoughnessTexture;
+        case "normal": return material.normalTexture;
+        case "occlusion": return material.occlusionTexture;
+        case "emissive": return material.emissiveTexture;
+        case "clearcoat": return ext.clearcoat?.texture ?? null;
+        case "clearcoatRoughness": return ext.clearcoat?.roughnessTexture ?? null;
+        case "clearcoatNormal": return ext.clearcoat?.normalTexture ?? null;
+        case "specular": return ext.specular?.texture ?? null;
+        case "specularColor": return ext.specular?.colorTexture ?? null;
+        case "sheenColor": return ext.sheen?.colorTexture ?? null;
+        case "sheenRoughness": return ext.sheen?.roughnessTexture ?? null;
+        case "iridescence": return ext.iridescence?.texture ?? null;
+        case "iridescenceThickness": return ext.iridescence?.thicknessTexture ?? null;
+        case "anisotropy": return ext.anisotropy?.texture ?? null;
+        case "transmission": return ext.transmission?.texture ?? null;
+        case "volumeThickness": return ext.volume?.thicknessTexture ?? null;
+        case "diffuseTransmission": return ext.diffuseTransmission?.texture ?? null;
+        case "diffuseTransmissionColor": return ext.diffuseTransmission?.colorTexture ?? null;
+        case "transmissionSource": return null;
+    }
 };
 
 export class StandardMaterial extends Material {
@@ -641,10 +772,8 @@ export class StandardMaterial extends Material {
     private _occlusionStrength: number;
     private _alphaCutoff: number;
     private _extensions: StandardMaterialExtensions;
-    private static _cachedBindGroupLayout: GPUBindGroupLayout | null = null;
-    private static _cachedLayoutDevice: GPUDevice | null = null;
+    private _layoutPlan: StandardMaterialLayoutPlan | null = null;
     private static readonly UNIFORM_FLOAT_COUNT = 204;
-    private static readonly TEXTURE_BINDING_COUNT = 15;
 
     constructor(descriptor: StandardMaterialDescriptor = {}) {
         super({
@@ -674,8 +803,14 @@ export class StandardMaterial extends Material {
     }
 
     private invalidateBindings(): void {
+        this._layoutPlan = null;
         this.bindGroupKey = null;
         this._dirty = true;
+    }
+
+    getLayoutPlan(): StandardMaterialLayoutPlan {
+        if (!this._layoutPlan) this._layoutPlan = planStandardMaterialLayout(this.getFeatureMask());
+        return this._layoutPlan;
     }
 
     get color(): Color {
@@ -854,8 +989,15 @@ export class StandardMaterial extends Material {
     }
 
     setExtensions(descriptor?: StandardMaterialExtensionsDescriptor): this {
+        const previousPlan = this.getLayoutPlan();
+        const previousTextures = previousPlan.bindings.map((binding) => getMaterialTextureForSlot(this, binding.slot));
         this._extensions = normalizeStandardMaterialExtensions(descriptor);
-        this.invalidateBindings();
+        const nextPlan = planStandardMaterialLayout(this.getFeatureMask());
+        const sameLayout = previousPlan.featureKey === nextPlan.featureKey;
+        const sameResources = sameLayout && nextPlan.bindings.every((binding, index) => getMaterialTextureForSlot(this, binding.slot) === previousTextures[index]);
+        this._layoutPlan = nextPlan;
+        if (!sameResources) this.bindGroupKey = null;
+        this._dirty = true;
         return this;
     }
 
@@ -868,7 +1010,6 @@ export class StandardMaterial extends Material {
         if (this._emissiveTexture) mask |= StandardMaterialFeatureFlag.EmissiveTexture;
         const clearcoat = this._extensions.clearcoat;
         if (clearcoat) {
-            mask |= StandardMaterialFeatureFlag.Clearcoat;
             if (clearcoat.texture) mask |= StandardMaterialFeatureFlag.ClearcoatTexture;
             if (clearcoat.roughnessTexture) mask |= StandardMaterialFeatureFlag.ClearcoatRoughnessTexture;
             if (clearcoat.normalTexture) mask |= StandardMaterialFeatureFlag.ClearcoatNormalTexture;
@@ -880,30 +1021,25 @@ export class StandardMaterial extends Material {
         }
         const volume = this._extensions.volume;
         if (volume) {
-            mask |= StandardMaterialFeatureFlag.Volume;
             if (volume.thicknessTexture) mask |= StandardMaterialFeatureFlag.ThicknessTexture;
         }
         const specular = this._extensions.specular;
         if (specular) {
-            mask |= StandardMaterialFeatureFlag.Specular;
             if (specular.texture) mask |= StandardMaterialFeatureFlag.SpecularTexture;
             if (specular.colorTexture) mask |= StandardMaterialFeatureFlag.SpecularColorTexture;
         }
         const sheen = this._extensions.sheen;
         if (sheen) {
-            mask |= StandardMaterialFeatureFlag.Sheen;
             if (sheen.colorTexture) mask |= StandardMaterialFeatureFlag.SheenColorTexture;
             if (sheen.roughnessTexture) mask |= StandardMaterialFeatureFlag.SheenRoughnessTexture;
         }
         const iridescence = this._extensions.iridescence;
         if (iridescence) {
-            mask |= StandardMaterialFeatureFlag.Iridescence;
             if (iridescence.texture) mask |= StandardMaterialFeatureFlag.IridescenceTexture;
             if (iridescence.thicknessTexture) mask |= StandardMaterialFeatureFlag.IridescenceThicknessTexture;
         }
         const anisotropy = this._extensions.anisotropy;
         if (anisotropy) {
-            mask |= StandardMaterialFeatureFlag.Anisotropy;
             if (anisotropy.texture) mask |= StandardMaterialFeatureFlag.AnisotropyTexture;
         }
         const diffuseTransmission = this._extensions.diffuseTransmission;
@@ -912,9 +1048,6 @@ export class StandardMaterial extends Material {
             if (diffuseTransmission.texture) mask |= StandardMaterialFeatureFlag.DiffuseTransmissionTexture;
             if (diffuseTransmission.colorTexture) mask |= StandardMaterialFeatureFlag.DiffuseTransmissionColorTexture;
         }
-        if (this._extensions.dispersion) mask |= StandardMaterialFeatureFlag.Dispersion;
-        if (this._extensions.ior) mask |= StandardMaterialFeatureFlag.Ior;
-        if (this._extensions.emissiveStrength) mask |= StandardMaterialFeatureFlag.EmissiveStrength;
         return mask >>> 0;
     }
 
@@ -1010,36 +1143,31 @@ export class StandardMaterial extends Material {
     }
 
     createBindGroupLayout(device: GPUDevice): GPUBindGroupLayout {
-        if (StandardMaterial._cachedBindGroupLayout && StandardMaterial._cachedLayoutDevice === device) return StandardMaterial._cachedBindGroupLayout;
-        const entries: GPUBindGroupLayoutEntry[] = [ { binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } } ];
-        for (let i = 0; i < StandardMaterial.TEXTURE_BINDING_COUNT; i++) {
-            const samplerBinding = 1 + (i * 2);
-            entries.push({ binding: samplerBinding, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } });
-            entries.push({ binding: samplerBinding + 1, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } });
+        const plan = this.getLayoutPlan();
+        const maxTextures = device.limits?.maxSampledTexturesPerShaderStage ?? WEBGPU_BASELINE_MAX_SAMPLED_TEXTURES_PER_SHADER_STAGE;
+        const maxSamplers = device.limits?.maxSamplersPerShaderStage ?? WEBGPU_BASELINE_MAX_SAMPLERS_PER_SHADER_STAGE;
+        const materialIdentity = this.label ? ` '${this.label}'` : "";
+        if (plan.sampledTextureCount > maxTextures || plan.samplerCount > maxSamplers) throw new Error(`StandardMaterial${materialIdentity}: required ${plan.sampledTextureCount} sampled textures (limit: ${maxTextures}) and ${plan.samplerCount} samplers (limit: ${maxSamplers}) for features [${plan.bindings.map((b) => b.slot).join(", ")}], which exceeds device limits.`);
+        let deviceLayouts = standardMaterialBindGroupLayouts.get(device);
+        if (!deviceLayouts) { deviceLayouts = new Map(); standardMaterialBindGroupLayouts.set(device, deviceLayouts); }
+        const cached = deviceLayouts.get(plan.featureKey);
+        if (cached) return cached;
+        const entries: GPUBindGroupLayoutEntry[] = [{ binding: 0, visibility: GPUShaderStage.FRAGMENT, buffer: { type: "uniform" } }];
+        for (const b of plan.bindings) {
+            entries.push({ binding: b.samplerBinding, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } });
+            entries.push({ binding: b.textureBinding, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float" } });
         }
-        const layout = device.createBindGroupLayout({ entries });
-        StandardMaterial._cachedBindGroupLayout = layout;
-        StandardMaterial._cachedLayoutDevice = device;
+        const layout = device.createBindGroupLayout({ label: `StandardMaterial ${plan.featureKey}`, entries });
+        deviceLayouts.set(plan.featureKey, layout);
         return layout;
     }
 
     usesTransmissionLayout(): boolean {
-        const transmissionFactor = this._extensions.transmission?.factor ?? 0;
-        const diffuseTransmissionFactor = this._extensions.diffuseTransmission?.factor ?? 0;
-        return transmissionFactor > 0 || diffuseTransmissionFactor > 0;
+        return this.getLayoutPlan().usesTransmission;
     }
 
-    getShaderCode(opts: { instanced?: boolean; skinned?: boolean; skinned8?: boolean; transmission?: boolean } = {}): string {
-        if (opts.transmission) {
-            if (opts.instanced) return standardTransmissionInstancedWGSL;
-            if (opts.skinned8) return standardTransmissionSkinned8WGSL;
-            if (opts.skinned) return standardTransmissionSkinnedWGSL;
-            return standardTransmissionWGSL;
-        }
-        if (opts.instanced) return standardInstancedWGSL;
-        if (opts.skinned8) return standardSkinned8WGSL;
-        if (opts.skinned) return standardSkinnedWGSL;
-        return standardWGSL;
+    getShaderCode(opts: { instanced?: boolean; skinned?: boolean; skinned8?: boolean } = {}): string {
+        return getSpecializedStandardShader(this.getLayoutPlan(), opts);
     }
 }
 

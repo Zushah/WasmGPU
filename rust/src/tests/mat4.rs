@@ -4,7 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::mat4::{mat4_det_from, mat4_identity_arr, mat4_invert_from};
+use crate::cull::mul_clip;
+use crate::mat4::{mat4_det_from, mat4_identity_arr, mat4_invert_from, mat4_perspective_from};
 use crate::tests::common::{assert_approx, assert_slice_approx};
 
 #[test]
@@ -40,4 +41,40 @@ fn determinant_and_inverse_cover_identity_affine_and_singular_matrices() {
     );
     assert_eq!(mat4_det_from(&[0.0; 16]), 0.0);
     assert_eq!(mat4_invert_from(&[0.0; 16]), identity);
+}
+
+#[test]
+fn perspective_matrix_supports_finite_and_infinite_far_planes() {
+    let fov_rad = std::f32::consts::FRAC_PI_2;
+    let aspect = 2.0;
+    let near = 0.5;
+    let far = 100.0;
+    let finite = mat4_perspective_from(fov_rad, aspect, near, far);
+    assert_approx(finite[0], 0.5, 1e-6);
+    assert_approx(finite[5], 1.0, 1e-6);
+    assert_approx(finite[10], 100.0 / (0.5 - 100.0), 1e-6);
+    assert_eq!(finite[11], -1.0);
+    assert_approx(finite[14], (0.5 * 100.0) / (0.5 - 100.0), 1e-6);
+    assert_eq!(finite[15], 0.0);
+    let infinite = mat4_perspective_from(fov_rad, aspect, near, f32::INFINITY);
+    assert_approx(infinite[0], 0.5, 1e-6);
+    assert_approx(infinite[5], 1.0, 1e-6);
+    assert_eq!(infinite[10], -1.0);
+    assert_eq!(infinite[11], -1.0);
+    assert_eq!(infinite[14], -near);
+    assert_eq!(infinite[15], 0.0);
+    for val in infinite {
+        assert!(
+            val.is_finite(),
+            "infinite perspective entries must be finite numbers"
+        );
+    }
+    let near_clip = mul_clip(&infinite, 0.0, 0.0, -near);
+    assert_approx(near_clip[2] / near_clip[3], 0.0, 1e-6);
+    let far_clip = mul_clip(&infinite, 0.0, 0.0, -50000.0);
+    let far_ndc = far_clip[2] / far_clip[3];
+    assert!(
+        far_ndc > 0.999 && far_ndc < 1.0,
+        "distant ndc_z ({far_ndc}) should approach 1.0 without exceeding 1.0"
+    );
 }

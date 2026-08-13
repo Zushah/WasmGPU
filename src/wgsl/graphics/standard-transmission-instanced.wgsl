@@ -138,16 +138,26 @@ struct TangentFrame {
 @group(1) @binding(18) var specular_tex: texture_2d<f32>;
 @group(1) @binding(19) var specular_color_sampler: sampler;
 @group(1) @binding(20) var specular_color_tex: texture_2d<f32>;
-@group(1) @binding(21) var transmission_sampler: sampler;
-@group(1) @binding(22) var transmission_tex: texture_2d<f32>;
-@group(1) @binding(23) var volume_thickness_sampler: sampler;
-@group(1) @binding(24) var volume_thickness_tex: texture_2d<f32>;
-@group(1) @binding(25) var diffuse_transmission_sampler: sampler;
-@group(1) @binding(26) var diffuse_transmission_tex: texture_2d<f32>;
-@group(1) @binding(27) var diffuse_transmission_color_sampler: sampler;
-@group(1) @binding(28) var diffuse_transmission_color_tex: texture_2d<f32>;
-@group(1) @binding(29) var transmission_source_sampler: sampler;
-@group(1) @binding(30) var transmission_source_tex: texture_2d<f32>;
+@group(1) @binding(21) var sheen_color_sampler: sampler;
+@group(1) @binding(22) var sheen_color_tex: texture_2d<f32>;
+@group(1) @binding(23) var sheen_roughness_sampler: sampler;
+@group(1) @binding(24) var sheen_roughness_tex: texture_2d<f32>;
+@group(1) @binding(25) var iridescence_sampler: sampler;
+@group(1) @binding(26) var iridescence_tex: texture_2d<f32>;
+@group(1) @binding(27) var iridescence_thickness_sampler: sampler;
+@group(1) @binding(28) var iridescence_thickness_tex: texture_2d<f32>;
+@group(1) @binding(29) var anisotropy_sampler: sampler;
+@group(1) @binding(30) var anisotropy_tex: texture_2d<f32>;
+@group(1) @binding(31) var transmission_sampler: sampler;
+@group(1) @binding(32) var transmission_tex: texture_2d<f32>;
+@group(1) @binding(33) var volume_thickness_sampler: sampler;
+@group(1) @binding(34) var volume_thickness_tex: texture_2d<f32>;
+@group(1) @binding(35) var diffuse_transmission_sampler: sampler;
+@group(1) @binding(36) var diffuse_transmission_tex: texture_2d<f32>;
+@group(1) @binding(37) var diffuse_transmission_color_sampler: sampler;
+@group(1) @binding(38) var diffuse_transmission_color_tex: texture_2d<f32>;
+@group(1) @binding(39) var transmission_source_sampler: sampler;
+@group(1) @binding(40) var transmission_source_tex: texture_2d<f32>;
 
 fn apply_texture_transform(
     uv0: vec2<f32>,
@@ -229,17 +239,23 @@ fn build_tangent_frame(
     tangent: vec4<f32>,
     world_pos: vec3<f32>,
     uv: vec2<f32>,
+    face_sign: f32,
 ) -> TangentFrame {
     let n = normalize(normal);
     let derivative_frame = derivative_tangent_frame(n, world_pos, uv);
     var t = tangent.xyz - n * dot(n, tangent.xyz);
     let t_len2 = dot(t, t);
     if (t_len2 <= 1e-20) {
-        return derivative_frame;
+        return TangentFrame(
+            derivative_frame.t,
+            derivative_frame.b * face_sign,
+            derivative_frame.n * face_sign,
+        );
     }
     t = t * inverseSqrt(t_len2);
-    let b = normalize(cross(n, t)) * select(-1.0, 1.0, tangent.w >= 0.0);
-    return TangentFrame(t, b, n);
+    let b =
+        normalize(cross(n, t)) * select(-1.0, 1.0, tangent.w >= 0.0) * face_sign;
+    return TangentFrame(t, b, n * face_sign);
 }
 
 fn apply_normal_map(
@@ -249,11 +265,12 @@ fn apply_normal_map(
     uv: vec2<f32>,
     normal_sample: vec3<f32>,
     normal_scale: f32,
+    face_sign: f32,
 ) -> vec3<f32> {
     if (normal_scale == 0.0) {
-        return normalize(n);
+        return normalize(n) * face_sign;
     }
-    let frame = build_tangent_frame(n, tangent, world_pos, uv);
+    let frame = build_tangent_frame(n, tangent, world_pos, uv, face_sign);
     var ns = normal_sample * 2.0 - vec3<f32>(1.0);
     ns = vec3<f32>(ns.x * normal_scale, ns.y * normal_scale, ns.z);
     return normalize(frame.t * ns.x + frame.b * ns.y + frame.n * ns.z);
@@ -559,7 +576,11 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    let face_sign = select(-1.0, 1.0, is_front);
+    let front_geom_normal = normalize(in.normal);
+    let geom_normal = front_geom_normal * face_sign;
+
     let base_uv = apply_texture_transform(
         in.uv,
         in.uv1,
@@ -685,12 +706,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let roughness = clamp(material.params.y * mr_sample.g, 0.04, 1.0);
     let normal_sample = textureSample(normal_tex, normal_sampler, normal_uv).xyz;
     let n = apply_normal_map(
-        in.normal,
+        front_geom_normal,
         in.tangent,
         in.world_pos,
         normal_uv,
         normal_sample,
         material.params.z,
+        face_sign,
     );
     let occl_sample = textureSample(occlusion_tex, occlusion_sampler, occlusion_uv).r;
     let ao = 1.0 + material.params.w * (occl_sample - 1.0);
@@ -719,12 +741,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         clearcoat_normal_uv,
     ).xyz;
     let clearcoat_normal = apply_normal_map(
-        in.normal,
+        front_geom_normal,
         in.tangent,
         in.world_pos,
         clearcoat_normal_uv,
         clearcoat_normal_sample,
         material.clearcoat_params.z,
+        face_sign,
     );
     let specular_strength = clamp(
         material.specular_params.x * textureSample(specular_tex, specular_sampler, specular_uv).a,
@@ -733,11 +756,31 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     );
     let specular_color = material.specular_params.yzw
             * textureSample(specular_color_tex, specular_color_sampler, specular_color_uv).rgb;
-    let sheen_color = material.sheen_params.rgb;
-    let sheen_roughness = clamp(material.sheen_params.w, 0.0, 1.0);
-    let iridescence = clamp(material.iridescence_params.x, 0.0, 1.0);
-    let iridescence_thickness = material.iridescence_params.w;
-    let anisotropy_sample = vec3<f32>(1.0, 0.5, 1.0);
+    let sheen_color = material.sheen_params.rgb
+            * textureSample(sheen_color_tex, sheen_color_sampler, sheen_color_uv).rgb;
+    let sheen_roughness = clamp(
+        material.sheen_params.w
+            * textureSample(sheen_roughness_tex, sheen_roughness_sampler, sheen_roughness_uv).a,
+        0.0,
+        1.0,
+    );
+    let iridescence = clamp(
+        material.iridescence_params.x
+            * textureSample(iridescence_tex, iridescence_sampler, iridescence_uv).r,
+        0.0,
+        1.0,
+    );
+    let iridescence_thickness_sample = textureSample(
+        iridescence_thickness_tex,
+        iridescence_thickness_sampler,
+        iridescence_thickness_uv,
+    ).g;
+    let iridescence_thickness = mix(
+        material.iridescence_params.z,
+        material.iridescence_params.w,
+        iridescence_thickness_sample,
+    );
+    let anisotropy_sample = textureSample(anisotropy_tex, anisotropy_sampler, anisotropy_uv).rgb;
     let transmission = clamp(
         material.transmission_params.x
             * textureSample(transmission_tex, transmission_sampler, transmission_uv).r,
@@ -809,12 +852,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     let transmission_weight =
         transmission * (1.0 - metallic) * max(1.0 - max_component(view_fresnel), 0.0);
-    let geometric_n = normalize(in.normal);
+    let geometric_n = geom_normal;
     let anisotropy_frame = build_tangent_frame(
-        geometric_n,
+        front_geom_normal,
         in.tangent,
         in.world_pos,
         anisotropy_uv,
+        face_sign,
     );
     let clearcoat_view_fresnel = clamp(
         clearcoat * fresnel_schlick_scalar(abs(dot(v, clearcoat_normal)), 0.04),

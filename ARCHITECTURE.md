@@ -2,7 +2,7 @@
 
 Latest commit: Thursday, August 13, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Thursday, August 13, 2026, [**`a13ddea`**](https://www.github.com/Zushah/WasmGPU/commit/a13ddea).
+Parent commit: Thursday, August 13, 2026, [**`1c890c8`**](https://www.github.com/Zushah/WasmGPU/commit/1c890c8).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -300,11 +300,11 @@ Graphics data is implemented under `./src/graphics/`.
 
 `./src/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, RGBA vertex colors, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It can also borrow external `WasmMemoryView` sources for mesh vertex attributes, colors, and indices, explicitly refresh them, and upload active ranges into geometry-owned GPU buffers without owning or freeing the external WebAssembly memory. It calls Rust bounds and normal-generation functions through `./src/wasm/index.ts`; these synchronous operations use scoped WebAssembly heap scratch that is released after results are copied into JavaScript-owned arrays. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry.
 
-`./src/graphics/material.ts` implements `Material`, `UnlitMaterial`, `StandardMaterial`, `DataMaterial`, and `CustomMaterial`. Materials own uniform buffers, bind groups, texture references, WebGPU state flags, and dirty state. `StandardMaterial` currently includes glTF-style properties for base color, metallic roughness, normal maps, occlusion, emissive maps, clearcoat, transmission, volume, diffuse transmission, dispersion, specular, sheen, iridescence, anisotropy, index of refraction, and emissive strength.
+`./src/graphics/material.ts` implements `Material`, `UnlitMaterial`, `StandardMaterial`, `DataMaterial`, and `CustomMaterial`. Materials own uniform buffers, bind groups, texture references, WebGPU state, and dirty state, while standard materials expose glTF-style physically based rendering properties. Standard material layouts and imported WGSL shaders are specialized and cached by material features and mesh variant, with resource-limit validation before layout creation.
 
 `DataMaterial` reads f32 data or external GPU buffers, uses a `ScaleTransform`, and can feed the scaling service. It owns GPU data buffers created from CPU data; `setDataBuffer()` stores caller-provided buffer handles without marking them owned. `CustomMaterial` reads caller-provided WGSL and uniform definitions. Material changes should be checked against renderer pipeline selection, WGSL shader variants, bind group layout creation, texture upload paths, tests, and glTF import.
 
-`./src/graphics/texture.ts` wraps image bytes, URLs, `ImageBitmap` sources, sampler descriptors, GPU textures, and mipmap generation. Texture upload is asynchronous and uses `createImageBitmap()` in browser contexts. Until upload completes, renderer paths use fallback texture resources.
+`./src/graphics/texture.ts` wraps image bytes, URLs, `ImageBitmap` sources, sampler descriptors, GPU textures, and mipmap generation. Texture upload is asynchronous, supports configurable browser decoding and safe cancellation, and exposes terminal upload errors while renderer paths use fallback resources. Shared URL and glTF sources reuse encoded image data, while differing linear and sRGB uses receive separate GPU textures and mip chains.
 
 `./src/graphics/colormap.ts` stores built-in or caller-provided color stops, optional CPU lookup tables, and optional caller-provided GPU texture views and samplers. It can create cached GPU lookup resources for a device, and CPU sampling works only for colormaps that have CPU lookup data.
 
@@ -326,13 +326,13 @@ Before changing one of these object types, inspect the matching WGSL under `./sr
 
 ### 1.9. Lights, cameras, and controls
 
-Cameras are implemented in `./src/world/camera.ts`. The base `Camera` owns a transform and cached matrices. `PerspectiveCamera` and `OrthographicCamera` compute projection matrices and expose setters for projection parameters. The renderer updates perspective aspect ratio from the canvas before drawing.
+Lights are implemented in `./src/world/light.ts`. Ambient, directional, point, and spot lights share a base class. Scene lighting data reads light colors, intensities, positions, directions, ranges, and cone angles. glTF import can bind light transforms so imported lights follow imported node transforms.
+
+Cameras are implemented in `./src/world/camera.ts`. The base `Camera` owns a transform and cached view and projection matrices, with camera orientation derived from hierarchy rotations while ignoring scale. `PerspectiveCamera` and `OrthographicCamera` expose their projection parameters; perspective cameras support automatic or fixed aspect ratios and finite or infinite far planes. glTF import preserves authored fixed aspect ratios and omitted infinite perspective far planes.
 
 Controls are implemented in `./src/world/controls.ts`. `NavigationControls` handles orbit, trackball, and fly modes, pointer, keyboard, and wheel input, damping, target state for target-centric modes, fitting to bounds, pointer lock, configurable fly yaw, and event listener cleanup. `OrbitControls`, `TrackballControls`, and `FlyControls` are mode-specific subclasses and runtime factories. Controls mutate camera transforms and emit events used by overlays.
 
-Lights are implemented in `./src/world/light.ts`. Ambient, directional, point, and spot lights share a base class. Scene lighting data reads light colors, intensities, positions, directions, ranges, and cone angles. glTF import can bind light transforms so imported lights follow imported node transforms.
-
-Camera, controls, and light changes should be checked against renderer uniform packing, scene bounds fitting, overlay projection, glTF camera and light import, and tests that inspect matrix or lighting output.
+Lights, cameras, and controls changes should be checked against renderer uniform packing, scene bounds fitting, overlay projection, glTF camera and light import, and tests that inspect matrix or lighting output.
 
 ### 1.10. Rendering pipeline
 
@@ -615,8 +615,9 @@ Architectural role:
 Important files:
 
 - `./src/graphics/geometry.ts`: vertex data, index data, RGBA color channels, WASM-memory upload, tangent generation, normal generation, bounds, morph target arrays, GPU buffers, reference counting, and primitive geometry factories.
-- `./src/graphics/material.ts`: material base class, unlit material, standard material, data material, custom material, uniform packing, texture references, bind groups, and reference counting.
-- `./src/graphics/texture.ts`: texture descriptors, image loading, GPU texture upload, mipmap generation, sampler setup, fallback behavior, and destruction.
+- `./src/graphics/material.ts`: material base class, unlit material, standard material, data material, custom material, layout planning, uniform packing, texture references, bind groups, and reference counting.
+- `./src/wgsl/graphics/standard*.wgsl`: canonical standard material mesh, instanced, skinned-4, skinned-8, and transmission shader bodies, while `material.ts` performs narrow declaration/sample-path specialization from these sources.
+- `./src/graphics/texture.ts`: texture descriptors, image loading, strict decode policy, GPU texture upload, mipmap generation, sampler setup, fallback behavior, and destruction.
 - `./src/graphics/colormap.ts`: built-in and caller-provided color stops, CPU lookup tables, optional external GPU texture views, GPU resource caching, and CPU sampling helpers.
 - `./src/graphics/animation.ts`: animation clips, players, skins, skin instances, transform sampling, morph weight sampling, and bone buffer updates.
 
@@ -675,7 +676,7 @@ Important files:
 - `./src/gltf/glb.ts`: binary GLB parsing.
 - `./src/gltf/uri.ts`: URI handling.
 - `./src/gltf/accessors.ts`: accessor decoding, padded matrix compaction, sparse handling, and conversion.
-- `./src/gltf/import.ts`: conversion from loaded asset data to scene resources.
+- `./src/gltf/import.ts`: conversion from loaded asset data to scene resources, transfer-function-aware texture caching, and extension compatibility assessments.
 
 Common interactions:
 
@@ -684,7 +685,7 @@ Common interactions:
 - `KHR_gaussian_splatting` mesh primitives import into `SplatField` scene objects for the supported Gaussian splat subset.
 - Unsupported optional `KHR_gaussian_splatting` primitive features are skipped with warnings rather than converted to fallback pointclouds.
 - glTF animation pointers compile to existing transform and morph paths when possible and to JavaScript setters for imported nodes, materials, cameras, and lights.
-- Material extension import must match `StandardMaterial` fields and renderer shader support.
+- Material extension import must match `StandardMaterial` fields and renderer shader support. Valid combinations within WebGPU's guaranteed baseline limits of 16 sampled textures and 16 samplers per shader stage report `"supported"`, and over-baseline combinations report `"partial"`.
 - glTF changes should be checked against `./test/gltf.test.js` and `./examples/gltf.html`.
 
 ### 2.7. Overlays and annotations

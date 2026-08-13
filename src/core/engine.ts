@@ -31,6 +31,7 @@ import { pythonInterop } from "../python";
 import { ScaleService } from "../scaling";
 import { driver, frameArena, initWebAssembly, mat4, quat, vec3, WasmHeapArena, webassemblyInterop } from "../wasm";
 import { Camera, PerspectiveCamera, OrthographicCamera } from "../world/camera";
+import type { PerspectiveCameraDescriptor, OrthographicCameraDescriptor } from "../world/camera";
 import { NavigationControls, OrbitControls, TrackballControls, FlyControls } from "../world/controls";
 import type { NavigationControlsDescriptor, OrbitControlsDescriptor, TrackballControlsDescriptor, FlyControlsDescriptor } from "../world/controls";
 import { GlyphField } from "../world/glyphfield";
@@ -345,10 +346,10 @@ export class WasmGPU {
     }
 
     readonly createCamera = {
-        perspective: (options?: { fov?: number; aspect?: number; near?: number; far?: number; }): PerspectiveCamera => {
+        perspective: (options?: PerspectiveCameraDescriptor): PerspectiveCamera => {
             return new PerspectiveCamera(options);
         },
-        orthographic: (options?: { left?: number; right?: number; top?: number; bottom?: number; near?: number; far?: number; }): OrthographicCamera => {
+        orthographic: (options?: OrthographicCameraDescriptor): OrthographicCamera => {
             return new OrthographicCamera(options);
         }
     };

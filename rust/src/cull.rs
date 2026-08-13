@@ -61,6 +61,65 @@ pub(crate) fn mul_clip(m: &[f32], x: f32, y: f32, z: f32) -> [f32; 4] {
     ]
 }
 
+pub(crate) fn write_planes_from_view_projection(out: &mut [f32], m: &[f32]) {
+    debug_assert!(out.len() >= 24);
+    debug_assert!(m.len() >= 16);
+    let r0x = m[0];
+    let r0y = m[4];
+    let r0z = m[8];
+    let r0w = m[12];
+    let r1x = m[1];
+    let r1y = m[5];
+    let r1z = m[9];
+    let r1w = m[13];
+    let r2x = m[2];
+    let r2y = m[6];
+    let r2z = m[10];
+    let r2w = m[14];
+    let r3x = m[3];
+    let r3y = m[7];
+    let r3z = m[11];
+    let r3w = m[15];
+    out[0] = r3x + r0x;
+    out[1] = r3y + r0y;
+    out[2] = r3z + r0z;
+    out[3] = r3w + r0w;
+    out[4] = r3x - r0x;
+    out[5] = r3y - r0y;
+    out[6] = r3z - r0z;
+    out[7] = r3w - r0w;
+    out[8] = r3x + r1x;
+    out[9] = r3y + r1y;
+    out[10] = r3z + r1z;
+    out[11] = r3w + r1w;
+    out[12] = r3x - r1x;
+    out[13] = r3y - r1y;
+    out[14] = r3z - r1z;
+    out[15] = r3w - r1w;
+    out[16] = r2x;
+    out[17] = r2y;
+    out[18] = r2z;
+    out[19] = r2w;
+    out[20] = r3x - r2x;
+    out[21] = r3y - r2y;
+    out[22] = r3z - r2z;
+    out[23] = r3w - r2w;
+    for p in 0..6 {
+        let i = p * 4;
+        let nx = out[i + 0];
+        let ny = out[i + 1];
+        let nz = out[i + 2];
+        let len2 = nx * nx + ny * ny + nz * nz;
+        if len2 > 0.0 {
+            let inv = 1.0 / len2.sqrt();
+            out[i + 0] = nx * inv;
+            out[i + 1] = ny * inv;
+            out[i + 2] = nz * inv;
+            out[i + 3] *= inv;
+        }
+    }
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn cull_write_planes_from_view_projection(
     out_planes_ptr: u32,
@@ -72,60 +131,7 @@ pub unsafe extern "C" fn cull_write_planes_from_view_projection(
         }
         let m = f32_slice(call, view_proj_ptr, 16);
         let out = f32_slice_mut(call, out_planes_ptr, 24);
-        let r0x = m[0];
-        let r0y = m[4];
-        let r0z = m[8];
-        let r0w = m[12];
-        let r1x = m[1];
-        let r1y = m[5];
-        let r1z = m[9];
-        let r1w = m[13];
-        let r2x = m[2];
-        let r2y = m[6];
-        let r2z = m[10];
-        let r2w = m[14];
-        let r3x = m[3];
-        let r3y = m[7];
-        let r3z = m[11];
-        let r3w = m[15];
-        out[0] = r3x + r0x;
-        out[1] = r3y + r0y;
-        out[2] = r3z + r0z;
-        out[3] = r3w + r0w;
-        out[4] = r3x - r0x;
-        out[5] = r3y - r0y;
-        out[6] = r3z - r0z;
-        out[7] = r3w - r0w;
-        out[8] = r3x + r1x;
-        out[9] = r3y + r1y;
-        out[10] = r3z + r1z;
-        out[11] = r3w + r1w;
-        out[12] = r3x - r1x;
-        out[13] = r3y - r1y;
-        out[14] = r3z - r1z;
-        out[15] = r3w - r1w;
-        out[16] = r2x;
-        out[17] = r2y;
-        out[18] = r2z;
-        out[19] = r2w;
-        out[20] = r3x - r2x;
-        out[21] = r3y - r2y;
-        out[22] = r3z - r2z;
-        out[23] = r3w - r2w;
-        for p in 0..6 {
-            let i = p * 4;
-            let nx = out[i + 0];
-            let ny = out[i + 1];
-            let nz = out[i + 2];
-            let len2 = nx * nx + ny * ny + nz * nz;
-            if len2 > 0.0 {
-                let inv = 1.0 / len2.sqrt();
-                out[i + 0] = nx * inv;
-                out[i + 1] = ny * inv;
-                out[i + 2] = nz * inv;
-                out[i + 3] *= inv;
-            }
-        }
+        write_planes_from_view_projection(out, m);
         0
     })
 }

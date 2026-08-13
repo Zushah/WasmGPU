@@ -6,36 +6,17 @@
 
 import assert from "./utils/assert.js";
 import { createApproxHelpers, createBrowserCanvasScope, createWebGPUCanvasDouble as createMockCanvas, runIntentionalWebGPUTeardown, setupTest } from "./utils/helpers.js";
-import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, BlendMode, CullMode, PointCloud, GlyphField, NodeLink, wasm } from "../dist/WasmGPU.js";
+import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, Texture2D, Skin, Transform, BlendMode, CullMode, PointCloud, GlyphField, NodeLink, AmbientLight, DirectionalLight, wasm } from "../dist/WasmGPU.js";
 
 const baseGpu = navigator.gpu;
 const originalRequestAdapter = baseGpu.requestAdapter.bind(baseGpu);
 const capturedAdapterOptions = [];
 const capturedDeviceDescriptors = [];
-const wrappedRequestAdapter = async (options) => {
-    capturedAdapterOptions.push(options);
-    const adapter = await originalRequestAdapter(options);
-    assert.ok(adapter, "Failed to acquire a WebGPU adapter");
-    const originalRequestDevice = adapter.requestDevice.bind(adapter);
-    return {
-        features: adapter.features,
-        limits: adapter.limits,
-        requestDevice: async (descriptor = {}) => {
-            capturedDeviceDescriptors.push(descriptor);
-            return await originalRequestDevice(descriptor);
-        }
-    };
-};
+const wrappedRequestAdapter = async (options) => { capturedAdapterOptions.push(options); const adapter = await originalRequestAdapter(options); assert.ok(adapter, "Failed to acquire a WebGPU adapter"); const originalRequestDevice = adapter.requestDevice.bind(adapter); return { features: adapter.features, limits: adapter.limits, requestDevice: async (descriptor = {}) => { capturedDeviceDescriptors.push(descriptor); return await originalRequestDevice(descriptor); } }; };
 baseGpu.requestAdapter = wrappedRequestAdapter;
-
 const { numberApproxEqual } = createApproxHelpers();
 const browserCanvases = createBrowserCanvasScope();
-
-const createCamera = (aspect = 1) => {
-    const camera = new PerspectiveCamera({ fov: 60, aspect, near: 0.1, far: 100 });
-    camera.transform.setPosition(0, 0, 5);
-    return camera;
-};
+const createCamera = (aspect = 1) => { const camera = new PerspectiveCamera({ fov: 60, aspect, near: 0.1, far: 100 }); camera.transform.setPosition(0, 0, 5); return camera; };
 
 await setupTest({ initWebAssembly });
 
@@ -566,7 +547,136 @@ await setupTest({ initWebAssembly });
     }
 }
 
-// 15) Cleanup removes every real canvas element created by renderer integration themes.
+// 15) Every standard mesh variant reverses normal-mapped tangent frames on back faces.
+{
+    const canvas = createMockCanvas(64, 64, { additionalUsage: GPUTextureUsage.COPY_SRC });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
+    const readCenterPixel = async () => {
+        const output = canvas.lastCurrentTexture;
+        assert.ok(output, "Renderer did not expose its test output texture");
+        const readback = renderer.gpu.device.createBuffer({ size: 256, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        const encoder = renderer.gpu.device.createCommandEncoder();
+        encoder.copyTextureToBuffer({ texture: output, origin: { x: 32, y: 32, z: 0 } }, { buffer: readback, bytesPerRow: 256, rowsPerImage: 1 }, { width: 1, height: 1, depthOrArrayLayers: 1 });
+        renderer.gpu.queue.submit([encoder.finish()]);
+        await readback.mapAsync(GPUMapMode.READ);
+        const pixel = Array.from(new Uint8Array(readback.getMappedRange()).slice(0, 4));
+        readback.unmap();
+        readback.destroy();
+        return pixel;
+    };
+    const createSolidTexture = async (rgba) => {
+        const bitmap = await createImageBitmap(new ImageData(new Uint8ClampedArray(rgba), 1, 1), { premultiplyAlpha: "none", imageOrientation: "none", colorSpaceConversion: "none" });
+        const texture = Texture2D.createFrom({ source: { kind: "bitmap", bitmap }, mipmaps: false });
+        texture.ensureUploaded(renderer.gpu.device, renderer.gpu.queue, "linear");
+        for (let i = 0; i < 100 && !texture.uploaded; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+        assert.ok(texture.uploaded, "Test texture did not upload");
+        return { bitmap, texture };
+    };
+    const normalMap = await createSolidTexture([128, 128, 255, 255]);
+    const anisotropyMap = await createSolidTexture([255, 128, 255, 255]);
+    const whiteMap = await createSolidTexture([255, 255, 255, 255]);
+    const blackMap = await createSolidTexture([0, 0, 0, 255]);
+    const zeroMap = await createSolidTexture([0, 0, 0, 0]);
+    const patternBitmap = await createImageBitmap(new ImageData(new Uint8ClampedArray([0, 0, 0, 255, 255, 255, 255, 255]), 2, 1), { premultiplyAlpha: "none", imageOrientation: "none", colorSpaceConversion: "none" });
+    const patternTexture = Texture2D.createFrom({ source: { kind: "bitmap", bitmap: patternBitmap }, mipmaps: false, sampler: { addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge", magFilter: "nearest", minFilter: "nearest" } });
+    patternTexture.ensureUploaded(renderer.gpu.device, renderer.gpu.queue, "linear");
+    for (let i = 0; i < 100 && !patternTexture.uploaded; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.ok(patternTexture.uploaded, "Pattern test texture did not upload");
+    const renderSide = async (variant, backFace, cullMode = CullMode.None) => {
+        const scene = new Scene({ background: variant.background ?? [0, 0, 0] });
+        scene.addLight(new AmbientLight({ intensity: 0 }));
+        scene.addLight(new DirectionalLight({ direction: variant.lightDirection ?? (backFace ? [0, 0, 1] : [0, 0, -1]), intensity: 4 }));
+        const base = Geometry.triangle(4, 4, "xy");
+        const descriptor = { positions: base.positions.slice(), normals: base.normals.slice(), uvs: variant.uv0 ?? base.uvs.slice(), indices: base.indices.slice() };
+        if (variant.uv1) descriptor.uvs1 = variant.uv1;
+        if (variant.authoredTangent) descriptor.tangents = new Float32Array([1, 0, 0, 1, 1, 0, 0, 1, 1, 0, 0, 1]);
+        if (variant.skinned) {
+            descriptor.joints = new Uint16Array(12);
+            descriptor.weights = new Float32Array([1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0]);
+            if (variant.skinned8) {
+                descriptor.joints1 = new Uint16Array(12);
+                descriptor.weights1 = new Float32Array(12);
+            }
+        }
+        const geometry = new Geometry(descriptor);
+        base.destroy();
+        const extensions = variant.extensions ?? {};
+        const material = new StandardMaterial({ color: [1, 1, 1], metallic: 0, roughness: 1, cullMode, normalTexture: normalMap.texture, ...(variant.material ?? {}), extensions });
+        const mesh = new Mesh(geometry, material);
+        if (variant.mirrored) mesh.transform.setScale(-1, 1, 1);
+        let skin = null;
+        let joint = null;
+        if (variant.skinned) {
+            joint = new Transform();
+            skin = new Skin(`renderer-${variant.name}`, [joint], null);
+            mesh.skin = skin.createInstance(mesh.transform);
+        }
+        const camera = new PerspectiveCamera({ fov: 45, aspect: 1, near: 0.1, far: 20, autoAspect: false });
+        camera.transform.setPosition(...(variant.cameraPosition ?? [0, 0, backFace ? -5 : 5]));
+        camera.lookAt(0, 0, 0);
+        scene.add(mesh);
+        if (variant.instanced) {
+            geometry.retain();
+            material.retain();
+            scene.add(new Mesh(geometry, material));
+        }
+        renderer.render(scene, camera);
+        const pixel = await readCenterPixel();
+        scene.destroy();
+        camera.destroy();
+        skin?.dispose();
+        joint?.dispose();
+        return pixel;
+    };
+    try {
+        const variants = [
+            { name: "ordinary derivative", authoredTangent: false },
+            { name: "ordinary authored", authoredTangent: true },
+            { name: "clearcoat normal", authoredTangent: true, extensions: { clearcoat: { factor: 1, roughness: 0.2, normalTexture: normalMap.texture } } },
+            { name: "anisotropy", authoredTangent: true, extensions: { anisotropy: { strength: 1, texture: anisotropyMap.texture } } },
+            { name: "transmission", authoredTangent: true, extensions: { transmission: { factor: 0.5, texture: whiteMap.texture } } },
+            { name: "instanced", authoredTangent: true, instanced: true },
+            { name: "skinned-4", authoredTangent: true, skinned: true },
+            { name: "skinned-8", authoredTangent: true, skinned: true, skinned8: true },
+            { name: "transmission-layout instanced", authoredTangent: true, instanced: true, extensions: { transmission: { factor: 0, texture: whiteMap.texture } } },
+            { name: "transmission skinned-4", authoredTangent: true, skinned: true, extensions: { transmission: { factor: 0.5, texture: whiteMap.texture } } },
+            { name: "transmission skinned-8", authoredTangent: true, skinned: true, skinned8: true, extensions: { transmission: { factor: 0.5, texture: whiteMap.texture } } },
+            { name: "mirrored", authoredTangent: true, mirrored: true }
+        ];
+        for (const variant of variants) {
+            const front = await renderSide(variant, false);
+            const back = await renderSide(variant, true);
+            assert.ok(front[0] > 40 && front[1] > 40 && front[2] > 40, `${variant.name} front face was unexpectedly dark: ${front}`);
+            assert.ok(back[0] > 40 && back[1] > 40 && back[2] > 40, `${variant.name} back face did not receive reversed-frame lighting: ${back}`);
+            for (let channel = 0; channel < 3; channel++) assert.ok(Math.abs(front[channel] - back[channel]) <= 4, `${variant.name} front/back channel mismatch: ${front} vs ${back}`);
+        }
+        const culledBack = await renderSide({ name: "single-sided", authoredTangent: false }, true, CullMode.Back);
+        assert.ok(culledBack[0] <= 2 && culledBack[1] <= 2 && culledBack[2] <= 2, `Single-sided back face was not culled: ${culledBack}`);
+
+        const textureCases = [
+            { name: "clearcoat", off: { clearcoat: { factor: 1, texture: blackMap.texture, roughness: 0.15 } }, on: { clearcoat: { factor: 1, texture: whiteMap.texture, roughness: 0.15 } } },
+            { name: "specular", material: { roughness: 0.25 }, off: { specular: { factor: 1, texture: zeroMap.texture } }, on: { specular: { factor: 1, texture: whiteMap.texture } } },
+            { name: "sheen", material: { roughness: 1 }, lightDirection: [0.6, 0, -1], cameraPosition: [3, 0, 5], off: { sheen: { color: [1, 0.2, 0.1], colorTexture: blackMap.texture, roughness: 1 } }, on: { sheen: { color: [1, 0.2, 0.1], colorTexture: whiteMap.texture, roughness: 1 } } },
+            { name: "iridescence", material: { color: [0.8, 0.3, 0.1], metallic: 0, roughness: 0.1 }, lightDirection: [0.6, 0, -1], cameraPosition: [4, 0, 5], off: { iridescence: { factor: 1, texture: blackMap.texture, thicknessMinimum: 400, thicknessMaximum: 400 } }, on: { iridescence: { factor: 1, texture: whiteMap.texture, thicknessMinimum: 400, thicknessMaximum: 400 } } },
+            { name: "anisotropy", material: { metallic: 1, roughness: 0.35 }, lightDirection: [0.7, 0.3, -1], off: { anisotropy: { strength: 1, texture: blackMap.texture } }, on: { anisotropy: { strength: 1, texture: anisotropyMap.texture } } },
+            { name: "transmission", background: [0.1, 0.3, 0.8], off: { transmission: { factor: 1, texture: blackMap.texture } }, on: { transmission: { factor: 1, texture: whiteMap.texture } } },
+            { name: "transmission UV1", background: [0.1, 0.3, 0.8], uv0: new Float32Array([0.25, 0.5, 0.25, 0.5, 0.25, 0.5]), uv1: new Float32Array([0.75, 0.5, 0.75, 0.5, 0.75, 0.5]), off: { transmission: { factor: 1, texture: patternTexture, textureTransform: { texCoord: 0 } } }, on: { transmission: { factor: 1, texture: patternTexture, textureTransform: { texCoord: 1 } } } },
+            { name: "transmission texture transform", background: [0.1, 0.3, 0.8], uv0: new Float32Array([0.25, 0.5, 0.25, 0.5, 0.25, 0.5]), off: { transmission: { factor: 1, texture: patternTexture } }, on: { transmission: { factor: 1, texture: patternTexture, textureTransform: { offset: [0.5, 0] } } } },
+            { name: "volume thickness", background: [0.8, 0.8, 0.8], off: { transmission: { factor: 1 }, volume: { thicknessFactor: 1, thicknessTexture: blackMap.texture, attenuationDistance: 0.1, attenuationColor: [1, 0.05, 0.05] } }, on: { transmission: { factor: 1 }, volume: { thicknessFactor: 1, thicknessTexture: whiteMap.texture, attenuationDistance: 0.1, attenuationColor: [1, 0.05, 0.05] } } },
+            { name: "diffuse transmission", background: [0.1, 0.3, 0.8], lightDirection: [0, 0, 1], off: { diffuseTransmission: { factor: 1, texture: zeroMap.texture, color: [1, 0.4, 0.2] } }, on: { diffuseTransmission: { factor: 1, texture: whiteMap.texture, color: [1, 0.4, 0.2] } } },
+            { name: "diffuse transmission color", background: [0.1, 0.3, 0.8], lightDirection: [0, 0, 1], off: { diffuseTransmission: { factor: 1, color: [1, 1, 1], colorTexture: blackMap.texture } }, on: { diffuseTransmission: { factor: 1, color: [1, 1, 1], colorTexture: whiteMap.texture } } }
+        ];
+        for (const textureCase of textureCases) {
+            const common = { name: textureCase.name, authoredTangent: true, material: textureCase.material, background: textureCase.background, lightDirection: textureCase.lightDirection, cameraPosition: textureCase.cameraPosition, uv0: textureCase.uv0, uv1: textureCase.uv1 };
+            const off = await renderSide({ ...common, extensions: textureCase.off }, false);
+            const on = await renderSide({ ...common, extensions: textureCase.on }, false);
+            const difference = Math.abs(off[0] - on[0]) + Math.abs(off[1] - on[1]) + Math.abs(off[2] - on[2]);
+            assert.ok(difference >= 1, `${textureCase.name} source texture did not affect rendered pixels: ${off} vs ${on}`);
+        }
+    } finally { normalMap.texture.destroy(); anisotropyMap.texture.destroy(); whiteMap.texture.destroy(); blackMap.texture.destroy(); zeroMap.texture.destroy(); patternTexture.destroy(); normalMap.bitmap.close(); anisotropyMap.bitmap.close(); whiteMap.bitmap.close(); blackMap.bitmap.close(); zeroMap.bitmap.close(); patternBitmap.close(); await runIntentionalWebGPUTeardown(() => renderer.destroy()); }
+}
+
+// 16) Cleanup removes every real canvas element created by renderer integration themes.
 {
     browserCanvases.restore();
 }

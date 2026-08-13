@@ -224,17 +224,23 @@ fn build_tangent_frame(
     tangent: vec4<f32>,
     world_pos: vec3<f32>,
     uv: vec2<f32>,
+    face_sign: f32,
 ) -> TangentFrame {
     let n = normalize(normal);
     let derivative_frame = derivative_tangent_frame(n, world_pos, uv);
     var t = tangent.xyz - n * dot(n, tangent.xyz);
     let t_len2 = dot(t, t);
     if (t_len2 <= 1e-20) {
-        return derivative_frame;
+        return TangentFrame(
+            derivative_frame.t,
+            derivative_frame.b * face_sign,
+            derivative_frame.n * face_sign,
+        );
     }
     t = t * inverseSqrt(t_len2);
-    let b = normalize(cross(n, t)) * select(-1.0, 1.0, tangent.w >= 0.0);
-    return TangentFrame(t, b, n);
+    let b =
+        normalize(cross(n, t)) * select(-1.0, 1.0, tangent.w >= 0.0) * face_sign;
+    return TangentFrame(t, b, n * face_sign);
 }
 
 fn apply_normal_map(
@@ -244,11 +250,12 @@ fn apply_normal_map(
     uv: vec2<f32>,
     normal_sample: vec3<f32>,
     normal_scale: f32,
+    face_sign: f32,
 ) -> vec3<f32> {
     if (normal_scale == 0.0) {
-        return normalize(n);
+        return normalize(n) * face_sign;
     }
-    let frame = build_tangent_frame(n, tangent, world_pos, uv);
+    let frame = build_tangent_frame(n, tangent, world_pos, uv, face_sign);
     var ns = normal_sample * 2.0 - vec3<f32>(1.0);
     ns = vec3<f32>(ns.x * normal_scale, ns.y * normal_scale, ns.z);
     return normalize(frame.t * ns.x + frame.b * ns.y + frame.n * ns.z);
@@ -467,7 +474,10 @@ fn vs_main(in: VertexInput) -> VertexOutput {
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location(0) vec4<f32> {
+    let face_sign = select(-1.0, 1.0, is_front);
+    let front_geom_normal = normalize(in.normal);
+    let geom_normal = front_geom_normal * face_sign;
     let base_uv = apply_texture_transform(
         in.uv,
         in.uv1,
@@ -569,12 +579,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let roughness = clamp(material.params.y * mr_sample.g, 0.04, 1.0);
     let normal_sample = textureSample(normal_tex, normal_sampler, normal_uv).xyz;
     let n = apply_normal_map(
-        in.normal,
+        front_geom_normal,
         in.tangent,
         in.world_pos,
         normal_uv,
         normal_sample,
         material.params.z,
+        face_sign,
     );
     let occl_sample = textureSample(occlusion_tex, occlusion_sampler, occlusion_uv).r;
     let ao = 1.0 + material.params.w * (occl_sample - 1.0);
@@ -603,12 +614,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         clearcoat_normal_uv,
     ).xyz;
     let clearcoat_normal = apply_normal_map(
-        in.normal,
+        front_geom_normal,
         in.tangent,
         in.world_pos,
         clearcoat_normal_uv,
         clearcoat_normal_sample,
         material.clearcoat_params.z,
+        face_sign,
     );
     let specular_strength = clamp(
         material.specular_params.x * textureSample(specular_tex, specular_sampler, specular_uv).a,
@@ -674,12 +686,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
             view_ndot_v,
         );
     }
-    let geometric_n = normalize(in.normal);
+    let geometric_n = geom_normal;
     let anisotropy_frame = build_tangent_frame(
-        geometric_n,
+        front_geom_normal,
         in.tangent,
         in.world_pos,
         anisotropy_uv,
+        face_sign,
     );
     let clearcoat_view_fresnel = clamp(
         clearcoat * fresnel_schlick_scalar(abs(dot(v, clearcoat_normal)), 0.04),
