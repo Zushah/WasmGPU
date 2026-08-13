@@ -5,8 +5,9 @@
  */
 
 import type { GltfBuffer, GltfImage, GltfRoot, GltfDocument } from "./types";
+import { decodeGltfJson, validateGltfCompatibility } from "./compatibility";
 import { parseGLB } from "./glb";
-import { decodeDataUri, dirnameUrl, isDataUri, resolveUri } from "./uri";
+import { decodeDataUri, dirnameUrl, isDataUri, normalizeDirectoryUrl, resolveUri } from "./uri";
 
 export type LoadGltfOptions = {
     baseUrl?: string;
@@ -17,27 +18,28 @@ export type LoadGltfOptions = {
 
 const warn = (opts: LoadGltfOptions | undefined, msg: string): void => opts?.onWarning?.(msg);
 
+type FetchedArrayBuffer = {
+    bytes: ArrayBuffer;
+    responseUrl: string;
+};
+
 const getFetch = (opts?: LoadGltfOptions): ((input: RequestInfo | URL, init?: RequestInit) => Promise<Response>) => {
     const f = opts?.fetch ?? (globalThis.fetch as unknown as typeof fetch | undefined);
     if (!f) throw new Error("loadGltf(): fetch() is not available. Pass LoadGltfOptions.fetch or provide an ArrayBuffer source.");
     return f;
 };
 
-const fetchArrayBuffer = async (url: string, opts?: LoadGltfOptions): Promise<ArrayBuffer> => {
+const fetchArrayBuffer = async (url: string, opts?: LoadGltfOptions): Promise<FetchedArrayBuffer> => {
     const f = getFetch(opts);
     const res = await f(url);
     if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
-    return await res.arrayBuffer();
+    const bytes = await res.arrayBuffer();
+    return { bytes, responseUrl: typeof res.url === "string" && res.url.length > 0 ? res.url : url };
 };
 
-const fetchJson = async (url: string, opts?: LoadGltfOptions): Promise<GltfRoot> => {
-    const f = getFetch(opts);
-    const res = await f(url);
-    if (!res.ok) throw new Error(`Failed to fetch ${url}: ${res.status} ${res.statusText}`);
-    return (await res.json()) as GltfRoot;
-};
+const isGLB = (bytes: ArrayBuffer): boolean => bytes.byteLength >= 4 && new DataView(bytes).getUint32(0, true) === 0x46546c67;
 
-const resolveBuffers = async (json: GltfRoot, baseUrl: string, opts?: LoadGltfOptions, glbBinChunk?: ArrayBuffer | null): Promise<ArrayBuffer[]> => {
+const resolveBuffers = async (json: GltfRoot, resourceBaseUrl: string, opts?: LoadGltfOptions, glbBinChunk?: ArrayBuffer | null): Promise<ArrayBuffer[]> => {
     const buffers: GltfBuffer[] = json.buffers ?? [];
     const out: ArrayBuffer[] = new Array(buffers.length);
     for (let i = 0; i < buffers.length; i++) {
@@ -51,13 +53,13 @@ const resolveBuffers = async (json: GltfRoot, baseUrl: string, opts?: LoadGltfOp
             out[i] = decodeDataUri(b.uri).data;
             continue;
         }
-        const url = resolveUri(baseUrl, b.uri);
-        out[i] = await fetchArrayBuffer(url, opts);
+        const url = resolveUri(resourceBaseUrl, b.uri);
+        out[i] = (await fetchArrayBuffer(url, opts)).bytes;
     }
     return out;
 };
 
-const resolveImages = async (json: GltfRoot, buffers: ArrayBuffer[], baseUrl: string, opts?: LoadGltfOptions): Promise<ArrayBuffer[]> => {
+const resolveImages = async (json: GltfRoot, buffers: ArrayBuffer[], resourceBaseUrl: string, opts?: LoadGltfOptions): Promise<ArrayBuffer[]> => {
     const images: GltfImage[] = json.images ?? [];
     const out: ArrayBuffer[] = new Array(images.length);
     for (let i = 0; i < images.length; i++) {
@@ -66,8 +68,8 @@ const resolveImages = async (json: GltfRoot, buffers: ArrayBuffer[], baseUrl: st
             if (isDataUri(img.uri)) {
                 out[i] = decodeDataUri(img.uri).data;
             } else {
-                const url = resolveUri(baseUrl, img.uri);
-                out[i] = await fetchArrayBuffer(url, opts);
+                const url = resolveUri(resourceBaseUrl, img.uri);
+                out[i] = (await fetchArrayBuffer(url, opts)).bytes;
             }
             continue;
         }
@@ -89,39 +91,29 @@ const resolveImages = async (json: GltfRoot, buffers: ArrayBuffer[], baseUrl: st
     return out;
 };
 
+const finalizeDocument = async (json: GltfRoot, baseUrl: string, resourceBaseUrl: string, opts?: LoadGltfOptions, glbBinChunk?: ArrayBuffer | null): Promise<GltfDocument> => {
+    validateGltfCompatibility(json);
+    const buffers = await resolveBuffers(json, resourceBaseUrl, opts, glbBinChunk);
+    const doc: GltfDocument = { json, buffers, baseUrl, resourceBaseUrl };
+    if (opts?.loadImages) doc.images = await resolveImages(json, buffers, resourceBaseUrl, opts);
+    return doc;
+};
+
+const parseRootBytes = (bytes: ArrayBuffer, context: string): { json: GltfRoot; binChunk: ArrayBuffer | null } => {
+    if (isGLB(bytes)) return parseGLB(bytes);
+    return { json: decodeGltfJson(bytes, `${context} JSON`), binChunk: null };
+};
+
 export const loadGltf = async (source: string | ArrayBuffer, opts?: LoadGltfOptions): Promise<GltfDocument> => {
     if (typeof source === "string") {
-        const url = source;
-        const baseUrl = opts?.baseUrl ?? dirnameUrl(url);
-        if (url.toLowerCase().endsWith(".glb")) {
-            const glb = await fetchArrayBuffer(url, opts);
-            const { json, binChunk } = parseGLB(glb);
-            const buffers = await resolveBuffers(json, baseUrl, opts, binChunk);
-            const doc: GltfDocument = { json, buffers, baseUrl };
-            if (opts?.loadImages) doc.images = await resolveImages(json, buffers, baseUrl, opts);
-            return doc;
-        }
-        const json = await fetchJson(url, opts);
-        const buffers = await resolveBuffers(json, baseUrl, opts, null);
-        const doc: GltfDocument = { json, buffers, baseUrl };
-        if (opts?.loadImages) doc.images = await resolveImages(json, buffers, baseUrl, opts);
-        return doc;
+        const fetched = await fetchArrayBuffer(source, opts);
+        const resourceBaseUrl = opts?.baseUrl !== undefined ? normalizeDirectoryUrl(opts.baseUrl) : fetched.responseUrl;
+        const baseUrl = opts?.baseUrl !== undefined ? resourceBaseUrl : dirnameUrl(resourceBaseUrl);
+        const { json, binChunk } = parseRootBytes(fetched.bytes, `source '${source}'`);
+        return finalizeDocument(json, baseUrl, resourceBaseUrl, opts, binChunk);
     }
-    const ab = source;
-    const dv = new DataView(ab);
-    const magic = dv.byteLength >= 4 ? dv.getUint32(0, true) : 0;
-    const baseUrl = opts?.baseUrl ?? "";
-    if (magic === 0x46546c67) {
-        const { json, binChunk } = parseGLB(ab);
-        const buffers = await resolveBuffers(json, baseUrl, opts, binChunk);
-        const doc: GltfDocument = { json, buffers, baseUrl };
-        if (opts?.loadImages) doc.images = await resolveImages(json, buffers, baseUrl, opts);
-        return doc;
-    }
-    const jsonText = new TextDecoder("utf-8").decode(ab);
-    const json = JSON.parse(jsonText) as GltfRoot;
-    const buffers = await resolveBuffers(json, baseUrl, opts, null);
-    const doc: GltfDocument = { json, buffers, baseUrl };
-    if (opts?.loadImages) doc.images = await resolveImages(json, buffers, baseUrl, opts);
-    return doc;
+    const resourceBaseUrl = opts?.baseUrl !== undefined ? normalizeDirectoryUrl(opts.baseUrl) : "";
+    const baseUrl = resourceBaseUrl;
+    const { json, binChunk } = parseRootBytes(source, "in-memory source");
+    return finalizeDocument(json, baseUrl, resourceBaseUrl, opts, binChunk);
 };

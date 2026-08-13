@@ -6,7 +6,7 @@
 
 import assert from "./utils/assert.js";
 import { createApproxHelpers, setupTest } from "./utils/helpers.js";
-import { initWebAssembly, readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32, parseGLB, loadGltf, importGltf, Scene, TransformStore, UnlitMaterial, StandardMaterial, SplatField, wasm } from "../dist/WasmGPU.js";
+import { initWebAssembly, readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32, parseGLB, loadGltf, importGltf, isDataUri, decodeDataUri, dirnameUrl, resolveUri, Scene, TransformStore, UnlitMaterial, StandardMaterial, SplatField, wasm } from "../dist/WasmGPU.js";
 
 const pad4 = (n) => (n + 3) & ~3;
 const makeGLB = (gltfJson, binBytes) => {
@@ -29,6 +29,8 @@ const makeGLB = (gltfJson, binBytes) => {
 const copyBytes = (target, offset, source) => { target.set(new Uint8Array(source.buffer, source.byteOffset, source.byteLength), offset); };
 const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
 const expectSupport = (metadata, names, expected) => { for (const name of names) assert.equal(metadata.extensions.support[name], expected, `${name} should be ${expected}`); };
+const jsonBytes = (json) => new TextEncoder().encode(JSON.stringify(json)).buffer;
+const mockResponse = (bytes, url = "") => ({ ok: true, status: 200, statusText: "OK", url, arrayBuffer: async () => bytes.slice(0) });
 
 await setupTest({ initWebAssembly });
 
@@ -226,7 +228,8 @@ await setupTest({ initWebAssembly });
 
     const res = importGltf(await loadGltf(makeGLB(gltfJson, bin.buffer), { baseUrl: "https://example.test/models/" }), { addToScene: false, computeMissingNormals: true });
 
-    expectSupport(res.metadata, supportedNames, "supported");
+    expectSupport(res.metadata, supportedNames.filter((name) => name !== "KHR_materials_anisotropy"), "supported");
+    expectSupport(res.metadata, ["KHR_materials_anisotropy"], "partial");
     assert.equal(res.meshes.length, 3);
 
     const standardMesh = res.meshes[0];
@@ -681,7 +684,7 @@ await setupTest({ initWebAssembly });
     for (const unsupportedExtension of [{ kernel: "box", colorSpace: "lin_rec709_display" }, { kernel: "ellipse", colorSpace: "lin_rec709_display", projection: "orthographic" }, { kernel: "ellipse", colorSpace: "lin_rec709_display", sortingMethod: "none" }]) {
         const optionalWarnings = [];
         const optionalRes = importGltf(await loadGltf(makeGLB(makeSplatJson(makeSplatPrimitive(unsupportedExtension), false), bin.buffer)), { addToScene: false, onWarning: (message) => optionalWarnings.push(message) });
-        expectSupport(optionalRes.metadata, [extensionName], "unsupported");
+        expectSupport(optionalRes.metadata, [extensionName], "partial");
         assert.equal(optionalRes.splatFields.length, 0);
         assert.ok(optionalWarnings.some((message) => message.includes("skipping primitive")));
         assert.ok(optionalWarnings.some((message) => message.includes("optional sparse point-cloud fallback conversion")));
@@ -719,7 +722,7 @@ await setupTest({ initWebAssembly });
 
     expectSupport(deferredRes.metadata, deferredNames, "deferred");
     assert.equal(deferredRes.meshes.length, 0);
-    assert.ok(deferredWarnings.some((message) => message.includes("KHR_draco_mesh_compression not supported; skipping primitive")));
+    assert.ok(deferredWarnings.some((message) => message.includes("KHR_draco_mesh_compression has no usable uncompressed core POSITION")));
     deferredRes.destroy();
 
     const meshoptDoc = {
@@ -738,7 +741,21 @@ await setupTest({ initWebAssembly });
         buffers: [new ArrayBuffer(0)],
         baseUrl: ""
     };
-    assert.throws(() => readAccessorAsFloat32(meshoptDoc, 0), /EXT_meshopt_compression is not supported yet/);
+    assert.throws(() => readAccessorAsFloat32(meshoptDoc, 0), /Invalid|offset|length/i);
+    const meshoptFallbackWarnings = [];
+    const meshoptFallback = importGltf({
+        ...meshoptDoc,
+        json: {
+            ...meshoptDoc.json,
+            meshes: [{ primitives: [{ attributes: { POSITION: 0 } }] }],
+            nodes: [{ mesh: 0 }],
+            scenes: [{ nodes: [0] }],
+            scene: 0
+        }
+    }, { addToScene: false, onWarning: (message) => meshoptFallbackWarnings.push(message) });
+    assert.equal(meshoptFallback.meshes.length, 0);
+    assert.ok(meshoptFallbackWarnings.some((message) => message.includes("EXT_meshopt_compression") && message.includes("no usable uncompressed core")));
+    meshoptFallback.destroy();
 }
 
 // 9) Failed animation import releases allocations accumulated before the error.
@@ -780,4 +797,280 @@ await setupTest({ initWebAssembly });
     }
     assert.equal(freedF32.filter(([, len]) => len === 2).length, 2, "Failed animation import must free its uploaded times and values");
     assert.ok(freedU32.some(([, len]) => len === 10), "Failed animation import must free its sampler table");
+}
+
+// 10) Validates compatibility and identifies roots from bytes rather than URL spelling.
+{
+    const supported = { asset: { version: "2.0" }, buffers: [] };
+    const futureMinor = await loadGltf(jsonBytes({ asset: { version: "2.10" }, buffers: [] }));
+    assert.equal(futureMinor.json.asset.version, "2.10");
+    const supportedMinimum = await loadGltf(jsonBytes({ asset: { version: "2.10", minVersion: "2.0" }, buffers: [] }));
+    assert.equal(supportedMinimum.json.asset.minVersion, "2.0");
+    for (const invalid of [
+        {},
+        { asset: {} },
+        { asset: { version: "2" } },
+        { asset: { version: "2.0.0" } },
+        { asset: { version: "1.0" } },
+        { asset: { version: "3.0" } },
+        { asset: { version: "2.0", minVersion: "2.1" } },
+        { asset: { version: "2.0", minVersion: "2.0.1" } },
+        { asset: { version: "2.0", minVersion: "2.10" } }
+    ]) {
+        await assert.rejects(() => loadGltf(jsonBytes(invalid)), /glTF|asset|version/i);
+    }
+    const before = TransformStore.global().count;
+    assert.throws(() => importGltf({ json: { asset: { version: "1.0" } }, buffers: [], baseUrl: "" }, { addToScene: false }), /Unsupported glTF asset version 1\.0/);
+    assert.equal(TransformStore.global().count, before);
+
+    const glbVersionError = makeGLB({ asset: { version: "1.0" } }, new ArrayBuffer(0));
+    await assert.rejects(() => loadGltf(glbVersionError), /Unsupported glTF asset version 1\.0/);
+
+    for (const requestedUrl of [
+        "https://example.test/model.glb?v=1",
+        "https://example.test/model.glb#fragment",
+        "https://example.test/content-addressed/8f2a",
+        "https://example.test/model.gltf"
+    ]) {
+        let rootFetches = 0;
+        const glb = makeGLB(supported, new ArrayBuffer(0));
+        const doc = await loadGltf(requestedUrl, {
+            fetch: async (input) => { rootFetches++; assert.equal(String(input), requestedUrl); return mockResponse(glb, requestedUrl); }
+        });
+        assert.equal(rootFetches, 1);
+        assert.equal(doc.json.asset.version, "2.0");
+    }
+    let extensionlessJsonFetches = 0;
+    const extensionlessJson = await loadGltf("https://example.test/content-addressed/json", {
+        fetch: async () => { extensionlessJsonFetches++; return mockResponse(jsonBytes(supported)); }
+    });
+    assert.equal(extensionlessJsonFetches, 1);
+    assert.equal(extensionlessJson.json.asset.version, "2.0");
+    let invalidRootFetches = 0;
+    await assert.rejects(() => loadGltf("https://example.test/binary", {
+        fetch: async () => { invalidRootFetches++; return mockResponse(new Uint8Array([0xff, 0xfe, 0xfd]).buffer); }
+    }), /Invalid glTF source.*UTF-8|JSON/i);
+    assert.equal(invalidRootFetches, 1);
+
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const redirectedJson = {
+        asset: { version: "2.0" },
+        buffers: [{ uri: "../data/positions.bin", byteLength: positions.byteLength }]
+    };
+    const requested = "https://example.test/requested/model.gltf?sig=1";
+    const calls = [];
+    const redirected = await loadGltf(requested, {
+        fetch: async (input) => {
+            calls.push(String(input));
+            if (calls.length === 1) return mockResponse(jsonBytes(redirectedJson), "https://cdn.test/final/scenes/model.gltf?sig=2#ignored");
+            return mockResponse(positions.buffer, "https://cdn.test/final/data/positions.bin");
+        }
+    });
+    assert.deepEqual(calls, [requested, "https://cdn.test/final/data/positions.bin"]);
+    assert.equal(redirected.resourceBaseUrl, "https://cdn.test/final/scenes/model.gltf?sig=2#ignored");
+    assert.equal(redirected.baseUrl, "https://cdn.test/final/scenes/");
+}
+
+// 11) URI resolution and data URLs preserve web-reference and octet semantics.
+{
+    assert.equal(isDataUri("DATA:text/plain,hello"), true);
+    assert.equal(resolveUri("https://host/a/model.gltf", "../b.bin"), "https://host/b.bin");
+    assert.equal(resolveUri("https://host/a/", "./b.bin"), "https://host/a/b.bin");
+    assert.equal(resolveUri("https://host/a/", "/b.bin"), "https://host/b.bin");
+    assert.equal(resolveUri("https://host/a/", "//cdn.test/b.bin"), "https://cdn.test/b.bin");
+    assert.equal(resolveUri("https://host/a/model.gltf?sig=1#x", "?part=buffer"), "https://host/a/model.gltf?part=buffer");
+    assert.equal(resolveUri("https://host/a/model.gltf?sig=1#x", "#part"), "https://host/a/model.gltf?sig=1#part");
+    assert.equal(resolveUri("https://host/a/model.gltf?sig=1#x", "b.bin"), "https://host/a/b.bin");
+    assert.equal(resolveUri("models/scenes/", "../b.bin"), "models/b.bin");
+    assert.equal(resolveUri("models/scenes/", "./nested/../b.bin"), "models/scenes/b.bin");
+    assert.equal(resolveUri("models/scenes/", "//cdn.test/b.bin"), "//cdn.test/b.bin");
+    assert.equal(resolveUri("https://host/a/", "file:///tmp/b.bin"), "file:///tmp/b.bin");
+    assert.equal(resolveUri("https://host/a/", "blob:https://host/id"), "blob:https://host/id");
+    assert.equal(resolveUri("https://host/a/", "data:application/octet-stream,%00"), "data:application/octet-stream,%00");
+    assert.equal(resolveUri("anything", "custom+asset:abc"), "custom+asset:abc");
+    assert.equal(resolveUri("custom+asset://host/a/model.gltf", "../b.bin"), "custom+asset://host/b.bin");
+    assert.equal(dirnameUrl("https://host/a/model.gltf?sig=1#x"), "https://host/a/");
+
+    const raw = decodeDataUri("data:application/octet-stream,%00%2B,%7F%80%FF+");
+    assert.deepEqual(Array.from(new Uint8Array(raw.data)), [0x00, 0x2b, 0x2c, 0x7f, 0x80, 0xff, 0x2b]);
+    assert.deepEqual(Array.from(new Uint8Array(decodeDataUri("data:application/octet-stream,%C3%A9é").data)), [0xc3, 0xa9, 0xc3, 0xa9]);
+    const media = decodeDataUri("data:image/png;charset=utf-8;foo=bar,abc");
+    assert.equal(media.mimeType, "image/png;charset=utf-8;foo=bar");
+    assert.equal(decodeDataUri("data:;charset=utf-8,abc").mimeType, null);
+    assert.throws(() => decodeDataUri("data:;not-a-parameter,abc"), /invalid media type parameter/i);
+    const base64 = decodeDataUri("DaTa:TEXT/PLAIN;CHARSET=UTF-8;BaSe64,SGVsbG8%3D");
+    assert.equal(base64.mimeType, "TEXT/PLAIN;CHARSET=UTF-8");
+    assert.deepEqual(Array.from(new Uint8Array(base64.data)), Array.from(new TextEncoder().encode("Hello")));
+    assert.throws(() => decodeDataUri("data:application/octet-stream,%0"), /malformed percent escape/i);
+    assert.throws(() => decodeDataUri("data:;base64,not base64"), /invalid base64/i);
+}
+
+// 12) Required-extension preflight is strict and optional core fallbacks remain usable.
+{
+    const requiredNames = [
+        "VENDOR_unknown",
+        "KHR_draco_mesh_compression",
+        "KHR_texture_basisu",
+        "EXT_mesh_gpu_instancing",
+        "EXT_meshopt_compression",
+        "EXT_texture_webp",
+        "KHR_materials_pbrSpecularGlossiness"
+    ];
+    for (const name of requiredNames) {
+        const before = TransformStore.global().count;
+        assert.throws(() => importGltf({ json: { asset: { version: "2.0" }, extensionsUsed: [name], extensionsRequired: [name] }, buffers: [], baseUrl: "" }, { addToScene: false }), new RegExp(`Required glTF extension '${name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}'`));
+        assert.equal(TransformStore.global().count, before);
+    }
+
+    const positions = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]);
+    const coreJson = {
+        asset: { version: "2.0" },
+        extensionsUsed: ["KHR_draco_mesh_compression", "EXT_meshopt_compression", "EXT_mesh_gpu_instancing", "VENDOR_optional"],
+        buffers: [{ byteLength: positions.byteLength }],
+        bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: positions.byteLength, extensions: { EXT_meshopt_compression: { byteOffset: 0, byteLength: positions.byteLength } } }],
+        accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3" }],
+        meshes: [{ primitives: [{ attributes: { POSITION: 0 }, extensions: { KHR_draco_mesh_compression: {} } }] }],
+        nodes: [{ mesh: 0, extensions: { EXT_mesh_gpu_instancing: {} } }],
+        scenes: [{ nodes: [0] }],
+        scene: 0
+    };
+    const warnings = [];
+    const fallback = importGltf({ json: coreJson, buffers: [positions.buffer], baseUrl: "" }, { addToScene: false, onWarning: (message) => warnings.push(message) });
+    assert.equal(fallback.meshes.length, 1);
+    expectSupport(fallback.metadata, ["KHR_draco_mesh_compression", "EXT_meshopt_compression", "EXT_mesh_gpu_instancing"], "deferred");
+    expectSupport(fallback.metadata, ["VENDOR_optional"], "unsupported");
+    assert.ok(warnings.some((message) => message.includes("uncompressed core primitive")));
+    assert.ok(warnings.some((message) => message.includes("EXT_mesh_gpu_instancing") && message.includes("single core node instance")));
+    fallback.destroy();
+
+    const specGloss = importGltf({ json: { asset: { version: "2.0" }, extensionsUsed: ["KHR_materials_pbrSpecularGlossiness"], materials: [{ extensions: { KHR_materials_pbrSpecularGlossiness: { diffuseFactor: [1, 1, 1, 1] } } }] }, buffers: [], baseUrl: "" }, { addToScene: false });
+    expectSupport(specGloss.metadata, ["KHR_materials_pbrSpecularGlossiness"], "partial");
+    specGloss.destroy();
+
+    const optionalMeshopt = {
+        json: { asset: { version: "2.0" }, extensionsUsed: ["EXT_meshopt_compression"], buffers: [{ byteLength: positions.byteLength }], bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: positions.byteLength, extensions: { EXT_meshopt_compression: {} } }], accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3" }] },
+        buffers: [positions.buffer],
+        baseUrl: ""
+    };
+    arraysApproxEqual(Array.from(readAccessorAsFloat32(optionalMeshopt, 0)), Array.from(positions));
+
+    const imageFallbackWarnings = [];
+    const imageFallback = importGltf({
+        json: {
+            asset: { version: "2.0" },
+            extensionsUsed: ["KHR_texture_basisu", "EXT_texture_webp"],
+            images: [{ uri: "data:image/png;base64,AA==" }],
+            textures: [
+                { source: 0, extensions: { KHR_texture_basisu: { source: 0 } } },
+                { extensions: { EXT_texture_webp: { source: 0 } } },
+                { source: 0, extensions: { EXT_texture_webp: { source: 0 } } },
+                { extensions: { KHR_texture_basisu: { source: 0 } } }
+            ],
+            materials: [
+                { pbrMetallicRoughness: { baseColorTexture: { index: 0 } } },
+                { pbrMetallicRoughness: { baseColorTexture: { index: 1 } } },
+                { pbrMetallicRoughness: { baseColorTexture: { index: 2 } } },
+                { pbrMetallicRoughness: { baseColorTexture: { index: 3 } } }
+            ],
+            buffers: [{ byteLength: positions.byteLength }],
+            bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: positions.byteLength }],
+            accessors: [{ bufferView: 0, componentType: 5126, count: 3, type: "VEC3" }],
+            meshes: [{ primitives: [
+                { attributes: { POSITION: 0 }, material: 0 },
+                { attributes: { POSITION: 0 }, material: 1 },
+                { attributes: { POSITION: 0 }, material: 2 },
+                { attributes: { POSITION: 0 }, material: 3 }
+            ] }],
+            nodes: [{ mesh: 0 }],
+            scenes: [{ nodes: [0] }],
+            scene: 0
+        },
+        buffers: [positions.buffer],
+        baseUrl: ""
+    }, { addToScene: false, onWarning: (message) => imageFallbackWarnings.push(message) });
+    expectSupport(imageFallback.metadata, ["KHR_texture_basisu", "EXT_texture_webp"], "deferred");
+    assert.ok(imageFallback.meshes[0].material.baseColorTexture, "valid core image source must be imported when BasisU is optional");
+    assert.equal(imageFallback.meshes[1].material.baseColorTexture, null, "WebP alternative without a core source must remain unavailable");
+    assert.ok(imageFallback.meshes[2].material.baseColorTexture, "valid core image source must be imported when WebP is optional");
+    assert.equal(imageFallback.meshes[3].material.baseColorTexture, null, "BasisU alternative without a core source must remain unavailable");
+    assert.ok(imageFallbackWarnings.some((message) => message.includes("KHR_texture_basisu") && message.includes("core texture.source")));
+    assert.ok(imageFallbackWarnings.some((message) => message.includes("EXT_texture_webp") && message.includes("no usable core")));
+    imageFallback.destroy();
+
+    const pointerArrays = [new Float32Array([0, 1]), new Float32Array([0, 0, 0, 1, 0, 0])];
+    const pointerBin = new Uint8Array(pointerArrays[0].byteLength + pointerArrays[1].byteLength);
+    copyBytes(pointerBin, 0, pointerArrays[0]);
+    copyBytes(pointerBin, pointerArrays[0].byteLength, pointerArrays[1]);
+    const pointerJson = {
+        asset: { version: "2.0" },
+        extensionsUsed: ["KHR_animation_pointer"],
+        buffers: [{ byteLength: pointerBin.byteLength }],
+        bufferViews: [{ buffer: 0, byteOffset: 0, byteLength: pointerArrays[0].byteLength }, { buffer: 0, byteOffset: pointerArrays[0].byteLength, byteLength: pointerArrays[1].byteLength }],
+        accessors: [{ bufferView: 0, componentType: 5126, count: 2, type: "SCALAR" }, { bufferView: 1, componentType: 5126, count: 2, type: "VEC3" }],
+        nodes: [{}],
+        animations: [{ samplers: [{ input: 0, output: 1 }], channels: [
+            { sampler: 0, target: { path: "pointer", extensions: { KHR_animation_pointer: { pointer: "/nodes/0/translation" } } } },
+            { sampler: 0, target: { path: "pointer", extensions: { KHR_animation_pointer: { pointer: "/nodes/0/unsupported" } } } }
+        ] }],
+        scenes: [{ nodes: [0] }],
+        scene: 0
+    };
+    const mixedPointer = importGltf({ json: pointerJson, buffers: [pointerBin.buffer], baseUrl: "" }, { addToScene: false, onWarning: () => {} });
+    expectSupport(mixedPointer.metadata, ["KHR_animation_pointer"], "partial");
+    mixedPointer.destroy();
+    assert.throws(() => importGltf({ json: { ...pointerJson, extensionsRequired: ["KHR_animation_pointer"] }, buffers: [pointerBin.buffer], baseUrl: "" }, { addToScene: false }), /Required glTF extension 'KHR_animation_pointer'/);
+
+    const scalarAccessor = { bufferView: 1, componentType: 5126, count: 2, type: "SCALAR" };
+    const requiredPointerDocument = (json) => ({ json: { ...json, extensionsRequired: ["KHR_animation_pointer"] }, buffers: [pointerBin.buffer], baseUrl: "" });
+    const targetNodePointer = {
+        ...pointerJson,
+        animations: [{ samplers: [{ input: 0, output: 1 }], channels: [{ sampler: 0, target: { node: 0, path: "pointer", extensions: { KHR_animation_pointer: { pointer: "/nodes/0/translation" } } } }] }]
+    };
+    let pointerPreflightCount = TransformStore.global().count;
+    assert.throws(() => importGltf(requiredPointerDocument(targetNodePointer), { addToScene: false }), /Required glTF extension 'KHR_animation_pointer'/);
+    assert.equal(TransformStore.global().count, pointerPreflightCount);
+
+    const unusedMaterialPointer = {
+        ...pointerJson,
+        accessors: [...pointerJson.accessors, scalarAccessor],
+        materials: [{}],
+        animations: [{ samplers: [{ input: 0, output: 2 }], channels: [{ sampler: 0, target: { path: "pointer", extensions: { KHR_animation_pointer: { pointer: "/materials/0/alphaCutoff" } } } }] }]
+    };
+    pointerPreflightCount = TransformStore.global().count;
+    assert.throws(() => importGltf(requiredPointerDocument(unusedMaterialPointer), { addToScene: false }), /Required glTF extension 'KHR_animation_pointer'/);
+    assert.equal(TransformStore.global().count, pointerPreflightCount);
+
+    const unlitMaterialPointer = {
+        ...pointerJson,
+        extensionsUsed: ["KHR_animation_pointer", "KHR_materials_unlit"],
+        accessors: [...pointerJson.accessors, scalarAccessor],
+        materials: [{ pbrMetallicRoughness: {}, extensions: { KHR_materials_unlit: {} } }],
+        meshes: [{ primitives: [{ attributes: { POSITION: 1 }, material: 0 }] }],
+        nodes: [{ mesh: 0 }],
+        animations: [{ samplers: [{ input: 0, output: 2 }], channels: [{ sampler: 0, target: { path: "pointer", extensions: { KHR_animation_pointer: { pointer: "/materials/0/pbrMetallicRoughness/metallicFactor" } } } }] }]
+    };
+    pointerPreflightCount = TransformStore.global().count;
+    assert.throws(() => importGltf(requiredPointerDocument(unlitMaterialPointer), { addToScene: false }), /Required glTF extension 'KHR_animation_pointer'/);
+    assert.equal(TransformStore.global().count, pointerPreflightCount);
+
+    const gaussianRequired = { asset: { version: "2.0" }, extensionsUsed: ["KHR_gaussian_splatting"], extensionsRequired: ["KHR_gaussian_splatting"], meshes: [{ primitives: [{ mode: 0, attributes: { POSITION: 0 }, extensions: { KHR_gaussian_splatting: { kernel: "box", colorSpace: "lin_rec709_display" } } }] }], nodes: [{ mesh: 0 }], scenes: [{ nodes: [0] }], scene: 0 };
+    assert.throws(() => importGltf({ json: gaussianRequired, buffers: [], baseUrl: "" }, { addToScene: false }), /kernel 'box' is not supported/);
+
+    const gaussianIncompleteSH = {
+        asset: { version: "2.0" },
+        extensionsUsed: ["KHR_gaussian_splatting"],
+        extensionsRequired: ["KHR_gaussian_splatting"],
+        accessors: [
+            { componentType: 5126, count: 1, type: "VEC3" },
+            { componentType: 5126, count: 1, type: "VEC4" },
+            { componentType: 5126, count: 1, type: "SCALAR" }
+        ],
+        meshes: [{ primitives: [{ mode: 0, attributes: { POSITION: 0, "KHR_gaussian_splatting:ROTATION": 1, "KHR_gaussian_splatting:SCALE": 0, "KHR_gaussian_splatting:OPACITY": 2, "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0": 0, "KHR_gaussian_splatting:SH_DEGREE_1_COEF_0": 0 }, extensions: { KHR_gaussian_splatting: { kernel: "ellipse", colorSpace: "lin_rec709_display" } } }] }],
+        nodes: [{ mesh: 0 }],
+        scenes: [{ nodes: [0] }],
+        scene: 0
+    };
+    const gaussianPreflightCount = TransformStore.global().count;
+    assert.throws(() => importGltf({ json: gaussianIncompleteSH, buffers: [], baseUrl: "" }, { addToScene: false }), /spherical harmonic attributes must be complete/);
+    assert.equal(TransformStore.global().count, gaussianPreflightCount);
 }

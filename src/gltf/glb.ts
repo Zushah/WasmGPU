@@ -5,6 +5,7 @@
  */
 
 import type { GltfRoot } from "./types";
+import { decodeGltfJson } from "./compatibility";
 
 export type ParsedGLB = {
     json: GltfRoot;
@@ -39,7 +40,6 @@ export const parseGLB = (glb: ArrayBuffer): ParsedGLB => {
         offset += chunkLength;
     }
     if (!jsonChunk) throw new Error("Invalid GLB: missing JSON chunk");
-    const jsonText = new TextDecoder("utf-8").decode(jsonChunk);
-    const json = JSON.parse(jsonText) as GltfRoot;
+    const json = decodeGltfJson(jsonChunk, "GLB JSON chunk");
     return { json, binChunk };
 };

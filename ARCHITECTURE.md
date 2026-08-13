@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Tuesday, August 11, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Thursday, August 13, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Tuesday, August 11, 2026, [**`ff0a2d0`**](https://www.github.com/Zushah/WasmGPU/commit/ff0a2d0).
+Parent commit: Tuesday, August 11, 2026, [**`d203dfb`**](https://www.github.com/Zushah/WasmGPU/commit/d203dfb).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -414,9 +414,13 @@ Changing scaling behavior requires checking `./src/scaling/`, data-source object
 
 glTF loading and import are implemented under `./src/gltf/`. The loader reads JSON `.gltf` files, binary `.glb` files, external buffers, embedded buffers, and image resources. URI resolution is implemented in `./src/gltf/uri.ts`; GLB parsing is in `./src/gltf/glb.ts`.
 
+Root sources are fetched or read once, classified from the first four bytes, decoded with fatal UTF-8 JSON parsing when they are not GLB, and passed through the shared glTF compatibility gate. URL loads retain the exact response URL as `GltfDocument.resourceBaseUrl` for WHATWG external-resource resolution, while `baseUrl` remains the backward-compatible directory-style value; explicit bases and in-memory sources are normalized as directories. Data URLs are parsed as RFC 2397 octets, including percent-decoded bytes, literal plus signs, media-type parameters, and percent-escaped base64.
+
 Accessor decoding is split between TypeScript and Rust. `./src/gltf/accessors.ts` reads accessor descriptors, buffer views, sparse data, component types, normalization rules, and typed-array output requirements. Numeric conversion, deinterleaving, and sparse patching call Rust functions in `./rust/src/accessors.rs`.
 
 `./src/gltf/import.ts` converts loaded asset data into scene resources. Current import code covers geometry, materials, textures, skins, animations, morph targets, node transforms, node visibility, animation pointers, scene selection, metadata, material variants, cameras, punctual lights including spot lights, texture transforms, XMP metadata, Gaussian splat primitives from `KHR_gaussian_splatting` into `SplatField`, and material extensions for clearcoat, specular, transmission, volume, diffuse transmission, dispersion, sheen, iridescence, anisotropy, index of refraction, and emissive strength. `KHR_gaussian_splatting` import keeps spherical harmonic degree 0 through degree 3 data as `SplatField` coefficients when complete degree data is present.
+
+Import performs a pure required-extension preflight before constructing scene or runtime resources. `extensionsRequired` failures are strict, while optional deferred features may use usable core representations with explicit warnings. `metadata.extensions.support` reports the per-asset outcome using `supported`, `partial`, `deferred`, and `unsupported`; outcomes degrade monotonically as asset-specific fallback or loss is discovered, and the same assessment feeds required-extension enforcement.
 
 The importer mutates scenes, meshes, splatfields, geometry, materials, textures, animations, skin instances, camera data, and light bindings. It reads loaded asset data, WebAssembly decoding helpers, material extension descriptors, texture resources, and transform state. Before changing glTF import, check `./test/gltf.test.js`, examples using glTF, renderer material paths, texture upload behavior, and animation sampling.
 
@@ -851,11 +855,11 @@ The CI selection table below makes the platform decision explicit instead of tre
 | Ubuntu 24 ARM64 Chromium | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | Ubuntu 24 ARM64 Firefox | ✅ | ✅ | ⚠️ | ✅ | ⚠️ | ❌ |
 | Ubuntu 24 ARM64 WebKit | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
-| MacOS 26 AMD64 Chromium | ✅ | ✅ | ✅ | ✅ | ❓ | ✅ |
+| MacOS 26 AMD64 Chromium | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | MacOS 26 AMD64 Firefox | ✅ | ✅ | ⚠️ | ⚠️ | ⚠️ | ❌ |
 | MacOS 26 AMD64 WebKit | ✅ | ✅ | ❌ | ⚠️ | ❌ | ❌ |
-| MacOS 26 ARM64 Chromium | ✅ | ✅ | ✅ | ✅ | ❓ | ✅ |
-| MacOS 26 ARM64 Firefox | ✅ | ✅ | ✅ | ✅ | ❓ | ✅ |
+| MacOS 26 ARM64 Chromium | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| MacOS 26 ARM64 Firefox | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | MacOS 26 ARM64 WebKit | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
 
 `npm run test` first removes prior aggregate artifacts, then uses an ordinary npm command chain to check Rust formatting, run Clippy over all native targets and the WebAssembly library, run the Rust tests, run two setup checks, run the 25 fast browser-module tests, run the 16 slower example tests, and merge reports. The chain stops at the first failing command. `npm run test:setup`, `npm run test:js`, and `npm run test:ex` select only their respective Playwright projects, so their terminal counts remain 2, 25, and 16 and development iteration does not implicitly rerun setup or examples. The full command and CI explicitly sequence setup before the primary suites. In CI, setup is a prerequisite for the browser-module, example, and merge steps, preventing an unavailable WebGPU implementation from turning every subsequent test into a timeout; after setup passes, the browser-module and example suites still run independently so both can retain diagnostics if either fails.

@@ -94,7 +94,7 @@ export const readAccessor = (doc: GltfDocument, accessorIndex: number): Accessor
     if (accessor.bufferView === undefined) base = new info.ctor(new ArrayBuffer(count * numComps * info.bytes), 0, count * numComps);
     else {
         const bv = getBufferView(json, accessor.bufferView);
-        if ((bv.extensions as Record<string, unknown> | undefined)?.["EXT_meshopt_compression"]) throw new Error("EXT_meshopt_compression is not supported yet. Please provide an uncompressed glTF/GLB.");
+        if ((bv.extensions as Record<string, unknown> | undefined)?.["EXT_meshopt_compression"] && json.extensionsRequired?.includes("EXT_meshopt_compression")) throw new Error("Required EXT_meshopt_compression must be handled by glTF import preflight.");
         const buffer = doc.buffers[bv.buffer];
         if (!buffer) throw new Error(`Missing buffer[${bv.buffer}]`);
         const bvOffset = (bv.byteOffset ?? 0) | 0;
@@ -139,7 +139,7 @@ const applySparse = (doc: GltfDocument, accessor: GltfAccessor, out: GltfTypedAr
     const scount = sparse.count | 0;
     if (scount <= 0) return;
     const idxBv = getBufferView(doc.json, sparse.indices.bufferView);
-    if ((idxBv.extensions as Record<string, unknown> | undefined)?.["EXT_meshopt_compression"]) throw new Error("EXT_meshopt_compression sparse indices are not supported yet.");
+    if ((idxBv.extensions as Record<string, unknown> | undefined)?.["EXT_meshopt_compression"] && doc.json.extensionsRequired?.includes("EXT_meshopt_compression")) throw new Error("Required EXT_meshopt_compression sparse indices must be handled by glTF import preflight.");
     const idxBuf = doc.buffers[idxBv.buffer];
     if (!idxBuf) throw new Error(`Missing buffer[${idxBv.buffer}] for sparse indices`);
     const idxOffset = (idxBv.byteOffset ?? 0) + (sparse.indices.byteOffset ?? 0);
@@ -148,7 +148,7 @@ const applySparse = (doc: GltfDocument, accessor: GltfAccessor, out: GltfTypedAr
     if (!idxInfo) throw new Error(`Unsupported sparse indices componentType: ${idxComponent}`);
     const idxStride = idxInfo.bytes;
     const valBv = getBufferView(doc.json, sparse.values.bufferView);
-    if ((valBv.extensions as Record<string, unknown> | undefined)?.["EXT_meshopt_compression"]) throw new Error("EXT_meshopt_compression sparse values are not supported yet.");
+    if ((valBv.extensions as Record<string, unknown> | undefined)?.["EXT_meshopt_compression"] && doc.json.extensionsRequired?.includes("EXT_meshopt_compression")) throw new Error("Required EXT_meshopt_compression sparse values must be handled by glTF import preflight.");
     const valBuf = doc.buffers[valBv.buffer];
     if (!valBuf) throw new Error(`Missing buffer[${valBv.buffer}] for sparse values`);
     const valOffset = (valBv.byteOffset ?? 0) + (sparse.values.byteOffset ?? 0);

@@ -15,7 +15,8 @@ export { Compute, ComputeKernels, ComputePipeline, StorageBuffer, UniformBuffer,
 export type { ComputeDispatchOptions, ComputeDescriptor, ComputePipelineDescriptor, ComputeBindGroupLayoutDescriptor, StorageBufferDescriptor, UniformBufferDescriptor, ComputeDispatchCommand, KernelDispatchOptions, ReduceOptions, ArgReduceOptions, ScanOptions, HistogramOptions, CompactOptions, RadixSortOptions, RadixSortPairsOptions, RadixSortPairsResult, CopyOptions, ScaleExtractOptions, ScaleExtractResult, ScaleHistogramOptions, ScaleRemapOptions, ReduceOp, ArgReduceOp, ReadbackSource, ReadbackRingDescriptor, DType, NdarrayResidency, NdLayoutDescriptor, DTypeInfo, NumberTypedArray, NumberTypedArrayConstructor } from "./compute";
 export { ScaleService, SCALE_UNIFORM_FLOAT_COUNT, applyScaleTransformCPU, invertScaleTransformCPU, resolveScaleTransformDomainCPU, cloneScaleTransform, defaultScaleTransform, normalizeScaleTransform, packScaleTransform, scaleClampModeToId, scaleModeToId, scaleValueModeToId } from "./scaling";
 export type { ScaleBufferSource, ScaleClampMode, ScaleMode, ScaleSourceDescriptor, ScaleStatsRequest, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor, ScaleValueMode } from "./scaling";
-export { readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32, parseGLB, loadGltf, importGltf } from "./gltf";
+export { readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32, parseGLB, loadGltf, importGltf, isDataUri, decodeDataUri, dirnameUrl, normalizeDirectoryUrl, resolveUri } from "./gltf";
+export type { DecodedDataUri } from "./gltf";
 export { AnimationClip, AnimationPlayer, Skin, SkinInstance } from "./graphics/animation";
 export type { AnimationClipDescriptor } from "./graphics/animation";
 export { Colormap } from "./graphics/colormap";

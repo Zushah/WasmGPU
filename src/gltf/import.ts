@@ -18,6 +18,7 @@ import { Transform } from "../core/transform";
 import type { GltfDocument, GltfAnimation, GltfAnimationChannel, GltfAnimationSampler, GltfAsset, GltfCamera, GltfExtensions, GltfExtras, GltfMaterial, GltfMesh, GltfNode, GltfPrimitive, GltfPrimitiveAttributes, GltfRoot, GltfScene, GltfSkin, KHRLightsPunctualLight, KHRLightsPunctualNode, KHRLightsPunctualRoot } from "./types";
 import { decodeDataUri, isDataUri, resolveUri } from "./uri";
 import { readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32 } from "./accessors";
+import { validateGltfCompatibility } from "./compatibility";
 
 export type ImportedSkin = {
     name?: string;
@@ -410,9 +411,9 @@ const GLTF_EXTENSION_SUPPORT_STATES: Record<string, GltfImportExtensionSupportSt
     KHR_materials_anisotropy: "supported",
     KHR_materials_ior: "supported",
     KHR_materials_variants: "supported",
-    KHR_gaussian_splatting: "supported",
+    KHR_gaussian_splatting: "partial",
     KHR_node_visibility: "supported",
-    KHR_animation_pointer: "supported",
+    KHR_animation_pointer: "partial",
     KHR_xmp_json_ld: "supported",
     KHR_draco_mesh_compression: "deferred",
     KHR_texture_basisu: "deferred",
@@ -422,25 +423,344 @@ const GLTF_EXTENSION_SUPPORT_STATES: Record<string, GltfImportExtensionSupportSt
     EXT_texture_webp: "deferred"
 };
 
-const buildExtensionsMetadata = (json: GltfRoot): GltfImportExtensionsMetadata => {
+const KHR_ANIMATION_POINTER = "KHR_animation_pointer";
+const KHR_GAUSSIAN_SPLATTING_EXTENSION = "KHR_gaussian_splatting";
+const KHR_DRACO_MESH_COMPRESSION = "KHR_draco_mesh_compression";
+const KHR_TEXTURE_BASISU = "KHR_texture_basisu";
+const EXT_MESH_GPU_INSTANCING = "EXT_mesh_gpu_instancing";
+const EXT_MESHOPT_COMPRESSION = "EXT_meshopt_compression";
+const EXT_TEXTURE_WEBP = "EXT_texture_webp";
+
+const GLTF_EXTENSION_SUPPORT_RANK: Record<GltfImportExtensionSupportState, number> = {
+    supported: 0,
+    partial: 1,
+    deferred: 2,
+    unsupported: 3
+};
+
+type ExtensionAssessment = {
+    state: GltfImportExtensionSupportState;
+    reason?: string;
+};
+
+const getExtension = (source: { extensions?: GltfExtensions } | undefined, name: string): unknown => source?.extensions?.[name];
+
+const pointerTokens = (pointer: unknown): string[] | null => {
+    if (typeof pointer !== "string") return null;
+    if (pointer === "") return [];
+    if (!pointer.startsWith("/")) return null;
+    return pointer.slice(1).split("/").map((part) => part.replace(/~1/g, "/").replace(/~0/g, "~"));
+};
+
+const pointerIndex = (tokens: readonly string[], index: number): number | null => {
+    const token = tokens[index];
+    if (token === undefined || !/^(0|[1-9]\d*)$/.test(token)) return null;
+    const value = Number(token);
+    return Number.isSafeInteger(value) ? value : null;
+};
+
+const accessorComponentCount = (type: string | undefined): number | null => {
+    switch (type) {
+        case "SCALAR": return 1;
+        case "VEC2": return 2;
+        case "VEC3": return 3;
+        case "VEC4": return 4;
+        case "MAT2": return 4;
+        case "MAT3": return 9;
+        case "MAT4": return 16;
+        default: return null;
+    }
+};
+
+type PointerShape = {
+    valueSize: number | null;
+    requiresStep?: boolean;
+};
+
+type AnimationPointerRuntimeTargets = {
+    morphTargetCounts: Map<number, number>;
+    materials: Set<number>;
+    cameras: Set<number>;
+    lights: Set<number>;
+};
+
+const getAnimationPointerRuntimeTargets = (json: GltfRoot, opts: ImportGltfOptions): AnimationPointerRuntimeTargets => {
+    const targets: AnimationPointerRuntimeTargets = { morphTargetCounts: new Map(), materials: new Set(), cameras: new Set(), lights: new Set() };
+    const sceneIndex = getSceneIndex(json, opts);
+    const visited = new Set<number>();
+    const visit = (nodeIndex: number): void => {
+        if (visited.has(nodeIndex)) return;
+        visited.add(nodeIndex);
+        const node = json.nodes?.[nodeIndex];
+        if (!node) return;
+        if (opts.importCameras && node.camera !== undefined) {
+            const camera = json.cameras?.[node.camera];
+            const hasRuntimeCamera = camera?.type === "perspective" && !!camera.perspective || camera?.type === "orthographic" && !!camera.orthographic;
+            if (hasRuntimeCamera) targets.cameras.add(node.camera);
+        }
+        if (opts.importLights) {
+            const nodeLight = getNodeKHRLight(node);
+            const light = nodeLight ? getKHRLightsFromRoot(json)?.lights?.[nodeLight.light] : undefined;
+            if (nodeLight && light && (light.type === "directional" || light.type === "point" || light.type === "spot")) targets.lights.add(nodeLight.light);
+        }
+        const mesh = node.mesh !== undefined ? json.meshes?.[node.mesh] : undefined;
+        for (const primitive of mesh?.primitives ?? []) {
+            const mode = primitive.mode ?? 4;
+            const positionIndex = primitive.attributes?.POSITION;
+            if (getExtension(primitive, KHR_GAUSSIAN_SPLATTING_EXTENSION) !== undefined || (mode !== 4 && mode !== 5 && mode !== 6) || positionIndex === undefined || !json.accessors?.[positionIndex]) continue;
+            const morphTargetCount = primitive.targets?.length ?? 0;
+            if (morphTargetCount > (targets.morphTargetCounts.get(nodeIndex) ?? 0)) targets.morphTargetCounts.set(nodeIndex, morphTargetCount);
+            if (primitive.material !== undefined && json.materials?.[primitive.material]) targets.materials.add(primitive.material);
+            const variants = getExtension(primitive, "KHR_materials_variants") as { mappings?: Array<{ material?: unknown }> } | undefined;
+            for (const mapping of Array.isArray(variants?.mappings) ? variants.mappings : []) if (typeof mapping.material === "number" && Number.isFinite(mapping.material) && json.materials?.[mapping.material | 0]) targets.materials.add(mapping.material | 0);
+        }
+        for (const child of node.children ?? []) visit(child);
+    };
+    for (const root of json.scenes?.[sceneIndex]?.nodes ?? []) visit(root);
+    return targets;
+};
+
+const getMaterialPointerShape = (json: GltfRoot, tokens: readonly string[], targets: AnimationPointerRuntimeTargets): PointerShape | null => {
+    const materialIndex = pointerIndex(tokens, 1);
+    const material = materialIndex !== null ? json.materials?.[materialIndex] : undefined;
+    if (materialIndex === null || !material || !targets.materials.has(materialIndex)) return null;
+    const unlit = isMaterialUnlit(material);
+    const pbr = material.pbrMetallicRoughness;
+    if (tokens[2] === "pbrMetallicRoughness") {
+        if (!pbr) return null;
+        if (tokens.length === 4 && tokens[3] === "baseColorFactor") return { valueSize: 4 };
+        if (!unlit && tokens.length === 4 && (tokens[3] === "metallicFactor" || tokens[3] === "roughnessFactor")) return { valueSize: 1 };
+        if (tokens.length === 7 && tokens[4] === "extensions" && tokens[5] === "KHR_texture_transform") {
+            const info = (pbr as Record<string, unknown>)[tokens[3]!] as { extensions?: GltfExtensions } | undefined;
+            if ((!unlit || tokens[3] === "baseColorTexture") && getExtension(info, "KHR_texture_transform") && (tokens[6] === "rotation" || tokens[6] === "offset" || tokens[6] === "scale")) return { valueSize: tokens[6] === "rotation" ? 1 : 2 };
+        }
+        return null;
+    }
+    if (tokens.length === 3 && tokens[2] === "alphaCutoff") return { valueSize: 1 };
+    if (unlit) return null;
+    if (tokens.length === 3 && tokens[2] === "emissiveFactor") return { valueSize: 3 };
+    if (tokens.length === 4 && tokens[2] === "normalTexture" && tokens[3] === "scale" && material.normalTexture) return { valueSize: 1 };
+    if (tokens.length === 4 && tokens[2] === "occlusionTexture" && tokens[3] === "strength" && material.occlusionTexture) return { valueSize: 1 };
+    if (tokens.length === 6 && tokens[3] === "extensions" && tokens[4] === "KHR_texture_transform") {
+        const info = (material as Record<string, unknown>)[tokens[2]!] as { extensions?: GltfExtensions } | undefined;
+        if (getExtension(info, "KHR_texture_transform") && (tokens[5] === "rotation" || tokens[5] === "offset" || tokens[5] === "scale")) return { valueSize: tokens[5] === "rotation" ? 1 : 2 };
+    }
+    if (tokens[2] !== "extensions" || tokens.length < 5 || !material.extensions?.[tokens[3]!]) return null;
+    const extensionProperties: Record<string, Record<string, number>> = {
+        KHR_materials_anisotropy: { anisotropyStrength: 1, anisotropyRotation: 1 },
+        KHR_materials_clearcoat: { clearcoatFactor: 1, clearcoatRoughnessFactor: 1 },
+        KHR_materials_dispersion: { dispersion: 1 },
+        KHR_materials_emissive_strength: { emissiveStrength: 1 },
+        KHR_materials_ior: { ior: 1 },
+        KHR_materials_iridescence: { iridescenceFactor: 1, iridescenceIor: 1, iridescenceThicknessMinimum: 1, iridescenceThicknessMaximum: 1 },
+        KHR_materials_sheen: { sheenColorFactor: 3, sheenRoughnessFactor: 1 },
+        KHR_materials_specular: { specularFactor: 1, specularColorFactor: 3 },
+        KHR_materials_transmission: { transmissionFactor: 1 },
+        KHR_materials_volume: { thicknessFactor: 1, attenuationDistance: 1, attenuationColor: 3 },
+        KHR_materials_diffuse_transmission: { diffuseTransmissionFactor: 1, diffuseTransmissionColorFactor: 3 }
+    };
+    const property = extensionProperties[tokens[3]!]?.[tokens[4]!];
+    if (tokens.length === 5 && property !== undefined) return { valueSize: property };
+    if (tokens.length === 6 && tokens[5] === "scale" && tokens[3] === "KHR_materials_clearcoat" && tokens[4] === "clearcoatNormalTexture") return { valueSize: 1 };
+    if (tokens.length === 8 && tokens[5] === "extensions" && tokens[6] === "KHR_texture_transform") {
+        const extension = material.extensions[tokens[3]!] as Record<string, unknown>;
+        const info = extension?.[tokens[4]!] as { extensions?: GltfExtensions } | undefined;
+        if (getExtension(info, "KHR_texture_transform") && (tokens[7] === "rotation" || tokens[7] === "offset" || tokens[7] === "scale")) return { valueSize: tokens[7] === "rotation" ? 1 : 2 };
+    }
+    return null;
+};
+
+const getAnimationPointerShape = (json: GltfRoot, tokens: readonly string[], opts: ImportGltfOptions, targets: AnimationPointerRuntimeTargets): PointerShape | null => {
+    if (tokens[0] === "nodes") {
+        const nodeIndex = pointerIndex(tokens, 1);
+        const node = nodeIndex !== null ? json.nodes?.[nodeIndex] : undefined;
+        if (nodeIndex === null || !node) return null;
+        if (tokens.length === 3 && tokens[2] === "translation") return { valueSize: 3 };
+        if (tokens.length === 3 && (tokens[2] === "rotation" || tokens[2] === "scale")) return node.matrix ? null : { valueSize: tokens[2] === "rotation" ? 4 : 3 };
+        const targetCount = targets.morphTargetCounts.get(nodeIndex) ?? 0;
+        if (tokens.length === 3 && tokens[2] === "weights") return targetCount > 0 ? { valueSize: targetCount } : null;
+        if (tokens.length === 4 && tokens[2] === "weights") {
+            const weightIndex = pointerIndex(tokens, 3);
+            return weightIndex !== null && weightIndex < targetCount ? { valueSize: 1 } : null;
+        }
+        if (tokens.length === 5 && tokens[2] === "extensions" && tokens[3] === "KHR_node_visibility" && tokens[4] === "visible") return getExtension(node, "KHR_node_visibility") ? { valueSize: 1, requiresStep: true } : null;
+        return null;
+    }
+    if (tokens[0] === "materials") return getMaterialPointerShape(json, tokens, targets);
+    if (tokens[0] === "cameras") {
+        if (!opts.importCameras) return null;
+        const cameraIndex = pointerIndex(tokens, 1);
+        const camera = cameraIndex !== null ? json.cameras?.[cameraIndex] : undefined;
+        if (cameraIndex === null || !camera || !targets.cameras.has(cameraIndex) || tokens.length !== 4) return null;
+        const family = tokens[2];
+        const property = tokens[3];
+        if (family === "perspective" && camera.type === "perspective" && camera.perspective && ["yfov", "znear", "zfar", "aspectRatio"].includes(property)) {
+            if ((property === "aspectRatio" || property === "zfar") && camera.perspective?.[property] === undefined) return null;
+            return { valueSize: 1 };
+        }
+        if (family === "orthographic" && camera.type === "orthographic" && camera.orthographic && ["xmag", "ymag", "znear", "zfar"].includes(property)) return { valueSize: 1 };
+        return null;
+    }
+    if (tokens[0] === "extensions" && tokens[1] === "KHR_lights_punctual" && tokens[2] === "lights") {
+        if (!opts.importLights) return null;
+        const lightIndex = pointerIndex(tokens, 3);
+        const root = getExtension(json, "KHR_lights_punctual") as KHRLightsPunctualRoot | undefined;
+        const light = lightIndex !== null ? root?.lights?.[lightIndex] : undefined;
+        if (lightIndex === null || !light || !targets.lights.has(lightIndex)) return null;
+        if (tokens.length === 5 && ["color", "intensity"].includes(tokens[4]!)) return { valueSize: tokens[4] === "color" ? 3 : 1 };
+        if (tokens.length === 5 && tokens[4] === "range" && (light.type === "point" || light.type === "spot")) return { valueSize: 1 };
+        if (tokens.length === 6 && tokens[4] === "spot" && light.type === "spot" && ["innerConeAngle", "outerConeAngle"].includes(tokens[5]!)) return { valueSize: 1 };
+    }
+    return null;
+};
+
+const assessAnimationPointers = (json: GltfRoot, opts: ImportGltfOptions): ExtensionAssessment => {
+    let occurrenceCount = 0;
+    let unsupportedReason: string | undefined;
+    const targets = getAnimationPointerRuntimeTargets(json, opts);
+    for (let animationIndex = 0; animationIndex < (json.animations?.length ?? 0); animationIndex++) {
+        const animation = json.animations![animationIndex]!;
+        for (let channelIndex = 0; channelIndex < animation.channels.length; channelIndex++) {
+            const channel = animation.channels[channelIndex]!;
+            if (channel.target.path !== "pointer") continue;
+            occurrenceCount++;
+            const pointer = (channel.target.extensions?.[KHR_ANIMATION_POINTER] as { pointer?: unknown } | undefined)?.pointer;
+            const tokens = pointerTokens(pointer);
+            const targetShape = tokens ? getAnimationPointerShape(json, tokens, opts, targets) : null;
+            const sampler = animation.samplers[channel.sampler];
+            const input = sampler ? json.accessors?.[sampler.input] : undefined;
+            const output = sampler ? json.accessors?.[sampler.output] : undefined;
+            const interpolation = sampler?.interpolation ?? "LINEAR";
+            const componentCount = accessorComponentCount(output?.type);
+            const expectedOutputCount = input ? input.count * (interpolation === "CUBICSPLINE" ? 3 : 1) : -1;
+            const outputCount = output?.count ?? -1;
+            const validInterpolation = interpolation === "LINEAR" || interpolation === "STEP" || interpolation === "CUBICSPLINE";
+            const validInput = input?.type === "SCALAR" && input.componentType === 5126;
+            const actualValueSize = validInput && validInterpolation && componentCount !== null && input && expectedOutputCount > 0 && outputCount >= 0 && outputCount % expectedOutputCount === 0 ? componentCount * (outputCount / expectedOutputCount) : null;
+            const valueSize = actualValueSize;
+            const shapeMatches = channel.target.node === undefined && !!targetShape && (targetShape.valueSize === null || targetShape.valueSize === valueSize) && (!targetShape.requiresStep || interpolation === "STEP");
+            if (!shapeMatches) unsupportedReason ??= `animation ${animationIndex} channel ${channelIndex} has an unsupported pointer target or sampler shape`;
+        }
+    }
+    if (occurrenceCount === 0) return { state: "partial", reason: "no implemented pointer occurrence was found" };
+    return unsupportedReason ? { state: "partial", reason: unsupportedReason } : { state: "supported" };
+};
+
+const assessGaussianSplatting = (json: GltfRoot): ExtensionAssessment => {
+    let occurrenceCount = 0;
+    let unsupportedReason: string | undefined;
+    const requiredAttributes: Array<{ semantic: string; type: string; supportedEncoding: (componentType: number, normalized: boolean) => boolean }> = [
+        { semantic: "POSITION", type: "VEC3", supportedEncoding: isFloatNonNormalizedEncoding },
+        { semantic: "KHR_gaussian_splatting:ROTATION", type: "VEC4", supportedEncoding: (componentType, normalized) => isFloatEncoding(componentType) || isNormalizedSignedByteOrShort(componentType, normalized) },
+        { semantic: "KHR_gaussian_splatting:SCALE", type: "VEC3", supportedEncoding: (componentType) => isFloatEncoding(componentType) || isUnsignedByteOrShort(componentType) },
+        { semantic: "KHR_gaussian_splatting:OPACITY", type: "SCALAR", supportedEncoding: (componentType, normalized) => isFloatEncoding(componentType) || isNormalizedUnsignedByteOrShort(componentType, normalized) },
+        { semantic: "KHR_gaussian_splatting:SH_DEGREE_0_COEF_0", type: "VEC3", supportedEncoding: isFloatNonNormalizedEncoding }
+    ];
+    for (let meshIndex = 0; meshIndex < (json.meshes?.length ?? 0); meshIndex++) {
+        const mesh = json.meshes![meshIndex]!;
+        for (let primitiveIndex = 0; primitiveIndex < mesh.primitives.length; primitiveIndex++) {
+            const primitive = mesh.primitives[primitiveIndex]!;
+            const extension = getExtension(primitive, KHR_GAUSSIAN_SPLATTING_EXTENSION) as Record<string, unknown> | undefined;
+            if (extension === undefined) continue;
+            occurrenceCount++;
+            const mode = primitive.mode ?? 4;
+            let reason: string | undefined;
+            if (!extension || Array.isArray(extension)) reason = "extension object is required.";
+            else if (extension.kernel !== "ellipse") reason = `kernel '${String(extension.kernel)}' is not supported; expected 'ellipse'`;
+            else if (extension.colorSpace !== "lin_rec709_display" && extension.colorSpace !== "srgb_rec709_display") reason = `colorSpace '${String(extension.colorSpace)}' is not supported`;
+            else if (extension.projection !== undefined && extension.projection !== "perspective") reason = `projection '${String(extension.projection)}' is not supported; expected 'perspective'`;
+            else if (extension.sortingMethod !== undefined && extension.sortingMethod !== "cameraDistance") reason = `sortingMethod '${String(extension.sortingMethod)}' is not supported; expected 'cameraDistance'`;
+            else if (mode !== 0) reason = `primitive mode must be POINTS (0), got ${mode}.`;
+            else {
+                const attributes = primitive.attributes as GltfPrimitiveAttributes | undefined;
+                let sourceCount: number | null = null;
+                for (const { semantic, type, supportedEncoding } of requiredAttributes) {
+                    const accessorIndex = attributes?.[semantic];
+                    const accessor = typeof accessorIndex === "number" ? json.accessors?.[accessorIndex] : undefined;
+                    if (accessorIndex === undefined) { reason = `missing required attribute '${semantic}'.`; break; }
+                    if (!accessor) { reason = `attribute '${semantic}' references missing accessor ${accessorIndex}.`; break; }
+                    if (accessor.type !== type) { reason = `attribute '${semantic}' must use accessor type ${type}, got ${accessor.type}.`; break; }
+                    if (!supportedEncoding(accessor.componentType, accessor.normalized === true)) { reason = `attribute '${semantic}' has unsupported accessor encoding componentType=${accessor.componentType} normalized=${accessor.normalized === true}.`; break; }
+                    if (sourceCount === null) sourceCount = accessor.count;
+                    else if (accessor.count !== sourceCount) { reason = `attribute '${semantic}' count ${accessor.count} does not match POSITION count ${sourceCount}.`; break; }
+                }
+                if (!reason && attributes && sourceCount !== null) {
+                    try {
+                        const sh0Accessor = attributes["KHR_gaussian_splatting:SH_DEGREE_0_COEF_0"]!;
+                        const shAttributes = resolveGaussianSplatSHAttributes(attributes, sh0Accessor, `mesh ${meshIndex} primitive ${primitiveIndex}`);
+                        for (const [semantic, accessorIndex] of shAttributes.accessors) {
+                            const accessor = json.accessors?.[accessorIndex];
+                            if (!accessor) { reason = `attribute '${semantic}' references missing accessor ${accessorIndex}.`; break; }
+                            if (accessor.type !== "VEC3") { reason = `attribute '${semantic}' must use accessor type VEC3, got ${accessor.type}.`; break; }
+                            if (!isFloatNonNormalizedEncoding(accessor.componentType, accessor.normalized === true)) { reason = `attribute '${semantic}' has unsupported accessor encoding componentType=${accessor.componentType} normalized=${accessor.normalized === true}.`; break; }
+                            if (accessor.count !== sourceCount) { reason = `attribute '${semantic}' count ${accessor.count} does not match POSITION count ${sourceCount}.`; break; }
+                        }
+                    } catch (error) { reason = error instanceof Error ? error.message : String(error); }
+                }
+            }
+            if (reason) unsupportedReason ??= `mesh ${meshIndex} primitive ${primitiveIndex}: ${reason}`;
+        }
+    }
+    if (occurrenceCount === 0) return { state: "partial", reason: "no implemented Gaussian splat occurrence was found" };
+    return unsupportedReason ? { state: "partial", reason: unsupportedReason } : { state: "supported" };
+};
+
+const getMaterialTextureCombinationLosses = (material: GltfMaterial, materialIndex: number): Array<{ name: string; reason: string }> => {
+    const losses: Array<{ name: string; reason: string }> = [];
+    const extensions = material.extensions as Record<string, any> | undefined;
+    const transmissionFactor = Number(extensions?.KHR_materials_transmission?.transmissionFactor ?? 0);
+    const diffuseTransmissionFactor = Number(extensions?.KHR_materials_diffuse_transmission?.diffuseTransmissionFactor ?? 0);
+    if (!(transmissionFactor > 0 || diffuseTransmissionFactor > 0)) return losses;
+    if (extensions?.KHR_materials_sheen?.sheenColorTexture || extensions?.KHR_materials_sheen?.sheenRoughnessTexture) losses.push({ name: "KHR_materials_sheen", reason: `material ${materialIndex} uses sheen textures in the current transmission layout, where those bindings are unavailable` });
+    if (extensions?.KHR_materials_iridescence?.iridescenceTexture || extensions?.KHR_materials_iridescence?.iridescenceThicknessTexture) losses.push({ name: "KHR_materials_iridescence", reason: `material ${materialIndex} uses iridescence textures in the current transmission layout, where those bindings are unavailable` });
+    if (extensions?.KHR_materials_anisotropy?.anisotropyTexture) losses.push({ name: "KHR_materials_anisotropy", reason: `material ${materialIndex} uses an anisotropy texture in the current transmission layout, where that binding is unavailable` });
+    return losses;
+};
+
+const assessMaterialTextureCombinations = (json: GltfRoot): Map<string, ExtensionAssessment> => {
+    const assessments = new Map<string, ExtensionAssessment>();
+    for (let materialIndex = 0; materialIndex < (json.materials?.length ?? 0); materialIndex++) for (const { name, reason } of getMaterialTextureCombinationLosses(json.materials![materialIndex]!, materialIndex)) if (!assessments.has(name)) assessments.set(name, { state: "partial", reason });
+    return assessments;
+};
+
+const assessAssetExtensions = (json: GltfRoot, opts: ImportGltfOptions): Map<string, ExtensionAssessment> => {
+    const assessments = new Map<string, ExtensionAssessment>();
+    if ((json.extensionsUsed ?? []).includes(KHR_ANIMATION_POINTER) || (json.extensionsRequired ?? []).includes(KHR_ANIMATION_POINTER)) assessments.set(KHR_ANIMATION_POINTER, assessAnimationPointers(json, opts));
+    if ((json.extensionsUsed ?? []).includes(KHR_GAUSSIAN_SPLATTING_EXTENSION) || (json.extensionsRequired ?? []).includes(KHR_GAUSSIAN_SPLATTING_EXTENSION)) assessments.set(KHR_GAUSSIAN_SPLATTING_EXTENSION, assessGaussianSplatting(json));
+    for (const [name, assessment] of assessMaterialTextureCombinations(json)) assessments.set(name, assessment);
+    return assessments;
+};
+
+const buildExtensionsMetadata = (json: GltfRoot, opts: ImportGltfOptions): { metadata: GltfImportExtensionsMetadata; assessments: Map<string, ExtensionAssessment> } => {
     const used = [...(json.extensionsUsed ?? [])];
     const required = [...(json.extensionsRequired ?? [])];
     const names = new Set<string>([...used, ...required]);
     const support: Record<string, GltfImportExtensionSupportState> = {};
     for (const name of names) support[name] = GLTF_EXTENSION_SUPPORT_STATES[name] ?? "unsupported";
-    return { used, required, support };
-};
-
-const GLTF_EXTENSION_SUPPORT_RANK: Record<GltfImportExtensionSupportState, number> = {
-    supported: 0,
-    deferred: 1,
-    partial: 2,
-    unsupported: 3
+    const assessments = assessAssetExtensions(json, opts);
+    for (const [name, assessment] of assessments) support[name] = assessment.state;
+    return { metadata: { used, required, support }, assessments };
 };
 
 const markExtensionSupport = (extensions: GltfImportExtensionsMetadata, name: string, state: GltfImportExtensionSupportState): void => { const current = extensions.support[name]; if (!current || GLTF_EXTENSION_SUPPORT_RANK[state] > GLTF_EXTENSION_SUPPORT_RANK[current]) extensions.support[name] = state; };
 
 const isExtensionRequired = (json: GltfRoot, name: string): boolean => (json.extensionsRequired ?? []).includes(name);
+
+const reportAnimationPointerLoss = (json: GltfRoot, extensions: GltfImportExtensionsMetadata, opts: ImportGltfOptions, message: string): void => {
+    markExtensionSupport(extensions, KHR_ANIMATION_POINTER, "partial");
+    if (isExtensionRequired(json, KHR_ANIMATION_POINTER)) throw new Error(`Required glTF extension '${KHR_ANIMATION_POINTER}' cannot be imported without semantic loss: ${message}`);
+    warn(opts, `${KHR_ANIMATION_POINTER}: ${message}`);
+};
+
+const enforceRequiredExtensions = (json: GltfRoot, extensions: GltfImportExtensionsMetadata, assessments: Map<string, ExtensionAssessment>): void => {
+    for (const name of json.extensionsRequired ?? []) {
+        const state = extensions.support[name] ?? "unsupported";
+        if (state === "supported") continue;
+        const reason = assessments.get(name)?.reason;
+        if (state === "deferred") throw new Error(`Required glTF extension '${name}' is deferred: WasmGPU does not implement its defining behavior${reason ? ` (${reason})` : ""}.`);
+        throw new Error(`Required glTF extension '${name}' is ${state} for this asset and cannot be imported without semantic loss${reason ? `: ${reason}` : "."}`);
+    }
+};
 
 const buildXmpMetadata = (json: GltfRoot): GltfImportXmpMetadata => {
     const rootExt = (json.extensions as Record<string, unknown> | undefined)?.["KHR_xmp_json_ld"] as { packets?: unknown[] } | undefined;
@@ -665,6 +985,7 @@ const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: n
         materialCache.set(materialIndex, created);
         return created;
     }
+    for (const { name, reason } of getMaterialTextureCombinationLosses(mat, materialIndex)) warn(opts, `${name}: ${reason}; the texture contribution is ignored by the current transmission layout.`);
     const getOrCreateTextureByIndex = (textureIndex: number | undefined, usage: string): Texture2D | null => {
         if (textureIndex === undefined) return null;
         const cached = textureCache.get(textureIndex);
@@ -674,8 +995,15 @@ const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: n
             warn(opts, `glTF texture index ${textureIndex} missing (usage=${usage}).`);
             return null;
         }
+        const textureExtensions = texDef.extensions as Record<string, unknown> | undefined;
+        const alternativeSourceExtensions = [KHR_TEXTURE_BASISU, EXT_TEXTURE_WEBP].filter((name) => textureExtensions?.[name] !== undefined);
         const imageIndex = texDef.source;
         const img = imageIndex !== undefined ? json.images?.[imageIndex] : undefined;
+        const hasCoreImageSource = !!img && (typeof img.uri === "string" && img.uri.length > 0 || img.bufferView !== undefined);
+        for (const extensionName of alternativeSourceExtensions) {
+            if (hasCoreImageSource) warn(opts, `glTF texture ${textureIndex}: ignoring optional ${extensionName} alternative source and using the core texture.source (usage=${usage}).`);
+            else warn(opts, `glTF texture ${textureIndex}: optional ${extensionName} has no usable core texture.source; its deferred alternative source is unavailable (usage=${usage}).`);
+        }
         if (imageIndex === undefined || !img) {
             warn(opts, `glTF texture ${textureIndex} has no valid source image (usage=${usage}).`);
             return null;
@@ -688,7 +1016,7 @@ const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: n
         let source: { kind: "bytes"; bytes: ArrayBuffer; mimeType?: string } | { kind: "url"; url: string; mimeType?: string } | null = null;
         const loadedBytes = doc.images?.[imageIndex];
         const mimeType = img.mimeType ?? inferMimeTypeFromUri(img.uri);
-        if (loadedBytes) {
+        if (loadedBytes && loadedBytes.byteLength > 0) {
             source = { kind: "bytes", bytes: loadedBytes, mimeType };
         } else if (img.bufferView !== undefined) {
             const bv = json.bufferViews?.[img.bufferView];
@@ -704,7 +1032,7 @@ const getOrCreateMaterial = (doc: GltfDocument, json: GltfRoot, materialIndex: n
                 const decoded = decodeDataUri(img.uri);
                 source = { kind: "bytes", bytes: decoded.data, mimeType: mimeType ?? decoded.mimeType ?? undefined };
             } else {
-                const url = resolveUri(doc.baseUrl, img.uri);
+                const url = resolveUri(doc.resourceBaseUrl ?? doc.baseUrl, img.uri);
                 source = { kind: "url", url, mimeType };
             }
         }
@@ -971,10 +1299,31 @@ type KHRGaussianSplattingPrimitiveExtension = {
 
 const getGaussianSplattingExtension = (prim: GltfPrimitive): unknown | undefined => (prim.extensions as Record<string, unknown> | undefined)?.[KHR_GAUSSIAN_SPLATTING];
 
+const getPrimitiveAccessorIndices = (prim: GltfPrimitive): number[] => {
+    const indices: number[] = [];
+    if (typeof prim.indices === "number") indices.push(prim.indices);
+    for (const accessorIndex of Object.values(prim.attributes ?? {})) if (typeof accessorIndex === "number") indices.push(accessorIndex);
+    for (const target of prim.targets ?? []) for (const accessorIndex of Object.values(target)) if (typeof accessorIndex === "number") indices.push(accessorIndex);
+    return indices;
+};
+
+const primitiveUsesMeshopt = (json: GltfRoot, prim: GltfPrimitive): boolean => {
+    for (const accessorIndex of getPrimitiveAccessorIndices(prim)) {
+        const accessor = json.accessors?.[accessorIndex];
+        if (!accessor) continue;
+        const bufferViewIndices = [accessor.bufferView, accessor.sparse?.indices.bufferView, accessor.sparse?.values.bufferView];
+        for (const bufferViewIndex of bufferViewIndices) {
+            const bufferView = bufferViewIndex !== undefined ? json.bufferViews?.[bufferViewIndex] : undefined;
+            if (bufferView?.extensions?.[EXT_MESHOPT_COMPRESSION] !== undefined) return true;
+        }
+    }
+    return false;
+};
+
 const failGaussianSplatting = (context: string, message: string): never => { throw new Error(`${KHR_GAUSSIAN_SPLATTING}: ${context}: ${message}`); };
 
 const handleUnsupportedGaussianSplatting = (json: GltfRoot, extensions: GltfImportExtensionsMetadata, opts: ImportGltfOptions, context: string, message: string): null => {
-    markExtensionSupport(extensions, KHR_GAUSSIAN_SPLATTING, "unsupported");
+    markExtensionSupport(extensions, KHR_GAUSSIAN_SPLATTING, "partial");
     if (isExtensionRequired(json, KHR_GAUSSIAN_SPLATTING)) failGaussianSplatting(context, message);
     warn(opts, `${KHR_GAUSSIAN_SPLATTING}: ${context}: ${message}; skipping primitive. WasmGPU does not implement optional sparse point-cloud fallback conversion for unsupported Gaussian splat primitives in this MVP.`);
     return null;
@@ -1320,7 +1669,16 @@ const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: numbe
     const computeMissingNormals = opts.computeMissingNormals !== false;
     for (let primIndex = 0; primIndex < gltfMesh.primitives.length; primIndex++) {
         const prim = gltfMesh.primitives[primIndex]!;
-        if ((prim.extensions as unknown as Record<string, unknown> | undefined)?.["KHR_draco_mesh_compression"]) { warn(opts, `Mesh ${gltfMesh.name ?? node.mesh} primitive ${primIndex}: KHR_draco_mesh_compression not supported; skipping primitive`); continue; }
+        const hasOptionalMeshopt = primitiveUsesMeshopt(json, prim) && !isExtensionRequired(json, EXT_MESHOPT_COMPRESSION);
+        if (hasOptionalMeshopt) warn(opts, `Mesh ${gltfMesh.name ?? node.mesh} primitive ${primIndex}: ignoring optional ${EXT_MESHOPT_COMPRESSION} payload and attempting the uncompressed core accessor representation.`);
+        if ((prim.extensions as unknown as Record<string, unknown> | undefined)?.[KHR_DRACO_MESH_COMPRESSION]) {
+            const hasCorePosition = prim.attributes?.POSITION !== undefined && !!json.accessors?.[prim.attributes.POSITION];
+            if (!hasCorePosition) {
+                warn(opts, `Mesh ${gltfMesh.name ?? node.mesh} primitive ${primIndex}: ${KHR_DRACO_MESH_COMPRESSION} has no usable uncompressed core POSITION; skipping primitive.`);
+                continue;
+            }
+            warn(opts, `Mesh ${gltfMesh.name ?? node.mesh} primitive ${primIndex}: ignoring optional ${KHR_DRACO_MESH_COMPRESSION} payload and using the uncompressed core primitive.`);
+        }
         if (getGaussianSplattingExtension(prim) !== undefined) {
             const field = createSplatFieldFromPrimitive(doc, json, gltfMesh, node.mesh, prim, primIndex, node, nodeT, extensions, opts);
             if (field) splatFields.push(field);
@@ -1333,7 +1691,15 @@ const instantiateMeshNode = (doc: GltfDocument, json: GltfRoot, nodeIndex: numbe
         const matJson = prim.material !== undefined ? json.materials?.[prim.material] : undefined;
         validateMaterialTextureCoordinates(matJson, prim.attributes, opts, `Mesh '${gltfMesh.name ?? node.mesh}' primitive ${primIndex}`);
         if (!hasCachedGeometry) {
-            const built = buildGeometryFromPrimitive(doc, json, prim, computeMissingNormals, opts);
+            let built: Geometry | null;
+            try {
+                built = buildGeometryFromPrimitive(doc, json, prim, computeMissingNormals, opts);
+            } catch (error) {
+                if (!hasOptionalMeshopt) throw error;
+                const detail = error instanceof Error ? error.message : String(error);
+                warn(opts, `Mesh ${gltfMesh.name ?? node.mesh} primitive ${primIndex}: ${EXT_MESHOPT_COMPRESSION} has no usable uncompressed core representation; skipping primitive (${detail}).`);
+                built = null;
+            }
             geom = built;
             geometryCache.set(cacheKey, geom);
         }
@@ -1837,7 +2203,7 @@ const trackAnimationTarget = (seen: Set<string>, canonical: string, animationNam
     seen.add(canonical);
 };
 
-const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedNode[], materialCache: Map<number, Material>, cameraRuntimeMap: Map<number, Camera[]>, lightRuntimeMap: Map<number, Light[]>, opts: ImportGltfOptions): ImportedAnimation[] => {
+const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedNode[], materialCache: Map<number, Material>, cameraRuntimeMap: Map<number, Camera[]>, lightRuntimeMap: Map<number, Light[]>, extensions: GltfImportExtensionsMetadata, opts: ImportGltfOptions): ImportedAnimation[] => {
     const anims = json.animations ?? [];
     const out: ImportedAnimation[] = [];
     const interpToCode = (interp: string): number => {
@@ -1932,11 +2298,11 @@ const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedN
                     if (c.target.path === "pointer") chan.targetPointer = getChannelPointer(c) ?? undefined;
                     channels.push(chan);
                     if (c.target.path === "pointer") {
-                        if (nodeIndex !== undefined) { warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} sets target.node; skipping pointer channel.`); continue; }
+                        if (nodeIndex !== undefined) { reportAnimationPointerLoss(json, extensions, opts, `animation '${animationName}' channel ${ci} sets target.node; skipping pointer channel.`); continue; }
                         const pointer = getChannelPointer(c);
-                        if (!pointer) { warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} is missing extensions.KHR_animation_pointer.pointer.`); continue; }
+                        if (!pointer) { reportAnimationPointerLoss(json, extensions, opts, `animation '${animationName}' channel ${ci} is missing extensions.KHR_animation_pointer.pointer.`); continue; }
                         const resolved = resolveAnimationPointer(pointerContext, pointer);
-                        if (!resolved) { warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} pointer '${pointer}' is not supported by this importer.`); continue; }
+                        if (!resolved) { reportAnimationPointerLoss(json, extensions, opts, `animation '${animationName}' channel ${ci} pointer '${pointer}' is not supported by this importer.`); continue; }
                         trackAnimationTarget(seenTargets, resolved.canonical, animationName, opts, resolved.kind === "pointer" && resolved.allowDuplicateTarget === true);
                         if (resolved.kind === "trs") {
                             runtimeChannels.push({
@@ -1951,9 +2317,9 @@ const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedN
                             continue;
                         }
                         const sampler = valueSamplers[chan.sampler];
-                        if (!sampler) { warn(opts, `KHR_animation_pointer: animation '${animationName}' channel ${ci} references missing sampler ${chan.sampler}.`); continue; }
-                        if (resolved.requiresStep && sampler.interpolation !== "STEP") { warn(opts, `KHR_animation_pointer: boolean pointer '${resolved.canonical}' requires STEP interpolation; skipping channel.`); continue; }
-                        if ((sampler.valueSize | 0) !== (resolved.valueSize | 0)) { warn(opts, `KHR_animation_pointer: pointer '${resolved.canonical}' expects ${resolved.valueSize} output component(s), got ${sampler.valueSize}; skipping channel.`); continue; }
+                        if (!sampler) { reportAnimationPointerLoss(json, extensions, opts, `animation '${animationName}' channel ${ci} references missing sampler ${chan.sampler}.`); continue; }
+                        if (resolved.requiresStep && sampler.interpolation !== "STEP") { reportAnimationPointerLoss(json, extensions, opts, `boolean pointer '${resolved.canonical}' requires STEP interpolation; skipping channel.`); continue; }
+                        if ((sampler.valueSize | 0) !== (resolved.valueSize | 0)) { reportAnimationPointerLoss(json, extensions, opts, `pointer '${resolved.canonical}' expects ${resolved.valueSize} output component(s), got ${sampler.valueSize}; skipping channel.`); continue; }
                         pointerChannels.push({
                             sampler: chan.sampler | 0,
                             scratch: new Float32Array(resolved.valueSize),
@@ -2032,6 +2398,9 @@ const parseAnimations = (doc: GltfDocument, json: GltfRoot, nodes: GltfImportedN
 
 export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): GltfImportResult => {
     const json = doc.json;
+    validateGltfCompatibility(json);
+    const { metadata: extensions, assessments } = buildExtensionsMetadata(json, opts);
+    enforceRequiredExtensions(json, extensions, assessments);
     const scene = opts.targetScene ?? new Scene();
     const addToScene = opts.addToScene !== false;
     const sceneIndex = getSceneIndex(json, opts);
@@ -2064,7 +2433,6 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
             else warn(opts, `Node ${i} child ${child} missing transform`);
         }
     }
-    const extensions = buildExtensionsMetadata(json);
     const xmp = buildXmpMetadata(json);
     const variantsController = createVariantsController(getDeclaredVariants(json, xmp.packets));
     const skins = parseSkins(doc, json, nodes, opts);
@@ -2084,6 +2452,7 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
         const importedNode = nodes[nodeIndex];
         const nodeT = importedNode?.transform;
         if (!importedNode || !nodeT) return;
+        if (node.extensions?.[EXT_MESH_GPU_INSTANCING] !== undefined && !isExtensionRequired(json, EXT_MESH_GPU_INSTANCING)) warn(opts, `Node ${node.name ?? nodeIndex}: ignoring optional ${EXT_MESH_GPU_INSTANCING}; using the single core node instance because instancing is deferred.`);
         const createdObjects = instantiateMeshNode(doc, json, nodeIndex, node, nodeT, materialCache, textureCache, geometryCache, variantsController, extensions, opts);
         const createdMeshes = createdObjects.meshes;
         const createdSplatFields = createdObjects.splatFields;
@@ -2130,7 +2499,7 @@ export const importGltf = (doc: GltfDocument, opts: ImportGltfOptions = {}): Glt
     const gltfScene: GltfScene | undefined = json.scenes?.[sceneIndex];
     const roots = gltfScene?.nodes ?? [];
     for (const root of roots) instantiateNodeRecursive(root, undefined);
-    const animations = parseAnimations(doc, json, nodes, materialCache, cameraRuntimeMap, lightRuntimeMap, opts);
+    const animations = parseAnimations(doc, json, nodes, materialCache, cameraRuntimeMap, lightRuntimeMap, extensions, opts);
     const clips = animations.map((a) => a.clip).filter((c): c is AnimationClip => c !== null);
     const metadata = buildImportMetadata(json, sceneIndex, extensions, xmp, variantsController.public);
     let destroyed = false;
