@@ -5,7 +5,7 @@
  */
 
 import { defineConfig } from "@playwright/test";
-import { expectedTests } from "./test/manifests/suites.js";
+import { expectedTests } from "./tests/manifests/suites.js";
 
 if (Object.prototype.hasOwnProperty.call(process.env, "NO_COLOR")) { delete process.env.NO_COLOR; process.env.FORCE_COLOR = "0"; }
 
@@ -66,7 +66,7 @@ if (browserName === "chromium") {
 }
 
 export default defineConfig({
-    testDir: "./test/manifests",
+    testDir: "./tests/manifests",
     testMatch: "**/*.spec.js",
     fullyParallel: false,
     workers: 1,
@@ -100,7 +100,7 @@ export default defineConfig({
     webServer: {
         command: `node ./scripts/serve-tests.js --port ${PORT}`,
         gracefulShutdown: { signal: "SIGTERM", timeout: 500 },
-        url: `${BASE_URL}/test/index.html`,
+        url: `${BASE_URL}/tests/index.html`,
         reuseExistingServer: !process.env.CI,
         timeout: 30_000,
         stdout: "ignore",

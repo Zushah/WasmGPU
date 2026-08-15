@@ -1,13 +1,13 @@
 {
-  "include": ["./src/**/*"],
+  "include": ["./typescript/**/*"],
   "compilerOptions": {
     "target": "es2023",
     "module": "esnext",
     "moduleResolution": "bundler",
     "lib": ["es2023", "dom"],
     "types": ["@webgpu/types"],
-    "rootDir": "./src/",
-    "outDir": "./dist/",
+    "rootDir": "./typescript/",
+    "outDir": "./release/",
     "declaration": false,
     "declarationMap": false,
     "sourceMap": false,

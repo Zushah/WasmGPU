@@ -9,7 +9,7 @@ import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { expectedTests } from "../test/manifests/suites.js";
+import { expectedTests } from "../tests/manifests/suites.js";
 
 const ROOT = resolve(fileURLToPath(new URL("../", import.meta.url)));
 const REPORT_DIR = join(ROOT, "blob-report");

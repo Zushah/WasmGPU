@@ -21,12 +21,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Validate UTF-8, LF endings, final newlines, local Markdown links, "
-            "and optional inbound links under ./website/src/docs/.")
+            "and optional inbound links under ./website/docs/.")
     )
     parser.add_argument(
         "--docs-root",
         type=Path,
-        default=Path("website/src/docs"),
+        default=Path("website/docs"),
         help="Documentation root relative to the current directory.",
     )
     selection = parser.add_mutually_exclusive_group(required=True)

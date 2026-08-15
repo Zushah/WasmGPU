@@ -11,19 +11,19 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).resolve().parents[1]
 WEBSITE_DIR = ROOT_DIR / "website"
 BUILD_DIR = WEBSITE_DIR / "build"
-HOME_SOURCE_DIR = WEBSITE_DIR / "src" / "home"
-EXAMPLES_PAGE_SOURCE_DIR = WEBSITE_DIR / "src" / "examples"
+HOME_SOURCE_DIR = WEBSITE_DIR / "home"
+EXAMPLES_PAGE_SOURCE_DIR = WEBSITE_DIR / "examples"
 ASSETS_SOURCE_DIR = ROOT_DIR / "assets"
 EXAMPLES_SOURCE_DIR = ROOT_DIR / "examples"
 EXAMPLES_BUILD_DIR = BUILD_DIR / "examples"
 MKDOCS_CONFIG_PATH = ROOT_DIR / "mkdocs.yaml"
 DOCS_ASSETS_BUILD_DIR = BUILD_DIR / "docs" / "assets"
-DIST_MINIFIED_SOURCE = ROOT_DIR / "dist" / "WasmGPU.min.js"
-DIST_MINIFIED_BUILD = BUILD_DIR / "WasmGPU.min.js"
-IIFE_SCRIPT_OLD = '<script src="../dist/WasmGPU.iife.min.js"></script>'
-IIFE_SCRIPT_NEW = '<script src="https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.iife.min.js"></script>'
-ESM_IMPORT_OLD = 'import { WasmGPU } from "../dist/WasmGPU.min.js";'
-ESM_IMPORT_NEW = 'import { WasmGPU } from "https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.min.js";'
+RELEASE_MINIFIED_SOURCE = ROOT_DIR / "release" / "WasmGPU.min.js"
+RELEASE_MINIFIED_BUILD = BUILD_DIR / "WasmGPU.min.js"
+LOCAL_IIFE_SCRIPT = '<script src="../release/WasmGPU.iife.min.js"></script>'
+CDN_IIFE_SCRIPT = '<script src="https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.iife.min.js"></script>'
+LOCAL_ESM_IMPORT = 'import { WasmGPU } from "../release/WasmGPU.min.js";'
+CDN_ESM_IMPORT = 'import { WasmGPU } from "https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.min.js";'
 
 def ensure_required_paths() -> None:
     required_paths = [
@@ -34,7 +34,7 @@ def ensure_required_paths() -> None:
         ASSETS_SOURCE_DIR,
         EXAMPLES_SOURCE_DIR,
         MKDOCS_CONFIG_PATH,
-        DIST_MINIFIED_SOURCE
+        RELEASE_MINIFIED_SOURCE
     ]
     for path in required_paths:
         if not path.exists():
@@ -56,8 +56,8 @@ def copy_homepage_files() -> None:
 def copy_assets() -> None:
     shutil.copytree(ASSETS_SOURCE_DIR, BUILD_DIR / "assets", dirs_exist_ok=True)
 
-def copy_dist_bundle() -> None:
-    shutil.copy2(DIST_MINIFIED_SOURCE, DIST_MINIFIED_BUILD)
+def copy_release_bundle() -> None:
+    shutil.copy2(RELEASE_MINIFIED_SOURCE, RELEASE_MINIFIED_BUILD)
 
 def copy_examples() -> None:
     EXAMPLES_BUILD_DIR.mkdir(parents=True, exist_ok=True)
@@ -71,8 +71,8 @@ def copy_examples() -> None:
 
 def rewrite_example_import_paths(file_path: Path) -> None:
     content = file_path.read_text(encoding="utf-8")
-    content = content.replace(IIFE_SCRIPT_OLD, IIFE_SCRIPT_NEW)
-    content = content.replace(ESM_IMPORT_OLD, ESM_IMPORT_NEW)
+    content = content.replace(LOCAL_IIFE_SCRIPT, CDN_IIFE_SCRIPT)
+    content = content.replace(LOCAL_ESM_IMPORT, CDN_ESM_IMPORT)
     file_path.write_text(content, encoding="utf-8")
 
 def build_docs() -> None:
@@ -90,7 +90,7 @@ def main() -> int:
     reset_build_directory()
     copy_homepage_files()
     copy_assets()
-    copy_dist_bundle()
+    copy_release_bundle()
     copy_examples()
     build_docs()
     copy_docs_assets()

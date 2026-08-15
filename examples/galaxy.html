@@ -18,7 +18,7 @@
     <body>
         <canvas></canvas>
         <script src="https://cdn.jsdelivr.net/pyodide/v0.29.3/full/pyodide.js"></script>
-        <script src="../dist/WasmGPU.iife.min.js"></script>
+        <script src="../release/WasmGPU.iife.min.js"></script>
         <script type="module">
             const canvas = document.querySelector("canvas");
             const wgpu = await WasmGPU.create(canvas, { powerPreference: "high-performance", antialias: true, frustumCulling: true });

@@ -2,8 +2,8 @@ node_modules/
 tools/
 target/
 rust/target/
-build/debug.wasm
-build/*.map
+wasm/debug.wasm
+wasm/*.map
 website/build/
 playwright-report/
 blob-report/

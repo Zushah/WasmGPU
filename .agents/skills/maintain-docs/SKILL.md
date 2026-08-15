@@ -1,11 +1,11 @@
 ---
 name: maintain-docs
-description: Audit, write, maintain, and verify WasmGPU Markdown documentation under ./website/src/docs/ with source-backed release and maintenance workflows. Use for release documentation preparation, API or member-page creation and updates, stale-doc cleanup, documentation coverage audits, link and index checks, or verification of documentation diffs. Support release, maintain, and verify modes. In release mode, stop for approval after producing the audit and before editing documentation.
+description: Audit, write, maintain, and verify WasmGPU Markdown documentation under ./website/docs/ with source-backed release and maintenance workflows. Use for release documentation preparation, API or member-page creation and updates, stale-doc cleanup, documentation coverage audits, link and index checks, or verification of documentation diffs. Support release, maintain, and verify modes. In release mode, stop for approval after producing the audit and before editing documentation.
 ---
 
 # Maintain Docs
 
-Maintain `./website/src/docs/` as a hand-written, source-backed reference for WasmGPU. Treat current source, tests, and examples as evidence; use `./ARCHITECTURE.md` as a map rather than a substitute for inspecting them.
+Maintain `./website/docs/` as a hand-written, source-backed reference for WasmGPU. Treat current source, tests, and examples as evidence; use `./ARCHITECTURE.md` as a map rather than a substitute for inspecting them.
 
 ## Select a mode
 
@@ -18,8 +18,8 @@ If the mode is omitted, infer it from the request and state the choice. Ask only
 ## Preserve boundaries
 
 1. Snapshot `git status --short` before working. Preserve all pre-existing changes and never use blanket restore commands.
-2. Default documentation writes to `./website/src/docs/**`. In `release` mode, also write the audit ledger under `./.cache/`, which is intentionally gitignored.
-3. Treat `./ARCHITECTURE.md`, `./README.md`, `./CHANGELOG.md`, `./website/src/home/`, `./website/src/examples/`, `./website/build/`, `./build/`, `./dist/`, `./mkdocs.yaml`, `./scripts/`, source, tests, examples, assets, and package files as read-only unless the user explicitly expands the task.
+2. Default documentation writes to `./website/docs/**`. In `release` mode, also write the audit ledger under `./.cache/`, which is intentionally gitignored.
+3. Treat `./ARCHITECTURE.md`, `./README.md`, `./CHANGELOG.md`, `./website/home/`, `./website/examples/`, `./website/build/`, `./wasm/`, `./release/`, `./mkdocs.yaml`, `./scripts/`, source, tests, examples, assets, and package files as read-only unless the user explicitly expands the task.
 4. Do not run `npm run website` or `./scripts/build_website.py`.
 5. Do not generate Markdown prose from declarations or use a script to bulk-create reference pages. Write and review prose manually.
 6. Create new or touched documentation files with LF line endings and exactly one final newline.
@@ -29,8 +29,8 @@ If the mode is omitted, infer it from the request and state the choice. Ask only
 
 Before editing:
 
-1. Read `./.CONTRIBUTING.md` and the relevant documentation and subsystem sections of `./ARCHITECTURE.md`.
-2. Inspect `./src/index.ts`, public factories in `./src/core/engine.ts`, the source that owns the behavior, important callers, related WGSL or Rust when applicable, focused tests, and at least one representative example.
+1. Read `./CONTRIBUTING.md` and the relevant documentation and subsystem sections of `./ARCHITECTURE.md`.
+2. Inspect `./typescript/index.ts`, public factories in `./typescript/core/engine.ts`, the source that owns the behavior, important callers, related WGSL or Rust when applicable, focused tests, and at least one representative example.
 3. Inspect the affected documentation page, its section index, sibling member pages, and nearby cross-links.
 4. Inspect relevant history and renames. For release work, use commit history, a three-dot diff from the baseline to the target, and the target-to-worktree diff when the checked-out worktree contains release changes.
 5. Prefer current source when release-facing prose describes an older release. Mark uncertainty instead of inventing behavior.
@@ -45,13 +45,13 @@ Before editing:
 4. Map each release-visible addition, change, rename, and removal to its source symbols, callers, tests, examples, affected pages, cross-cutting effects, priority, and documentation disposition.
 5. Give every public-surface delta one disposition: `add`, `update`, `remove`, `group`, or `no-op`. For `group` and `no-op`, record the exact APIs and rationale.
 6. Derive stale searches from old names, removed names, old version strings, and changed unions or result shapes. Do not rely on a hard-coded list from a previous release.
-7. Write only the ledger. Do not edit or normalize `./website/src/docs/` during the audit turn.
+7. Write only the ledger. Do not edit or normalize `./website/docs/` during the audit turn.
 8. Report the proposed subsystem batches, uncertainties, and out-of-scope follow-ups. Stop and request approval.
 
 ### Implement after approval
 
 1. Re-read the approved ledger and current working-tree state. Reconcile intervening source changes before writing.
-2. At the start of the first approved implementation turn, normalize every Markdown file under `./website/src/docs/` to LF with:
+2. At the start of the first approved implementation turn, normalize every Markdown file under `./website/docs/` to LF with:
 
    ```bash
    python ./.agents/skills/maintain-docs/scripts/validate_docs.py --all --normalize-lf
@@ -111,7 +111,7 @@ Do not normalize untouched documentation in `maintain` mode.
 
 Run `./.agents/skills/maintain-docs/scripts/validate_docs.py` from the repository root.
 
-- Pass `--all` to select every Markdown file under `./website/src/docs/`.
+- Pass `--all` to select every Markdown file under `./website/docs/`.
 - Pass `--files <path>...` to select an explicit subset inside that directory.
 - Add `--normalize-lf` only in approved release implementation or for files owned by a maintain task.
 - Add `--require-inbound <path>...` for new pages that must be linked from another Markdown page.

@@ -18,7 +18,7 @@
     <body>
         <canvas></canvas>
         <script type="module">
-            import { WasmGPU } from "../dist/WasmGPU.min.js";
+            import { WasmGPU } from "../release/WasmGPU.min.js";
             const main = async () => {
                 const canvas = document.querySelector("canvas");
                 const wgpu = await WasmGPU.create(canvas);

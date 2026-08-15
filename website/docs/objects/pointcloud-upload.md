@@ -1,0 +1,50 @@
+# PointCloud.upload
+
+## Summary
+PointCloud.upload uploads pending CPU/wasm data into GPU buffers so this PointCloud is render-ready.
+
+## Syntax
+```ts
+PointCloud.upload(device: GPUDevice, queue: GPUQueue): void
+pointCloud.upload(device, queue);
+```
+
+## Parameters
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `device` | `GPUDevice` | Yes | GPUDevice used to allocate pipelines, buffers, layouts, or textures. |
+| `queue` | `GPUQueue` | Yes | GPUQueue used for data uploads and command submissions. |
+
+## Returns
+`void` - No return value. The call applies side effects to runtime state and/or GPU resources.
+
+## Type Details
+```ts
+// No additional descriptor expansion is required for this signature.
+```
+
+## Example
+```js
+const canvas = document.querySelector("canvas");
+const wgpu = await WasmGPU.create(canvas);
+
+const pointCloud = wgpu.createPointCloud({ data: new Float32Array([0, 0, 0, 0.1, 1, 0, 0, 0.8]), scaleTransform: { mode: "linear", domainMin: 0, domainMax: 1 } });
+const device = wgpu.gpu.device;
+const queue = wgpu.gpu.queue;
+pointCloud.upload(device, queue);
+console.log("updated");
+```
+
+## See Also
+- [PointCloud.applyScaleStats](./pointcloud-applyscalestats.md)
+- [PointCloud.basePointSize](./pointcloud-basepointsize.md)
+- [PointCloud.colormap](./pointcloud-colormap.md)
+- [PointCloud.colormapStops](./pointcloud-colormapstops.md)
+- [PointCloud.computeBoundsFromCPUData](./pointcloud-computeboundsfromcpudata.md)
+- [PointCloud.destroy](./pointcloud-destroy.md)
+- [PointCloud.dirtyUniforms](./pointcloud-dirtyuniforms.md)
+- [PointCloud.dropCPUData](./pointcloud-dropcpudata.md)
+- [PointCloud.getBounds](./pointcloud-getbounds.md)
+- [PointCloud.getColormapForBinding](./pointcloud-getcolormapforbinding.md)
+- [PointCloud.getColormapKey](./pointcloud-getcolormapkey.md)
+- [PointCloud.getLocalBounds](./pointcloud-getlocalbounds.md)

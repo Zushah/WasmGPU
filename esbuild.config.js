@@ -33,34 +33,34 @@ const common = {
 try {
   await esbuild.build({
     ...common,
-    entryPoints: ["./src/index.ts"],
+    entryPoints: ["./typescript/index.ts"],
     define: {
       __WASMGPU_BASE_URL__: "import.meta.url"
     },
     format: "esm",
     minify: false,
-    outfile: "./dist/WasmGPU.js"
+    outfile: "./release/WasmGPU.js"
   });
   await esbuild.build({
     ...common,
-    entryPoints: ["./src/index.ts"],
+    entryPoints: ["./typescript/index.ts"],
     define: {
       __WASMGPU_BASE_URL__: "import.meta.url"
     },
     format: "esm",
     minify: true,
-    outfile: "./dist/WasmGPU.min.js"
+    outfile: "./release/WasmGPU.min.js"
   });
   await esbuild.build({
     ...common,
-    entryPoints: ["./src/index.iife.ts"],
+    entryPoints: ["./typescript/index.iife.ts"],
     define: {
       __WASMGPU_BASE_URL__: "\"__CURRENT_SCRIPT__\""
     },
     format: "iife",
     globalName: "WasmGPU",
     minify: true,
-    outfile: "./dist/WasmGPU.iife.min.js",
+    outfile: "./release/WasmGPU.iife.min.js",
     footer: {
       js: `
 (() => {
@@ -69,8 +69,8 @@ try {
 })();`
     }
   });
-  fs.copyFileSync("./build/wasm.wasm", "./dist/wasm.wasm");
-  fs.copyFileSync("./build/wasm.js", "./dist/wasm.js");
+  fs.copyFileSync("./wasm/wasm.wasm", "./release/wasm.wasm");
+  fs.copyFileSync("./wasm/wasm.js", "./release/wasm.js");
 } catch (e) {
   process.exit(1);
 }

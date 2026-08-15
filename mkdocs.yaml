@@ -3,7 +3,7 @@ site_description: WebGPU × WebAssembly rendering and computing engine for scien
 site_url: https://zushah.github.io/WasmGPU/
 repo_url: https://www.github.com/Zushah/WasmGPU
 repo_name: Zushah/WasmGPU
-docs_dir: ./website/src/docs/
+docs_dir: ./website/docs/
 site_dir: ./website/build/docs/
 
 theme:

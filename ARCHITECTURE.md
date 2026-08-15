@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Thursday, August 13, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Saturday, August 15, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Thursday, August 13, 2026, [**`1c890c8`**](https://www.github.com/Zushah/WasmGPU/commit/1c890c8).
+Parent commit: Thursday, August 13, 2026, [**`2b72600`**](https://www.github.com/Zushah/WasmGPU/commit/2b72600).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -227,17 +227,17 @@ This diagram describes the current source tree, including [unreleased work](http
 
 ### 1.2. Public API surface
 
-The public API is exported from `./src/index.ts`. It exports the `WasmGPU` class, the renderer, compute helpers, scaling helpers, world objects, graphics objects, glTF helpers, overlay and annotation types, Python interop, WebAssembly interop, and math helpers.
+The public API is exported from `./typescript/index.ts`. It exports the `WasmGPU` class, the renderer, compute helpers, scaling helpers, world objects, graphics objects, glTF helpers, overlay and annotation types, Python interop, WebAssembly interop, and math helpers.
 
-Applications normally enter through `WasmGPU.create(canvas, descriptor)` in `./src/core/engine.ts`. The runtime initializes WebAssembly, creates a WebGPU renderer, constructs the compute subsystem, and exposes factories for scenes, cameras, controls, geometry, materials, textures, meshes, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, lights, glTF loading, animation, overlays, and annotations.
+Applications normally enter through `WasmGPU.create(canvas, descriptor)` in `./typescript/core/engine.ts`. The runtime initializes WebAssembly, creates a WebGPU renderer, constructs the compute subsystem, and exposes factories for scenes, cameras, controls, geometry, materials, textures, meshes, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, lights, glTF loading, animation, overlays, and annotations.
 
 The public API reads and writes data owned by the objects it creates. For example, a `Mesh` owns a transform, references geometry and material objects, and may own skin or morph runtime state. `Geometry`, `PointCloud`, `GlyphField`, `NodeLink`, `SplatField`, and `LatticeSpace` keep CPU-side records for external WebAssembly memory upload paths only when configured to retain CPU data. `PointCloud`, `GlyphField`, `NodeLink`, `SplatField`, and `LatticeSpace` follow an explicit external-buffer ownership model of owning GPU buffers they create internally and destroying caller-supplied external buffers only when constructed with `ownBuffers: true`. `PointCloud` supports setter-level `ownBuffer: true` on point and color buffer replacement, `GlyphField` supports setter-level `ownBuffers: true` on instance-buffer replacement, `NodeLink` supports setter-level `ownBuffer: true` on per-channel node and edge buffer replacement, and `LatticeSpace` supports setter-level `ownBuffer: true` on data and mask buffer replacement. `DataMaterial` handles externally supplied data buffers differently because it does not destroy a `dataBuffer` supplied by the caller.
 
-Before changing exported names, constructor descriptors, or factory return values, inspect `./src/index.ts`, `./src/core/engine.ts`, `./test/*.test.js`, and the examples under `./examples/`. Public API changes often require updates to examples and release-facing documentation when preparing a release.
+Before changing exported names, constructor descriptors, or factory return values, inspect `./typescript/index.ts`, `./typescript/core/engine.ts`, `./tests/*.test.js`, and the examples under `./examples/`. Public API changes often require updates to examples and release-facing documentation when preparing a release.
 
 ### 1.3. Runtime creation and frame loop
 
-Runtime creation starts in `./src/core/engine.ts`. `WasmGPU.create()` calls `initWebAssembly()` from `./src/wasm/index.ts`, then calls `Renderer.create()` from `./src/core/renderer.ts`. It then creates `Compute`, `ScaleService`, and `PerformanceStats` instances.
+Runtime creation starts in `./typescript/core/engine.ts`. `WasmGPU.create()` calls `initWebAssembly()` from `./typescript/wasm/index.ts`, then calls `Renderer.create()` from `./typescript/core/renderer.ts`. It then creates `Compute`, `ScaleService`, and `PerformanceStats` instances.
 
 The runtime owns:
 
@@ -247,44 +247,44 @@ The runtime owns:
 - performance stats;
 - requestAnimationFrame loop state.
 
-It also exposes accessors from `./src/wasm/index.ts` for the WebAssembly driver (`driver`) and the external WebAssembly interop (`webassembly`), alongside the Python interop (`python`) accessors from `./src/python/index.ts`.
+It also exposes accessors from `./typescript/wasm/index.ts` for the WebAssembly driver (`driver`) and the external WebAssembly interop (`webassembly`), alongside the Python interop (`python`) accessors from `./typescript/python/index.ts`.
 
 `WasmGPU.run(callback)` starts a browser animation loop. Each frame resets the WebAssembly frame arena, computes timing values, invokes the callback, and records frame statistics. `WasmGPU.render(scene, camera)` delegates to `Renderer.render()`. If the runtime is not inside `run()`, it resets the frame arena before rendering.
 
-`WasmGPU.destroy()` stops the frame loop, clears the scaling cache, destroys compute resources, and destroys the renderer. Contributors changing lifetime behavior should inspect both `./src/core/engine.ts` and the resource `destroy()` methods in the objects that can be attached to a scene.
+`WasmGPU.destroy()` stops the frame loop, clears the scaling cache, destroys compute resources, and destroys the renderer. Contributors changing lifetime behavior should inspect both `./typescript/core/engine.ts` and the resource `destroy()` methods in the objects that can be attached to a scene.
 
 ### 1.4. WebGPU engine
 
-The WebGPU engine coordinates the browser-facing parts of the runtime. Its main files are `./src/core/engine.ts`, `./src/core/renderer.ts`, the internal renderer helper modules under `./src/core/`, `./src/core/stats.ts`, `./src/core/transform.ts`, and the subsystem directories under `./src/`.
+The WebGPU engine coordinates the browser-facing parts of the runtime. Its main files are `./typescript/core/engine.ts`, `./typescript/core/renderer.ts`, the internal renderer helper modules under `./typescript/core/`, `./typescript/core/stats.ts`, `./typescript/core/transform.ts`, and the subsystem directories under `./typescript/`.
 
 The engine reads scene objects, transform state, camera state, material state, texture state, compute descriptors, overlay descriptors, and WebAssembly memory views. It mutates cached renderer state, GPU buffers, bind groups, draw lists, pick state, performance counters, per-frame staging memory, and optional occlusion hierarchy resources used by render-only previous-frame occlusion culling.
 
-`./src/core/renderer.ts` owns the public `Renderer` class and the renderer-facing orchestration path. It creates the WebGPU adapter, device, queue, context, fallback textures, global buffers, bind group layouts, pipeline caches, shader caches, draw-list pools, culling scratch state, pick resources, optional occlusion hierarchy textures and readback slots, and optional SMAA resources. Internal modules under `./src/core/` hold the mechanical helper bodies for resources, timing, postprocessing, transmission, drawlists, materials, objects, picking, and occlusion. `Renderer` is the only public runtime renderer class.
+`./typescript/core/renderer.ts` owns the public `Renderer` class and the renderer-facing orchestration path. It creates the WebGPU adapter, device, queue, context, fallback textures, global buffers, bind group layouts, pipeline caches, shader caches, draw-list pools, culling scratch state, pick resources, optional occlusion hierarchy textures and readback slots, and optional SMAA resources. Internal modules under `./typescript/core/` hold the mechanical helper bodies for resources, timing, postprocessing, transmission, drawlists, materials, objects, picking, and occlusion. `Renderer` is the only public runtime renderer class.
 
-`./src/core/stats.ts` stores frame timing, GPU timing when timestamp queries are available, and frame counters. `./src/core/transform.ts` owns the global transform store and calls Rust functions for transform propagation.
+`./typescript/core/stats.ts` stores frame timing, GPU timing when timestamp queries are available, and frame counters. `./typescript/core/transform.ts` owns the global transform store and calls Rust functions for transform propagation.
 
 ### 1.5. Scene and object model
 
-The scene model is implemented in `./src/world/scene.ts`. A `Scene` owns arrays of meshes, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, lights, and a background color. It mutates those arrays through `add()`, `remove()`, `clear()`, and typed add/remove helpers.
+The scene model is implemented in `./typescript/world/scene.ts`. A `Scene` owns arrays of meshes, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, lights, and a background color. It mutates those arrays through `add()`, `remove()`, `clear()`, and typed add/remove helpers.
 
 The renderer reads visible scene objects through scene getters. It also reads scene lighting data and scene bounds. The scene limits non-ambient lights used for packed lighting data to `MAX_LIGHTS`, currently eight.
 
 Objects in the scene own different data:
 
-- `./src/world/mesh.ts`: geometry, material references, transform, optional skin, optional morph runtime state, visibility flags, and scene owner references. Mesh vertex and index data enters the renderer through `Geometry`.
-- `./src/world/pointcloud.ts`: point data, optional borrowed external WebAssembly memory views, bounds, scale source metadata, colormap state, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external point and color buffers.
-- `./src/world/glyphfield.ts`: glyph geometry, instance data, optional borrowed external WebAssembly memory views, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external instance buffers.
-- `./src/world/nodelink.ts`: node data, edge data, optional borrowed external WebAssembly memory views, node and edge rendering modes, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external node and edge buffers.
-- `./src/world/splatfield.ts`: Gaussian splat instance data, optional borrowed external WebAssembly memory views, packed GPU buffers, transform, bounds, optional CPU records for upload and bounds computation, and per-object ownership flags for external buffers.
-- `./src/world/latticespace.ts`: regular 2D or 3D cell dimensions, X-fastest scalar/vector/RGBA data, optional activity masks, CPU/WebAssembly/GPU source ownership, scale and colormap state, analytic bounds, and retained cell records for picking.
+- `./typescript/world/mesh.ts`: geometry, material references, transform, optional skin, optional morph runtime state, visibility flags, and scene owner references. Mesh vertex and index data enters the renderer through `Geometry`.
+- `./typescript/world/pointcloud.ts`: point data, optional borrowed external WebAssembly memory views, bounds, scale source metadata, colormap state, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external point and color buffers.
+- `./typescript/world/glyphfield.ts`: glyph geometry, instance data, optional borrowed external WebAssembly memory views, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external instance buffers.
+- `./typescript/world/nodelink.ts`: node data, edge data, optional borrowed external WebAssembly memory views, node and edge rendering modes, scale source metadata, transform, GPU buffers, uniform buffers, optional CPU records for picking, and per-buffer ownership flags for external node and edge buffers.
+- `./typescript/world/splatfield.ts`: Gaussian splat instance data, optional borrowed external WebAssembly memory views, packed GPU buffers, transform, bounds, optional CPU records for upload and bounds computation, and per-object ownership flags for external buffers.
+- `./typescript/world/latticespace.ts`: regular 2D or 3D cell dimensions, X-fastest scalar/vector/RGBA data, optional activity masks, CPU/WebAssembly/GPU source ownership, scale and colormap state, analytic bounds, and retained cell records for picking.
 
 Mesh geometry and materials are reference-counted. `Mesh.destroy()` detaches the mesh from scene owners, destroys morph runtime state, disposes the skin instance, disposes the transform, and releases geometry and material references. `Scene.clear()` and typed clear methods remove scene references; they do not call `destroy()` on removed objects. `Scene.destroy()` calls `destroy()` on current meshes, pointclouds, glyphfields, nodelinks, splatfields, and latticespaces, then clears lights. Pointcloud, glyphfield, nodelink, splatfield, and latticespace changes should be checked against renderer draw-list building, object-family culling behavior, GPU buffer ownership, picking paths, overlay legends where applicable, and tests.
 
 ### 1.6. Transforms
 
-Transforms are implemented in `./src/core/transform.ts` and backed by WebAssembly memory. The global `TransformStore` uses structure-of-arrays storage for positions, rotations, scales, local matrices, world matrices, parent indices, and traversal order.
+Transforms are implemented in `./typescript/core/transform.ts` and backed by WebAssembly memory. The global `TransformStore` uses structure-of-arrays storage for positions, rotations, scales, local matrices, world matrices, parent indices, and traversal order.
 
-Each `Transform` object keeps JavaScript-side position, rotation, and scale arrays plus parent/child links. Mutating a transform marks it dirty. The store then calls Rust functions from `./rust/src/transform.rs` through `./src/wasm/index.ts` to compose local matrices and update world matrices.
+Each `Transform` object keeps JavaScript-side position, rotation, and scale arrays plus parent/child links. Mutating a transform marks it dirty. The store then calls Rust functions from `./rust/src/transform.rs` through `./typescript/wasm/index.ts` to compose local matrices and update world matrices.
 
 The transform store mutates:
 
@@ -296,47 +296,47 @@ Capacity growth allocates and copies replacement structure-of-arrays blocks befo
 
 ### 1.7. Geometry, materials, textures, and colormaps
 
-Graphics data is implemented under `./src/graphics/`.
+Graphics data is implemented under `./typescript/graphics/`.
 
-`./src/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, RGBA vertex colors, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It can also borrow external `WasmMemoryView` sources for mesh vertex attributes, colors, and indices, explicitly refresh them, and upload active ranges into geometry-owned GPU buffers without owning or freeing the external WebAssembly memory. It calls Rust bounds and normal-generation functions through `./src/wasm/index.ts`; these synchronous operations use scoped WebAssembly heap scratch that is released after results are copied into JavaScript-owned arrays. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry.
+`./typescript/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, RGBA vertex colors, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It can also borrow external `WasmMemoryView` sources for mesh vertex attributes, colors, and indices, explicitly refresh them, and upload active ranges into geometry-owned GPU buffers without owning or freeing the external WebAssembly memory. It calls Rust bounds and normal-generation functions through `./typescript/wasm/index.ts`; these synchronous operations use scoped WebAssembly heap scratch that is released after results are copied into JavaScript-owned arrays. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry.
 
-`./src/graphics/material.ts` implements `Material`, `UnlitMaterial`, `StandardMaterial`, `DataMaterial`, and `CustomMaterial`. Materials own uniform buffers, bind groups, texture references, WebGPU state, and dirty state, while standard materials expose glTF-style physically based rendering properties. Standard material layouts and imported WGSL shaders are specialized and cached by material features and mesh variant, with resource-limit validation before layout creation.
+`./typescript/graphics/material.ts` implements `Material`, `UnlitMaterial`, `StandardMaterial`, `DataMaterial`, and `CustomMaterial`. Materials own uniform buffers, bind groups, texture references, WebGPU state, and dirty state, while standard materials expose glTF-style physically based rendering properties. Standard material layouts and imported WGSL shaders are specialized and cached by material features and mesh variant, with resource-limit validation before layout creation.
 
 `DataMaterial` reads f32 data or external GPU buffers, uses a `ScaleTransform`, and can feed the scaling service. It owns GPU data buffers created from CPU data; `setDataBuffer()` stores caller-provided buffer handles without marking them owned. `CustomMaterial` reads caller-provided WGSL and uniform definitions. Material changes should be checked against renderer pipeline selection, WGSL shader variants, bind group layout creation, texture upload paths, tests, and glTF import.
 
-`./src/graphics/texture.ts` wraps image bytes, URLs, `ImageBitmap` sources, sampler descriptors, GPU textures, and mipmap generation. Texture upload is asynchronous, supports configurable browser decoding and safe cancellation, and exposes terminal upload errors while renderer paths use fallback resources. Shared URL and glTF sources reuse encoded image data, while differing linear and sRGB uses receive separate GPU textures and mip chains.
+`./typescript/graphics/texture.ts` wraps image bytes, URLs, `ImageBitmap` sources, sampler descriptors, GPU textures, and mipmap generation. Texture upload is asynchronous, supports configurable browser decoding and safe cancellation, and exposes terminal upload errors while renderer paths use fallback resources. Shared URL and glTF sources reuse encoded image data, while differing linear and sRGB uses receive separate GPU textures and mip chains.
 
-`./src/graphics/colormap.ts` stores built-in or caller-provided color stops, optional CPU lookup tables, and optional caller-provided GPU texture views and samplers. It can create cached GPU lookup resources for a device, and CPU sampling works only for colormaps that have CPU lookup data.
+`./typescript/graphics/colormap.ts` stores built-in or caller-provided color stops, optional CPU lookup tables, and optional caller-provided GPU texture views and samplers. It can create cached GPU lookup resources for a device, and CPU sampling works only for colormaps that have CPU lookup data.
 
 ### 1.8. Pointcloud, glyphfield, nodelink, splatfield, and latticespace data
 
 Pointclouds, glyphfields, nodelinks, splatfields, and latticespaces are separate scene object types. They share several patterns: a transform, visibility flags, GPU buffer references, uniform buffers, bind groups, bounds, and renderer-owned draw-list state. Pointclouds, glyphfields, nodelinks, and latticespaces carry scale transform state plus optional CPU records for picking, while splatfields carry packed Gaussian attributes, optional CPU records for picking, and private renderer-side GPU sort state for transparent rendering.
 
-`./src/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays, borrowed external `WasmMemoryView<Float32Array>` sources, or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available or external WebAssembly data is explicitly refreshed with bounds recomputation. Pointcloud WebAssembly sources are borrowed, refresh is explicit, and upload copies the active packed f32 vec4 ranges into pointcloud-owned GPU buffers without freeing or owning the external WebAssembly memory. It owns GPU buffers it creates from CPU data or external WebAssembly sources and destroys caller-supplied external point and color buffers only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer.
+`./typescript/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays, borrowed external `WasmMemoryView<Float32Array>` sources, or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available or external WebAssembly data is explicitly refreshed with bounds recomputation. Pointcloud WebAssembly sources are borrowed, refresh is explicit, and upload copies the active packed f32 vec4 ranges into pointcloud-owned GPU buffers without freeing or owning the external WebAssembly memory. It owns GPU buffers it creates from CPU data or external WebAssembly sources and destroys caller-supplied external point and color buffers only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer.
 
-`./src/world/glyphfield.ts` handles instanced glyph geometry. It can read CPU arrays, internal WebAssembly structure-of-arrays pointers, borrowed external `WasmMemoryView<Float32Array>` sources, or external GPU buffers. It writes instance buffers and uniform buffers. Glyphfield external WebAssembly sources are borrowed, refresh is explicit, and upload copies active packed f32 vec4 channel ranges into glyphfield-owned GPU buffers without freeing or owning the external WebAssembly memory. It owns GPU buffers it creates from CPU arrays, internal WebAssembly pointers, or external WebAssembly sources and borrows caller-supplied external instance buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffers: true` is used. Glyph geometry is a `Geometry` reference used by the renderer; `GlyphField.destroy()` currently destroys the stored uniform buffer plus only the instance buffers it owns, and it disposes its transform. It does not release the geometry reference. Glyphfield bounds use Rust bounds helpers when CPU arrays, internal WebAssembly pointers, or explicitly refreshed external WebAssembly position/scale data are available.
+`./typescript/world/glyphfield.ts` handles instanced glyph geometry. It can read CPU arrays, internal WebAssembly structure-of-arrays pointers, borrowed external `WasmMemoryView<Float32Array>` sources, or external GPU buffers. It writes instance buffers and uniform buffers. Glyphfield external WebAssembly sources are borrowed, refresh is explicit, and upload copies active packed f32 vec4 channel ranges into glyphfield-owned GPU buffers without freeing or owning the external WebAssembly memory. It owns GPU buffers it creates from CPU arrays, internal WebAssembly pointers, or external WebAssembly sources and borrows caller-supplied external instance buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffers: true` is used. Glyph geometry is a `Geometry` reference used by the renderer; `GlyphField.destroy()` currently destroys the stored uniform buffer plus only the instance buffers it owns, and it disposes its transform. It does not release the geometry reference. Glyphfield bounds use Rust bounds helpers when CPU arrays, internal WebAssembly pointers, or explicitly refreshed external WebAssembly position/scale data are available.
 
-`./src/world/nodelink.ts` handles node positions, node scalar or color data, node radii, edges, node geometry modes, edge geometry modes, separate node and edge scale transforms, separate colormaps, uniform data, and picking records. It can read CPU arrays, borrowed external `WasmMemoryView` sources, or external GPU buffers per channel. Nodelink external WebAssembly sources are borrowed, refresh is explicit, and upload copies active node and edge ranges into nodelink-owned GPU buffers without freeing or owning the external WebAssembly memory. It computes bounds from retained CPU node positions in TypeScript. Its update methods can queue or write GPU-buffer changes for node positions, edges, scalars, radii, and colors. It owns GPU buffers it creates from CPU data or external WebAssembly sources and borrows caller-supplied external node and edge buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer. The renderer has nodelink draw and pick paths, and overlay legends can read nodelink scale and colormap state.
+`./typescript/world/nodelink.ts` handles node positions, node scalar or color data, node radii, edges, node geometry modes, edge geometry modes, separate node and edge scale transforms, separate colormaps, uniform data, and picking records. It can read CPU arrays, borrowed external `WasmMemoryView` sources, or external GPU buffers per channel. Nodelink external WebAssembly sources are borrowed, refresh is explicit, and upload copies active node and edge ranges into nodelink-owned GPU buffers without freeing or owning the external WebAssembly memory. It computes bounds from retained CPU node positions in TypeScript. Its update methods can queue or write GPU-buffer changes for node positions, edges, scalars, radii, and colors. It owns GPU buffers it creates from CPU data or external WebAssembly sources and borrows caller-supplied external node and edge buffers by default, destroying them only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer. The renderer has nodelink draw and pick paths, and overlay legends can read nodelink scale and colormap state.
 
-`./src/world/splatfield.ts` handles precomputed Gaussian splat records. It reads friendly CPU arrays, borrowed external `WasmMemoryView<Float32Array>` sources, or caller-supplied packed GPU buffers for center-plus-opacity, rotation, scale, and either direct color data or spherical harmonic color coefficients. Splatfield external WebAssembly sources are borrowed, refresh is explicit, and upload copies active packed ranges into splatfield-owned GPU buffers without freeing or owning the external WebAssembly memory. Splatfield keeps CPU arrays, external WebAssembly memory upload, and external GPU buffers as distinct source families. Spherical harmonic coefficients use flat f32 RGB-triple storage for degree 0 through degree 3 and can come from `sh0`, `sh1`, `sh2`, and `sh3` CPU arrays, an external `shBuffer`, or an external `wasmSphericalHarmonics` source. CPU direct colors in sRGB space are decoded to linear during packing. External direct colors in sRGB space and spherical harmonic colors in sRGB space are decoded in the shader. In spherical harmonic mode, the splatfield render shader evaluates RGB from the local-frame view direction; it does not rotate coefficients with Wigner-D matrices. Bounds can come from explicit descriptors or from conservative CPU-side center-plus-scale expansion. `SplatField.destroy()` destroys internally created buffers and optionally destroys caller-supplied external buffers when `ownBuffers: true`. The renderer treats splatfields as transparent-only objects, GPU-sorts each field by camera depth for rendering, includes them in nearest-footprint picking without consuming the sorted index buffer, but excludes them from occlusion culling.
+`./typescript/world/splatfield.ts` handles precomputed Gaussian splat records. It reads friendly CPU arrays, borrowed external `WasmMemoryView<Float32Array>` sources, or caller-supplied packed GPU buffers for center-plus-opacity, rotation, scale, and either direct color data or spherical harmonic color coefficients. Splatfield external WebAssembly sources are borrowed, refresh is explicit, and upload copies active packed ranges into splatfield-owned GPU buffers without freeing or owning the external WebAssembly memory. Splatfield keeps CPU arrays, external WebAssembly memory upload, and external GPU buffers as distinct source families. Spherical harmonic coefficients use flat f32 RGB-triple storage for degree 0 through degree 3 and can come from `sh0`, `sh1`, `sh2`, and `sh3` CPU arrays, an external `shBuffer`, or an external `wasmSphericalHarmonics` source. CPU direct colors in sRGB space are decoded to linear during packing. External direct colors in sRGB space and spherical harmonic colors in sRGB space are decoded in the shader. In spherical harmonic mode, the splatfield render shader evaluates RGB from the local-frame view direction; it does not rotate coefficients with Wigner-D matrices. Bounds can come from explicit descriptors or from conservative CPU-side center-plus-scale expansion. `SplatField.destroy()` destroys internally created buffers and optionally destroys caller-supplied external buffers when `ownBuffers: true`. The renderer treats splatfields as transparent-only objects, GPU-sorts each field by camera depth for rendering, includes them in nearest-footprint picking without consuming the sorted index buffer, but excludes them from occlusion culling.
 
-`./src/world/latticespace.ts` handles regular 2D and 3D cell lattices. Public dimensions are spatial `[x, y]` or `[x, y, z]`, while flat data is C-compatible X-fastest storage: `x + width * y` in 2D and `x + width * (y + height * z)` in 3D. Dimensions and component count are immutable structural properties. Scalar, vector, RGBA, and solid-color visualization share scale, colormap, clipping, mask, filtering, ownership, WebAssembly refresh, and CPU-retention behavior with the other scientific primitives. Bounds are analytic from origin, spacing, cell scale, index range, and transform. The renderer draws one procedural quad for 2D lattices and procedural cube instances for 3D lattices; `cellScale < 1` exposes separated cell faces, while fully packed cells suppress shared internal faces. Transparent 3D lattices use a latticespace-private GPU radix sorter over implicit cell centers; it reuses the raw scan WGSL sources but does not use or extend the public compute kernel API. Picking returns exact linear and spatial cell indices, and opaque latticespaces participate in occlusion capture and filtering. This surface renderer does not implement raymarched participating-media volume rendering, bricking, or out-of-core streaming.
+`./typescript/world/latticespace.ts` handles regular 2D and 3D cell lattices. Public dimensions are spatial `[x, y]` or `[x, y, z]`, while flat data is C-compatible X-fastest storage: `x + width * y` in 2D and `x + width * (y + height * z)` in 3D. Dimensions and component count are immutable structural properties. Scalar, vector, RGBA, and solid-color visualization share scale, colormap, clipping, mask, filtering, ownership, WebAssembly refresh, and CPU-retention behavior with the other scientific primitives. Bounds are analytic from origin, spacing, cell scale, index range, and transform. The renderer draws one procedural quad for 2D lattices and procedural cube instances for 3D lattices; `cellScale < 1` exposes separated cell faces, while fully packed cells suppress shared internal faces. Transparent 3D lattices use a latticespace-private GPU radix sorter over implicit cell centers; it reuses the raw scan WGSL sources but does not use or extend the public compute kernel API. Picking returns exact linear and spatial cell indices, and opaque latticespaces participate in occlusion capture and filtering. This surface renderer does not implement raymarched participating-media volume rendering, bricking, or out-of-core streaming.
 
-Before changing one of these object types, inspect the matching WGSL under `./src/wgsl/world/`, the renderer drawlist and object helper code under `./src/core/renderer.ts`, `./src/core/drawlists.ts`, `./src/core/objects.ts`, `./src/core/picking.ts`, and `./src/core/occlusion.ts` when applicable, picking types in `./src/world/picking.ts` when the object participates in picking, scale source descriptors in `./src/scaling/` when the object participates in scaling, and tests such as `./test/nodelink.test.js` or `./test/splatfield.test.js`.
+Before changing one of these object types, inspect the matching WGSL under `./wgsl/world/`, the renderer drawlist and object helper code under `./typescript/core/renderer.ts`, `./typescript/core/drawlists.ts`, `./typescript/core/objects.ts`, `./typescript/core/picking.ts`, and `./typescript/core/occlusion.ts` when applicable, picking types in `./typescript/world/picking.ts` when the object participates in picking, scale source descriptors in `./typescript/scaling/` when the object participates in scaling, and tests such as `./tests/nodelink.test.js` or `./tests/splatfield.test.js`.
 
 ### 1.9. Lights, cameras, and controls
 
-Lights are implemented in `./src/world/light.ts`. Ambient, directional, point, and spot lights share a base class. Scene lighting data reads light colors, intensities, positions, directions, ranges, and cone angles. glTF import can bind light transforms so imported lights follow imported node transforms.
+Lights are implemented in `./typescript/world/light.ts`. Ambient, directional, point, and spot lights share a base class. Scene lighting data reads light colors, intensities, positions, directions, ranges, and cone angles. glTF import can bind light transforms so imported lights follow imported node transforms.
 
-Cameras are implemented in `./src/world/camera.ts`. The base `Camera` owns a transform and cached view and projection matrices, with camera orientation derived from hierarchy rotations while ignoring scale. `PerspectiveCamera` and `OrthographicCamera` expose their projection parameters; perspective cameras support automatic or fixed aspect ratios and finite or infinite far planes. glTF import preserves authored fixed aspect ratios and omitted infinite perspective far planes.
+Cameras are implemented in `./typescript/world/camera.ts`. The base `Camera` owns a transform and cached view and projection matrices, with camera orientation derived from hierarchy rotations while ignoring scale. `PerspectiveCamera` and `OrthographicCamera` expose their projection parameters; perspective cameras support automatic or fixed aspect ratios and finite or infinite far planes. glTF import preserves authored fixed aspect ratios and omitted infinite perspective far planes.
 
-Controls are implemented in `./src/world/controls.ts`. `NavigationControls` handles orbit, trackball, and fly modes, pointer, keyboard, and wheel input, damping, target state for target-centric modes, fitting to bounds, pointer lock, configurable fly yaw, and event listener cleanup. `OrbitControls`, `TrackballControls`, and `FlyControls` are mode-specific subclasses and runtime factories. Controls mutate camera transforms and emit events used by overlays.
+Controls are implemented in `./typescript/world/controls.ts`. `NavigationControls` handles orbit, trackball, and fly modes, pointer, keyboard, and wheel input, damping, target state for target-centric modes, fitting to bounds, pointer lock, configurable fly yaw, and event listener cleanup. `OrbitControls`, `TrackballControls`, and `FlyControls` are mode-specific subclasses and runtime factories. Controls mutate camera transforms and emit events used by overlays.
 
 Lights, cameras, and controls changes should be checked against renderer uniform packing, scene bounds fitting, overlay projection, glTF camera and light import, and tests that inspect matrix or lighting output.
 
 ### 1.10. Rendering pipeline
 
-The public renderer class is implemented in `./src/core/renderer.ts`. It stores the WebGPU device, queue, canvas context, and swapchain format. It owns renderer-created bind group layouts, fallback resources, pipeline caches, shader caches, model buffers, instance buffers, culling scratch memory, pick resources, optional occlusion hierarchy resources, and optional SMAA resources. The helper files under `./src/core/` split the implementation mechanically by responsibility: `./src/core/resources.ts`, `./src/core/timing.ts`, `./src/core/postprocessing.ts`, `./src/core/transmission.ts`, `./src/core/drawlists.ts`, `./src/core/materials.ts`, `./src/core/objects.ts`, `./src/core/picking.ts`, and `./src/core/occlusion.ts`.
+The public renderer class is implemented in `./typescript/core/renderer.ts`. It stores the WebGPU device, queue, canvas context, and swapchain format. It owns renderer-created bind group layouts, fallback resources, pipeline caches, shader caches, model buffers, instance buffers, culling scratch memory, pick resources, optional occlusion hierarchy resources, and optional SMAA resources. The helper files under `./typescript/core/` split the implementation mechanically by responsibility: `./typescript/core/resources.ts`, `./typescript/core/timing.ts`, `./typescript/core/postprocessing.ts`, `./typescript/core/transmission.ts`, `./typescript/core/drawlists.ts`, `./typescript/core/materials.ts`, `./typescript/core/objects.ts`, `./typescript/core/picking.ts`, and `./typescript/core/occlusion.ts`.
 
 `Renderer.create()` requests a WebGPU adapter and device. It currently supports descriptor fields for antialiasing, power preference, canvas format, frustum culling, frustum culling stats, occlusion culling, occlusion culling stats, and requested device limits such as maximum buffer and binding sizes.
 
@@ -356,9 +356,9 @@ The public renderer class is implemented in `./src/core/renderer.ts`. It stores 
 - submit the command buffer;
 - optionally capture a low-resolution opaque depth hierarchy for a later frame and schedule its readback without blocking the current frame.
 
-The renderer reads scene objects, transform world matrices, material state, texture views, geometry buffers, pointcloud buffers, glyphfield buffers, nodelink buffers, splatfield buffers, latticespace data and mask buffers, camera matrices, light data, and WebAssembly culling results. It mutates GPU buffers, bind groups, pipeline caches, draw-list pools, pick textures, timing query buffers, private splatfield and latticespace sort buffers, internal counters, and the bounded ring of occlusion readback slots. Splatfield bind groups include a spherical harmonic storage-buffer binding; non-SH splatfields use a renderer-owned dummy buffer for that binding. Picking helpers are in `./src/core/picking.ts` while render-only previous-frame occlusion helpers are in `./src/core/occlusion.ts`. Note that picking and warmup do not apply render-only previous-frame occlusion filtering.
+The renderer reads scene objects, transform world matrices, material state, texture views, geometry buffers, pointcloud buffers, glyphfield buffers, nodelink buffers, splatfield buffers, latticespace data and mask buffers, camera matrices, light data, and WebAssembly culling results. It mutates GPU buffers, bind groups, pipeline caches, draw-list pools, pick textures, timing query buffers, private splatfield and latticespace sort buffers, internal counters, and the bounded ring of occlusion readback slots. Splatfield bind groups include a spherical harmonic storage-buffer binding; non-SH splatfields use a renderer-owned dummy buffer for that binding. Picking helpers are in `./typescript/core/picking.ts` while render-only previous-frame occlusion helpers are in `./typescript/core/occlusion.ts`. Note that picking and warmup do not apply render-only previous-frame occlusion filtering.
 
-Changing render behavior usually means checking `./src/core/renderer.ts`, the relevant helper module(s) under `./src/core/`, the graphics classes in `./src/graphics/`, object classes in `./src/world/`, WGSL shader variants in `./src/wgsl/`, and renderer-focused tests in `./test/`.
+Changing render behavior usually means checking `./typescript/core/renderer.ts`, the relevant helper module(s) under `./typescript/core/`, the graphics classes in `./typescript/graphics/`, object classes in `./typescript/world/`, WGSL shader variants in `./wgsl/`, and renderer-focused tests in `./tests/`.
 
 ### 1.11. Browser runtime resources
 
@@ -370,77 +370,77 @@ Changing browser resource layout requires checking usage flags, bind group layou
 
 ### 1.12. Picking, overlays, and annotations
 
-Picking types and selection helpers are implemented in `./src/world/picking.ts`. The renderer keeps the public pick wrappers in `./src/core/renderer.ts`, while `./src/core/picking.ts` implements the actual pick passes. Pick rendering writes object and element identifiers into GPU textures, then reads back the requested pixel or region.
+Picking types and selection helpers are implemented in `./typescript/world/picking.ts`. The renderer keeps the public pick wrappers in `./typescript/core/renderer.ts`, while `./typescript/core/picking.ts` implements the actual pick passes. Pick rendering writes object and element identifiers into GPU textures, then reads back the requested pixel or region.
 
-The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./src/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, nodelinks, splatfields, and latticespaces when CPU records are available. Retained splatfield CPU records can include direct color data or spherical harmonic degree and coefficient data. Picking is nearest-footprint/depth picking and does not evaluate spherical harmonic visual contribution. Pick preparation uses the renderer's base scene-preparation path only, so it does not apply render-only occlusion filtering and does not consume previous-frame occlusion results.
+The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./typescript/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, nodelinks, splatfields, and latticespaces when CPU records are available. Retained splatfield CPU records can include direct color data or spherical harmonic degree and coefficient data. Picking is nearest-footprint/depth picking and does not evaluate spherical harmonic visual contribution. Pick preparation uses the renderer's base scene-preparation path only, so it does not apply render-only occlusion filtering and does not consume previous-frame occlusion results.
 
-The overlay framework lives under `./src/overlay/`. `./src/overlay/system.ts` creates a DOM overlay root next to the canvas, tracks layers, observes resize and scroll changes, listens to controls when attached, and marks layers dirty for camera, viewport, layout, scale, colormap, or interaction changes. Built-in layers include axis triad, grid, and legend layers.
+The overlay framework lives under `./typescript/overlay/`. `./typescript/overlay/system.ts` creates a DOM overlay root next to the canvas, tracks layers, observes resize and scroll changes, listens to controls when attached, and marks layers dirty for camera, viewport, layout, scale, colormap, or interaction changes. Built-in layers include axis triad, grid, and legend layers.
 
-Annotations live under `./src/overlay/annotation/`. The annotation toolkit owns an `AnnotationStore`; `Scene` does not own annotation records. The store owns marker, distance, and angle records. The toolkit reads picking results, creates marker objects in the scene through the marker renderer, and creates labels through the label layer.
+Annotations live under `./typescript/overlay/annotation/`. The annotation toolkit owns an `AnnotationStore`; `Scene` does not own annotation records. The store owns marker, distance, and angle records. The toolkit reads picking results, creates marker objects in the scene through the marker renderer, and creates labels through the label layer.
 
 Overlay and annotation changes cross both DOM and WebGPU paths. Inspect layer types, projection helpers, picking behavior, annotation store revisions, marker scene objects, and examples that attach overlays to controls.
 
 ### 1.13. Compute and ndarray systems
 
-The compute subsystem is implemented under `./src/compute/`. `./src/compute/index.ts` stores the WebGPU device and queue references used for compute work. It creates storage buffers, uniform buffers, compute pipelines, readback rings, scratch pools, ndarray objects, and an optional RGBA8 blitter.
+The compute subsystem is implemented under `./typescript/compute/`. `./typescript/compute/index.ts` stores the WebGPU device and queue references used for compute work. It creates storage buffers, uniform buffers, compute pipelines, readback rings, scratch pools, ndarray objects, and an optional RGBA8 blitter.
 
 The main compute files are:
 
-- `./src/compute/buffer.ts`: storage and uniform GPU buffer wrappers, writes, reads, and typed reads.
-- `./src/compute/pipeline.ts`: compute pipeline descriptors, pipeline creation, and bind group creation.
-- `./src/compute/dispatch.ts`: command encoding and dispatch validation.
-- `./src/compute/workgroups.ts`: workgroup size helpers.
-- `./src/compute/kernels.ts`: built-in copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, and LU factor/solve kernels.
-- `./src/compute/readback.ts`: reusable asynchronous GPU readback slots.
-- `./src/compute/scratch.ts`: scratch buffer pooling.
-- `./src/compute/ndarray.ts`: CPU and GPU ndarray layout, dtype, stride, offset, upload, and readback logic.
-- `./src/compute/blit.ts`: RGBA8 storage-buffer-to-canvas blitting.
+- `./typescript/compute/buffer.ts`: storage and uniform GPU buffer wrappers, writes, reads, and typed reads.
+- `./typescript/compute/pipeline.ts`: compute pipeline descriptors, pipeline creation, and bind group creation.
+- `./typescript/compute/dispatch.ts`: command encoding and dispatch validation.
+- `./typescript/compute/workgroups.ts`: workgroup size helpers.
+- `./typescript/compute/kernels.ts`: built-in copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, and LU factor/solve kernels.
+- `./typescript/compute/readback.ts`: reusable asynchronous GPU readback slots.
+- `./typescript/compute/scratch.ts`: scratch buffer pooling.
+- `./typescript/compute/ndarray.ts`: CPU and GPU ndarray layout, dtype, stride, offset, upload, and readback logic.
+- `./typescript/compute/blit.ts`: RGBA8 storage-buffer-to-canvas blitting.
 
-The compute subsystem reads WGSL from `./src/wgsl/compute/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory. `CPUndarray` owns its backing bytes plus shape, stride, and indexing allocations; `destroy()` releases them idempotently and later memory access throws. `GPUndarray` destroys only buffers it owns and continues to borrow buffers supplied through `wrap()`.
+The compute subsystem reads WGSL from `./wgsl/compute/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory. `CPUndarray` owns its backing bytes plus shape, stride, and indexing allocations; `destroy()` releases them idempotently and later memory access throws. `GPUndarray` destroys only buffers it owns and continues to borrow buffers supplied through `wrap()`.
 
 Contributors changing compute code should check buffer usage flags, copy alignment, dispatch dimensions, shader bindings, readback slot reuse, and tests that assert kernel results.
 
 ### 1.14. Scaling service
 
-The scaling service is implemented in `./src/scaling/service.ts` with scale transform logic in `./src/scaling/transform.ts`. It uses compute kernels to extract finite f32 values, compact them, compute min and max values, build histograms when percentile clamping is requested, and read results back asynchronously.
+The scaling service is implemented in `./typescript/scaling/service.ts` with scale transform logic in `./typescript/scaling/transform.ts`. It uses compute kernels to extract finite f32 values, compact them, compute min and max values, build histograms when percentile clamping is requested, and read results back asynchronously.
 
 The service reads scale source descriptors from data materials, pointclouds, glyphfields, nodelinks, and latticespaces. It caches in-flight and completed results using source buffer identity, revision, component selection, value mode, stride, offset, count, transform settings, and percentile settings.
 
 Scale transforms pack values for WGSL in a fixed float layout. The current modes include linear, logarithmic, and symmetric logarithmic behavior, plus range or percentile clamping, gamma, and inversion.
 
-Changing scaling behavior requires checking `./src/scaling/`, data-source objects in `./src/graphics/material.ts` and `./src/world/`, WGSL scaling kernels under `./src/wgsl/compute/`, legend behavior under `./src/overlay/`, and examples that show colormap legends.
+Changing scaling behavior requires checking `./typescript/scaling/`, data-source objects in `./typescript/graphics/material.ts` and `./typescript/world/`, WGSL scaling kernels under `./wgsl/compute/`, legend behavior under `./typescript/overlay/`, and examples that show colormap legends.
 
 ### 1.15. Asset loading and glTF import
 
-glTF loading and import are implemented under `./src/gltf/`. The loader reads JSON `.gltf` files, binary `.glb` files, external buffers, embedded buffers, and image resources. URI resolution is implemented in `./src/gltf/uri.ts`; GLB parsing is in `./src/gltf/glb.ts`.
+glTF loading and import are implemented under `./typescript/gltf/`. The loader reads JSON `.gltf` files, binary `.glb` files, external buffers, embedded buffers, and image resources. URI resolution is implemented in `./typescript/gltf/uri.ts`; GLB parsing is in `./typescript/gltf/glb.ts`.
 
 Root sources are fetched or read once, classified from the first four bytes, decoded with fatal UTF-8 JSON parsing when they are not GLB, and passed through the shared glTF compatibility gate. URL loads retain the final response URL as `GltfDocument.resourceBaseUrl` for WHATWG external-resource resolution, while an explicit `LoadGltfOptions.resourceBaseUrl` and in-memory sources are normalized as directories. Data URLs are parsed as RFC 2397 octets, including percent-decoded bytes, literal plus signs, media-type parameters, and percent-escaped base64.
 
-Accessor decoding is split between TypeScript and Rust. `./src/gltf/accessors.ts` reads accessor descriptors, buffer views, sparse data, component types, normalization rules, and typed-array output requirements. It compacts padded MAT2/MAT3/MAT4 column layouts, including interleaved and sparse values, into logical typed arrays while retaining tight aligned zero-copy access. Numeric conversion, generalized compaction/deinterleaving, and sparse patching call Rust functions in `./rust/src/accessors.rs`.
+Accessor decoding is split between TypeScript and Rust. `./typescript/gltf/accessors.ts` reads accessor descriptors, buffer views, sparse data, component types, normalization rules, and typed-array output requirements. It compacts padded MAT2/MAT3/MAT4 column layouts, including interleaved and sparse values, into logical typed arrays while retaining tight aligned zero-copy access. Numeric conversion, generalized compaction/deinterleaving, and sparse patching call Rust functions in `./rust/src/accessors.rs`.
 
-`./src/gltf/import.ts` converts loaded asset data into scene resources. Current import code covers geometry, materials, textures, skins, animations, morph targets, node transforms, node visibility, animation pointers, scene selection, metadata, material variants, cameras, punctual lights including spot lights, texture transforms, XMP metadata, Gaussian splat primitives from `KHR_gaussian_splatting` into `SplatField`, and material extensions for clearcoat, specular, transmission, volume, diffuse transmission, dispersion, sheen, iridescence, anisotropy, index of refraction, and emissive strength. `KHR_gaussian_splatting` import keeps spherical harmonic degree 0 through degree 3 data as `SplatField` coefficients when complete degree data is present.
+`./typescript/gltf/import.ts` converts loaded asset data into scene resources. Current import code covers geometry, materials, textures, skins, animations, morph targets, node transforms, node visibility, animation pointers, scene selection, metadata, material variants, cameras, punctual lights including spot lights, texture transforms, XMP metadata, Gaussian splat primitives from `KHR_gaussian_splatting` into `SplatField`, and material extensions for clearcoat, specular, transmission, volume, diffuse transmission, dispersion, sheen, iridescence, anisotropy, index of refraction, and emissive strength. `KHR_gaussian_splatting` import keeps spherical harmonic degree 0 through degree 3 data as `SplatField` coefficients when complete degree data is present.
 
 Import performs a pure required-extension preflight before constructing scene or runtime resources. `extensionsRequired` failures are strict except for explicitly declared approximation policies: required `KHR_materials_pbrSpecularGlossiness` assets may import through the existing diffuse/base-color and glossiness-to-roughness approximation with explicit warnings while remaining reported as `partial`. Optional deferred features may use usable core representations with explicit warnings. `metadata.extensions.support` reports the per-asset outcome using `supported`, `partial`, `deferred`, and `unsupported`; outcomes degrade monotonically as asset-specific fallback or loss is discovered, and the same assessment feeds required-extension enforcement.
 
-The importer mutates scenes, meshes, splatfields, geometry, materials, textures, animations, skin instances, camera data, and light bindings. It reads loaded asset data, WebAssembly decoding helpers, material extension descriptors, texture resources, and transform state. Before changing glTF import, check `./test/gltf.test.js`, examples using glTF, renderer material paths, texture upload behavior, and animation sampling.
+The importer mutates scenes, meshes, splatfields, geometry, materials, textures, animations, skin instances, camera data, and light bindings. It reads loaded asset data, WebAssembly decoding helpers, material extension descriptors, texture resources, and transform state. Before changing glTF import, check `./tests/gltf.test.js`, examples using glTF, renderer material paths, texture upload behavior, and animation sampling.
 
 `importGltf()` is failure-atomic. A reverse-order ownership transaction registers every transform, resource reference, scene insertion, and light binding immediately after acquisition. Geometry and material reference entries are transferred to a mesh only after the mesh assumes them; the successful `GltfImportResult` adopts the remaining ledger as its idempotent `destroy()` implementation. If any synchronous import phase throws, rollback continues through all registered disposers while preserving the original error, removes only imported objects from a caller-owned target scene, and never truncates the global transform store or destroys the target scene itself. Texture destruction invalidates pending decode/upload generations so asynchronous completion after rollback cannot recreate a GPU resource.
 
 ### 1.16. Animating, skinning, and morphing
 
-Animation code is implemented in `./src/graphics/animation.ts`. `AnimationClip` stores channels and samplers. It samples translation, rotation, scale, weight, and glTF animation-pointer channels. Transform sampling calls Rust functions in `./rust/src/anim.rs`; morph weight sampling and animation-pointer setter sampling are currently handled in TypeScript.
+Animation code is implemented in `./typescript/graphics/animation.ts`. `AnimationClip` stores channels and samplers. It samples translation, rotation, scale, weight, and glTF animation-pointer channels. Transform sampling calls Rust functions in `./rust/src/anim.rs`; morph weight sampling and animation-pointer setter sampling are currently handled in TypeScript.
 
 `AnimationPlayer` advances time, handles looping and clamping, and samples a clip. It mutates target transforms, morph weights, imported node visibility, material factors, texture transforms, camera projection properties, and punctual-light properties when a clip contains those channels.
 
-`Skin` stores joint transform indices and inverse bind matrices in WebAssembly memory. `SkinInstance` owns a GPU bone buffer and bind group, and exposes the mesh transform's live world-matrix pointer for joint-matrix evaluation. The renderer updates joint matrices through Rust before drawing skinned meshes. Shader variants under `./src/wgsl/graphics/` cover normal, skinned, and skinned8 paths.
+`Skin` stores joint transform indices and inverse bind matrices in WebAssembly memory. `SkinInstance` owns a GPU bone buffer and bind group, and exposes the mesh transform's live world-matrix pointer for joint-matrix evaluation. The renderer updates joint matrices through Rust before drawing skinned meshes. Shader variants under `./wgsl/graphics/` cover normal, skinned, and skinned8 paths.
 
-Morph target runtime state is attached to meshes in `./src/world/mesh.ts`. When morph weights change, the mesh updates CPU-side morphed positions, normals, and RGBA colors, clamps morphed colors to `[0,1]`, updates GPU buffers, and recomputes bounds used by the renderer. glTF node skins are node-local; they are not inherited by child mesh nodes.
+Morph target runtime state is attached to meshes in `./typescript/world/mesh.ts`. When morph weights change, the mesh updates CPU-side morphed positions, normals, and RGBA colors, clamps morphed colors to `[0,1]`, updates GPU buffers, and recomputes bounds used by the renderer. glTF node skins are node-local; they are not inherited by child mesh nodes.
 
 Animation changes should be checked against glTF import, mesh morph handling, skin buffer layout, shader variants, and renderer draw-list paths.
 
 ### 1.17. Python interop
 
-Python interop is implemented in `./src/python/index.ts` and `./src/python/interop.py`. The TypeScript side exposes `pythonInterop`, which can copy typed-array or Pyodide buffer data into WebAssembly memory and return ndarray handles that include pointer, dtype, shape, strides, offset, byte length, and ownership metadata.
+Python interop is implemented in `./typescript/python/index.ts` and `./python/interop.py`. The TypeScript side exposes `pythonInterop`, which can copy typed-array or Pyodide buffer data into WebAssembly memory and return ndarray handles that include pointer, dtype, shape, strides, offset, byte length, and ownership metadata.
 
 `sendNdarray()` accepts JavaScript typed arrays, array-like values, or Pyodide buffer-like proxies. Python buffers must currently be C-contiguous. The function can allocate memory through the WebAssembly heap, frame arena, or a supplied `WasmHeapArena`.
 
@@ -450,11 +450,11 @@ Interop changes should preserve allocator ownership, frame arena lifetime checks
 
 ### 1.18. WebAssembly driver
 
-WebAssembly driver initialization is implemented in `./src/wasm/driver.ts` and exported through `./src/wasm/index.ts`. It imports the generated loader from `./build/wasm.js`, creates an eight-mebibyte (8,388,608 bytes) frame arena, and exposes grouped Rust functions for accessors, animation, bounds, culling, matrix math, mesh normals, ndarray indexing, quaternion math, transforms, and vector math.
+WebAssembly driver initialization is implemented in `./typescript/wasm/driver.ts` and exported through `./typescript/wasm/index.ts`. It imports the generated loader from `./wasm/wasm.js`, creates an eight-mebibyte (8,388,608 bytes) frame arena, and exposes grouped Rust functions for accessors, animation, bounds, culling, matrix math, mesh normals, ndarray indexing, quaternion math, transforms, and vector math.
 
 `WasmSlice`, `WasmHeapArena`, `frameArena`, `wasm`, and the `driver` namespace are part of the WebAssembly driver. `WasmSlice` records pointer, length, dtype, allocation kind, and epoch. Frame arena and heap arena slices check epochs so callers do not reuse memory after a reset or destroyed arena, and freed slices reject later view or handle creation. `WasmHeapArena` allocates a WebAssembly heap block and provides bump allocation within that block. Explicit release remains retryable if its allocator call throws; garbage-collection finalization is only a fallback for abandoned heap slices.
 
-WebAssembly interop with external modules lives in `./src/wasm/interop.ts`. It wraps foreign `WebAssembly.Instance` or exports objects, resolves explicit memory and export descriptors, validates byte ranges and alignment, constructs typed views or raw byte/DataView accessors over external linear memory, and provides small shared validation helpers for object-owned uploads from borrowed `WasmMemoryView` sources.
+WebAssembly interop with external modules lives in `./typescript/wasm/interop.ts`. It wraps foreign `WebAssembly.Instance` or exports objects, resolves explicit memory and export descriptors, validates byte ranges and alignment, constructs typed views or raw byte/DataView accessors over external linear memory, and provides small shared validation helpers for object-owned uploads from borrowed `WasmMemoryView` sources.
 
 Rust memory allocation is implemented in `./rust/src/heap.rs` through Rust's standard allocator. Exported byte, `f32`, and `u32` allocation/free pairs use checked layouts; a successful allocation remains valid until its matching one-time free, after which its storage can be reused. WebAssembly memory pages do not shrink after growth. `WasmHeapArena.destroy()` releases its backing heap block, while the frame arena keeps one persistent backing block and reuses its contents through resets.
 
@@ -474,14 +474,14 @@ Changing memory movement requires checking alignment, buffer usage flags, frame 
 
 ### 1.19. Shader organization
 
-WGSL shaders live under `./src/wgsl/`. They are imported as text into TypeScript and bundled by `./esbuild.config.js`, whose WGSL plugin removes comments and extra whitespace.
+WGSL shaders live under `./wgsl/`. They are imported as text into TypeScript and bundled by `./esbuild.config.js`, whose WGSL plugin removes comments and extra whitespace.
 
 Shader directories currently map to architecture areas:
 
-- `./src/wgsl/core/`: SMAA, mesh picking shaders, mesh occlusion capture, and occlusion hierarchy reduction.
-- `./src/wgsl/graphics/`: mesh material shaders, transmission shaders, data material shaders, custom material defaults, mipmap generation, and skinned or instanced variants.
-- `./src/wgsl/world/`: pointcloud, glyphfield, nodelink, splatfield, latticespace, picking, private splatfield and latticespace sorting, and object-family occlusion capture shaders.
-- `./src/wgsl/compute/`: copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, and blit kernels.
+- `./wgsl/core/`: SMAA, mesh picking shaders, mesh occlusion capture, and occlusion hierarchy reduction.
+- `./wgsl/graphics/`: mesh material shaders, transmission shaders, data material shaders, custom material defaults, mipmap generation, and skinned or instanced variants.
+- `./wgsl/world/`: pointcloud, glyphfield, nodelink, splatfield, latticespace, picking, private splatfield and latticespace sorting, and object-family occlusion capture shaders.
+- `./wgsl/compute/`: copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, and blit kernels.
 
 WGSL changes must stay in sync with bind group layouts, vertex buffer layouts, uniform packing, material descriptors, object uniform layouts, and compute pipeline resource bindings in TypeScript.
 
@@ -534,18 +534,18 @@ Architectural role:
 
 - Implements the Public API area in the diagram.
 - Creates runtime objects and exposes factory helpers.
-- Re-exports types and classes from the rest of `./src/`.
+- Re-exports types and classes from the rest of `./typescript/`.
 
 Important files:
 
-- `./src/index.ts`: main module export surface. Check this file before adding or renaming public classes, descriptors, or helper functions.
-- `./src/index.iife.ts`: browser global entry point for IIFE bundles. It imports the public API and attaches it for script-tag examples and bundles.
-- `./src/core/engine.ts`: `WasmGPU` runtime class, factory methods, frame loop, renderer delegation, picking wrappers, interop accessors, and destruction.
+- `./typescript/index.ts`: main module export surface. Check this file before adding or renaming public classes, descriptors, or helper functions.
+- `./typescript/index.iife.ts`: browser global entry point for IIFE bundles. It imports the public API and attaches it for script-tag examples and bundles.
+- `./typescript/core/engine.ts`: `WasmGPU` runtime class, factory methods, frame loop, renderer delegation, picking wrappers, interop accessors, and destruction.
 
 Common interactions:
 
-- `./src/index.ts` imports from every public subsystem.
-- `./src/core/engine.ts` creates `Renderer`, `Compute`, `ScaleService`, scene objects, cameras, controls, overlays, annotations, glTF helpers, and animation objects.
+- `./typescript/index.ts` imports from every public subsystem.
+- `./typescript/core/engine.ts` creates `Renderer`, `Compute`, `ScaleService`, scene objects, cameras, controls, overlays, annotations, glTF helpers, and animation objects.
 - Examples under `./examples/` use the exported API directly.
 
 ### 2.2. Runtime and renderer
@@ -558,21 +558,21 @@ Architectural role:
 
 Important files:
 
-- `./src/core/renderer.ts`: public `Renderer` class and orchestrator. It creates the WebGPU device and context, configures limits, owns renderer state, coordinates the helper modules below, preserves the public renderer API surface, and keeps render, warmup, resize, pick wrapper, and destroy sequencing in one place.
-- `./src/core/resources.ts`: renderer-global buffers, fallback textures, staging views, object IDs, and uniform writes.
-- `./src/core/timing.ts`: GPU timestamp-query setup and readback.
-- `./src/core/postprocessing.ts`: current SMAA resource creation, resize, and execution.
-- `./src/core/transmission.ts`: transmission target lifecycle and transmissive draw detection.
-- `./src/core/drawlists.ts`: drawitem pools, drawlist building, culling-capacity helpers, and transparent merged execution.
-- `./src/core/materials.ts`: material pipeline, shader-module, bind-group, blend, and cull helpers.
-- `./src/core/objects.ts`: mesh, pointcloud, glyphfield, nodelink, splatfield, and latticespace helpers, including renderer-private sort state.
-- `./src/core/picking.ts`: pick target resources, pick queries, pick draw execution, and pick pipelines.
-- `./src/core/occlusion.ts`: render-only previous-frame occlusion resource lifecycle, hierarchy validity checks, conservative opaque filtering, capture/readback, and occlusion pipelines.
-- `./src/core/transform.ts`: global transform store and `Transform` class. It stores transform data in WebAssembly memory and calls Rust transform functions.
-- `./src/core/stats.ts`: frame and GPU timing counters plus the nested public culling stats display used by the runtime.
-- `./src/utils/index.ts`: shared internal helpers used across subsystems.
+- `./typescript/core/renderer.ts`: public `Renderer` class and orchestrator. It creates the WebGPU device and context, configures limits, owns renderer state, coordinates the helper modules below, preserves the public renderer API surface, and keeps render, warmup, resize, pick wrapper, and destroy sequencing in one place.
+- `./typescript/core/resources.ts`: renderer-global buffers, fallback textures, staging views, object IDs, and uniform writes.
+- `./typescript/core/timing.ts`: GPU timestamp-query setup and readback.
+- `./typescript/core/postprocessing.ts`: current SMAA resource creation, resize, and execution.
+- `./typescript/core/transmission.ts`: transmission target lifecycle and transmissive draw detection.
+- `./typescript/core/drawlists.ts`: drawitem pools, drawlist building, culling-capacity helpers, and transparent merged execution.
+- `./typescript/core/materials.ts`: material pipeline, shader-module, bind-group, blend, and cull helpers.
+- `./typescript/core/objects.ts`: mesh, pointcloud, glyphfield, nodelink, splatfield, and latticespace helpers, including renderer-private sort state.
+- `./typescript/core/picking.ts`: pick target resources, pick queries, pick draw execution, and pick pipelines.
+- `./typescript/core/occlusion.ts`: render-only previous-frame occlusion resource lifecycle, hierarchy validity checks, conservative opaque filtering, capture/readback, and occlusion pipelines.
+- `./typescript/core/transform.ts`: global transform store and `Transform` class. It stores transform data in WebAssembly memory and calls Rust transform functions.
+- `./typescript/core/stats.ts`: frame and GPU timing counters plus the nested public culling stats display used by the runtime.
+- `./typescript/utils/index.ts`: shared internal helpers used across subsystems.
 
-Contributors should inspect `./src/core/renderer.ts` together with the object class, material class, and shader file for any feature that changes draw behavior. Renderer changes often affect tests, examples, and shader layouts.
+Contributors should inspect `./typescript/core/renderer.ts` together with the object class, material class, and shader file for any feature that changes draw behavior. Renderer changes often affect tests, examples, and shader layouts.
 
 ### 2.3. Scene and world objects
 
@@ -584,25 +584,25 @@ Architectural role:
 
 Important files:
 
-- `./src/world/scene.ts`: scene object arrays, add/remove helpers, light packing, bounds collection, and traversal.
-- `./src/world/mesh.ts`: mesh lifetime, transform ownership, material and geometry references, scene owner references, skin attachment, and morph runtime state.
-- `./src/world/pointcloud.ts`: point data, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
-- `./src/world/glyphfield.ts`: glyph instance data, geometry modes, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
-- `./src/world/nodelink.ts`: node and edge data, rendering modes, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
-- `./src/world/splatfield.ts`: Gaussian splat data, direct colors, spherical harmonic coefficient data, GPU-buffer upload, CPU-array upload, WASM-memory upload, bounds, color-space handling, and picking records.
-- `./src/world/latticespace.ts`: regular 2D/3D cell data, X-fastest indexing, masks, GPU-buffer upload, CPU-array upload, WASM-memory upload, analytic bounds, scale and colormap state, and picking records.
-- `./src/world/camera.ts`: base, perspective, and orthographic cameras.
-- `./src/world/controls.ts`: navigation controls, orbit controls, trackball controls, fly controls, pointer and keyboard input, damping, pointer lock, and scene fitting.
-- `./src/world/light.ts`: ambient, directional, point, and spot lights plus glTF light transform binding helpers.
-- `./src/world/picking.ts`: pick result types, region query types, and `SelectionStore`.
-- `./src/world/bounds.ts`: bounds helpers.
+- `./typescript/world/scene.ts`: scene object arrays, add/remove helpers, light packing, bounds collection, and traversal.
+- `./typescript/world/mesh.ts`: mesh lifetime, transform ownership, material and geometry references, scene owner references, skin attachment, and morph runtime state.
+- `./typescript/world/pointcloud.ts`: point data, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
+- `./typescript/world/glyphfield.ts`: glyph instance data, geometry modes, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
+- `./typescript/world/nodelink.ts`: node and edge data, rendering modes, GPU-buffer upload, CPU-array upload, WASM-memory upload, scale source metadata, bounds, and picking records.
+- `./typescript/world/splatfield.ts`: Gaussian splat data, direct colors, spherical harmonic coefficient data, GPU-buffer upload, CPU-array upload, WASM-memory upload, bounds, color-space handling, and picking records.
+- `./typescript/world/latticespace.ts`: regular 2D/3D cell data, X-fastest indexing, masks, GPU-buffer upload, CPU-array upload, WASM-memory upload, analytic bounds, scale and colormap state, and picking records.
+- `./typescript/world/camera.ts`: base, perspective, and orthographic cameras.
+- `./typescript/world/controls.ts`: navigation controls, orbit controls, trackball controls, fly controls, pointer and keyboard input, damping, pointer lock, and scene fitting.
+- `./typescript/world/light.ts`: ambient, directional, point, and spot lights plus glTF light transform binding helpers.
+- `./typescript/world/picking.ts`: pick result types, region query types, and `SelectionStore`.
+- `./typescript/world/bounds.ts`: bounds helpers.
 
 Common interactions:
 
-- `./src/core/renderer.ts` reads visible world objects and their GPU resources.
-- `./src/gltf/import.ts` creates and mutates world objects from assets.
-- `./src/overlay/annotation/` creates marker objects and reads picking results.
-- `./src/scaling/` reads scale source descriptors from pointclouds, glyphfields, nodelinks, latticespaces, and data materials.
+- `./typescript/core/renderer.ts` reads visible world objects and their GPU resources.
+- `./typescript/gltf/import.ts` creates and mutates world objects from assets.
+- `./typescript/overlay/annotation/` creates marker objects and reads picking results.
+- `./typescript/scaling/` reads scale source descriptors from pointclouds, glyphfields, nodelinks, latticespaces, and data materials.
 
 ### 2.4. Graphics data
 
@@ -614,19 +614,19 @@ Architectural role:
 
 Important files:
 
-- `./src/graphics/geometry.ts`: vertex data, index data, RGBA color channels, WASM-memory upload, tangent generation, normal generation, bounds, morph target arrays, GPU buffers, reference counting, and primitive geometry factories.
-- `./src/graphics/material.ts`: material base class, unlit material, standard material, data material, custom material, layout planning, uniform packing, texture references, bind groups, and reference counting.
-- `./src/wgsl/graphics/standard*.wgsl`: canonical standard material mesh, instanced, skinned-4, skinned-8, and transmission shader bodies, while `material.ts` performs narrow declaration/sample-path specialization from these sources.
-- `./src/graphics/texture.ts`: texture descriptors, image loading, strict decode policy, GPU texture upload, mipmap generation, sampler setup, fallback behavior, and destruction.
-- `./src/graphics/colormap.ts`: built-in and caller-provided color stops, CPU lookup tables, optional external GPU texture views, GPU resource caching, and CPU sampling helpers.
-- `./src/graphics/animation.ts`: animation clips, players, skins, skin instances, transform sampling, morph weight sampling, and bone buffer updates.
+- `./typescript/graphics/geometry.ts`: vertex data, index data, RGBA color channels, WASM-memory upload, tangent generation, normal generation, bounds, morph target arrays, GPU buffers, reference counting, and primitive geometry factories.
+- `./typescript/graphics/material.ts`: material base class, unlit material, standard material, data material, custom material, layout planning, uniform packing, texture references, bind groups, and reference counting.
+- `./wgsl/graphics/standard*.wgsl`: canonical standard material mesh, instanced, skinned-4, skinned-8, and transmission shader bodies, while `material.ts` performs narrow declaration/sample-path specialization from these sources.
+- `./typescript/graphics/texture.ts`: texture descriptors, image loading, strict decode policy, GPU texture upload, mipmap generation, sampler setup, fallback behavior, and destruction.
+- `./typescript/graphics/colormap.ts`: built-in and caller-provided color stops, CPU lookup tables, optional external GPU texture views, GPU resource caching, and CPU sampling helpers.
+- `./typescript/graphics/animation.ts`: animation clips, players, skins, skin instances, transform sampling, morph weight sampling, and bone buffer updates.
 
 Common interactions:
 
-- `./src/core/renderer.ts` reads graphics data and binds buffers, textures, samplers, and material uniforms.
-- `./src/gltf/import.ts` creates geometry, materials, textures, animations, skins, and morph data.
-- `./src/wgsl/graphics/` must match material and geometry layouts.
-- Tests under `./test/material.test.js`, `./test/geometry.test.js`, `./test/mesh.test.js`, `./test/renderer.test.js`, and `./test/gltf.test.js` cover important behavior.
+- `./typescript/core/renderer.ts` reads graphics data and binds buffers, textures, samplers, and material uniforms.
+- `./typescript/gltf/import.ts` creates geometry, materials, textures, animations, skins, and morph data.
+- `./wgsl/graphics/` must match material and geometry layouts.
+- Tests under `./tests/material.test.js`, `./tests/geometry.test.js`, `./tests/mesh.test.js`, `./tests/renderer.test.js`, and `./tests/gltf.test.js` cover important behavior.
 
 ### 2.5. Compute, ndarray, and scaling
 
@@ -639,26 +639,26 @@ Architectural role:
 
 Important files:
 
-- `./src/compute/index.ts`: `Compute` facade, buffer creation, pipeline creation, dispatch helpers, readback rings, ndarray factories, and blitter creation.
-- `./src/compute/buffer.ts`: storage and uniform buffer wrappers.
-- `./src/compute/pipeline.ts`: compute pipeline wrapper and bind group creation.
-- `./src/compute/dispatch.ts`: compute pass encoding.
-- `./src/compute/workgroups.ts`: workgroup normalization and size helpers.
-- `./src/compute/kernels.ts`: built-in compute kernels.
-- `./src/compute/readback.ts`: asynchronous readback ring.
-- `./src/compute/scratch.ts`: scratch GPU buffer pool.
-- `./src/compute/ndarray.ts`: CPU and GPU ndarray classes, dtype handling, shape and stride validation, deterministic WebAssembly-backed CPU allocation lifetime, upload, and readback.
-- `./src/compute/blit.ts`: RGBA8 compute output blitting.
-- `./src/scaling/service.ts`: cached statistics requests over GPU data.
-- `./src/scaling/transform.ts`: scale transform packing and CPU-side helpers.
-- `./src/scaling/types.ts`: scaling descriptors and enums.
-- `./src/scaling/index.ts`: scaling exports.
+- `./typescript/compute/index.ts`: `Compute` facade, buffer creation, pipeline creation, dispatch helpers, readback rings, ndarray factories, and blitter creation.
+- `./typescript/compute/buffer.ts`: storage and uniform buffer wrappers.
+- `./typescript/compute/pipeline.ts`: compute pipeline wrapper and bind group creation.
+- `./typescript/compute/dispatch.ts`: compute pass encoding.
+- `./typescript/compute/workgroups.ts`: workgroup normalization and size helpers.
+- `./typescript/compute/kernels.ts`: built-in compute kernels.
+- `./typescript/compute/readback.ts`: asynchronous readback ring.
+- `./typescript/compute/scratch.ts`: scratch GPU buffer pool.
+- `./typescript/compute/ndarray.ts`: CPU and GPU ndarray classes, dtype handling, shape and stride validation, deterministic WebAssembly-backed CPU allocation lifetime, upload, and readback.
+- `./typescript/compute/blit.ts`: RGBA8 compute output blitting.
+- `./typescript/scaling/service.ts`: cached statistics requests over GPU data.
+- `./typescript/scaling/transform.ts`: scale transform packing and CPU-side helpers.
+- `./typescript/scaling/types.ts`: scaling descriptors and enums.
+- `./typescript/scaling/index.ts`: scaling exports.
 
 Common interactions:
 
-- `./src/world/pointcloud.ts`, `./src/world/glyphfield.ts`, `./src/world/nodelink.ts`, `./src/world/latticespace.ts`, and `./src/graphics/material.ts` expose scale sources.
-- `./src/overlay/legendLayer.ts` reads scaling and colormap state for legends.
-- WGSL kernels under `./src/wgsl/compute/` implement GPU work.
+- `./typescript/world/pointcloud.ts`, `./typescript/world/glyphfield.ts`, `./typescript/world/nodelink.ts`, `./typescript/world/latticespace.ts`, and `./typescript/graphics/material.ts` expose scale sources.
+- `./typescript/overlay/legendLayer.ts` reads scaling and colormap state for legends.
+- WGSL kernels under `./wgsl/compute/` implement GPU work.
 
 ### 2.6. Asset loading and glTF
 
@@ -670,23 +670,23 @@ Architectural role:
 
 Important files:
 
-- `./src/gltf/index.ts`: public glTF exports.
-- `./src/gltf/types.ts`: loaded asset, descriptor, accessor, and extension types.
-- `./src/gltf/loader.ts`: asset loading, buffer loading, image loading, and resource resolution.
-- `./src/gltf/glb.ts`: binary GLB parsing.
-- `./src/gltf/uri.ts`: URI handling.
-- `./src/gltf/accessors.ts`: accessor decoding, padded matrix compaction, sparse handling, and conversion.
-- `./src/gltf/import.ts`: conversion from loaded asset data to scene resources, transfer-function-aware texture caching, and extension compatibility assessments.
+- `./typescript/gltf/index.ts`: public glTF exports.
+- `./typescript/gltf/types.ts`: loaded asset, descriptor, accessor, and extension types.
+- `./typescript/gltf/loader.ts`: asset loading, buffer loading, image loading, and resource resolution.
+- `./typescript/gltf/glb.ts`: binary GLB parsing.
+- `./typescript/gltf/uri.ts`: URI handling.
+- `./typescript/gltf/accessors.ts`: accessor decoding, padded matrix compaction, sparse handling, and conversion.
+- `./typescript/gltf/import.ts`: conversion from loaded asset data to scene resources, transfer-function-aware texture caching, and extension compatibility assessments.
 
 Common interactions:
 
-- `./src/gltf/import.ts` creates objects from `./src/world/` and `./src/graphics/`.
-- `./src/gltf/accessors.ts` calls Rust accessors through `./src/wasm/index.ts`.
+- `./typescript/gltf/import.ts` creates objects from `./typescript/world/` and `./typescript/graphics/`.
+- `./typescript/gltf/accessors.ts` calls Rust accessors through `./typescript/wasm/index.ts`.
 - `KHR_gaussian_splatting` mesh primitives import into `SplatField` scene objects for the supported Gaussian splat subset.
 - Unsupported optional `KHR_gaussian_splatting` primitive features are skipped with warnings rather than converted to fallback pointclouds.
 - glTF animation pointers compile to existing transform and morph paths when possible and to JavaScript setters for imported nodes, materials, cameras, and lights.
 - Material extension import must match `StandardMaterial` fields and renderer shader support. Valid combinations within WebGPU's guaranteed baseline limits of 16 sampled textures and 16 samplers per shader stage report `"supported"`, and over-baseline combinations report `"partial"`.
-- glTF changes should be checked against `./test/gltf.test.js` and `./examples/gltf.html`.
+- glTF changes should be checked against `./tests/gltf.test.js` and `./examples/gltf.html`.
 
 ### 2.7. Overlays and annotations
 
@@ -698,26 +698,26 @@ Architectural role:
 
 Important files:
 
-- `./src/overlay/index.ts`: overlay exports.
-- `./src/overlay/types.ts`: layer, anchor, legend, and overlay descriptors.
-- `./src/overlay/system.ts`: overlay root, layer registry, dirty tracking, resize and scroll observers, controls binding, and update loop.
-- `./src/overlay/projection.ts`: world-to-screen projection helpers.
-- `./src/overlay/pool.ts`: DOM element pooling.
-- `./src/overlay/axisTriadLayer.ts`: axis triad DOM layer.
-- `./src/overlay/gridLayer.ts`: grid DOM layer.
-- `./src/overlay/legendLayer.ts`: legend DOM layer for explicit and data-driven sources.
-- `./src/overlay/annotation/store.ts`: annotation records and revisions.
-- `./src/overlay/annotation/toolkit.ts`: high-level annotation operations and pointer interaction.
-- `./src/overlay/annotation/markerRenderer.ts`: marker scene objects.
-- `./src/overlay/annotation/labelLayer.ts`: annotation label DOM layer.
-- `./src/overlay/annotation/units.ts`: units and formatting helpers.
+- `./typescript/overlay/index.ts`: overlay exports.
+- `./typescript/overlay/types.ts`: layer, anchor, legend, and overlay descriptors.
+- `./typescript/overlay/system.ts`: overlay root, layer registry, dirty tracking, resize and scroll observers, controls binding, and update loop.
+- `./typescript/overlay/projection.ts`: world-to-screen projection helpers.
+- `./typescript/overlay/pool.ts`: DOM element pooling.
+- `./typescript/overlay/axisTriadLayer.ts`: axis triad DOM layer.
+- `./typescript/overlay/gridLayer.ts`: grid DOM layer.
+- `./typescript/overlay/legendLayer.ts`: legend DOM layer for explicit and data-driven sources.
+- `./typescript/overlay/annotation/store.ts`: annotation records and revisions.
+- `./typescript/overlay/annotation/toolkit.ts`: high-level annotation operations and pointer interaction.
+- `./typescript/overlay/annotation/markerRenderer.ts`: marker scene objects.
+- `./typescript/overlay/annotation/labelLayer.ts`: annotation label DOM layer.
+- `./typescript/overlay/annotation/units.ts`: units and formatting helpers.
 
 Common interactions:
 
-- Annotation picking calls runtime picking methods from `./src/core/engine.ts`.
-- Marker rendering mutates scenes under `./src/world/scene.ts`.
+- Annotation picking calls runtime picking methods from `./typescript/core/engine.ts`.
+- Marker rendering mutates scenes under `./typescript/world/scene.ts`.
 - Legends read data from graphics and world objects.
-- Controls under `./src/world/controls.ts` drive dirty updates during camera interaction.
+- Controls under `./typescript/world/controls.ts` drive dirty updates during camera interaction.
 
 ### 2.8. Python and WebAssembly interop
 
@@ -728,29 +728,29 @@ Architectural role:
 
 Important files:
 
-- `./src/python/index.ts`: TypeScript interop API for sending and receiving ndarrays, viewing handles, copying data, and freeing owned memory.
-- `./src/python/interop.py`: Python-side helper classes for handles, arenas, and array wrappers.
-- `./src/wasm/index.ts`: exports for the WebAssembly driver and the WebAssembly interop.
-- `./src/wasm/interop.ts`: external WebAssembly module wrappers, descriptor resolution, typed memory views, raw byte reads, UTF-8/DataView helpers, and shared external memory validation/count helpers used by geometry, pointcloud, glyphfield, nodelink, and splatfield upload paths.
+- `./typescript/python/index.ts`: TypeScript interop API for sending and receiving ndarrays, viewing handles, copying data, and freeing owned memory.
+- `./python/interop.py`: Python-side helper classes for handles, arenas, and array wrappers.
+- `./typescript/wasm/index.ts`: exports for the WebAssembly driver and the WebAssembly interop.
+- `./typescript/wasm/interop.ts`: external WebAssembly module wrappers, descriptor resolution, typed memory views, raw byte reads, UTF-8/DataView helpers, and shared external memory validation/count helpers used by geometry, pointcloud, glyphfield, nodelink, and splatfield upload paths.
 
 Common interactions:
 
-- `./src/compute/ndarray.ts` uses WebAssembly memory for CPU ndarray storage.
-- `./src/core/transform.ts`, `./src/graphics/geometry.ts`, `./src/graphics/animation.ts`, and `./src/gltf/accessors.ts` call Rust helpers through `./src/wasm/index.ts`.
-- `./scripts/build-rust-wasm.js` creates generated WebAssembly files consumed by `./src/wasm/index.ts`.
+- `./typescript/compute/ndarray.ts` uses WebAssembly memory for CPU ndarray storage.
+- `./typescript/core/transform.ts`, `./typescript/graphics/geometry.ts`, `./typescript/graphics/animation.ts`, and `./typescript/gltf/accessors.ts` call Rust helpers through `./typescript/wasm/index.ts`.
+- `./scripts/build-rust-wasm.js` creates generated WebAssembly files consumed by `./typescript/wasm/index.ts`.
 
 ### 2.9. Rust driver
 
 Architectural role:
 
 - Implements the WebAssembly Driver area in the diagram.
-- `./src/wasm/driver.ts` is the TypeScript layer over the generated WebAssembly output of the Rust.
+- `./typescript/wasm/driver.ts` is the TypeScript layer over the generated WebAssembly output of the Rust.
 - Provides exported functions for allocation, frame scratch memory, transforms, math, bounds, culling, normals, accessors, animation, and ndarray layout.
 - Mutates WebAssembly memory owned by the current WebAssembly instance.
 
 Important files:
 
-- `./src/wasm/driver.ts`: internal "glue" between the TypeScript and Rust sides of the overall system, `WasmSlice`, `WasmHeapArena`, frame arena helpers, loader integration, and grouped Rust function wrappers.
+- `./typescript/wasm/driver.ts`: internal "glue" between the TypeScript and Rust sides of the overall system, `WasmSlice`, `WasmHeapArena`, frame arena helpers, loader integration, and grouped Rust function wrappers.
 - `./rust/Cargo.toml`: Rust crate metadata and release profile.
 - `./rust/src/lib.rs`: module wiring and exported entry points.
 - `./rust/src/heap.rs`: checked heap allocation and reclamation through Rust's global allocator.
@@ -768,10 +768,10 @@ Important files:
 
 Common interactions:
 
-- TypeScript calls Rust through generated bindings from `./build/wasm.js`.
-- `./scripts/build-rust-wasm.js` compiles the Rust crate and emits generated files under `./build/`.
+- TypeScript calls Rust through generated bindings from `./wasm/wasm.js`.
+- `./scripts/build-rust-wasm.js` compiles the Rust crate and emits generated files under `./wasm/`.
 - Native tests exercise portable Rust computation without converting native pointers to the WebAssembly ABI's 32-bit offsets.
-- `./test/wasm.test.js` validates the compiled function ABI, generated bridge and declarations, heap allocations, frame-arena behavior, and representative pointer-based calls.
+- `./tests/wasm.test.js` validates the compiled function ABI, generated bridge and declarations, heap allocations, frame-arena behavior, and representative pointer-based calls.
 - Changes to Rust exports must be reflected in TypeScript wrappers and tests.
 
 ### 2.10. WGSL shaders
@@ -783,15 +783,15 @@ Architectural role:
 
 Important directories:
 
-- `./src/wgsl/core/`: core render support shaders such as SMAA, mesh picking, mesh occlusion capture, and occlusion hierarchy reduction.
-- `./src/wgsl/graphics/`: material shaders, standard and transmission shader variants, data material shaders, mipmap generation, and custom material defaults.
-- `./src/wgsl/world/`: pointcloud, glyphfield, nodelink, splatfield, latticespace, picking, private object-family sorting, and occlusion capture shaders.
-- `./src/wgsl/compute/`: compute kernels for copy, reductions, scans, histograms, compaction, radix sort, scaling, blitting, and LU factoring/solving.
+- `./wgsl/core/`: core render support shaders such as SMAA, mesh picking, mesh occlusion capture, and occlusion hierarchy reduction.
+- `./wgsl/graphics/`: material shaders, standard and transmission shader variants, data material shaders, mipmap generation, and custom material defaults.
+- `./wgsl/world/`: pointcloud, glyphfield, nodelink, splatfield, latticespace, picking, private object-family sorting, and occlusion capture shaders.
+- `./wgsl/compute/`: compute kernels for copy, reductions, scans, histograms, compaction, radix sort, scaling, blitting, and LU factoring/solving.
 
 Common interactions:
 
-- `./src/core/renderer.ts` and the internal renderer helper modules under `./src/core/` import render shaders.
-- `./src/compute/kernels.ts` imports compute shaders.
+- `./typescript/core/renderer.ts` and the internal renderer helper modules under `./typescript/core/` import render shaders.
+- `./typescript/compute/kernels.ts` imports compute shaders.
 - `./esbuild.config.js` minifies WGSL imports during bundling.
 
 ### 2.11. Examples
@@ -813,7 +813,7 @@ Important files:
 - `./examples/scaling.html`: scaling and colormap behavior.
 - `./examples/fluid.html`, `./examples/galaxy.html`, `./examples/graphing.html`, `./examples/mandelbulb.html`, `./examples/protein.html`, `./examples/terrain.html`, `./examples/lego.html`, and `./examples/quantum.html`: larger rendering and compute examples.
 
-Examples import built bundles from `./dist/`. When source changes public behavior, update examples when preparing a release or when a specific example fix is needed.
+Examples import built bundles from `./release/`. When source changes public behavior, update examples when preparing a release or when a specific example fix is needed.
 
 ### 2.12. Tests
 
@@ -826,18 +826,18 @@ Architectural role:
 Important files:
 
 - `./rust/src/tests/*.rs`: native Rust conformance tests run by `npm run test:rs`.
-- `./test/*.test.js`: Node tests which are browser modules loaded one per isolated Playwright browser page by `npm run test:js`.
-- `./test/manifests/setup.spec.js`: independent Playwright setup suite that verifies the secure browser origin, WebGPU adapter and device creation, command submission, real-canvas presentation, and complete examples-manifest coverage before the primary suites run.
-- `./test/manifests/runner.spec.js`: Playwright entry point that discovers test modules, forwards browser and WebGPU diagnostics, records device and queue-submission counts, and imports each module in isolation.
-- `./test/manifests/suites.js`: single source of truth for example files, page titles, readiness signals, bounded example-specific timeouts, browser-module discovery, and expected-count invariants used by setup coverage, execution, report provenance, and merging.
-- `./test/manifests/examples.spec.js`: Playwright entry point that loads each manifest example in an isolated page, checks browser, network, and WebGPU diagnostics, waits for completed GPU work, and exercises stable user-facing interactions. Examples retain their normal production workloads and live external resources during these tests.
-- `./test/utils/`: dual-runtime Playwright and browser-safe assertions, terminal formatting, WebGPU instrumentation and device lifecycles, deterministic random data, approximate comparisons, scoped real canvases, narrowly focused observable canvas doubles, compute-buffer readback, and other reusable test helpers. Test modules bind test-specific helpers first, call `setupTest()` once when shared initialization is needed, then bind and validate subsystem exports before entering numbered theme blocks.
-- `./playwright.config.js`: discovers Node-side `./test/manifests/*.spec.js` entry points and pins the independent setup, runner, and examples projects, local origin, selected browser, browser-specific WebGPU launch configuration, isolation, retries, reports, traces, and screenshots. `WASMGPU_BROWSER` selects `chromium`, `firefox`, or `webkit`; Chromium alone receives Dawn, Vulkan, and SwiftShader command-line arguments, Firefox alone receives its runtime WebGPU preference and runs headed on Windows and MacOS so its GPU process can remain enabled, and WebKit receives no foreign-engine flags. `WASMGPU_FORCE_FALLBACK_ADAPTER=1` makes the test monitor require Firefox's fallback adapter and is rejected for other browsers.
+- `./tests/*.test.js`: Node tests which are browser modules loaded one per isolated Playwright browser page by `npm run test:js`.
+- `./tests/manifests/setup.spec.js`: independent Playwright setup suite that verifies the secure browser origin, WebGPU adapter and device creation, command submission, real-canvas presentation, and complete examples-manifest coverage before the primary suites run.
+- `./tests/manifests/runner.spec.js`: Playwright entry point that discovers test modules, forwards browser and WebGPU diagnostics, records device and queue-submission counts, and imports each module in isolation.
+- `./tests/manifests/suites.js`: single source of truth for example files, page titles, readiness signals, bounded example-specific timeouts, browser-module discovery, and expected-count invariants used by setup coverage, execution, report provenance, and merging.
+- `./tests/manifests/examples.spec.js`: Playwright entry point that loads each manifest example in an isolated page, checks browser, network, and WebGPU diagnostics, waits for completed GPU work, and exercises stable user-facing interactions. Examples retain their normal production workloads and live external resources during these tests.
+- `./tests/utils/`: dual-runtime Playwright and browser-safe assertions, terminal formatting, WebGPU instrumentation and device lifecycles, deterministic random data, approximate comparisons, scoped real canvases, narrowly focused observable canvas doubles, compute-buffer readback, and other reusable test helpers. Test modules bind test-specific helpers first, call `setupTest()` once when shared initialization is needed, then bind and validate subsystem exports before entering numbered theme blocks.
+- `./playwright.config.js`: discovers Node-side `./tests/manifests/*.spec.js` entry points and pins the independent setup, runner, and examples projects, local origin, selected browser, browser-specific WebGPU launch configuration, isolation, retries, reports, traces, and screenshots. `WASMGPU_BROWSER` selects `chromium`, `firefox`, or `webkit`; Chromium alone receives Dawn, Vulkan, and SwiftShader command-line arguments, Firefox alone receives its runtime WebGPU preference and runs headed on Windows and MacOS so its GPU process can remain enabled, and WebKit receives no foreign-engine flags. `WASMGPU_FORCE_FALLBACK_ADAPTER=1` makes the test monitor require Firefox's fallback adapter and is rejected for other browsers.
 - `./scripts/configure-firefox-webgpu.js`: installs the Windows Firefox job's WebGPU blocklist override and parent-process permission into Playwright Firefox's application startup preferences before the browser launches. These preferences are startup-only and therefore cannot be supplied reliably through Playwright's later runtime preference update.
 - `./scripts/serve-tests.js`: minimal same-origin static server for test modules, bundled JavaScript, generated WebAssembly, declarations, and WGSL assets.
 - `./scripts/merge-test-reports.js`: serves as the Playwright provenance reporter, cleans aggregate output before full runs, validates report completeness, and combines the independently generated setup, JavaScript, and example blob reports.
-- `./test/wasm.test.js`: WebAssembly ABI, generated-binding, heap, frame-arena, and external-module interop coverage.
-- `./test/wgsl.test.js`: checks shader-module compilation and diagnostics through the selected Playwright browser's WebGPU implementation. It requests supported optional features and skips only modules that explicitly require unavailable features. It does not construct pipelines or validate shader interfaces against TypeScript bind group, vertex, override-constant, or render-target descriptors, so focused subsystem tests cover those integration contracts.
+- `./tests/wasm.test.js`: WebAssembly ABI, generated-binding, heap, frame-arena, and external-module interop coverage.
+- `./tests/wgsl.test.js`: checks shader-module compilation and diagnostics through the selected Playwright browser's WebGPU implementation. It requests supported optional features and skips only modules that explicitly require unavailable features. It does not construct pipelines or validate shader interfaces against TypeScript bind group, vertex, override-constant, or render-target descriptors, so focused subsystem tests cover those integration contracts.
 - `./.github/workflows/test.yaml`: GitHub Actions workflow for automatically running tests on every push and pull request.
 
 The CI selection table below makes the platform decision explicit instead of treating the eighteen-entry operating-system, architecture, and browser product as uniformly useful. A row is included only when GitHub supplies the host, Playwright supplies a native browser for that architecture, WebGPU is expected to exercise WasmGPU rather than fail at browser setup, and the row adds material coverage. Chromium supplies the portable operating-system and CPU-architecture baseline, while Firefox is retained on its supported Windows and Apple Silicon targets. Linux Firefox remains outside CI while its WebGPU implementation exhibits external backend failures, Playwright's WebKit embedder does not expose WebGPU even on a host where Safari supports it, and Windows ARM64 remains outside CI because Playwright currently supplies x64 rather than native ARM64 Windows browser packages. GitHub's `windows-2025` AMD64 image is the available Windows Server 2025 surrogate for the Windows 11 rows rather than a literal Windows 11 client installation.
@@ -887,18 +887,20 @@ Important files and directories:
 - `./README.md`: release-facing project overview. It currently describes v0.9.0.
 - `./CHANGELOG.md`: release notes through the latest documented release.
 - `./CONTRIBUTING.md`: shorter contributor guide for questions, issues, feature requests, and code contributions.
-- `./website/src/`: website source files, pages, and documentation.
+- `./website/docs/`: MkDocs documentation source.
+- `./website/home/`: homepage source copied to the website root during generation.
+- `./website/examples/`: examples-index source copied beside the generated example pages.
 - `./website/build/`: generated website output.
 - `./mkdocs.yaml`: MkDocs configuration for documentation pages.
-- `./scripts/build_website.py`: website build script. It copies website files, assets, examples, and `./dist/WasmGPU.min.js`, rewrites example imports to a versioned CDN URL, and runs MkDocs.
-- `./.agents/skills/maintain-docs/`: OpenAI Codex skill for auditing, writing, maintaining, and verifying Markdown documentation under `./website/src/docs/`.
+- `./scripts/build_website.py`: website build script. It copies website files, assets, examples, and `./release/WasmGPU.min.js`, rewrites the copied examples from local `./release/` imports to the pinned v0.9.0 CDN `./dist/` URLs, and runs MkDocs.
+- `./.agents/skills/maintain-docs/`: OpenAI Codex skill for auditing, writing, maintaining, and verifying Markdown documentation under `./website/docs/`.
 - `./.github/workflows/deploy-website.yaml`: GitHub Pages workflow for website changes.
 
 `./scripts/build_website.py` writes generated website output under `./website/build/`. That directory is not present in the codebase unless the website build has been run locally.
 
-`./website/src/`, `./README.md`, and `./CHANGELOG.md` are release-facing sources. They are often updated significantly during release work, not for every source change.
+`./website/docs/`, `./website/home/`, `./website/examples/`, `./README.md`, and `./CHANGELOG.md` are release-facing sources. They are often updated significantly during release work, not for every source change.
 
-The `maintain-docs` skill exists to keep the large Markdown reference aligned with the current public API without replacing source inspection or human review. Invoke `$maintain-docs` in `release` mode for a versioned documentation delta, `maintain` mode for a focused documentation change, or `verify` mode for a read-only accuracy and integrity pass. Release mode writes an audit ledger under the gitignored `./.cache/` directory, stops for approval before editing, normalizes all files under `./website/src/docs/` to LF line endings during approved implementation, writes in source-backed subsystem batches, and performs final coverage and link validation. The skill does not update this file or run the website build.
+The `maintain-docs` skill exists to keep the large Markdown reference aligned with the current public API without replacing source inspection or human review. Invoke `$maintain-docs` in `release` mode for a versioned documentation delta, `maintain` mode for a focused documentation change, or `verify` mode for a read-only accuracy and integrity pass. Release mode writes an audit ledger under the gitignored `./.cache/` directory, stops for approval before editing, normalizes all files under `./website/docs/` to LF line endings during approved implementation, writes in source-backed subsystem batches, and performs final coverage and link validation. The skill does not update this file or run the website build.
 
 ### 2.14. Build, generated, and release files
 
@@ -914,13 +916,13 @@ Important files and directories:
 - `./package.json`: npm scripts and package metadata.
 - `./rust/Cargo.toml`: Rust crate metadata and release profile.
 - `./tsconfig.json`: TypeScript compiler settings.
-- `./esbuild.config.js`: bundle configuration, WGSL loader, minification, and copy steps from `./build/` to `./dist/`.
+- `./esbuild.config.js`: bundle configuration, WGSL loader, minification, and copy steps from `./wasm/` to `./release/`.
 - `./scripts/build-rust-wasm.js`: Rust-to-WebAssembly build script. It invokes Cargo, generates `.wasm`, `.wat`, JavaScript loader, and declaration output, and can run WebAssembly optimization tooling.
-- `./build/`: generated WebAssembly loader, binary, text format, and declarations.
-- `./dist/`: bundled ESM and IIFE JavaScript files plus WebAssembly copies.
+- `./wasm/`: generated WebAssembly loader, binary, text format, and declarations.
+- `./release/`: bundled ESM and IIFE JavaScript files plus WebAssembly copies.
 - `./rust/target/`: local Rust build output when present. This is build output rather than source.
 
-`./build/` and `./dist/` are checked-in release artifacts. Development builds can modify them, and `npm run restore` restores them via Git.
+`./wasm/` and `./release/` are checked-in release artifacts. Development builds can modify them, and `npm run restore` restores them via Git.
 
 Cargo commands invoked from the repository root or `./rust/` inherit the repository Cargo policy and rustup toolchain selection. Package and release-profile settings remain in `./rust/Cargo.toml`, while dynamic WebAssembly SIMD, shared-memory, memory-limit, and post-processing variants remain owned by `./scripts/build-rust-wasm.js`.
 
@@ -960,7 +962,7 @@ Do not add broad rewrites while making a focused change. Renderer, transform, co
 
 ### 3.3. Public API behavior
 
-Treat exports from `./src/index.ts` and runtime factories in `./src/core/engine.ts` as public API. Preserve names, descriptor fields, default values, return shapes, and error behavior unless the change is intentionally public.
+Treat exports from `./typescript/index.ts` and runtime factories in `./typescript/core/engine.ts` as public API. Preserve names, descriptor fields, default values, return shapes, and error behavior unless the change is intentionally public.
 
 When public behavior changes, update tests and examples that use that behavior. Update release-facing files when preparing a release or when a specific small fix requires it. Do not rely on `./README.md` alone for current architecture, because it only describes the latest release while the source tree contains all of the unreleased work.
 
@@ -969,11 +971,11 @@ When public behavior changes, update tests and examples that use that behavior. 
 For TypeScript changes:
 
 - run `npm run build:ts` for type checking;
-- add or update `./test/*.test.js` when behavior is testable in the current Node setup;
+- add or update `./tests/*.test.js` when behavior is testable in the current Node setup;
 - check object lifetime and `destroy()` paths when adding GPU resources;
 - keep renderer, compute, and transform hot paths allocation-conscious;
-- update exports in `./src/index.ts` when adding public functionality;
-- update IIFE exposure through `./src/index.iife.ts` when needed.
+- update exports in `./typescript/index.ts` when adding public functionality;
+- update IIFE exposure through `./typescript/index.iife.ts` when needed.
 
 When changing renderer paths, inspect the object class, material class, texture path, shader variants, and tests together. Renderer changes often depend on matching layouts across TypeScript and WGSL.
 
@@ -983,21 +985,21 @@ For Rust changes:
 
 - use rustup so `./rust-toolchain.toml` selects the pinned development compiler, rustfmt and Clippy components, and WebAssembly target;
 - edit source under `./rust/src/`;
-- add portable algorithm coverage under `./rust/src/tests/` and WebAssembly-only ABI coverage in `./test/wasm.test.js`;
-- update TypeScript wrappers in `./src/wasm/index.ts` or `./src/wasm/interop.ts` when exports change;
+- add portable algorithm coverage under `./rust/src/tests/` and WebAssembly-only ABI coverage in `./tests/wasm.test.js`;
+- update TypeScript wrappers in `./typescript/wasm/index.ts` or `./typescript/wasm/interop.ts` when exports change;
 - run `npm run fmt:rs` and `npm run lint:rs` before committing Rust changes;
 - run `npm run build:rs` to regenerate WebAssembly files;
 - run `npm run test:rs` for native Rust checks and `npm run test` after wrapper changes;
 - keep pointer, length, dtype, stride, and alignment assumptions explicit at call sites.
 
-Rust heap allocation/free calls must use the same pointer, allocator family, and byte or element count exactly once. Prefer the frame arena for per-frame data and `WasmHeapArena` for grouped temporary allocations. If allocation semantics change, update `./src/wasm/driver.ts`, interop callers, WebAssembly tests, and this file.
+Rust heap allocation/free calls must use the same pointer, allocator family, and byte or element count exactly once. Prefer the frame arena for per-frame data and `WasmHeapArena` for grouped temporary allocations. If allocation semantics change, update `./typescript/wasm/driver.ts`, interop callers, WebAssembly tests, and this file.
 
 ### 3.6. WGSL changes
 
 For WGSL changes:
 
 - update matching TypeScript bind group layouts, vertex layouts, uniform packing, and pipeline creation;
-- check shader imports in `./src/core/renderer.ts`, `./src/compute/kernels.ts`, or related subsystem files;
+- check shader imports in `./typescript/core/renderer.ts`, `./typescript/compute/kernels.ts`, or related subsystem files;
 - keep material and picking variants aligned when adding geometry attributes or object types;
 - run `npm run build:js` when checking bundling and WGSL import handling.
 
@@ -1022,28 +1024,28 @@ Avoid unnecessary allocations in frame loops, draw-list building, transform upda
 
 ### 3.8. Examples, documentation, and release-facing files
 
-Update examples when a public API change affects example code, when a new public feature needs a usage reference, or when an example is part of release work. Examples import `./dist/` bundles, so source-only changes may not appear in examples until bundles are rebuilt.
+Update examples when a public API change affects example code, when a new public feature needs a usage reference, or when an example is part of release work. Examples import `./release/` bundles, so source-only changes may not appear in examples until bundles are rebuilt.
 
 Release-update convention:
 
-- `./dist/` and `./build/` contain build bundles and binaries and are updated only when a new WasmGPU version is released.
-- `./website/src/` contains the website and documentation and is usually updated significantly only when a new WasmGPU version is released.
+- `./release/` and `./wasm/` contain build bundles and binaries and are updated only when a new WasmGPU version is released.
+- `./website/` contains the website and documentation and is usually updated significantly only when a new WasmGPU version is released.
 - `./CHANGELOG.md` is usually updated significantly only when a new version is released.
 - `./README.md` is usually updated significantly only when a new version is released.
 - Small fixes to those files may happen outside a release, such as typo fixes or small bug and documentation corrections.
 - `./ARCHITECTURE.md` is different: update it whenever there is a significant source-code architecture change, not only when preparing a release.
 
-Do not update `./README.md`, `./CHANGELOG.md`, `./website/src/`, `./dist/`, or `./build/` for every source change. Update `./ARCHITECTURE.md` for significant architecture changes. Update release-facing files when preparing a release or when a specific small fix requires it.
+Do not update `./README.md`, `./CHANGELOG.md`, `./website/`, `./release/`, or `./wasm/` for every source change. Update `./ARCHITECTURE.md` for significant architecture changes. Update release-facing files when preparing a release or when a specific small fix requires it.
 
-Use the OpenAI Codex `$maintain-docs` skill for work under `./website/src/docs/`. Its `release` mode requires an audit and approval checkpoint before documentation changes, its `maintain` mode keeps focused updates narrowly scoped, and its `verify` mode checks source accuracy and documentation integrity without editing by default. The skill keeps release audit ledgers under `./.cache/` and reserves repository-wide LF normalization of the documentation tree for approved release implementation.
+Use the OpenAI Codex `$maintain-docs` skill for work under `./website/docs/`. Its `release` mode requires an audit and approval checkpoint before documentation changes, its `maintain` mode keeps focused updates narrowly scoped, and its `verify` mode checks source accuracy and documentation integrity without editing by default. The skill keeps release audit ledgers under `./.cache/` and reserves repository-wide LF normalization of the documentation tree for approved release implementation.
 
 ### 3.9. Generated files and release artifacts
 
-`npm run build:rs` updates generated WebAssembly files under `./build/`. `npm run build:js` updates bundles under `./dist/`. `npm run build` runs the Rust, TypeScript, and bundle steps.
+`npm run build:rs` updates generated WebAssembly files under `./wasm/`. `npm run build:js` updates bundles under `./release/`. `npm run build` runs the Rust, TypeScript, and bundle steps.
 
-During non-release development, generated changes under `./build/` and `./dist/` may be local build output. Use `npm run restore` to restore those directories from Git when generated output is not part of the intended change. Changes to `./build/` and `./dist/` should normally only be part of a release commit.
+During non-release development, generated changes under `./wasm/` and `./release/` may be local build output. Use `npm run restore` to restore those directories from Git when generated output is not part of the intended change. Changes to `./wasm/` and `./release/` should normally only be part of a release commit.
 
-Website generation uses `npm run website`, which runs `./scripts/build_website.py`. That script reads `./dist/WasmGPU.min.js`, copies assets and examples, rewrites example imports to the current release CDN URL configured in the script, and writes output under `./website/build/`.
+Website generation uses `npm run website`, which runs `./scripts/build_website.py`. That script reads `./release/WasmGPU.min.js`, copies assets and examples, rewrites the copied examples from their local `./release/` imports to the pinned v0.9.0 CDN `./dist/` URLs, and writes output under `./website/build/`. The repository examples therefore exercise the current local bundles, while the generated website examples continue to exercise the documented v0.9.0 release.
 
 ### 3.10. Validation commands
 
@@ -1060,7 +1062,7 @@ Use the commands from `./package.json`:
 | `npm run test:rs` | Run Rust tests under `./rust/src/tests/`. |
 | `npm run test:clean` | Remove prior test reports before a new full run. |
 | `npm run test:setup` | Run Node tests for the setup of `npm run test:js` and `npm run test:ex`. |
-| `npm run test:js` | Run Node tests under `./test/*.test.js` with Playwright Chromium. |
+| `npm run test:js` | Run Node tests under `./tests/*.test.js` with Playwright Chromium. |
 | `npm run test:ex` | Run Node tests under `./examples/` with Playwright Chromium. |
 | `npm run test:merge` | Merge all three of the Node test reports after they run. |
 | `npm run test:js:headed` | Run the Node tests with a visible Chromium window. |
@@ -1070,7 +1072,7 @@ Use the commands from `./package.json`:
 | `npm run test:setup:report` | Open the latest test report generated by `npm run test:setup`. |
 | `npm run test:js:report` | Open the latest test report generated by `npm run test:js`. |
 | `npm run test:ex:report` | Open the latest test report generated by `npm run test:ex`. |
-| `npm run restore` | Restore `./build/` and `./dist/` from Git. |
+| `npm run restore` | Restore `./wasm/` and `./release/` from Git. |
 | `npm run fmt` | Check formatting. |
 | `npm run fmt:rs` | Check Rust formatting with rustfmt. |
 | `npm run lint` | Check linting. |

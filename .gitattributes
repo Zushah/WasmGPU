@@ -1,7 +1,8 @@
 * text=auto
-website/* linguist-detectable=false
-examples/* linguist-detectable=false
-test/* linguist-detectable=false
+examples/** linguist-detectable=false
+release/** linguist-detectable=false
+tests/** linguist-detectable=false
+website/** linguist-detectable=false
 *.wgsl text
 *.wat text
 *.wasm binary

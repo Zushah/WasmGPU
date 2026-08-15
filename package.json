@@ -4,11 +4,11 @@
   "author": "Zushah",
   "license": "MPL-2.0",
   "description": "WebGPU × WebAssembly rendering and computing engine for scientific workloads in the browser.",
-  "main": "./dist/WasmGPU.js",
-  "module": "./dist/WasmGPU.js",
+  "main": "./release/WasmGPU.js",
+  "module": "./release/WasmGPU.js",
   "files": [
     "./CHANGELOG.md",
-    "./dist/",
+    "./release/",
     "./LICENSE.md",
     "./package.json",
     "./README.md"
@@ -43,7 +43,7 @@
     "test:setup:report": "playwright show-report ./playwright-report/setup",
     "test:js:report": "playwright show-report ./playwright-report/javascript",
     "test:ex:report": "playwright show-report ./playwright-report/examples",
-    "restore": "git restore build dist",
+    "restore": "git restore release wasm",
     "fmt": "npm run fmt:rs",
     "fmt:rs": "cargo fmt --manifest-path ./rust/Cargo.toml -- --check",
     "lint": "npm run lint:rs",
@@ -67,13 +67,13 @@
   "type": "module",
   "exports": {
     ".": {
-      "import": "./dist/WasmGPU.js"
+      "import": "./release/WasmGPU.js"
     },
     "./min": {
-      "import": "./dist/WasmGPU.min.js"
+      "import": "./release/WasmGPU.min.js"
     },
     "./iife": {
-      "default": "./dist/WasmGPU.iife.min.js"
+      "default": "./release/WasmGPU.iife.min.js"
     }
   },
   "keywords": [

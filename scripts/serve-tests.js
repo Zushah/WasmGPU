@@ -31,7 +31,7 @@ const server = createServer((request, response) => {
     try {
         const url = new URL(request.url ?? "/", "http://127.0.0.1");
         const decodedPath = decodeURIComponent(url.pathname);
-        const relativePath = decodedPath === "/" ? "test/index.html" : decodedPath.replace(/^\/+/, "");
+        const relativePath = decodedPath === "/" ? "tests/index.html" : decodedPath.replace(/^\/+/, "");
         const filePath = resolve(ROOT, relativePath);
         if (filePath !== ROOT && !filePath.startsWith(`${ROOT}${sep}`)) { response.writeHead(403).end("Forbidden"); return; }
         if (!statSync(filePath).isFile()) { response.writeHead(404).end("Not Found"); return; }

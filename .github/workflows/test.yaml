@@ -5,16 +5,18 @@ on:
     branches:
       - main
     paths:
-      - src/**
+      - typescript/**
+      - wgsl/**
+      - python/**
       - rust/**
-      - test/**
+      - tests/**
       - examples/**
       - scripts/serve-tests.js
       - scripts/merge-test-reports.js
       - scripts/build-rust-wasm.js
       - scripts/configure-firefox-webgpu.js
-      - build/**
-      - dist/**
+      - wasm/**
+      - release/**
       - .cargo/**
       - rust-toolchain.toml
       - .github/workflows/test.yaml
@@ -29,16 +31,18 @@ on:
     branches:
       - main
     paths:
-      - src/**
+      - typescript/**
+      - wgsl/**
+      - python/**
       - rust/**
-      - test/**
+      - tests/**
       - examples/**
       - scripts/serve-tests.js
       - scripts/merge-test-reports.js
       - scripts/build-rust-wasm.js
       - scripts/configure-firefox-webgpu.js
-      - build/**
-      - dist/**
+      - wasm/**
+      - release/**
       - .cargo/**
       - rust-toolchain.toml
       - .github/workflows/test.yaml
