@@ -5,7 +5,7 @@
  */
 
 use crate::cull::{extract_plane, mul_clip, near_plane_from_view_projection, write_all_visible};
-use crate::mat4::mat4_identity_arr;
+use crate::mat4::mat4f_identity_arr;
 use crate::tests::common::{assert_approx, assert_slice_approx};
 
 #[test]
@@ -16,7 +16,7 @@ fn plane_and_clip_helpers_follow_webgpu_column_major_conventions() {
         &[0.0, 0.0, 1.0, 2.0],
         0.0,
     );
-    let identity = mat4_identity_arr();
+    let identity = mat4f_identity_arr();
     assert_eq!(
         near_plane_from_view_projection(&identity),
         [0.0, 0.0, 1.0, 0.0]
@@ -55,8 +55,8 @@ fn conservative_fallback_preserves_stable_valid_indices_and_statistics() {
 #[test]
 fn infinite_perspective_produces_inactive_far_plane_without_culling_distant_geometry() {
     use crate::cull::write_planes_from_view_projection;
-    use crate::mat4::mat4_perspective_from;
-    let proj = mat4_perspective_from(std::f32::consts::FRAC_PI_2, 1.0, 0.1, f32::INFINITY);
+    use crate::mat4::mat4f_perspective_from;
+    let proj = mat4f_perspective_from(std::f32::consts::FRAC_PI_2, 1.0, 0.1, f32::INFINITY);
     let mut planes = [0.0f32; 24];
     write_planes_from_view_projection(&mut planes, &proj);
     let far_plane = &planes[20..24];

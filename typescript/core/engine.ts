@@ -29,7 +29,7 @@ import { OverlaySystem, AxisTriadLayer, GridLayer, LegendLayer } from "../overla
 import type { OverlaySystemDescriptor, AxisTriadLayerDescriptor, GridLayerDescriptor, LegendLayerDescriptor } from "../overlay";
 import { pythonInterop } from "../python";
 import { ScaleService } from "../scaling";
-import { driver, frameArena, initWebAssembly, mat4, quat, vec3, WasmHeapArena, webassemblyInterop } from "../wasm";
+import { driver, frameArena, initWebAssembly, mat4, mat4d, mat4f, quat, quatd, quatf, vec3, vec3d, vec3f, WasmHeapArena, webassemblyInterop } from "../wasm";
 import { Camera, PerspectiveCamera, OrthographicCamera } from "../world/camera";
 import type { PerspectiveCameraDescriptor, OrthographicCameraDescriptor } from "../world/camera";
 import { NavigationControls, OrbitControls, TrackballControls, FlyControls } from "../world/controls";
@@ -148,11 +148,11 @@ export class WasmGPU {
     }
 
     static get math() {
-        return { mat4, quat, vec3 };
+        return { mat4, mat4f, mat4d, quat, quatf, quatd, vec3, vec3f, vec3d };
     }
 
     get math() {
-        return { mat4, quat, vec3 };
+        return { mat4, mat4f, mat4d, quat, quatf, quatd, vec3, vec3f, vec3d };
     }
 
     static createHeapArena(capBytes: number, align: number = 16): WasmHeapArena {

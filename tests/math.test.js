@@ -6,7 +6,7 @@
 
 import assert from "./utils/assert.js";
 import { createApproxHelpers, safelySilence, setupTest } from "./utils/helpers.js";
-import { initWebAssembly, mat4, quat, vec3 } from "../release/WasmGPU.js";
+import { initWebAssembly, mat4, quat, vec3, wasm, WasmGPU } from "../release/WasmGPU.js";
 
 const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers(1e-5);
 
@@ -14,7 +14,55 @@ await setupTest({ initWebAssembly });
 
 const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >= min && v <= max, `Value ${v} not in [${min}, ${max}]`); }
 
-// 1) mat4.identity / mat4.isIdentity / mat4.det / mat4.trace.
+// 1) Static and instance math accessors expose matching f32/f64 pointer namespaces.
+{
+    const expected = ["mat4", "mat4f", "mat4d", "quat", "quatf", "quatd", "vec3", "vec3f", "vec3d"];
+    assert.deepStrictEqual(Object.keys(WasmGPU.math), expected);
+    assert.deepStrictEqual(Object.keys(Object.create(WasmGPU.prototype).math), expected);
+    for (const family of ["mat4", "quat", "vec3"]) assert.deepStrictEqual(Object.keys(WasmGPU.math[`${family}f`]), Object.keys(WasmGPU.math[`${family}d`]), `${family} f/d operations must remain in parity`);
+    const { vec3f, vec3d, mat4f, mat4d, quatf, quatd } = WasmGPU.math;
+    const vf = vec3f.alloc(), vdf = vec3d.alloc(), vof = vec3f.alloc(), vod = vec3d.alloc();
+    const mf = mat4f.alloc(), md = mat4d.alloc(), qf = quatf.alloc(), qd = quatd.alloc();
+    try {
+        const precise = 1 + Number.EPSILON;
+        vec3f.init(vf, precise, 2, 3);
+        vec3d.init(vdf, precise, 2, 3);
+        vec3f.scl(vof, vf, 2);
+        vec3d.scl(vod, vdf, 2);
+        assert.strictEqual(vec3f.view3(vf).length, 3, "vec3f allocations must represent exactly three components");
+        assert.strictEqual(vec3d.view3(vdf).length, 3, "vec3d allocations must represent exactly three components");
+        assert.strictEqual(vec3f.view3(vf)[0], 1, "f32 math should round values to binary32 storage");
+        assert.strictEqual(vec3d.view3(vdf)[0], precise, "f64 math should preserve binary64-only precision");
+        assert.deepStrictEqual(Array.from(vec3f.view3(vof)), [2, 4, 6]);
+        assert.deepStrictEqual(Array.from(vec3d.view3(vod)), [2 * precise, 4, 6]);
+        wasm.seed(0x12345678);
+        vec3d.random(vdf);
+        const randomA = Array.from(vec3d.view3(vdf));
+        wasm.seed(0x12345678);
+        vec3d.random(vod);
+        assert.deepStrictEqual(Array.from(vec3d.view3(vod)), randomA, "f64 randomness must remain deterministic when seeded");
+        assert.ok(randomA.some((value) => value !== Math.fround(value)), "f64 randomness must provide precision beyond a widened f32 sample");
+        mat4f.identity(mf);
+        mat4d.identity(md);
+        assert.strictEqual(mat4f.det(mf), 1);
+        assert.strictEqual(mat4d.det(md), 1);
+        quatf.init(qf, 0, 0, 0, 2);
+        quatd.init(qd, 0, 0, 0, 2);
+        quatf.normalize(qf, qf);
+        quatd.normalize(qd, qd);
+        assert.deepStrictEqual(Array.from(quatf.view(qf)), [0, 0, 0, 1]);
+        assert.deepStrictEqual(Array.from(quatd.view(qd)), [0, 0, 0, 1]);
+    } finally {
+        for (const ptr of [vf, vof]) wasm.freeF32(ptr, 3);
+        for (const ptr of [vdf, vod]) wasm.freeF64(ptr, 3);
+        wasm.freeF32(mf, 16);
+        wasm.freeF64(md, 16);
+        wasm.freeF32(qf, 4);
+        wasm.freeF64(qd, 4);
+    }
+}
+
+// 2) mat4.identity / mat4.isIdentity / mat4.det / mat4.trace.
 {
     const I = mat4.identity();
     assert.strictEqual(I.length, 16, "mat4.identity should return length 16");
@@ -23,7 +71,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     numberApproxEqual(mat4.trace(I), 4, 1e-5, "mat4.trace(identity) should be 4");
 }
 
-// 2) mat4.copy returns new array.
+// 3) mat4.copy returns new array.
 {
     const I = mat4.identity();
     const c = mat4.copy(I);
@@ -31,14 +79,9 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     assert.notStrictEqual(c, I, "mat4.copy should return a new array");
 }
 
-// 3) mat4.add / mat4.sub / mat4.neg / mat4.abs / mat4.round / mat4.scl.
+// 4) mat4.add / mat4.sub / mat4.neg / mat4.abs / mat4.round / mat4.scl.
 {
-    const A = mat4.init(
-        1, -2, 3, -4,
-        5, -6, 7, -8,
-        9, -10, 11, -12,
-        13, -14, 15, -16
-    );
+    const A = mat4.init(1, -2, 3, -4, 5, -6, 7, -8, 9, -10, 11, -12, 13, -14, 15, -16);
     const absA = mat4.abs(A);
     assert.deepStrictEqual(absA, [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], "mat4.abs failed");
     const negA = mat4.neg(A);
@@ -52,21 +95,21 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     assert.deepStrictEqual(rounded, [1, 3, 4, 4, 6, 6, 7, 9, 10, 10, 12, 13, 13, 14, 15, 16], "mat4.round failed");
 }
 
-// 4) mat4.mul(identity, identity) is identity.
+// 5) mat4.mul(identity, identity) is identity.
 {
     const I = mat4.identity();
     const M = mat4.mul(I, I);
     assert.strictEqual(mat4.isIdentity(M), true, "mat4.mul(identity, identity) should be identity");
 }
 
-// 5) mat4.transpose(identity) is identity.
+// 6) mat4.transpose(identity) is identity.
 {
     const I = mat4.identity();
     const T = mat4.transpose(I);
     assert.strictEqual(mat4.isIdentity(T), true, "mat4.transpose(identity) should be identity");
 }
 
-// 6) mat4.random / mat4.print.
+// 7) mat4.random / mat4.print.
 {
     const min = -2, max = 3;
     const r = mat4.random(min, max);
@@ -79,7 +122,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     assert.deepStrictEqual(messages, ["[ 1 0 0 0 ]\n[ 0 1 0 0 ]\n[ 0 0 1 0 ]\n[ 0 0 0 1 ]"], "mat4.print output mismatch");
 }
 
-// 7) quat.init / quat.copy.
+// 8) quat.init / quat.copy.
 {
     const q = quat.init(1, 2, 3, 4);
     assert.deepStrictEqual(q, [1, 2, 3, 4], "quat.init failed");
@@ -88,7 +131,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     assert.notStrictEqual(c, q, "quat.copy should return a new array");
 }
 
-// 8) quat.abs / quat.neg / quat.add / quat.sub / quat.scl.
+// 9) quat.abs / quat.neg / quat.add / quat.sub / quat.scl.
 {
     assert.deepStrictEqual(quat.abs([-1, -2, -3, -4]), [1, 2, 3, 4], "quat.abs failed");
     assert.deepStrictEqual(quat.neg([1, 2, 3, 4]), [-1, -2, -3, -4], "quat.neg failed");
@@ -97,7 +140,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     assert.deepStrictEqual(quat.scl([1, 2, 3, 4], 2), [2, 4, 6, 8], "quat.scl failed");
 }
 
-// 9) quat.norm / quat.normsq / quat.normalize / quat.isNormalized.
+// 10) quat.norm / quat.normsq / quat.normalize / quat.isNormalized.
 {
     const q = quat.init(0, 0, 0, 1);
     numberApproxEqual(quat.norm(q), 1, 1e-5, "quat.norm failed");
@@ -108,7 +151,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     numberApproxEqual(quat.norm(q2), 1, 1e-5, "quat.normalize produced wrong norm");
 }
 
-// 10) quat.dist / quat.distsq / quat.isEqual / quat.isZero.
+// 11) quat.dist / quat.distsq / quat.isEqual / quat.isZero.
 {
     const a = quat.init(1, 0, 0, 0);
     const b = quat.init(1, 0, 0, 0);
@@ -119,7 +162,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     assert.strictEqual(quat.isZero(quat.init(0, 0, 0, 1)), false, "quat.isZero failed for non-zero quat");
 }
 
-// 11) quat.random / quat.print.
+// 12) quat.random / quat.print.
 {
     const min = 5, max = 20;
     const r = quat.random(min, max);
@@ -132,7 +175,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     assert.deepStrictEqual(messages, ["0 + 0i + 0j + 1k"], "quat.print output mismatch");
 }
 
-// 12) vec3.init / vec3.copy.
+// 13) vec3.init / vec3.copy.
 {
     const v = vec3.init(7, 8, 9);
     assert.deepStrictEqual(v, [7, 8, 9], "vec3.init failed");
@@ -141,7 +184,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     assert.notStrictEqual(c, v, "vec3.copy should return a new array");
 }
 
-// 13) vec3.abs / vec3.neg / vec3.add / vec3.sub / vec3.scl / vec3.round.
+// 14) vec3.abs / vec3.neg / vec3.add / vec3.sub / vec3.scl / vec3.round.
 {
     assert.deepStrictEqual(vec3.abs([-1, -2, -3]), [1, 2, 3], "vec3.abs failed");
     assert.deepStrictEqual(vec3.neg([1, 2, 3]), [-1, -2, -3], "vec3.neg failed");
@@ -151,7 +194,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     assert.deepStrictEqual(vec3.round([1.2, 2.5, 3.7]), [1, 3, 4], "vec3.round failed");
 }
 
-// 14) vec3.dot / vec3.cross / vec3.dist / vec3.distsq / vec3.norm / vec3.normsq.
+// 15) vec3.dot / vec3.cross / vec3.dist / vec3.distsq / vec3.norm / vec3.normsq.
 {
     assert.strictEqual(vec3.dot([1, 2, 3], [4, 5, 6]), 32, "vec3.dot failed");
     assert.deepStrictEqual(vec3.cross([1, 0, 0], [0, 1, 0]), [0, 0, 1], "vec3.cross failed");
@@ -161,7 +204,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     numberApproxEqual(vec3.normsq([3, 4, 0]), 25, 1e-5, "vec3.normsq failed");
 }
 
-// 15) vec3.normalize / vec3.normscl / vec3.isNormalized.
+// 16) vec3.normalize / vec3.normscl / vec3.isNormalized.
 {
     const v = [3, 4, 0];
     const n = vec3.normalize(v);
@@ -171,7 +214,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     arraysApproxEqual(ns, [6, 8, 0], 1e-5);
 }
 
-// 16) vec3.ang / vec3.angBetween / vec3.interp.
+// 17) vec3.ang / vec3.angBetween / vec3.interp.
 {
     arraysApproxEqual(vec3.ang([1, 0, 0]), [0, Math.PI / 2, Math.PI / 2], 1e-5);
     numberApproxEqual(vec3.angBetween([1, 0, 0], [0, 1, 0]), Math.PI / 2, 1e-5, "vec3.angBetween failed");
@@ -179,7 +222,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     arraysApproxEqual(vec3.interp(base, 0.5, 5, 2), [22, 22, 22], 1e-5);
 }
 
-// 17) vec3.isEqual / vec3.isZero / vec3.isOrthogonal / vec3.isParallel.
+// 18) vec3.isEqual / vec3.isZero / vec3.isOrthogonal / vec3.isParallel.
 {
     assert.strictEqual(vec3.isEqual([1, 2, 3], [1, 2, 3]), true, "vec3.isEqual failed for equal arrays");
     assert.strictEqual(vec3.isEqual([1, 2, 3], [3, 2, 1]), false, "vec3.isEqual failed for inequal arrays");
@@ -190,7 +233,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     assert.strictEqual(vec3.isParallel([1, 0, 0], [0, 1, 0]), false, "vec3.isParallel failed for non-parallel vectors");
 }
 
-// 18) vec3.proj / vec3.oproj / vec3.reflect / vec3.refract.
+// 19) vec3.proj / vec3.oproj / vec3.reflect / vec3.refract.
 {
     arraysApproxEqual(vec3.proj([3, 4, 5], [1, 0, 0]), [3, 0, 0], 1e-5);
     arraysApproxEqual(vec3.oproj([3, 4, 5], [1, 0, 0]), [0, 4, 5], 1e-5);
@@ -198,7 +241,7 @@ const assertAllInRange = (arr, min, max) => { for (const v of arr) assert.ok(v >
     arraysApproxEqual(vec3.refract([0, -1, 0], [0, 1, 0], 1.5), [0, -1, 0], 1e-5);
 }
 
-// 19) vec3.random / vec3.print.
+// 20) vec3.random / vec3.print.
 {
     const min = 5, max = 10;
     const r = vec3.random(min, max);

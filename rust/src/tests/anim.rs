@@ -8,7 +8,7 @@ use crate::anim::{
     INTERP_CUBIC, INTERP_LINEAR, INTERP_STEP, clamp01, find_keyframe, hermite, mat4_mul_to,
     quat_normalize, quat_slerp, sample_quat, sample_vec,
 };
-use crate::mat4::mat4_identity_arr;
+use crate::mat4::mat4f_identity_arr;
 use crate::tests::common::{assert_approx, assert_slice_approx};
 
 #[test]
@@ -64,7 +64,7 @@ fn quaternion_sampling_is_normalized_and_uses_the_shortest_path() {
 
 #[test]
 fn joint_matrix_multiplication_uses_column_major_order() {
-    let identity = mat4_identity_arr();
+    let identity = mat4f_identity_arr();
     let mut translation = identity;
     translation[12] = 3.0;
     translation[13] = -2.0;

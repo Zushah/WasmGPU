@@ -83,6 +83,16 @@ pub unsafe extern "C" fn wasmgpu_free_f32(ptr: u32, len: u32) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn wasmgpu_alloc_f64(len: u32) -> u32 {
+    unsafe { alloc_array::<f64>(len) }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn wasmgpu_free_f64(ptr: u32, len: u32) {
+    unsafe { free_array::<f64>(ptr, len) }
+}
+
+#[unsafe(no_mangle)]
 pub extern "C" fn wasmgpu_alloc_u32(len: u32) -> u32 {
     unsafe { alloc_array::<u32>(len) }
 }

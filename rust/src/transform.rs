@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::mat4::mat4_invert_from;
+use crate::mat4::mat4f_invert_from;
 use crate::shared::{f32_slice, f32_slice_mut, u32_slice, with_driver_call};
 
 pub(crate) fn compose_local_many(
@@ -343,7 +343,7 @@ pub unsafe extern "C" fn transform_pack_model_normal_mat4_from_ptrs(
             out_f32[base..base + 16].copy_from_slice(src);
             let mut m = [0.0f32; 16];
             m.copy_from_slice(src);
-            let inv = mat4_invert_from(&m);
+            let inv = mat4f_invert_from(&m);
             let mut normal = [0.0f32; 16];
             normal[0] = inv[0];
             normal[1] = inv[4];

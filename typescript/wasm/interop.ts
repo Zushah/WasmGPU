@@ -83,6 +83,8 @@ export const assertWasmViewDType = <T extends NumberTypedArray = NumberTypedArra
 
 export const assertWasmF32View = (source: unknown, label: string): WasmMemoryView<Float32Array> => assertWasmViewDType<Float32Array>(source, "f32", label);
 
+export const assertWasmF64View = (source: unknown, label: string): WasmMemoryView<Float64Array> => assertWasmViewDType<Float64Array>(source, "f64", label);
+
 export const assertWasmU16View = (source: unknown, label: string): WasmMemoryView<Uint16Array> => assertWasmViewDType<Uint16Array>(source, "u16", label);
 
 export const assertWasmU32View = (source: unknown, label: string): WasmMemoryView<Uint32Array> => assertWasmViewDType<Uint32Array>(source, "u32", label);

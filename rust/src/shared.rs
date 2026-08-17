@@ -36,6 +36,25 @@ pub(crate) unsafe fn f32_slice_mut<'call>(
     unsafe { core::slice::from_raw_parts_mut(ptr as *mut f32, len) }
 }
 
+#[allow(dead_code)]
+#[inline(always)]
+pub(crate) unsafe fn f64_slice<'call>(
+    _call: DriverCall<'call>,
+    ptr: u32,
+    len: usize,
+) -> &'call [f64] {
+    unsafe { core::slice::from_raw_parts(ptr as *const f64, len) }
+}
+
+#[inline(always)]
+pub(crate) unsafe fn f64_slice_mut<'call>(
+    _call: DriverCall<'call>,
+    ptr: u32,
+    len: usize,
+) -> &'call mut [f64] {
+    unsafe { core::slice::from_raw_parts_mut(ptr as *mut f64, len) }
+}
+
 #[inline(always)]
 pub(crate) unsafe fn u32_slice<'call>(
     _call: DriverCall<'call>,
@@ -98,8 +117,20 @@ pub(crate) unsafe fn read_f32_array<const N: usize>(ptr: u32) -> [f32; N] {
 }
 
 #[inline(always)]
+pub(crate) unsafe fn read_f64_array<const N: usize>(ptr: u32) -> [f64; N] {
+    let mut out = [0.0; N];
+    unsafe { core::ptr::copy_nonoverlapping(ptr as *const f64, out.as_mut_ptr(), N) };
+    out
+}
+
+#[inline(always)]
 pub(crate) unsafe fn copy_f32(dst: u32, src: u32, len: usize) {
     unsafe { core::ptr::copy(src as *const f32, dst as *mut f32, len) };
+}
+
+#[inline(always)]
+pub(crate) unsafe fn copy_f64(dst: u32, src: u32, len: usize) {
+    unsafe { core::ptr::copy(src as *const f64, dst as *mut f64, len) };
 }
 
 #[cfg(any(target_arch = "wasm32", test))]

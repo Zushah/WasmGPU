@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Saturday, August 15, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Monday, August 17, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Thursday, August 13, 2026, [**`2b72600`**](https://www.github.com/Zushah/WasmGPU/commit/2b72600).
+Parent commit: Saturday, August 15, 2026, [**`de7246c`**](https://www.github.com/Zushah/WasmGPU/commit/de7246c).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -398,6 +398,8 @@ The main compute files are:
 
 The compute subsystem reads WGSL from `./wgsl/compute/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory. `CPUndarray` owns its backing bytes plus shape, stride, and indexing allocations; `destroy()` releases them idempotently and later memory access throws. `GPUndarray` destroys only buffers it owns and continues to borrow buffers supplied through `wrap()`.
 
+WasmGPU chooses floating-point precision by execution domain rather than imposing one width globally. CPU ndarrays and WasmGPU-owned or external WebAssembly memory support both `f32` and `f64`, including Python and WebAssembly interop. A `GPUndarray<f64>` is valid storage and transfer data, as its bytes may be uploaded to a WebGPU buffer, copied, and read back without loss. However, current WebGPU/WGSL has no concrete runtime `f64` scalar type, so `f64` GPU storage does not imply native `f6`4 shader computation or rendering arithmetic. Where a shader-facing path requires `f32`, explicitly converting `f64` CPU values through the existing typed-array or ndarray construction behavior is intentional.
+
 Contributors changing compute code should check buffer usage flags, copy alignment, dispatch dimensions, shader bindings, readback slot reuse, and tests that assert kernel results.
 
 ### 1.14. Scaling service
@@ -450,13 +452,13 @@ Interop changes should preserve allocator ownership, frame arena lifetime checks
 
 ### 1.18. WebAssembly driver
 
-WebAssembly driver initialization is implemented in `./typescript/wasm/driver.ts` and exported through `./typescript/wasm/index.ts`. It imports the generated loader from `./wasm/wasm.js`, creates an eight-mebibyte (8,388,608 bytes) frame arena, and exposes grouped Rust functions for accessors, animation, bounds, culling, matrix math, mesh normals, ndarray indexing, quaternion math, transforms, and vector math.
+WebAssembly driver initialization is implemented in `./typescript/wasm/driver.ts` and exported through `./typescript/wasm/index.ts`. It imports the generated loader from `./wasm/wasm.js`, creates an eight-mebibyte (8,388,608 bytes) frame arena, and exposes grouped Rust functions for accessors, animation, bounds, culling, matrix math, mesh normals, ndarray indexing, quaternion math, transforms, and mathematics, which includes `vec3`, `vec3f`, `vec3d`, `mat4`, `mat4f`, `mat4d`, `quat`, `quatf`, and `quatd` namespaces.
 
 `WasmSlice`, `WasmHeapArena`, `frameArena`, `wasm`, and the `driver` namespace are part of the WebAssembly driver. `WasmSlice` records pointer, length, dtype, allocation kind, and epoch. Frame arena and heap arena slices check epochs so callers do not reuse memory after a reset or destroyed arena, and freed slices reject later view or handle creation. `WasmHeapArena` allocates a WebAssembly heap block and provides bump allocation within that block. Explicit release remains retryable if its allocator call throws; garbage-collection finalization is only a fallback for abandoned heap slices.
 
 WebAssembly interop with external modules lives in `./typescript/wasm/interop.ts`. It wraps foreign `WebAssembly.Instance` or exports objects, resolves explicit memory and export descriptors, validates byte ranges and alignment, constructs typed views or raw byte/DataView accessors over external linear memory, and provides small shared validation helpers for object-owned uploads from borrowed `WasmMemoryView` sources.
 
-Rust memory allocation is implemented in `./rust/src/heap.rs` through Rust's standard allocator. Exported byte, `f32`, and `u32` allocation/free pairs use checked layouts; a successful allocation remains valid until its matching one-time free, after which its storage can be reused. WebAssembly memory pages do not shrink after growth. `WasmHeapArena.destroy()` releases its backing heap block, while the frame arena keeps one persistent backing block and reuses its contents through resets.
+Rust memory allocation is implemented in `./rust/src/heap.rs` through Rust's standard allocator. Exported byte, `f32`, `f64`, and `u32` allocation/free pairs use checked layouts, as a successful allocation remains valid until its matching one-time free, after which its storage can be reused. WebAssembly memory pages do not shrink after growth. `WasmHeapArena.destroy()` releases its backing heap block, while the frame arena keeps one persistent backing block and reuses its contents through resets. WebAssembly's `wasm32`/`u32` pointer width is an addressing concern independent of whether stored numeric values use `f32` or `f64`.
 
 The Rust driver separates portable slice and fixed-array computation from WebAssembly-only heap and frame-arena adapters where native testing requires it. The heap and frame-arena modules compile only for `wasm32`; their 32-bit pointer, memory-growth, alignment, capacity, and epoch contracts are tested against the compiled WebAssembly module rather than emulated with native pointers.
 

@@ -158,7 +158,27 @@ const compute = new Compute(device, device.queue);
     assert.strictEqual(wasm.memory().buffer.byteLength, stabilizedHeapBytes, "Destroyed CPUndarray storage must be reusable under fixed-size churn");
 }
 
-// 8) Cleanup releases the shared compute context before its browser GPU device.
+// 8) f64 storage roundtrips through GPU bytes and can be explicitly downcast before GPU use.
+{
+    const values = new Float64Array([Math.PI, 1 + Number.EPSILON, -Math.E, Number.MIN_VALUE]);
+    const a = compute.CPUndarray.fromArray("f64", [2, 2], values);
+    assert.ok(a.data() instanceof Float64Array, "f64 CPU ndarrays must expose Float64Array data");
+    assert.strictEqual(a.wgslScalarType, null, "f64 storage must not claim a native WGSL scalar type");
+    const ga = a.uploadToGPU(compute, { copySrc: true, label: "ndarray_roundtrip_f64_storage" });
+    const b = await ga.readbackToCPU();
+    assert.ok(b.data() instanceof Float64Array);
+    assert.deepStrictEqual(Array.from(b.data()), Array.from(values), "GPU storage/copy/readback must preserve f64 values and bytes");
+
+    const downcast = compute.CPUndarray.fromArray("f32", [2, 2], values);
+    assert.ok(downcast.data() instanceof Float32Array);
+    assert.deepStrictEqual(Array.from(downcast.data()), Array.from(new Float32Array(values)), "f64-to-f32 conversion must be explicit and follow typed-array conversion semantics");
+    downcast.destroy();
+    b.destroy();
+    ga.destroy();
+    a.destroy();
+}
+
+// 9) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

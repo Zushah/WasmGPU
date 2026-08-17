@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::mat4::mat4_invert_from;
+use crate::mat4::mat4f_invert_from;
 use crate::shared::{f32_slice, f32_slice_mut, u32_slice, with_driver_call};
 
 pub(crate) const INTERP_STEP: u32 = 0;
@@ -378,7 +378,7 @@ pub unsafe extern "C" fn anim_compute_joint_matrices_to(
         let mesh_world = f32_slice(call, mesh_world_ptr, 16);
         let mut mesh_arr = [0.0f32; 16];
         mesh_arr.copy_from_slice(mesh_world);
-        let mesh_inv = mat4_invert_from(&mesh_arr);
+        let mesh_inv = mat4f_invert_from(&mesh_arr);
         let mut jw = [0.0f32; 16];
         let mut ib = [0.0f32; 16];
         let mut tmp = [0.0f32; 16];

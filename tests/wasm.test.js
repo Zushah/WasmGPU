@@ -5,7 +5,7 @@
  */
 
 import assert from "./utils/assert.js";
-import { WasmGPU, WasmMemoryView, WasmModule, driver, initWebAssembly, pythonInterop, wasm, webassemblyInterop } from "../release/WasmGPU.js";
+import { WasmGPU, WasmMemoryView, WasmModule, driver, frameArena, initWebAssembly, pythonInterop, wasm, webassemblyInterop } from "../release/WasmGPU.js";
 import * as generatedWasm from "../wasm/wasm.js";
 
 const encoder = new TextEncoder();
@@ -25,107 +25,197 @@ const RUST_ABI = {
     cull_spheres_frustum: 5,
     cull_spheres_occlusion: 17,
     cull_write_planes_from_view_projection: 2,
-    mat4_abs: 2,
-    mat4_add: 3,
-    mat4_copy: 2,
-    mat4_decompose_trs: 2,
-    mat4_det: 1,
-    mat4_identity: 1,
-    mat4_init: 17,
-    mat4_invert: 2,
-    mat4_isEqual: 2,
-    mat4_isIdentity: 1,
-    mat4_isInverse: 2,
-    mat4_isZero: 1,
-    mat4_lookAt: 4,
-    mat4_mul: 3,
-    mat4_mul_vec4: 3,
-    mat4_neg: 2,
-    mat4_norm: 1,
-    mat4_normalize: 2,
-    mat4_normsq: 1,
-    mat4_perspective: 5,
-    mat4_print: 1,
-    mat4_random: 1,
-    mat4_random_range: 3,
-    mat4_rotateX: 3,
-    mat4_rotateY: 3,
-    mat4_rotateZ: 3,
-    mat4_round: 2,
-    mat4_scl: 3,
-    mat4_sub: 3,
-    mat4_trace: 1,
-    mat4_translate: 3,
-    mat4_transpose: 2,
+    mat4f_abs: 2,
+    mat4d_abs: 2,
+    mat4f_add: 3,
+    mat4d_add: 3,
+    mat4f_copy: 2,
+    mat4d_copy: 2,
+    mat4f_decompose_trs: 2,
+    mat4d_decompose_trs: 2,
+    mat4f_det: 1,
+    mat4d_det: 1,
+    mat4f_identity: 1,
+    mat4d_identity: 1,
+    mat4f_init: 17,
+    mat4d_init: 17,
+    mat4f_invert: 2,
+    mat4d_invert: 2,
+    mat4f_isEqual: 2,
+    mat4d_isEqual: 2,
+    mat4f_isIdentity: 1,
+    mat4d_isIdentity: 1,
+    mat4f_isInverse: 2,
+    mat4d_isInverse: 2,
+    mat4f_isZero: 1,
+    mat4d_isZero: 1,
+    mat4f_lookAt: 4,
+    mat4d_lookAt: 4,
+    mat4f_mul: 3,
+    mat4d_mul: 3,
+    mat4f_mul_vec4: 3,
+    mat4d_mul_vec4: 3,
+    mat4f_neg: 2,
+    mat4d_neg: 2,
+    mat4f_norm: 1,
+    mat4d_norm: 1,
+    mat4f_normalize: 2,
+    mat4d_normalize: 2,
+    mat4f_normsq: 1,
+    mat4d_normsq: 1,
+    mat4f_perspective: 5,
+    mat4d_perspective: 5,
+    mat4f_print: 1,
+    mat4d_print: 1,
+    mat4f_random: 1,
+    mat4d_random: 1,
+    mat4f_random_range: 3,
+    mat4d_random_range: 3,
+    mat4f_rotateX: 3,
+    mat4d_rotateX: 3,
+    mat4f_rotateY: 3,
+    mat4d_rotateY: 3,
+    mat4f_rotateZ: 3,
+    mat4d_rotateZ: 3,
+    mat4f_round: 2,
+    mat4d_round: 2,
+    mat4f_scl: 3,
+    mat4d_scl: 3,
+    mat4f_sub: 3,
+    mat4d_sub: 3,
+    mat4f_trace: 1,
+    mat4d_trace: 1,
+    mat4f_translate: 3,
+    mat4d_translate: 3,
+    mat4f_transpose: 2,
+    mat4d_transpose: 2,
     mesh_compute_vertex_normals: 5,
     ndarray_numel: 2,
     ndarray_offset_bytes: 5,
     ndarray_strides_row_major: 4,
-    quat_abs: 2,
-    quat_add: 3,
-    quat_copy: 2,
-    quat_dist: 2,
-    quat_distsq: 2,
-    quat_fromAxisAngle: 3,
-    quat_init: 5,
-    quat_invert: 2,
-    quat_isEqual: 2,
-    quat_isNormalized: 1,
-    quat_isZero: 1,
-    quat_mul: 3,
-    quat_neg: 2,
-    quat_norm: 1,
-    quat_normalize: 2,
-    quat_normscl: 3,
-    quat_normsq: 1,
-    quat_print: 1,
-    quat_random: 1,
-    quat_random_range: 3,
-    quat_round: 2,
-    quat_scl: 3,
-    quat_slerp: 4,
-    quat_sub: 3,
-    quat_toRotation: 3,
+    quatf_abs: 2,
+    quatd_abs: 2,
+    quatf_add: 3,
+    quatd_add: 3,
+    quatf_copy: 2,
+    quatd_copy: 2,
+    quatf_dist: 2,
+    quatd_dist: 2,
+    quatf_distsq: 2,
+    quatd_distsq: 2,
+    quatf_fromAxisAngle: 3,
+    quatd_fromAxisAngle: 3,
+    quatf_init: 5,
+    quatd_init: 5,
+    quatf_invert: 2,
+    quatd_invert: 2,
+    quatf_isEqual: 2,
+    quatd_isEqual: 2,
+    quatf_isNormalized: 1,
+    quatd_isNormalized: 1,
+    quatf_isZero: 1,
+    quatd_isZero: 1,
+    quatf_mul: 3,
+    quatd_mul: 3,
+    quatf_neg: 2,
+    quatd_neg: 2,
+    quatf_norm: 1,
+    quatd_norm: 1,
+    quatf_normalize: 2,
+    quatd_normalize: 2,
+    quatf_normscl: 3,
+    quatd_normscl: 3,
+    quatf_normsq: 1,
+    quatd_normsq: 1,
+    quatf_print: 1,
+    quatd_print: 1,
+    quatf_random: 1,
+    quatd_random: 1,
+    quatf_random_range: 3,
+    quatd_random_range: 3,
+    quatf_round: 2,
+    quatd_round: 2,
+    quatf_scl: 3,
+    quatd_scl: 3,
+    quatf_slerp: 4,
+    quatd_slerp: 4,
+    quatf_sub: 3,
+    quatd_sub: 3,
+    quatf_toRotation: 3,
+    quatd_toRotation: 3,
     transform_compose_local_many: 5,
     transform_pack_model_normal_mat4_from_ptrs: 3,
     transform_update_partial_ordered: 10,
     transform_update_world_ordered: 5,
-    vec3_abs: 2,
-    vec3_add: 3,
-    vec3_ang: 2,
-    vec3_angBetween: 2,
-    vec3_copy: 2,
-    vec3_cross: 3,
-    vec3_dist: 2,
-    vec3_distsq: 2,
-    vec3_dot: 2,
-    vec3_init: 4,
-    vec3_interp: 5,
-    vec3_isEqual: 2,
-    vec3_isNormalized: 1,
-    vec3_isOrthogonal: 2,
-    vec3_isParallel: 2,
-    vec3_isZero: 1,
-    vec3_neg: 2,
-    vec3_norm: 1,
-    vec3_normalize: 2,
-    vec3_normscl: 3,
-    vec3_normsq: 1,
-    vec3_oproj: 3,
-    vec3_print: 1,
-    vec3_proj: 3,
-    vec3_random: 1,
-    vec3_random_range: 3,
-    vec3_reflect: 3,
-    vec3_refract: 4,
-    vec3_round: 2,
-    vec3_scl: 3,
-    vec3_sub: 3,
+    vec3f_abs: 2,
+    vec3d_abs: 2,
+    vec3f_add: 3,
+    vec3d_add: 3,
+    vec3f_ang: 2,
+    vec3d_ang: 2,
+    vec3f_angBetween: 2,
+    vec3d_angBetween: 2,
+    vec3f_copy: 2,
+    vec3d_copy: 2,
+    vec3f_cross: 3,
+    vec3d_cross: 3,
+    vec3f_dist: 2,
+    vec3d_dist: 2,
+    vec3f_distsq: 2,
+    vec3d_distsq: 2,
+    vec3f_dot: 2,
+    vec3d_dot: 2,
+    vec3f_init: 4,
+    vec3d_init: 4,
+    vec3f_interp: 5,
+    vec3d_interp: 5,
+    vec3f_isEqual: 2,
+    vec3d_isEqual: 2,
+    vec3f_isNormalized: 1,
+    vec3d_isNormalized: 1,
+    vec3f_isOrthogonal: 2,
+    vec3d_isOrthogonal: 2,
+    vec3f_isParallel: 2,
+    vec3d_isParallel: 2,
+    vec3f_isZero: 1,
+    vec3d_isZero: 1,
+    vec3f_neg: 2,
+    vec3d_neg: 2,
+    vec3f_norm: 1,
+    vec3d_norm: 1,
+    vec3f_normalize: 2,
+    vec3d_normalize: 2,
+    vec3f_normscl: 3,
+    vec3d_normscl: 3,
+    vec3f_normsq: 1,
+    vec3d_normsq: 1,
+    vec3f_oproj: 3,
+    vec3d_oproj: 3,
+    vec3f_print: 1,
+    vec3d_print: 1,
+    vec3f_proj: 3,
+    vec3d_proj: 3,
+    vec3f_random: 1,
+    vec3d_random: 1,
+    vec3f_random_range: 3,
+    vec3d_random_range: 3,
+    vec3f_reflect: 3,
+    vec3d_reflect: 3,
+    vec3f_refract: 4,
+    vec3d_refract: 4,
+    vec3f_round: 2,
+    vec3d_round: 2,
+    vec3f_scl: 3,
+    vec3d_scl: 3,
+    vec3f_sub: 3,
+    vec3d_sub: 3,
     wasmgpu_alloc: 1,
     wasmgpu_alloc_f32: 1,
+    wasmgpu_alloc_f64: 1,
     wasmgpu_alloc_u32: 1,
     wasmgpu_frame_alloc: 2,
     wasmgpu_frame_alloc_f32: 1,
+    wasmgpu_frame_alloc_f64: 1,
     wasmgpu_frame_arena_cap: 0,
     wasmgpu_frame_arena_epoch: 0,
     wasmgpu_frame_arena_init: 1,
@@ -133,6 +223,7 @@ const RUST_ABI = {
     wasmgpu_frame_arena_used: 0,
     wasmgpu_free: 2,
     wasmgpu_free_f32: 2,
+    wasmgpu_free_f64: 2,
     wasmgpu_free_u32: 2,
     wasmgpu_seed: 1
 };
@@ -203,7 +294,7 @@ const makeFixture = () => {
     assert.deepStrictEqual(Array.from(moduleRef.view({ ptr: 24, length: 4, dtype: "i16", name: "i16-view" }).array()), [-10, 20, -30, 40]);
     assert.deepStrictEqual(Array.from(moduleRef.view({ ptr: 32, length: 4, dtype: "u32", name: "u32-view" }).array()), [100, 200, 300, 400]);
     assert.deepStrictEqual(Array.from(moduleRef.view({ ptr: 48, length: 4, dtype: "i32", name: "i32-view" }).array()), [-100, 200, -300, 400]);
-    assert.deepStrictEqual(Array.from(moduleRef.view({ ptr: () => 64, length: () => 4, dtype: "f32", name: "f32-view" }).array()), [1.5, 2.5, 3.5, 4.5]);
+    assert.deepStrictEqual(Array.from(moduleRef.view({ ptr: 64, length: 4, dtype: "f32", name: "f32-view" }).array()), [1.5, 2.5, 3.5, 4.5]);
     assert.deepStrictEqual(Array.from(moduleRef.view({ ptr: 96, length: 2, dtype: "f64", name: "f64-view" }).array()), [Math.PI, Math.E]);
 }
 
@@ -404,9 +495,11 @@ const makeFixture = () => {
     const bytePtr = generatedWasm.wasmgpu_frame_alloc(1, 1);
     const alignedPtr = generatedWasm.wasmgpu_frame_alloc(4, 4);
     const f32Ptr = generatedWasm.wasmgpu_frame_alloc_f32(2);
+    const f64Ptr = generatedWasm.wasmgpu_frame_alloc_f64(2);
     assert.strictEqual(bytePtr, base);
     assert.strictEqual(alignedPtr % 4, 0);
     assert.strictEqual(f32Ptr % 16, 0);
+    assert.strictEqual(f64Ptr % 16, 0);
     const used = generatedWasm.wasmgpu_frame_arena_used();
     assert.ok(used > 0 && used <= 256);
     assert.strictEqual(generatedWasm.wasmgpu_frame_alloc(1, 3), 0, "Non-power-of-two alignment must be rejected");
@@ -431,53 +524,53 @@ const makeFixture = () => {
         generatedWasm.u32view(shapePtr, 3).set([2, 3, 4]);
         assert.strictEqual(generatedWasm.ndarray_numel(shapePtr, 3), 24);
 
-        generatedWasm.mat4_identity(matrixPtr);
+        generatedWasm.mat4f_identity(matrixPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(matrixPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-        generatedWasm.mat4_copy(copyPtr, matrixPtr);
+        generatedWasm.mat4f_copy(copyPtr, matrixPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
-        generatedWasm.mat4_copy(copyPtr, copyPtr);
+        generatedWasm.mat4f_copy(copyPtr, copyPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], "Matrix self-copy must preserve its input");
         generatedWasm.f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => i + 1));
-        generatedWasm.mat4_copy(copyPtr + 4, copyPtr);
+        generatedWasm.mat4f_copy(copyPtr + 4, copyPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 17)), [1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], "Matrix copy must support forward overlap");
         generatedWasm.f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => i + 1));
-        generatedWasm.mat4_copy(copyPtr, copyPtr + 4);
+        generatedWasm.mat4f_copy(copyPtr, copyPtr + 4);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 17)), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 17], "Matrix copy must support backward overlap");
         generatedWasm.f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => -(i + 1)));
-        generatedWasm.mat4_abs(copyPtr + 4, copyPtr);
+        generatedWasm.mat4f_abs(copyPtr + 4, copyPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 17)), [-1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], "Fixed-width math kernels must stage inputs before partially overlapping output writes");
 
         generatedWasm.f32view(matrixPtr, 4).set([0.25, -0.5, 0.75, 1]);
-        generatedWasm.quat_copy(copyPtr, matrixPtr);
+        generatedWasm.quatf_copy(copyPtr, matrixPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [0.25, -0.5, 0.75, 1]);
-        generatedWasm.quat_copy(copyPtr, copyPtr);
+        generatedWasm.quatf_copy(copyPtr, copyPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [0.25, -0.5, 0.75, 1], "Quaternion self-copy must preserve its input");
         generatedWasm.f32view(copyPtr, 5).set([1, 2, 3, 4, 5]);
-        generatedWasm.quat_copy(copyPtr + 4, copyPtr);
+        generatedWasm.quatf_copy(copyPtr + 4, copyPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 5)), [1, 1, 2, 3, 4], "Quaternion copy must support forward overlap");
         generatedWasm.f32view(copyPtr, 5).set([1, 2, 3, 4, 5]);
-        generatedWasm.quat_copy(copyPtr, copyPtr + 4);
+        generatedWasm.quatf_copy(copyPtr, copyPtr + 4);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 5)), [2, 3, 4, 5, 5], "Quaternion copy must support backward overlap");
         generatedWasm.f32view(copyPtr, 8).set([0, 0, 0, 1, 1, 0, 0, 0]);
-        generatedWasm.quat_mul(copyPtr, copyPtr, copyPtr + 16);
+        generatedWasm.quatf_mul(copyPtr, copyPtr, copyPtr + 16);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [1, 0, 0, 0], "Quaternion multiplication must support an in-place left operand");
         generatedWasm.f32view(copyPtr, 4).set([0, 0, 0, 2]);
-        generatedWasm.quat_normalize(copyPtr, copyPtr);
+        generatedWasm.quatf_normalize(copyPtr, copyPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [0, 0, 0, 1], "Quaternion normalization must support in-place output");
 
         generatedWasm.f32view(matrixPtr, 3).set([1.25, -2.5, 3.75]);
-        generatedWasm.vec3_copy(copyPtr, matrixPtr);
+        generatedWasm.vec3f_copy(copyPtr, matrixPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 3)), [1.25, -2.5, 3.75]);
-        generatedWasm.vec3_copy(copyPtr, copyPtr);
+        generatedWasm.vec3f_copy(copyPtr, copyPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 3)), [1.25, -2.5, 3.75], "Vector self-copy must preserve its input");
         generatedWasm.f32view(copyPtr, 4).set([1, 2, 3, 4]);
-        generatedWasm.vec3_copy(copyPtr + 4, copyPtr);
+        generatedWasm.vec3f_copy(copyPtr + 4, copyPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [1, 1, 2, 3], "Vector copy must support forward overlap");
         generatedWasm.f32view(copyPtr, 4).set([1, 2, 3, 4]);
-        generatedWasm.vec3_copy(copyPtr, copyPtr + 4);
+        generatedWasm.vec3f_copy(copyPtr, copyPtr + 4);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [2, 3, 4, 4], "Vector copy must support backward overlap");
         generatedWasm.f32view(copyPtr, 3).set([2, 0, 0]);
-        generatedWasm.vec3_normalize(copyPtr, copyPtr);
+        generatedWasm.vec3f_normalize(copyPtr, copyPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 3)), [1, 0, 0], "Vector normalization must support in-place output");
 
         generatedWasm.u8view(sourcePtr, 12).set([1, 2, 3, 4, 90, 91, 5, 6, 7, 8, 92, 93]);
@@ -496,6 +589,13 @@ const makeFixture = () => {
 {
     await initWebAssembly(new URL("../wasm/", import.meta.url).toString());
 
+    frameArena.reset();
+    const frameF64Slice = driver.frame.allocF64(2);
+    frameF64Slice.write([Math.PI, 1 + Number.EPSILON]);
+    assert.ok(frameF64Slice.view() instanceof Float64Array);
+    frameArena.reset();
+    assert.throws(() => frameF64Slice.view(), /epoch changed/i, "f64 frame slices must expire with the frame epoch");
+
     const slice = driver.heap.allocF32(4);
     slice.write([1, 2, 3, 4]);
     assert.strictEqual(slice.isAlive(), true);
@@ -505,6 +605,14 @@ const makeFixture = () => {
     assert.throws(() => slice.view(), /freed/i, "Freed heap slices must reject later views");
     assert.throws(() => slice.handle(), /freed/i, "Freed heap slices must reject later handle creation");
     assert.doesNotThrow(() => slice.free(), "Heap slice free must remain idempotent");
+
+    const f64Slice = driver.heap.allocF64(3);
+    f64Slice.write([Math.PI, 1 + Number.EPSILON, -Math.E]);
+    assert.ok(f64Slice.view() instanceof Float64Array, "f64 heap slices must expose Float64Array views");
+    assert.deepStrictEqual(Array.from(f64Slice.view()), [Math.PI, 1 + Number.EPSILON, -Math.E]);
+    const f64Handle = f64Slice.handle();
+    assert.ok(driver.viewFromHandle(driver.buffer(), f64Handle) instanceof Float64Array, "f64 handles must reconstruct Float64Array views");
+    f64Slice.free();
 
     const retrySlice = driver.heap.allocF32(4);
     retrySlice.write([5, 6, 7, 8]);
@@ -532,7 +640,7 @@ const makeFixture = () => {
     pythonInterop.free(replacementHandle);
 
     const arena = driver.createHeapArena(256);
-    const arenaSlice = arena.allocU8(16);
+    const arenaSlice = arena.allocF64(2);
     arenaSlice.write([1, 2, 3, 4]);
     assert.strictEqual(arenaSlice.isAlive(), true);
     arena.destroy();

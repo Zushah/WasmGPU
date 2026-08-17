@@ -32,11 +32,29 @@ pub(crate) fn rand_f32_01() -> f32 {
 }
 
 #[inline(always)]
-pub(crate) fn rand_range(a: f32, b: f32) -> f32 {
+pub(crate) fn rand_range_f32(a: f32, b: f32) -> f32 {
     rand_f32_01() * (b - a) + a
 }
 
 #[inline(always)]
-pub(crate) fn round_js(x: f32) -> f32 {
+pub(crate) fn rand_f64_01() -> f64 {
+    const INV: f64 = 1.0 / 9007199254740992.0;
+    let high = (rand_u32() >> 5) as u64;
+    let low = (rand_u32() >> 6) as u64;
+    ((high << 26 | low) as f64) * INV
+}
+
+#[inline(always)]
+pub(crate) fn rand_range_f64(a: f64, b: f64) -> f64 {
+    rand_f64_01() * (b - a) + a
+}
+
+#[inline(always)]
+pub(crate) fn round_f32(x: f32) -> f32 {
+    (x + 0.5).floor()
+}
+
+#[inline(always)]
+pub(crate) fn round_f64(x: f64) -> f64 {
     (x + 0.5).floor()
 }

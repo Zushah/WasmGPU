@@ -100,3 +100,12 @@ pub extern "C" fn wasmgpu_frame_alloc_f32(len: u32) -> u32 {
     };
     wasmgpu_frame_alloc(bytes, 16)
 }
+
+#[unsafe(no_mangle)]
+pub extern "C" fn wasmgpu_frame_alloc_f64(len: u32) -> u32 {
+    let bytes = match len.checked_mul(mem::size_of::<f64>() as u32) {
+        Some(v) => v,
+        None => return 0,
+    };
+    wasmgpu_frame_alloc(bytes, 16)
+}

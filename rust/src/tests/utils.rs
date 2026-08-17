@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::utils::{rand_f32_01, rand_range, rand_u32, round_js, wasmgpu_seed};
+use crate::utils::{rand_f32_01, rand_range_f32, rand_u32, round_f32, wasmgpu_seed};
 
 #[test]
 fn seeded_randomness_is_deterministic_bounded_and_resettable() {
@@ -21,15 +21,15 @@ fn seeded_randomness_is_deterministic_bounded_and_resettable() {
     for _ in 0..64 {
         let unit = rand_f32_01();
         assert!((0.0..1.0).contains(&unit));
-        let ranged = rand_range(-3.0, 7.0);
+        let ranged = rand_range_f32(-3.0, 7.0);
         assert!((-3.0..7.0).contains(&ranged));
     }
 }
 
 #[test]
 fn javascript_rounding_uses_ties_toward_positive_infinity() {
-    assert_eq!(round_js(1.49), 1.0);
-    assert_eq!(round_js(1.5), 2.0);
-    assert_eq!(round_js(-1.5), -1.0);
-    assert_eq!(round_js(-1.51), -2.0);
+    assert_eq!(round_f32(1.49), 1.0);
+    assert_eq!(round_f32(1.5), 2.0);
+    assert_eq!(round_f32(-1.5), -1.0);
+    assert_eq!(round_f32(-1.51), -2.0);
 }

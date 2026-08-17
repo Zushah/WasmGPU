@@ -23,7 +23,7 @@ export type DTypeInfo<T extends NumberTypedArray = NumberTypedArray> = {
     readonly dtype: DType;
     readonly ctor: NumberTypedArrayConstructor<T>;
     readonly bytesPerElement: number;
-    readonly wgslScalarType: "i32" | "u32" | "f32" | "f64" | null;
+    readonly wgslScalarType: "i32" | "u32" | "f32" | null;
 };
 
 const DTYPE_TABLE: Record<DType, DTypeInfo> = {
@@ -34,7 +34,7 @@ const DTYPE_TABLE: Record<DType, DTypeInfo> = {
     i32: { dtype: "i32", ctor: Int32Array, bytesPerElement: 4, wgslScalarType: "i32" },
     u32: { dtype: "u32", ctor: Uint32Array, bytesPerElement: 4, wgslScalarType: "u32" },
     f32: { dtype: "f32", ctor: Float32Array, bytesPerElement: 4, wgslScalarType: "f32" },
-    f64: { dtype: "f64", ctor: Float64Array, bytesPerElement: 8, wgslScalarType: "f64" }
+    f64: { dtype: "f64", ctor: Float64Array, bytesPerElement: 8, wgslScalarType: null }
 };
 
 export const dtypeInfo = (dtype: DType): DTypeInfo => {
