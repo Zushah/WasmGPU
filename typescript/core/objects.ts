@@ -67,7 +67,7 @@ export const warmMeshDrawList = (ctx: RendererContext, items: DrawItem[]): void 
         }
         const canInstance = runCount > 1 && !first.skinned && !hasMeshMorphRuntime(first.mesh) && materialSupportsInstancing(ctx, material) && items === ctx.opaqueDrawList;
         if (canInstance) {
-            getOrCreatePipeline(ctx, material, true, false, false, first.mirrored);
+            getOrCreatePipeline(ctx, material, true, false, false, first.mirrored, false, first.receiveShadow);
             warmInstancedRunResources(ctx, items, i, runCount);
         } else if (first.skinned) {
             for (let k = i; k < j; k++) {
@@ -81,12 +81,15 @@ export const warmMeshDrawList = (ctx: RendererContext, items: DrawItem[]): void 
 
 export const warmSkinResources = (ctx: RendererContext, skin: Mesh["skin"]): void => {
     if (!skin) return;
+    if (ctx.framePreparedSkins.has(skin)) return;
     skin.ensureGpuResources(ctx.device, ctx.skinBindGroupLayout);
     const jointCount = skin.jointCount | 0;
     const jointMatPtr = frameArena.allocF32(jointCount * 16) as WasmPtr;
     animf.computeJointMatricesTo(jointMatPtr, skin.skin.jointIndicesPtr, jointCount, skin.skin.invBindPtr, TransformStore.global().worldPtr as WasmPtr, skin.meshWorldMatrixPtr);
     const bytes = driver.bytes();
     ctx.queue.writeBuffer(skin.boneBuffer!, 0, bytes, jointMatPtr, jointCount * 64);
+    ctx.framePreparedSkins.add(skin);
+    ctx.frameSkinPreparationCount++;
 };
 
 export const warmInstancedRunResources = (ctx: RendererContext, items: DrawItem[], start: number, count: number): void => {
@@ -200,7 +203,7 @@ export const executeDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder
         } else if (hasMeshMorphRuntime(first.mesh)) getMeshVertexBuffers(first.mesh, ctx.device, ctx.queue);
         const canInstance = runCount > 1 && !first.skinned && !hasMeshMorphRuntime(first.mesh) && materialSupportsInstancing(ctx, material) && items === ctx.opaqueDrawList;
         if (canInstance) {
-            const instancedPipeline = getOrCreatePipeline(ctx, material, true, false, false, first.mirrored);
+            const instancedPipeline = getOrCreatePipeline(ctx, material, true, false, false, first.mirrored, false, first.receiveShadow);
             if (instancedPipeline !== lastPipeline) {
                 pass.setPipeline(instancedPipeline);
                 lastPipeline = instancedPipeline;
@@ -216,13 +219,10 @@ export const executeDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder
                 const mesh = items[k].mesh;
                 const skin = first.skinned ? mesh.skin : null;
                 if (skin) {
-                    skin.ensureGpuResources(ctx.device, ctx.skinBindGroupLayout);
-                    const jointCount = skin.jointCount | 0;
-                    const jointMatPtr = frameArena.allocF32(jointCount * 16) as WasmPtr;
-                    animf.computeJointMatricesTo(jointMatPtr, skin.skin.jointIndicesPtr, jointCount, skin.skin.invBindPtr, TransformStore.global().worldPtr as WasmPtr, skin.meshWorldMatrixPtr);
-                    ctx.queue.writeBuffer(skin.boneBuffer!, 0, bytes, jointMatPtr, jointCount * 64);
+                    warmSkinResources(ctx, skin);
                     pass.setBindGroup(2, skin.bindGroup!);
                 }
+                if (first.receiveShadow) ctx.shadowRenderer.bindReceiver(pass, first.skinned);
                 const modelPtr = mesh.transform.worldMatrixPtr as WasmPtr;
                 const invPtr = ctx.modelUniformStagingPtr;
                 const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
@@ -451,6 +451,7 @@ export const drawInstancedRun = (ctx: RendererContext, pass: GPURenderPassEncode
     const bytes = driver.bytes();
     ctx.queue.writeBuffer(ctx.instanceBuffer!, dstOffset, bytes, outPtr, outBytes);
     pass.setBindGroup(0, ctx.globalBindGroups[0]);
+    if (items[start].receiveShadow) ctx.shadowRenderer.bindReceiver(pass, false);
     if (material instanceof StandardMaterial) {
         pass.setVertexBuffer(4, geometry.tangentBuffer);
         pass.setVertexBuffer(5, geometry.colorBuffer);

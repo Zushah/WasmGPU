@@ -40,6 +40,7 @@ export const acquireDrawItem = (ctx: RendererContext): DrawItem => {
             skinned: false,
             skinned8: false,
             mirrored: false,
+            receiveShadow: false,
             sortKey: 0
         };
         ctx.drawItemPool[i] = item;
@@ -186,7 +187,8 @@ export const buildDrawLists = (ctx: RendererContext, scene: Scene, camera: Camer
         const mirrored = isMirroredWorldMatrix(ctx, storeF32, wb);
         const opticalTransmission = isOpticallyTransmissiveMaterial(material);
         const forceNoDepthWrite = opticalTransmission && material.blendMode !== BlendMode.Opaque;
-        const pipeline = getOrCreatePipeline(ctx, material, false, skinned, skinned8, mirrored, forceNoDepthWrite);
+        const receiveShadow = mesh.receiveShadow && material instanceof StandardMaterial && ctx.shadowRenderer.activeViewCount > 0;
+        const pipeline = getOrCreatePipeline(ctx, material, false, skinned, skinned8, mirrored, forceNoDepthWrite, receiveShadow);
         const item = acquireDrawItem(ctx);
         item.mesh = mesh;
         item.geometry = geometry;
@@ -199,6 +201,7 @@ export const buildDrawLists = (ctx: RendererContext, scene: Scene, camera: Camer
         item.skinned = skinned;
         item.skinned8 = skinned8;
         item.mirrored = mirrored;
+        item.receiveShadow = receiveShadow;
         item.sortKey = 0;
         if (material.blendMode === BlendMode.Opaque && !opticalTransmission) ctx.opaqueDrawList.push(item);
         else {

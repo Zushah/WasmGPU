@@ -444,6 +444,8 @@ fn dielectric_f0_from_ior(ior: f32) -> f32 {
     return r * r;
 }
 
+fn standard_direct_visibility(light_index: u32, world_position: vec3<f32>, geometric_normal: vec3<f32>, light_direction: vec3<f32>, world_position_dx: vec3<f32>, world_position_dy: vec3<f32>) -> f32 { return 1.0; }
+
 fn compute_range_attenuation(distance: f32, range: f32) -> f32 {
     let inv_sq = 1.0 / max(distance * distance, 0.0001);
     if (range <= 0.0) {
@@ -595,6 +597,8 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
     let face_sign = select(-1.0, 1.0, is_front);
     let front_geom_normal = normalize(in.normal);
     let geom_normal = front_geom_normal * face_sign;
+    let shadow_world_dx = dpdx(in.world_pos);
+    let shadow_world_dy = dpdy(in.world_pos);
 
     let base_uv = apply_texture_transform(
         in.uv,
@@ -909,7 +913,7 @@ fn fs_main(in: VertexOutput, @builtin(front_facing) is_front: bool) -> @location
             continue;
         }
         let h = normalize(v + l);
-        let radiance = light.color.rgb * light.color.a * attenuation;
+        let radiance = light.color.rgb * light.color.a * attenuation * standard_direct_visibility(i, in.world_pos, geom_normal, l, shadow_world_dx, shadow_world_dy);
         let n_dot_l = max(dot(n, l), 0.0);
         let n_dot_v = view_ndot_v;
         let n_dot_h = max(dot(n, h), 0.0);

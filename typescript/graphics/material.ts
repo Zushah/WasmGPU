@@ -22,6 +22,7 @@ import standardTransmissionSkinnedWGSL from "../../wgsl/graphics/standard-transm
 import standardTransmissionSkinned8WGSL from "../../wgsl/graphics/standard-transmission-skinned8.wgsl";
 import dataWGSL from "../../wgsl/graphics/data.wgsl";
 import customDefaultVertexWGSL from "../../wgsl/graphics/custom-default-vertex.wgsl";
+import shadowReceiverWGSL from "../../wgsl/effects/shadow-receiver.wgsl";
 import { SCALE_UNIFORM_FLOAT_COUNT, cloneScaleTransform, normalizeScaleTransform, packScaleTransform } from "../scaling";
 import type { ScaleSourceDescriptor, ScaleTransform, ScaleTransformDescriptor } from "../scaling";
 
@@ -156,7 +157,7 @@ export abstract class Material {
     }
 
     abstract getUniformData(): Float32Array;
-    abstract getShaderCode(opts?: { instanced?: boolean; skinned?: boolean; skinned8?: boolean }): string;
+    abstract getShaderCode(opts?: { instanced?: boolean; skinned?: boolean; skinned8?: boolean; shadows?: boolean; shadowGroup?: number }): string;
     abstract getUniformBufferSize(): number;
     abstract createBindGroupLayout(device: GPUDevice): GPUBindGroupLayout;
 
@@ -691,9 +692,11 @@ const STANDARD_SHADER_SAMPLE_DEFAULTS = new Map<string, string>();
 for (const match of standardDefaultsWGSL.matchAll(/const\s+(standard_default_([A-Za-z0-9_]+))\s*=/g)) STANDARD_SHADER_SAMPLE_DEFAULTS.set(match[2]!, match[1]!);
 
 const standardShaderSourceCache = new Map<string, string>();
+const STANDARD_DIRECT_VISIBILITY_HOOK = "fn standard_direct_visibility(light_index: u32, world_position: vec3<f32>, geometric_normal: vec3<f32>, light_direction: vec3<f32>, world_position_dx: vec3<f32>, world_position_dy: vec3<f32>) -> f32 { return 1.0; }";
+const STANDARD_SHADOW_VISIBILITY_HOOK = "fn standard_direct_visibility(light_index: u32, world_position: vec3<f32>, geometric_normal: vec3<f32>, light_direction: vec3<f32>, world_position_dx: vec3<f32>, world_position_dy: vec3<f32>) -> f32 { return shadow_visibility(light_index, world_position, geometric_normal, light_direction, world_position_dx, world_position_dy); }";
 
-const specializeStandardShader = (source: string, plan: StandardMaterialLayoutPlan, variant: string): string => {
-    const cacheKey = `${plan.featureKey}|${variant}`;
+const specializeStandardShader = (source: string, plan: StandardMaterialLayoutPlan, variant: string, shadows: boolean = false, shadowGroup: number = 2): string => {
+    const cacheKey = `${plan.featureKey}|${variant}|${shadows ? `shadows:${shadowGroup}` : "no-shadows"}`;
     const cached = standardShaderSourceCache.get(cacheKey);
     if (cached) return cached;
     const activeSlots = new Set(plan.bindings.map((binding) => binding.slot));
@@ -710,17 +713,24 @@ const specializeStandardShader = (source: string, plan: StandardMaterialLayoutPl
         const unresolvedSample = new RegExp(`\\btextureSample\\s*\\(\\s*${definition.shaderName}_tex\\b`);
         if (unresolvedSample.test(specialized)) throw new Error(`StandardMaterial: canonical ${variant} WGSL contains an unsupported ${definition.slot} sampling path.`);
     }
+    if (shadows) {
+        const receiver = shadowGroup === 2 ? shadowReceiverWGSL : shadowReceiverWGSL.replaceAll("@group(2)", `@group(${shadowGroup})`);
+        const hookCount = specialized.split(STANDARD_DIRECT_VISIBILITY_HOOK).length - 1;
+        if (hookCount !== 1) throw new Error(`StandardMaterial: canonical ${variant} WGSL must contain exactly one direct-visibility hook; found ${hookCount}.`);
+        specialized = receiver.concat(specialized.replace(STANDARD_DIRECT_VISIBILITY_HOOK, STANDARD_SHADOW_VISIBILITY_HOOK));
+    }
     specialized = standardDefaultsWGSL.concat(specialized);
     standardShaderSourceCache.set(cacheKey, specialized);
     return specialized;
 };
 
-const getSpecializedStandardShader = (plan: StandardMaterialLayoutPlan, opts: { instanced?: boolean; skinned?: boolean; skinned8?: boolean } = {}): string => {
+const getSpecializedStandardShader = (plan: StandardMaterialLayoutPlan, opts: { instanced?: boolean; skinned?: boolean; skinned8?: boolean; shadows?: boolean; shadowGroup?: number } = {}): string => {
     const transmission = plan.usesTransmission;
-    if (opts.instanced) return specializeStandardShader(transmission ? standardTransmissionInstancedWGSL : standardInstancedWGSL, plan, transmission ? "transmission-instanced" : "instanced");
-    if (opts.skinned8) return specializeStandardShader(transmission ? standardTransmissionSkinned8WGSL : standardSkinned8WGSL, plan, transmission ? "transmission-skinned8" : "skinned8");
-    if (opts.skinned) return specializeStandardShader(transmission ? standardTransmissionSkinnedWGSL : standardSkinnedWGSL, plan, transmission ? "transmission-skinned" : "skinned");
-    return specializeStandardShader(transmission ? standardTransmissionWGSL : standardWGSL, plan, transmission ? "transmission" : "standard");
+    const shadowGroup = opts.shadowGroup ?? (opts.skinned || opts.skinned8 ? 3 : 2);
+    if (opts.instanced) return specializeStandardShader(transmission ? standardTransmissionInstancedWGSL : standardInstancedWGSL, plan, transmission ? "transmission-instanced" : "instanced", opts.shadows, shadowGroup);
+    if (opts.skinned8) return specializeStandardShader(transmission ? standardTransmissionSkinned8WGSL : standardSkinned8WGSL, plan, transmission ? "transmission-skinned8" : "skinned8", opts.shadows, shadowGroup);
+    if (opts.skinned) return specializeStandardShader(transmission ? standardTransmissionSkinnedWGSL : standardSkinnedWGSL, plan, transmission ? "transmission-skinned" : "skinned", opts.shadows, shadowGroup);
+    return specializeStandardShader(transmission ? standardTransmissionWGSL : standardWGSL, plan, transmission ? "transmission" : "standard", opts.shadows, shadowGroup);
 };
 
 const standardMaterialBindGroupLayouts = new WeakMap<GPUDevice, Map<string, GPUBindGroupLayout>>();
@@ -1166,7 +1176,7 @@ export class StandardMaterial extends Material {
         return this.getLayoutPlan().usesTransmission;
     }
 
-    getShaderCode(opts: { instanced?: boolean; skinned?: boolean; skinned8?: boolean } = {}): string {
+    getShaderCode(opts: { instanced?: boolean; skinned?: boolean; skinned8?: boolean; shadows?: boolean; shadowGroup?: number } = {}): string {
         return getSpecializedStandardShader(this.getLayoutPlan(), opts);
     }
 }

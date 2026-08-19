@@ -8,13 +8,14 @@ import { BlendMode, CullMode, DataMaterial, Material, StandardMaterial, UnlitMat
 import type { RendererContext } from "./context";
 import { getObjectId } from "./resources";
 
-export const getOrCreatePipeline = (ctx: RendererContext, material: Material, instanced: boolean = false, skinned: boolean = false, skinned8: boolean = false, mirrored: boolean = false, forceNoDepthWrite: boolean = false): GPURenderPipeline => {
+export const getOrCreatePipeline = (ctx: RendererContext, material: Material, instanced: boolean = false, skinned: boolean = false, skinned8: boolean = false, mirrored: boolean = false, forceNoDepthWrite: boolean = false, receiveShadow: boolean = false): GPURenderPipeline => {
     if (instanced && skinned) throw new Error("Renderer: instanced + skinned pipelines are not supported (attribute layout conflict).");
     if (skinned8 && !skinned) skinned = true;
-    const key = getPipelineCacheKey(ctx, material, instanced, skinned, skinned8, mirrored, forceNoDepthWrite);
+    const shadows = receiveShadow && material instanceof StandardMaterial && ctx.shadowRenderer.activeViewCount > 0;
+    const key = getPipelineCacheKey(ctx, material, instanced, skinned, skinned8, mirrored, forceNoDepthWrite, shadows);
     let pipeline = ctx.pipelineCache.get(key);
     if (pipeline) return pipeline;
-    const shaderCode = material.getShaderCode({ instanced, skinned, skinned8 });
+    const shaderCode = material.getShaderCode({ instanced, skinned, skinned8, shadows, shadowGroup: skinned ? 3 : 2 });
     let shaderModule = ctx.shaderCache.get(shaderCode);
     if (!shaderModule) {
         shaderModule = ctx.device.createShaderModule({ code: shaderCode });
@@ -23,6 +24,7 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
     const materialBindGroupLayout = material.createBindGroupLayout(ctx.device);
     const bindGroupLayouts: GPUBindGroupLayout[] = [ctx.globalBindGroupLayout, materialBindGroupLayout];
     if (skinned) bindGroupLayouts.push(ctx.skinBindGroupLayout);
+    if (shadows) bindGroupLayouts.push(ctx.shadowRenderer.bindGroupLayout);
     const pipelineLayout = ctx.device.createPipelineLayout({ bindGroupLayouts });
     let buffers: GPUVertexBufferLayout[];
     const standardMaterial = material instanceof StandardMaterial;
@@ -177,13 +179,13 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
     return pipeline;
 };
 
-export const getPipelineCacheKey = (ctx: RendererContext, material: Material, instanced: boolean, skinned: boolean, skinned8: boolean, mirrored: boolean, forceNoDepthWrite: boolean = false): string => {
+export const getPipelineCacheKey = (ctx: RendererContext, material: Material, instanced: boolean, skinned: boolean, skinned8: boolean, mirrored: boolean, forceNoDepthWrite: boolean = false, receiveShadow: boolean = false): string => {
     const ctorId = getObjectId(ctx, material.constructor as unknown as object);
     const isBuiltin = material.constructor === UnlitMaterial || material.constructor === StandardMaterial || material.constructor === DataMaterial;
     const depthWriteKey = forceNoDepthWrite ? "no-depth-write" : material.depthWrite ? "depth-write" : "no-depth-write";
     if (material instanceof StandardMaterial) {
         const plan = material.getLayoutPlan();
-        return `${ctorId}_${material.blendMode}_${material.cullMode}_${depthWriteKey}_${material.depthTest}_${plan.featureKey}_${mirrored ? "cw" : "ccw"}_${instanced ? "inst" : "mesh"}_${skinned8 ? "skin8" : skinned ? "skin4" : "noskin"}`;
+        return `${ctorId}_${material.blendMode}_${material.cullMode}_${depthWriteKey}_${material.depthTest}_${plan.featureKey}_${mirrored ? "cw" : "ccw"}_${instanced ? "inst" : "mesh"}_${skinned8 ? "skin8" : skinned ? "skin4" : "noskin"}_${receiveShadow ? "shadows" : "no-shadows"}`;
     }
     const matKey = isBuiltin ? `${ctorId}` : `${ctorId}_${getObjectId(ctx, material)}`;
     return `${matKey}_${material.blendMode}_${material.cullMode}_${depthWriteKey}_${material.depthTest}_${mirrored ? "cw" : "ccw"}_${instanced ? "inst" : "mesh"}_${skinned8 ? "skin8" : skinned ? "skin4" : "noskin"}`;

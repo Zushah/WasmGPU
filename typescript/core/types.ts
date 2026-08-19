@@ -51,6 +51,7 @@ export type DrawItem = {
     skinned: boolean;
     skinned8: boolean;
     mirrored: boolean;
+    receiveShadow: boolean;
     sortKey: number;
 };
 

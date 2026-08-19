@@ -11,6 +11,7 @@ import type { PerformanceStatsDescriptor } from "./stats";
 import { Transform } from "./transform";
 import { Compute } from "../compute";
 import type { ComputeDescriptor } from "../compute";
+import { RenderEffects } from "../effects";
 import { loadGltf, importGltf, parseGLB, readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesAsUint32 } from "../gltf";
 import type { GltfDocument, LoadGltfOptions, ImportGltfOptions, GltfImportResult, ParsedGLB, AccessorView } from "../gltf";
 import { AnimationClip, AnimationPlayer, Skin } from "../graphics/animation";
@@ -63,6 +64,7 @@ export type WasmGPUWarmupDescriptor = {
 
 export class WasmGPU {
     private renderer: Renderer;
+    readonly effects: RenderEffects;
     readonly compute: Compute;
     readonly scale: ScaleService;
     private _performanceStats: PerformanceStats | null = null;
@@ -73,6 +75,7 @@ export class WasmGPU {
 
     private constructor(renderer: Renderer, desc: WasmGPUDescriptor | ComputeDescriptor) {
         this.renderer = renderer;
+        this.effects = renderer.effects;
         const gpu = renderer.gpu;
         this.compute = new Compute(gpu.device, gpu.queue, desc as ComputeDescriptor);
         this.scale = new ScaleService(this.compute);

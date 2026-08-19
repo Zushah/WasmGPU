@@ -18,6 +18,9 @@ import { NodeLink } from "../world/nodelink";
 import { SplatField } from "../world/splatfield";
 import { LatticeSpace } from "../world/latticespace";
 import type { PickLassoPoint, PickQuery, PickRegionQuery } from "../world/picking";
+import { RenderEffects } from "../effects";
+import { setShadowDeviceLimits } from "../effects/shadows";
+import { RendererShadows } from "./shadows";
 
 import type {
     DrawItem,
@@ -187,6 +190,8 @@ export type {
 
 export class Renderer {
     readonly canvas: HTMLCanvasElement;
+    readonly effects: RenderEffects;
+    readonly shadowRenderer: RendererShadows;
     private context!: GPUCanvasContext;
     device!: GPUDevice;
     queue!: GPUQueue;
@@ -232,6 +237,8 @@ export class Renderer {
     instanceBufferCapacityBytes: number = 0;
     instanceBufferOffset: number = 0;
     readonly INSTANCE_STRIDE_BYTES = 128;
+    readonly framePreparedSkins: Set<object> = new Set();
+    frameSkinPreparationCount: number = 0;
     pipelineCache: Map<string, GPURenderPipeline> = new Map();
     shaderCache: Map<string, GPUShaderModule> = new Map();
     drawItemPool: DrawItem[] = [];
@@ -394,6 +401,8 @@ export class Renderer {
     private destroyed: boolean = false;
     private constructor(canvas: HTMLCanvasElement) {
         this.canvas = canvas;
+        this.effects = new RenderEffects();
+        this.shadowRenderer = new RendererShadows(this);
     }
 
     static async create(canvas: HTMLCanvasElement, descriptor: RendererDescriptor = {}): Promise<Renderer> {
@@ -417,6 +426,7 @@ export class Renderer {
         if (descriptor.maxUniformBufferBindingSize !== undefined) requiredLimits.maxUniformBufferBindingSize = descriptor.maxUniformBufferBindingSize;
         if (Object.keys(requiredLimits).length > 0) deviceDesc.requiredLimits = requiredLimits;
         this.device = await adapter.requestDevice(deviceDesc);
+        setShadowDeviceLimits(this.effects.shadows, this.device.limits.maxTextureDimension2D, this.device.limits.maxTextureArrayLayers);
         this.gpuTimingSupported = this.device.features.has("timestamp-query");
         this.queue = this.device.queue;
         this.context = this.canvas.getContext("webgpu") as GPUCanvasContext;
@@ -525,9 +535,11 @@ export class Renderer {
         ensureCullingCapacityImpl(this, count);
     }
 
-    prepareSceneFrameBase(scene: Scene, camera: Camera): void {
+    prepareSceneFrameBase(scene: Scene, camera: Camera, prepareShadows: boolean = false): void {
         this.modelBufferIndex = 0;
         this.instanceBufferOffset = 0;
+        this.framePreparedSkins.clear();
+        this.frameSkinPreparationCount = 0;
         this.frameFrustumTested = 0;
         this.frameFrustumVisible = 0;
         this.pendingOcclusionFrameState = null;
@@ -537,6 +549,7 @@ export class Renderer {
         if (camera instanceof PerspectiveCamera && camera.autoAspect) camera.aspect = this.aspectRatio;
         Transform.updateAll();
         this.writeCameraUniforms(camera);
+        if (prepareShadows) this.shadowRenderer.prepare(scene, camera);
         this.writeLightingUniforms(scene);
         this.buildDrawLists(scene, camera);
         this.buildPointCloudDrawLists(scene, camera);
@@ -564,9 +577,10 @@ export class Renderer {
         this.resize();
         const swapTexture = this.context.getCurrentTexture();
         const swapView = swapTexture.createView();
-        this.prepareSceneFrameBase(scene, camera);
+        this.prepareSceneFrameBase(scene, camera, true);
         this.applyRenderCullingAndStats(camera);
         const encoder = this.device.createCommandEncoder();
+        this.shadowRenderer.encode(encoder);
         this.encodeSplatFieldSorts(encoder);
         this.encodeLatticeSpaceSorts(encoder);
         const timestampWrites = (this.gpuTimingEnabled && this.gpuQuerySet) ? ({ querySet: this.gpuQuerySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } as any) : undefined;
@@ -703,10 +717,11 @@ export class Renderer {
 
     warmup(scene: Scene, camera: Camera): void {
         this.resize();
-        this.prepareSceneFrameBase(scene, camera);
+        this.prepareSceneFrameBase(scene, camera, true);
         if (this.occlusionCullingEnabled) this.ensureOcclusionResources();
         const hasTransmission = this.hasOpticalTransmissionDrawItems();
         if (hasTransmission) this.ensureTransmissionTargets(!this.smaaEnabled);
+        this.shadowRenderer.warmup();
         this.warmMeshDrawList(this.opaqueDrawList);
         this.warmMeshDrawList(this.transparentDrawList);
         this.warmPointCloudDrawList(this.opaquePointCloudDrawList);
@@ -742,6 +757,8 @@ export class Renderer {
         if (this.destroyed) return;
         destroyCullingScratchImpl(this);
         this.destroyed = true;
+        this.shadowRenderer.destroy();
+        this.effects.destroy();
         this.destroyOcclusionTextures();
         this.depthTexture?.destroy();
         this.smaaSceneColorTexture?.destroy();
@@ -1106,12 +1123,12 @@ export class Renderer {
         drawInstancedRunImpl(this, pass, geometry, material, items, start, count);
     }
 
-    private getOrCreatePipeline(material: Material, instanced: boolean = false, skinned: boolean = false, skinned8: boolean = false, mirrored: boolean = false, forceNoDepthWrite: boolean = false): GPURenderPipeline {
-        return getOrCreatePipelineImpl(this, material, instanced, skinned, skinned8, mirrored, forceNoDepthWrite);
+    private getOrCreatePipeline(material: Material, instanced: boolean = false, skinned: boolean = false, skinned8: boolean = false, mirrored: boolean = false, forceNoDepthWrite: boolean = false, receiveShadow: boolean = false): GPURenderPipeline {
+        return getOrCreatePipelineImpl(this, material, instanced, skinned, skinned8, mirrored, forceNoDepthWrite, receiveShadow);
     }
 
-    private getPipelineCacheKey(material: Material, instanced: boolean, skinned: boolean, skinned8: boolean, mirrored: boolean, forceNoDepthWrite: boolean = false): string {
-        return getPipelineCacheKeyImpl(this, material, instanced, skinned, skinned8, mirrored, forceNoDepthWrite);
+    private getPipelineCacheKey(material: Material, instanced: boolean, skinned: boolean, skinned8: boolean, mirrored: boolean, forceNoDepthWrite: boolean = false, receiveShadow: boolean = false): string {
+        return getPipelineCacheKeyImpl(this, material, instanced, skinned, skinned8, mirrored, forceNoDepthWrite, receiveShadow);
     }
 
     private isMirroredWorldMatrix(storeF32: Float32Array, base: number): boolean {
