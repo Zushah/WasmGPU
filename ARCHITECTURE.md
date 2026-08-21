@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Wednesday, August 19, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Friday, August 21, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Monday, August 17, 2026, [**`4b1c048`**](https://www.github.com/Zushah/WasmGPU/commit/4b1c048).
+Parent commit: Wednesday, August 19, 2026, [**`f81d654`**](https://www.github.com/Zushah/WasmGPU/commit/f81d654).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -44,9 +44,10 @@ Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zus
   - [2.10. WGSL shaders](#210-wgsl-shaders)
   - [2.11. Examples](#211-examples)
   - [2.12. Tests](#212-tests)
-  - [2.13. Documentation and website](#213-documentation-and-website)
-  - [2.14. Build, generated, and release files](#214-build-generated-and-release-files)
-  - [2.15. Assets and repository metadata](#215-assets-and-repository-metadata)
+  - [2.13. Benchmarks](#213-benchmarks)
+  - [2.14. Documentation and website](#214-documentation-and-website)
+  - [2.15. Build, generated, and release files](#215-build-generated-and-release-files)
+  - [2.16. Assets and repository metadata](#216-assets-and-repository-metadata)
 - [3. Guidelines](#3-guidelines)
   - [3.1. Start with local context](#31-start-with-local-context)
   - [3.2. Code style and formatting](#32-code-style-and-formatting)
@@ -905,7 +906,24 @@ The setup presentation resources likewise remain alive until Playwright closes t
 
 If a change modifies Rust exports, generated WebAssembly bindings, renderer behavior, glTF import, shader layouts, public descriptors, or examples, add or update focused tests where the current test setup can exercise the behavior.
 
-### 2.13. Documentation and website
+### 2.13. Benchmarks
+
+Architectural role:
+
+- Provides local developer infrastructure for repeatable performance measurement, scaling observation, and regression analysis.
+- Executes the built production bundle in a Playwright-managed Chromium browser with WebGPU and analyzes preserved JSON measurements separately with Python.
+
+Important files and directories:
+
+- `./benchmarks/harness/`: Node browser orchestration, native-adapter policy, warmup and sample lifecycle, statistics, structured reporting, and shared browser-side execution.
+- `./benchmarks/manifest.js` and `./benchmarks/**/*.bench.js` files: explicit registration plus self-contained definitions for representative subsystem workloads.
+- `./benchmarks/machine.example.json`: committed template for required manually declared machine facts, as the completed `./benchmarks/machine.local.json` is ignored.
+- `./benchmarks/analysis/`: NumPy and Matplotlib post-processing that creates Markdown summaries and PNG plots.
+- `./benchmarks/reports/`: chronological local or opt-in tracked run directories. Each contains one environment manifest and one JSON file per benchmark, and local filenames and plot directories carry a `.local` marker and are ignored by Git.
+
+Benchmarks import `./release/WasmGPU.js`, use quick workloads by default, and accept `--full` for larger workloads and more samples. Executable files follow `./benchmarks/<subsystem>/<owner>-<operation>-<type>.bench.js`. Throughput and microbenchmark samples repeat measured work until a minimum timing interval is reached, while latency, frame, and end-to-end samples remain single operations. Engine-backed render and pick definitions use additional warmup before recorded samples. Using `--tracked` selects trackable report filenames but cannot be combined with the diagnostic-only fallback override. Native hosts launch local Chromium with platform-aware arguments. Under WSL2, an automatic compatibility path starts native Windows Chrome or Edge with remote debugging and an isolated temporary Windows profile, keeps Chrome CDP on Windows loopback, relays only through the private Windows WSL interface, attaches from WSL with Playwright CDP, and loads the WSL-served bundle without another checkout. Note that `--windows-browser` overrides autodetection and `--linux-browser` forces local Linux Chromium. Adapter validation is identical for either launch path. Reports distinguish controller and browser environments and record the actual WebGPU adapter separately from the physical GPU. Normal and tracked runs reject unidentified, software, and fallback adapters. GPU measurements wait for submitted work where completion is part of the stated metric. Resources owned by a workload are destroyed during teardown.
+
+### 2.14. Documentation and website
 
 Architectural role:
 
@@ -932,7 +950,7 @@ Important files and directories:
 
 The `maintain-docs` skill exists to keep the large Markdown reference aligned with the current public API without replacing source inspection or human review. Invoke `$maintain-docs` in `release` mode for a versioned documentation delta, `maintain` mode for a focused documentation change, or `verify` mode for a read-only accuracy and integrity pass. Release mode writes an audit ledger under the gitignored `./.cache/` directory, stops for approval before editing, normalizes all files under `./website/docs/` to LF line endings during approved implementation, writes in source-backed subsystem batches, and performs final coverage and link validation. The skill does not update this file or run the website build.
 
-### 2.14. Build, generated, and release files
+### 2.15. Build, generated, and release files
 
 Architectural role:
 
@@ -956,7 +974,7 @@ Important files and directories:
 
 Cargo commands invoked from the repository root or `./rust/` inherit the repository Cargo policy and rustup toolchain selection. Package and release-profile settings remain in `./rust/Cargo.toml`, while dynamic WebAssembly SIMD, shared-memory, memory-limit, and post-processing variants remain owned by `./scripts/build-rust-wasm.js`.
 
-### 2.15. Assets and repository metadata
+### 2.16. Assets and repository metadata
 
 Architectural role:
 
@@ -1109,6 +1127,16 @@ Use the commands from `./package.json`:
 | `npm run fmt:rs` | Check Rust formatting with rustfmt. |
 | `npm run lint` | Check linting. |
 | `npm run lint:rs` | Check Rust linting with Clippy. |
+| `npm run bench` | Run the quick benchmark suite and report. |
+| `npm run bench -- --full` | Run the full benchmark suite and report. |
+| `npm run bench:render` | Run render benchmarks. |
+| `npm run bench:compute` | Run compute benchmarks. |
+| `npm run bench:math` | Run math benchmarks. |
+| `npm run bench:objects` | Run objects benchmarks. |
+| `npm run bench:scaling` | Run scaling benchmarks. |
+| `npm run bench:gltf` | Run glTF benchmarks. |
+| `npm run bench:interop` | Run interop benchmark. |
+| `npm run bench:interact` | Run interact benchmarks. |
 | `npm run website` | Build the website into `./website/build/`. |
 | `npm run logo` | Regenerate logo raster assets via `./scripts/rasterize_logo.py`. |
 
@@ -1132,6 +1160,7 @@ Examples from repository history include:
 - `fix(gltf): stabilize variants, skins, geometry, & morph rendering`
 - `fix(wasm): add deterministic resource lifetimes`
 - `test(material): cover defaults, uniforms, shaders, data, colormaps, & cleanup`
+- `bench(harness): create`
 - `docs(examples): update terrain with fly controls`
 - `feat(rust): reclaim freed WebAssembly heap allocations`
 - `chore(build): bump Rust from v1.93.0-2021 to v1.97.1-2024`

@@ -8,6 +8,10 @@ website/build/
 playwright-report/
 blob-report/
 test-results/
+benchmarks/machine.local.json
+benchmarks/reports/**/*.local.json
+benchmarks/reports/**/*.local.md
+benchmarks/reports/**/plots.local/
 __pycache__/
 *.py[cod]
 *.log

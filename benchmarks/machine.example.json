@@ -1,0 +1,9 @@
+{
+  "label": "Machine label",
+  "hostOS": "Operating system and version",
+  "environment": "Native, virtualized, container, or compatibility environment",
+  "cpu": "CPU model",
+  "gpu": "GPU model",
+  "ram": "Memory amount",
+  "storage": "Storage amount"
+}
