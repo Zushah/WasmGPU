@@ -9,9 +9,9 @@ playwright-report/
 blob-report/
 test-results/
 benchmarks/machine.local.json
-benchmarks/reports/**/*.local.json
-benchmarks/reports/**/*.local.md
-benchmarks/reports/**/plots.local/
+benchmarks/reports/**/logs/*.bench.local.json
+benchmarks/reports/**/plots/*.bench.local.png
+benchmarks/reports/**/*.bench.local.md
 __pycache__/
 *.py[cod]
 *.log

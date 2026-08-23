@@ -43,7 +43,7 @@ Benchmarks are located in `./benchmarks/<subsystem>/<owner>-<operation>-<type>.b
 
 ## Reports
 
-Runs are located in `./benchmarks/reports/YYYY-MM-DD/HH-MM-SS/` with one environment manifest and one JSON file per benchmark. Ordinary files contain `.local` and are ignored by Git. Running with `--tracked` omits that marker so an archival report can be committed. Note that `--tracked` cannot be combined with `--allow-fallback`.
+Runs are located in `./benchmarks/reports/YYYY-MM-DD/HH-MM-SS/`. JSON logs, including the environment manifest and one file per benchmark, are stored under `logs/`, whereas generated PNG charts are stored under `plots/`, and the Markdown summary is at the root. Tracked artifacts use `.bench` before their file extension, while ordinary untracked artifacts use `.bench.local` and are ignored by Git. For example, a local report contains `logs/*.bench.local.json`, `plots/*.bench.local.png`, and `SUMMARY.bench.local.md`. Running with `--tracked` produces the corresponding `.bench` filenames without `.local`. Note that `--tracked` cannot be combined with `--allow-fallback`.
 
 Each result preserves raw samples plus count, median, mean, p95, standard deviation, minimum, and maximum. Throughput and microbenchmarks batch repeated work until a meaningful minimum measurement interval is reached, whereas latency, frame, and end-to-end measurements are single-operation samples. Prefer the median for comparisons, inspect scaling across sizes, and remember that browser, backend, drivers, thermals, and machine load affect results.
 
@@ -58,4 +58,4 @@ python -m pip install numpy matplotlib
 python benchmarks/analysis/report.py benchmarks/reports/YYYY-MM-DD/HH-MM-SS
 ```
 
-Tracked runs produce `./benchmarks/reports/YYYY-MM-DD/HH-MM-SS/SUMMARY.md` and `./benchmarks/reports/YYYY-MM-DD/HH-MM-SS/plots/`, whereas untracked runs produce the same but with `.local` in the filenames.
+Tracked runs produce `SUMMARY.bench.md`, `logs/*.bench.json`, and `plots/*.bench.png`. Untracked runs produce `SUMMARY.bench.local.md`, `logs/*.bench.local.json`, and `plots/*.bench.local.png` in the same directory structure.

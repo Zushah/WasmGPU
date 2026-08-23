@@ -16,14 +16,24 @@ except ImportError as error:
     raise SystemExit(f"Analysis dependencies are unavailable ({error}). Install with: python3 -m pip install numpy matplotlib")
 
 def load_run(run_dir):
-    manifests = list(run_dir.glob("run.json")) + list(run_dir.glob("run.local.json"))
+    logs_dir = run_dir / "logs"
+    manifests = [
+        path for path in [
+            logs_dir / "run.bench.json",
+            logs_dir / "run.bench.local.json",
+            run_dir / "run.json",
+            run_dir / "run.local.json",
+        ] if path.exists()
+    ]
     if len(manifests) != 1:
-        raise ValueError("Expected exactly one run.json or run.local.json manifest.")
+        raise ValueError("Expected exactly one tracked or local benchmark run manifest.")
     manifest = json.loads(manifests[0].read_text())
     local = manifests[0].name.endswith(".local.json")
-    suffix = ".local.json" if local else ".json"
+    modern = manifests[0].parent == logs_dir
+    suffix = (".bench.local.json" if local else ".bench.json") if modern else (".local.json" if local else ".json")
+    results_dir = logs_dir if modern else run_dir
     results = []
-    for path in sorted(run_dir.glob(f"*{suffix}")):
+    for path in sorted(results_dir.glob(f"*{suffix}")):
         if path == manifests[0]:
             continue
         result = json.loads(path.read_text())
@@ -34,7 +44,8 @@ def load_run(run_dir):
 
 def generate(run_dir):
     manifest, results, local = load_run(run_dir)
-    plots = run_dir / ("plots.local" if local else "plots")
+    artifact_marker = ".bench.local" if local else ".bench"
+    plots = run_dir / "plots"
     plots.mkdir(exist_ok=True)
     adapter = manifest["adapter"]
     adapter_label = adapter.get("description") or adapter.get("device") or " / ".join(filter(None, [adapter.get("vendor"), adapter.get("architecture")])) or "unreported"
@@ -84,14 +95,14 @@ def generate(run_dir):
             axis.set_title(result["name"])
             axis.grid(True, alpha=0.25)
             figure.tight_layout()
-            figure.savefig(plots / f"{result['subsystem']}-{result['name']}.png", dpi=140)
+            figure.savefig(plots / f"{result['subsystem']}-{result['name']}{artifact_marker}.png", dpi=140)
             plt.close(figure)
-    summary = run_dir / ("SUMMARY.local.md" if local else "SUMMARY.md")
+    summary = run_dir / f"SUMMARY{artifact_marker}.md"
     summary.write_text("\n".join(lines) + "\n")
     print(f"Summary: {summary}")
     print(f"Plots: {plots}")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
-        raise SystemExit("Usage: python3 benchmarks/analysis/report.py <run-directory>")
+        raise SystemExit("Usage: python benchmarks/analysis/report.py <run-directory>")
     generate(Path(sys.argv[1]).resolve())

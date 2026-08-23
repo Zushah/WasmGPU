@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Friday, August 21, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Sunday, August 23, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Wednesday, August 19, 2026, [**`f81d654`**](https://www.github.com/Zushah/WasmGPU/commit/f81d654).
+Parent commit: Friday, August 19, 2026, [**`c89ae2b`**](https://www.github.com/Zushah/WasmGPU/commit/c89ae2b).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -919,7 +919,7 @@ Important files and directories:
 - `./benchmarks/manifest.js` and `./benchmarks/**/*.bench.js` files: explicit registration plus self-contained definitions for representative subsystem workloads.
 - `./benchmarks/machine.example.json`: committed template for required manually declared machine facts, as the completed `./benchmarks/machine.local.json` is ignored.
 - `./benchmarks/analysis/`: NumPy and Matplotlib post-processing that creates Markdown summaries and PNG plots.
-- `./benchmarks/reports/`: chronological local or opt-in tracked run directories. Each contains one environment manifest and one JSON file per benchmark, and local filenames and plot directories carry a `.local` marker and are ignored by Git.
+- `./benchmarks/reports/`: chronological local or opt-in tracked run directories. Each stores its environment manifest and per-benchmark JSON logs under `logs/`, PNG charts under `plots/`, and a Markdown summary at the run root. Tracked artifacts use `.bench` before the extension, whereas local artifacts use `.bench.local` and are ignored by Git.
 
 Benchmarks import `./release/WasmGPU.js`, use quick workloads by default, and accept `--full` for larger workloads and more samples. Executable files follow `./benchmarks/<subsystem>/<owner>-<operation>-<type>.bench.js`. Throughput and microbenchmark samples repeat measured work until a minimum timing interval is reached, while latency, frame, and end-to-end samples remain single operations. Engine-backed render and pick definitions use additional warmup before recorded samples. Using `--tracked` selects trackable report filenames but cannot be combined with the diagnostic-only fallback override. Native hosts launch local Chromium with platform-aware arguments. Under WSL2, an automatic compatibility path starts native Windows Chrome or Edge with remote debugging and an isolated temporary Windows profile, keeps Chrome CDP on Windows loopback, relays only through the private Windows WSL interface, attaches from WSL with Playwright CDP, and loads the WSL-served bundle without another checkout. Note that `--windows-browser` overrides autodetection and `--linux-browser` forces local Linux Chromium. Adapter validation is identical for either launch path. Reports distinguish controller and browser environments and record the actual WebGPU adapter separately from the physical GPU. Normal and tracked runs reject unidentified, software, and fallback adapters. GPU measurements wait for submitted work where completion is part of the stated metric. Resources owned by a workload are destroyed during teardown.
 

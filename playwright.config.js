@@ -4,6 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+import { existsSync, readdirSync } from "node:fs";
 import { defineConfig } from "@playwright/test";
 import { expectedTests } from "./tests/manifests/suites.js";
 
@@ -41,6 +42,14 @@ const lifecycleSuites = new Map([
 
 const reportSuite = lifecycleSuites.get(process.env.npm_lifecycle_event) ?? (requestedProjects.length === 1 && requestedProjects[0] === "setup" ? "setup" : requestedProjects.includes("examples") && !requestedProjects.includes("runner") ? "examples" : requestedProjects.length ? "javascript" : "all");
 
+const findLavapipeICD = () => {
+    const directory = "/usr/share/vulkan/icd.d", preferred = `${directory}/lvp_icd.json`;
+    if (existsSync(preferred)) return preferred;
+    if (!existsSync(directory)) return null;
+    const filename = readdirSync(directory).filter((name) => /^lvp_icd.*\.json$/.test(name)).sort()[0];
+    return filename ? `${directory}/${filename}` : null;
+};
+
 const launchOptions = {};
 
 if (browserName === "chromium") {
@@ -50,12 +59,16 @@ if (browserName === "chromium") {
         "--use-gpu-in-tests",
         "--enable-accelerated-2d-canvas"
     ];
-    if (process.platform === "linux") args.push(
-        "--enable-features=Vulkan",
-        "--use-angle=vulkan",
-        "--use-vulkan=native"
-    );
-    else args.push(
+    if (process.platform === "linux") {
+        const lavapipeICD = process.env.VK_DRIVER_FILES ?? findLavapipeICD();
+        if (!lavapipeICD) throw new Error("Lavapipe Vulkan ICD was not found. Install mesa-vulkan-drivers or set VK_DRIVER_FILES.");
+        args.push(
+            "--enable-features=Vulkan",
+            "--use-angle=vulkan",
+            "--use-vulkan=native"
+        );
+        launchOptions.env = { ...process.env, VK_DRIVER_FILES: lavapipeICD, LIBGL_ALWAYS_SOFTWARE: "1" };
+    } else args.push(
         "--use-webgpu-adapter=swiftshader"
     );
     launchOptions.args = args;
