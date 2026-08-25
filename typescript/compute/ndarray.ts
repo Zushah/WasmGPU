@@ -6,7 +6,8 @@
 
 import { alignTo, assert } from "../utils";
 import { StorageBuffer, type StorageBufferDescriptor } from "./buffer";
-import { wasm, ndarrayf, type WasmPtr } from "../wasm";
+import { wasm, type WasmPtr } from "../wasm";
+import type { ReadbackRing } from "./readback";
 
 export type DType = "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "f32" | "f64";
 
@@ -55,6 +56,7 @@ const validateShape = (shape: ReadonlyArray<number>): number[] => {
     for (let i = 0; i < shape.length; i++) {
         const d = shape[i] as number;
         assert(Number.isInteger(d) && d >= 0, `shape[${i}] must be an integer >= 0 (got ${d})`);
+        assert(d <= 0xFFFFFFFF, `shape[${i}] must fit in u32 (got ${d})`);
         out[i] = d;
     }
     return out;
@@ -175,23 +177,19 @@ export abstract class Ndarray {
     abstract get residency(): NdarrayResidency;
 }
 
-const ND_ERROR = 0xFFFF_FFFF;
-
 export class CPUndarray extends Ndarray {
     private _basePtrBytes: WasmPtr;
     private _shapePtr: WasmPtr;
     private _stridesPtr: WasmPtr;
-    private _indicesPtr: WasmPtr;
     private _destroyed: boolean = false;
     private _buf: ArrayBuffer | null = null;
     private _all: NumberTypedArray | null = null;
 
-    private constructor(dtype: DType, shape: number[], stridesBytes: number[], offsetBytes: number, byteLength: number, basePtrBytes: WasmPtr, shapePtr: WasmPtr, stridesPtr: WasmPtr, indicesPtr: WasmPtr) {
+    private constructor(dtype: DType, shape: number[], stridesBytes: number[], offsetBytes: number, byteLength: number, basePtrBytes: WasmPtr, shapePtr: WasmPtr, stridesPtr: WasmPtr) {
         super(dtype, shape, stridesBytes, offsetBytes, byteLength);
         this._basePtrBytes = basePtrBytes;
         this._shapePtr = shapePtr;
         this._stridesPtr = stridesPtr;
-        this._indicesPtr = indicesPtr;
     }
 
     static empty(dtype: DType, layout: NdLayoutDescriptor): CPUndarray {
@@ -204,25 +202,21 @@ export class CPUndarray extends Ndarray {
         const ndim = shape.length >>> 0;
         let shapePtr = 0;
         let stridesPtr = 0;
-        let indicesPtr = 0;
         let basePtrBytes = 0;
         try {
             shapePtr = wasm.allocU32(ndim);
             assert(shapePtr !== 0 || ndim === 0, `CPUndarray.empty(): shape allocation failed (${ndim} elements)`);
             stridesPtr = wasm.allocU32(ndim);
             assert(stridesPtr !== 0 || ndim === 0, `CPUndarray.empty(): strides allocation failed (${ndim} elements)`);
-            indicesPtr = wasm.allocU32(ndim);
-            assert(indicesPtr !== 0 || ndim === 0, `CPUndarray.empty(): indices allocation failed (${ndim} elements)`);
             const shapeView = wasm.u32view(shapePtr, ndim);
             for (let i = 0; i < shape.length; i++) shapeView[i] = shape[i]! >>> 0;
             const strideView = wasm.i32view(stridesPtr, ndim);
             for (let i = 0; i < stridesBytes.length; i++) strideView[i] = stridesBytes[i]! | 0;
             basePtrBytes = (byteLength > 0) ? wasm.allocBytes(byteLength >>> 0) : 0;
             assert(basePtrBytes !== 0 || byteLength === 0, `CPUndarray.empty(): backing allocation failed (${byteLength} bytes)`);
-            return new CPUndarray(dtype, shape, stridesBytes, offsetBytes, byteLength, basePtrBytes, shapePtr, stridesPtr, indicesPtr);
+            return new CPUndarray(dtype, shape, stridesBytes, offsetBytes, byteLength, basePtrBytes, shapePtr, stridesPtr);
         } catch (error) {
             if (basePtrBytes) wasm.freeBytes(basePtrBytes, byteLength >>> 0);
-            if (indicesPtr) wasm.freeU32(indicesPtr, ndim);
             if (stridesPtr) wasm.freeU32(stridesPtr, ndim);
             if (shapePtr) wasm.freeU32(shapePtr, ndim);
             throw error;
@@ -313,14 +307,15 @@ export class CPUndarray extends Ndarray {
         this.assertAlive();
         assert(indices.length === this.ndim, `expected ${this.ndim} indices, got ${indices.length}`);
         if (this.ndim === 0) return this.offsetBytes;
-        const idxView = wasm.u32view(this._indicesPtr, this.ndim >>> 0);
+        let off = this.offsetBytes;
         for (let i = 0; i < this.ndim; i++) {
             const v = indices[i] as number;
             assert(Number.isInteger(v) && v >= 0, `index[${i}] must be an integer >= 0 (got ${v})`);
-            idxView[i] = v >>> 0;
+            assert(v <= 0xFFFFFFFF, `index[${i}] must fit in u32 (got ${v})`);
+            assert(v < this.shape[i]!, "index out of bounds (or offset overflow)");
+            off += this.stridesBytes[i]! * v;
         }
-        const off = ndarrayf.offsetBytes(this._shapePtr, this._stridesPtr, this._indicesPtr, this.ndim >>> 0, this.offsetBytes >>> 0);
-        assert(off !== ND_ERROR, "index out of bounds (or offset overflow)");
+        assert(Number.isSafeInteger(off) && off >= 0 && off <= 0xFFFFFFFF, "index out of bounds (or offset overflow)");
         assert(off + this.bytesPerElement <= this.byteLength, "computed byte offset is outside backing storage");
         return off;
     }
@@ -349,7 +344,7 @@ export class CPUndarray extends Ndarray {
         this.backingBytes().fill(0);
     }
 
-    uploadToGPU(ctx: { device: GPUDevice; queue: GPUQueue }, desc: Omit<StorageBufferDescriptor, "byteLength" | "data"> = {}): GPUndarray {
+    uploadToGPU(ctx: { device: GPUDevice; queue: GPUQueue; readback?: ReadbackRing }, desc: Omit<StorageBufferDescriptor, "byteLength" | "data"> = {}): GPUndarray {
         const bytes = this.backingBytes();
         const sb = new StorageBuffer(ctx.device, ctx.queue, {
             label: desc.label,
@@ -359,21 +354,19 @@ export class CPUndarray extends Ndarray {
             copySrc: (desc as any).copySrc,
             usage: desc.usage
         });
-        return new GPUndarray(this.dtype, this.shape.slice(), this.stridesBytes.slice(), this.offsetBytes, this.byteLength, sb, 0, true);
+        return new GPUndarray(this.dtype, this.shape.slice(), this.stridesBytes.slice(), this.offsetBytes, this.byteLength, sb, 0, true, ctx.readback ?? null);
     }
 
     destroy(): void {
         if (this._destroyed) return;
         const ndim = this.ndim >>> 0;
         if (this._basePtrBytes) wasm.freeBytes(this._basePtrBytes, this.byteLength >>> 0);
-        if (this._indicesPtr) wasm.freeU32(this._indicesPtr, ndim);
         if (this._stridesPtr) wasm.freeU32(this._stridesPtr, ndim);
         if (this._shapePtr) wasm.freeU32(this._shapePtr, ndim);
         this._destroyed = true;
         this._basePtrBytes = 0;
         this._shapePtr = 0;
         this._stridesPtr = 0;
-        this._indicesPtr = 0;
         this._buf = null;
         this._all = null;
     }
@@ -383,17 +376,19 @@ export class GPUndarray extends Ndarray {
     readonly buffer: StorageBuffer;
     readonly baseOffsetBytes: number;
     private readonly owned: boolean;
+    private readonly readback: ReadbackRing | null;
 
-    constructor(dtype: DType, shape: number[], stridesBytes: number[], offsetBytes: number, byteLength: number, buffer: StorageBuffer, baseOffsetBytes: number = 0, owned: boolean = false) {
+    constructor(dtype: DType, shape: number[], stridesBytes: number[], offsetBytes: number, byteLength: number, buffer: StorageBuffer, baseOffsetBytes: number = 0, owned: boolean = false, readback: ReadbackRing | null = null) {
         super(dtype, shape, stridesBytes, offsetBytes, byteLength);
         assert(Number.isInteger(baseOffsetBytes) && baseOffsetBytes >= 0, `baseOffsetBytes must be an integer >= 0 (got ${baseOffsetBytes})`);
         assert((baseOffsetBytes & 3) === 0, `baseOffsetBytes must be 4-byte aligned for storage buffers (got ${baseOffsetBytes})`);
         this.buffer = buffer;
         this.baseOffsetBytes = baseOffsetBytes;
         this.owned = owned;
+        this.readback = readback;
     }
 
-    static empty(ctx: { device: GPUDevice; queue: GPUQueue }, dtype: DType, layout: NdLayoutDescriptor, desc: Omit<StorageBufferDescriptor, "byteLength" | "data"> = {}): GPUndarray {
+    static empty(ctx: { device: GPUDevice; queue: GPUQueue; readback?: ReadbackRing }, dtype: DType, layout: NdLayoutDescriptor, desc: Omit<StorageBufferDescriptor, "byteLength" | "data"> = {}): GPUndarray {
         const info = dtypeInfo(dtype);
         const shape = validateShape(layout.shape);
         const offsetBytes = validateOffsetBytes(layout.offsetBytes, info.bytesPerElement);
@@ -406,7 +401,7 @@ export class GPUndarray extends Ndarray {
             copySrc: (desc as any).copySrc,
             usage: desc.usage
         });
-        return new GPUndarray(dtype, shape, stridesBytes, offsetBytes, byteLength, sb, 0, true);
+        return new GPUndarray(dtype, shape, stridesBytes, offsetBytes, byteLength, sb, 0, true, ctx.readback ?? null);
     }
 
     static wrap(buffer: StorageBuffer, dtype: DType, layout: NdLayoutDescriptor, baseOffsetBytes: number = 0): GPUndarray {
@@ -428,15 +423,16 @@ export class GPUndarray extends Ndarray {
 
     async readbackToCPU(): Promise<CPUndarray> {
         assert(this.buffer.canReadback, "GPUndarray.readbackToCPU() requires the underlying StorageBuffer to be created with copySrc: true");
-        const bytes = await this.buffer.read(this.baseOffsetBytes, this.byteLength);
         const cpu = CPUndarray.empty(this.dtype, { shape: this.shape, stridesBytes: this.stridesBytes, offsetBytes: this.offsetBytes });
         try {
-            cpu.backingBytes().set(new Uint8Array(bytes), 0);
+            if (this.readback && !this.readback.isDestroyed) {
+                await this.readback.readIntoWasmMemory(wasm.memory(), cpu.basePtrBytes, this.buffer, this.baseOffsetBytes, this.byteLength, { label: "GPUndarray:readbackToCPU" });
+            } else {
+                const bytes = await this.buffer.read(this.baseOffsetBytes, this.byteLength);
+                cpu.backingBytes().set(new Uint8Array(bytes), 0);
+            }
             return cpu;
-        } catch (error) {
-            cpu.destroy();
-            throw error;
-        }
+        } catch (error) { cpu.destroy(); throw error; }
     }
 
     destroy(): void {

@@ -1,6 +1,7 @@
 * text=auto
 benchmarks/** linguist-detectable=false
 benchmarks/reports/**/*.json linguist-generated=true
+benchmarks/reports/**/*.png linguist-generated=true
 examples/** linguist-detectable=false
 release/** linguist-detectable=false
 tests/** linguist-detectable=false

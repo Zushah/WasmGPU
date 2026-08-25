@@ -7,7 +7,7 @@
 import { StorageBuffer, type StorageBufferDescriptor, UniformBuffer, type UniformBufferDescriptor } from "./buffer";
 import { ComputePipeline, type ComputePipelineDescriptor } from "./pipeline";
 import { workgroups1D, workgroups2D, workgroups3D, type WorkgroupCounts } from "./workgroups";
-import { encodeDispatch, encodeDispatchBatch, type ComputeDispatchCommand, validateWorkgroupsForDevice } from "./dispatch";
+import { encodeDispatch, encodeDispatchBatch, encodeDispatchBatchWithLimit, type ComputeDispatchCommand, validateWorkgroupsForDevice } from "./dispatch";
 import { ComputeKernels } from "./kernels";
 import { RGBA8BufferCanvasBlitter, type BlitRGBA8BufferToCanvasOptions, type RGBA8BufferSource } from "./blit";
 import { ReadbackRing, type ReadbackRingDescriptor } from "./readback";
@@ -61,8 +61,7 @@ export class Compute {
     }
 
     encodeDispatchBatch(encoder: GPUCommandEncoder, commands: ReadonlyArray<ComputeDispatchCommand>, label?: string, validateLimits: boolean = false): void {
-        if (validateLimits) for (const cmd of commands) validateWorkgroupsForDevice(this.device, cmd.workgroups);
-        encodeDispatchBatch(encoder, commands, label);
+        encodeDispatchBatchWithLimit(encoder, commands, label, validateLimits ? this.device.limits.maxComputeWorkgroupsPerDimension : undefined);
     }
 
     dispatch(cmd: ComputeDispatchCommand, opts: ComputeDispatchOptions = {}): GPUCommandBuffer {

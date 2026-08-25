@@ -89,9 +89,9 @@ const resourcesToEntries = (resources: ComputeBindGroupResources): GPUBindGroupE
         }
         return entries;
     }
-    const keys = Object.keys(resources).map((k) => Number(k)).filter((n) => Number.isFinite(n));
-    keys.sort((a, b) => a - b);
-    for (const binding of keys) {
+    for (const key of Object.keys(resources)) {
+        const binding = Number(key);
+        if (!Number.isFinite(binding)) continue;
         const resource = resources[binding];
         if (!resource) continue;
         entries.push({ binding, resource: resolveBufferBinding(resource) });

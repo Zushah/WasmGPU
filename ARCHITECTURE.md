@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Sunday, August 23, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Tuesday, August 25, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Friday, August 19, 2026, [**`c89ae2b`**](https://www.github.com/Zushah/WasmGPU/commit/c89ae2b).
+Parent commit: Sunday, August 23, 2026, [**`a2816a7`**](https://www.github.com/Zushah/WasmGPU/commit/a2816a7).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -407,7 +407,7 @@ The main compute files are:
 - `./typescript/compute/ndarray.ts`: CPU and GPU ndarray layout, dtype, stride, offset, upload, and readback logic.
 - `./typescript/compute/blit.ts`: RGBA8 storage-buffer-to-canvas blitting.
 
-The compute subsystem reads WGSL from `./wgsl/compute/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory. `CPUndarray` owns its backing bytes plus shape, stride, and indexing allocations; `destroy()` releases them idempotently and later memory access throws. `GPUndarray` destroys only buffers it owns and continues to borrow buffers supplied through `wrap()`.
+The compute subsystem reads WGSL from `./wgsl/compute/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory. `CPUndarray` owns its backing bytes plus shape and stride allocations; scalar indexing is checked locally in TypeScript, and `destroy()` releases the owned WebAssembly allocations idempotently and makes later memory access throw. `GPUndarray` destroys only buffers it owns and continues to borrow buffers supplied through `wrap()`; a shared readback ring is an optional accelerator, with direct storage-buffer readback remaining available after that ring is destroyed.
 
 WasmGPU chooses floating-point precision by execution domain rather than imposing one width globally. CPU ndarrays and WasmGPU-owned or external WebAssembly memory support both `f32` and `f64`, including Python and WebAssembly interop. A `GPUndarray<f64>` is valid storage and transfer data, as its bytes may be uploaded to a WebGPU buffer, copied, and read back without loss. However, current WebGPU/WGSL has no concrete runtime `f64` scalar type, so `f64` GPU storage does not imply native `f6`4 shader computation or rendering arithmetic. Where a shader-facing path requires `f32`, explicitly converting `f64` CPU values through the existing typed-array or ndarray construction behavior is intentional.
 

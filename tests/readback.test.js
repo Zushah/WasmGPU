@@ -60,7 +60,18 @@ assert.ok(compute.readback, "Compute.readback is missing");
     assert.ok(threw, "Expected readback to throw when source buffer lacks COPY_SRC");
 }
 
-// 5) Cleanup releases the shared compute context before its browser GPU device.
+// 5) Invalid logical ranges are rejected before allocating the returned copy.
+{
+    const buf = compute.createStorageBuffer({ label: "readback:invalid-range", data: new Uint32Array([7]), copySrc: true });
+    await assert.rejects(
+        compute.readback.read(buf, 0, Number.MAX_SAFE_INTEGER),
+        /sizeBytes .* exceeds remaining bytes/,
+        "Expected logical source-range validation instead of an allocation failure"
+    );
+    buf.destroy();
+}
+
+// 6) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-const ELEMENTS_PER_WORKGROUP: u32 = 512u;
+const ELEMENTS_PER_WORKGROUP: u32 = 1024u;
 
 @group(0) @binding(0) var<storage, read_write> data: array<u32>;
 @group(0) @binding(1) var<storage, read> block_offsets: array<u32>;

@@ -167,7 +167,38 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     arraysEqualU32(got, expected, "histogramU32 mismatch");
 }
 
-// 7) Compaction u32.
+// 7) Scan covers one-block, exact-block, and empty workloads around the 1,024-element geometry.
+{
+    for (const n of [1, 17, 1023, 1024, 1025]) {
+        const input = new Uint32Array(n);
+        input.fill(1);
+        const src = compute.createStorageBuffer({ data: input, copySrc: false });
+        const out = kernels.scanExclusiveU32(src);
+        const got = await out.readAs(Uint32Array);
+        for (let i = 0; i < n; i++) assert.strictEqual(got[i], i, `scan boundary mismatch for n=${n} at ${i}`);
+    }
+    const empty = compute.createStorageBuffer({ byteLength: 0, copySrc: false });
+    assert.strictEqual(kernels.scanExclusiveU32(empty).byteLength, 0);
+}
+
+// 8) Generic histogram fallback preserves shader clearing without COPY_DST and clear:false accumulation.
+{
+    const binCount = 300;
+    const keys = new Uint32Array([0, 1, 1, 255, 256, 299, 300]);
+    const bufKeys = compute.createStorageBuffer({ data: keys, copySrc: false });
+    const bins = compute.createStorageBuffer({ data: new Uint32Array(binCount).fill(99), copySrc: true, copyDst: false });
+    kernels.histogramU32(bufKeys, binCount, { bins, clear: true });
+    kernels.histogramU32(bufKeys, binCount, { bins, clear: false });
+    const got = await bins.readAs(Uint32Array);
+    assert.strictEqual(got[0], 2);
+    assert.strictEqual(got[1], 4);
+    assert.strictEqual(got[255], 2);
+    assert.strictEqual(got[256], 2);
+    assert.strictEqual(got[299], 2);
+    assert.strictEqual(got[2], 0);
+}
+
+// 9) Compaction u32.
 {
     const n = 4096 + 17;
     const input = makeRandomU32Array(n, 1000);
@@ -184,7 +215,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     for (let i = 0; i < expected.length; i++) assert.strictEqual(gotOut[i] >>> 0, expected[i] >>> 0, `compactU32 output mismatch at index ${i}`);
 }
 
-// 8) Compaction f32.
+// 10) Compaction f32.
 {
     const n = 2048 + 9;
     const input = makeRandomF32Array(n, -5, 5);
@@ -201,7 +232,18 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     for (let i = 0; i < expected.length; i++) numberApproxEqual(gotOut[i], expected[i], 1e-5, `compactF32 output mismatch at index ${i}`);
 }
 
-// 9) Radix sort u32 keys.
+// 11) Compaction count preserves the scan's existing arbitrary-u32 flag semantics.
+{
+    const input = compute.createStorageBuffer({ data: new Uint32Array([10, 20, 30]), copySrc: false });
+    const flags = compute.createStorageBuffer({ data: new Uint32Array([2, 0, 3]), copySrc: false });
+    const result = kernels.compactU32(input, flags);
+    assert.strictEqual((await result.count.readAs(Uint32Array))[0], 5);
+    const output = await result.output.readAs(Uint32Array);
+    assert.strictEqual(output[0], 10);
+    assert.strictEqual(output[2], 30);
+}
+
+// 12) Radix sort u32 keys.
 {
     const n = 10000 + 3;
     const keys = makeRandomU32Array(n, 0xFFFFFFFF >>> 0);
@@ -212,7 +254,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     for (let i = 0; i < n; i++) assert.strictEqual(got[i] >>> 0, expected[i] >>> 0, `radixSortKeysU32 mismatch at index ${i}`);
 }
 
-// 10) Radix sort u32 key-value pairs.
+// 13) Radix sort u32 key-value pairs.
 {
     assert.strictEqual(typeof kernels.radixSortPairsU32, "function", "Missing kernel: radixSortPairsU32");
 
@@ -253,6 +295,23 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 
     {
+        const n = 4099;
+        const keys = new Uint32Array(n);
+        const values = new Uint32Array(n);
+        for (let i = 0; i < n; i++) { keys[i] = Math.imul(i, 17) & 31; values[i] = i; }
+        const bufKeys = compute.createStorageBuffer({ data: keys, copySrc: false });
+        const bufValues = compute.createStorageBuffer({ data: values, copySrc: false });
+        const result = kernels.radixSortPairsU32(bufKeys, bufValues);
+        const gotKeys = await result.keys.readAs(Uint32Array);
+        const gotValues = await result.values.readAs(Uint32Array);
+        const expected = Array.from({ length: n }, (_, i) => i).sort((a, b) => (keys[a] - keys[b]) || (a - b));
+        for (let i = 0; i < n; i++) {
+            assert.strictEqual(gotKeys[i], keys[expected[i]], `radix pairs recursive key mismatch at ${i}`);
+            assert.strictEqual(gotValues[i], expected[i], `radix pairs recursive stability mismatch at ${i}`);
+        }
+    }
+
+    {
         const shared = compute.createStorageBuffer({ label: "radix:pairs:shared", data: new Uint32Array([1, 0]), copySrc: false });
         assert.throws(() => kernels.radixSortPairsU32(shared, shared), /keys and values must be distinct/, "Expected radixSortPairsU32 to reject aliased key/value buffers");
     }
@@ -265,7 +324,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// 11) Batched LU f32 (partial pivot: factor + solve).
+// 14) Batched LU f32 (partial pivot: factor + solve).
 {
     assert.strictEqual(typeof kernels.luFactorF32Batched, "function", "Missing kernel: luFactorF32Batched");
     assert.strictEqual(typeof kernels.luSolveF32Batched, "function", "Missing kernel: luSolveF32Batched");
@@ -373,7 +432,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// 12) Batched LU complex64 (partial pivot by |a|^2: factor + solve).
+// 15) Batched LU complex64 (partial pivot by |a|^2: factor + solve).
 {
     assert.strictEqual(typeof kernels.luFactorComplex64Batched, "function", "Missing kernel: luFactorComplex64Batched");
     assert.strictEqual(typeof kernels.luSolveComplex64Batched, "function", "Missing kernel: luSolveComplex64Batched");
@@ -549,7 +608,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// 13) Complex64 solve fallback path for n > 512 (identity LU should return rhs unchanged).
+// 16) Complex64 solve fallback path for n > 512 (identity LU should return rhs unchanged).
 {
     const batch = 1;
     const n = 513;
@@ -575,7 +634,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     arraysApproxEqual(gotX, rhs, 1e-5, "LU c64 large solve mismatch");
 }
 
-// 14) Blocked-path regression for f32 LU at n >= 160 (covers lead/upper/trailing kernels).
+// 17) Blocked-path regression for f32 LU at n >= 160 (covers lead/upper/trailing kernels).
 {
     const n = 192;
     const batch = 2;
@@ -627,7 +686,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// 15) Blocked-path regression for c64 LU at n >= 160 (covers lead/upper/trailing kernels).
+// 18) Blocked-path regression for c64 LU at n >= 160 (covers lead/upper/trailing kernels).
 {
     const n = 192;
     const batch = 2;
@@ -697,7 +756,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// 16) Cleanup releases the shared compute context before its browser GPU device.
+// 19) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

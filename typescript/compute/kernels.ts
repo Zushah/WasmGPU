@@ -8,7 +8,7 @@ import { alignTo, assert, resolveGPUBuffer } from "../utils";
 import { StorageBuffer } from "./buffer";
 import { ComputePipeline, storageBufferLayout, uniformBufferLayout, type BufferResource } from "./pipeline";
 import type { ComputeDispatchCommand } from "./dispatch";
-import { encodeDispatchBatch, validateWorkgroupsForDevice } from "./dispatch";
+import { encodeDispatchBatchWithLimit } from "./dispatch";
 import { ceilDiv, makeWorkgroupCounts, workgroups1D } from "./workgroups";
 import { ScratchBufferPool } from "./scratch";
 import reduceMaxF32WGSL from "../../wgsl/compute/reduce-max-f32.wgsl";
@@ -176,10 +176,18 @@ export class ComputeKernels {
     readonly queue: GPUQueue;
     private readonly scratch: ScratchBufferPool;
     private readonly pipelines: Map<string, ComputePipeline>;
-    /** Reused by batched LU kernels to avoid create/destroy per dispatch. */
     private luBatchedParamsBuffer: GPUBuffer | null;
-    /** Reused by blocked LU phases (needs kk/pw). */
     private luBlockedParamsBuffer: GPUBuffer | null;
+    private scaleExtractParamsBuffer: GPUBuffer | null;
+    private scaleHistogramParamsBuffer: GPUBuffer | null;
+    private scaleRemapParamsBuffer: GPUBuffer | null;
+    private readonly scaleExtractParamsData: Uint32Array;
+    private readonly scaleHistogramParamsData: ArrayBuffer;
+    private readonly scaleHistogramParamsView: DataView;
+    private readonly scaleRemapParamsData: ArrayBuffer;
+    private readonly scaleRemapParamsView: DataView;
+    private readonly scaleRemapParamsF32: Float32Array;
+    private readonly scaleTransformPacked: Float32Array;
 
     constructor(device: GPUDevice, queue: GPUQueue) {
         this.device = device;
@@ -191,6 +199,16 @@ export class ComputeKernels {
         this.pipelines = new Map();
         this.luBatchedParamsBuffer = null;
         this.luBlockedParamsBuffer = null;
+        this.scaleExtractParamsBuffer = null;
+        this.scaleHistogramParamsBuffer = null;
+        this.scaleRemapParamsBuffer = null;
+        this.scaleExtractParamsData = new Uint32Array(8);
+        this.scaleHistogramParamsData = new ArrayBuffer(16);
+        this.scaleHistogramParamsView = new DataView(this.scaleHistogramParamsData);
+        this.scaleRemapParamsData = new ArrayBuffer(80);
+        this.scaleRemapParamsView = new DataView(this.scaleRemapParamsData);
+        this.scaleRemapParamsF32 = new Float32Array(this.scaleRemapParamsData);
+        this.scaleTransformPacked = new Float32Array(20);
     }
 
     destroy(): void {
@@ -200,6 +218,12 @@ export class ComputeKernels {
         this.luBatchedParamsBuffer = null;
         this.luBlockedParamsBuffer?.destroy();
         this.luBlockedParamsBuffer = null;
+        this.scaleExtractParamsBuffer?.destroy();
+        this.scaleExtractParamsBuffer = null;
+        this.scaleHistogramParamsBuffer?.destroy();
+        this.scaleHistogramParamsBuffer = null;
+        this.scaleRemapParamsBuffer?.destroy();
+        this.scaleRemapParamsBuffer = null;
     }
 
     private getLuBatchedParamsBuffer(): GPUBuffer {
@@ -222,6 +246,21 @@ export class ComputeKernels {
             });
         }
         return this.luBlockedParamsBuffer;
+    }
+
+    private getScaleExtractParamsBuffer(): GPUBuffer {
+        if (!this.scaleExtractParamsBuffer) this.scaleExtractParamsBuffer = this.device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: "scale:extract:params" });
+        return this.scaleExtractParamsBuffer;
+    }
+
+    private getScaleHistogramParamsBuffer(): GPUBuffer {
+        if (!this.scaleHistogramParamsBuffer) this.scaleHistogramParamsBuffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: "histogramF32:params" });
+        return this.scaleHistogramParamsBuffer;
+    }
+
+    private getScaleRemapParamsBuffer(): GPUBuffer {
+        if (!this.scaleRemapParamsBuffer) this.scaleRemapParamsBuffer = this.device.createBuffer({ size: 80, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: "scale:remap:params" });
+        return this.scaleRemapParamsBuffer;
     }
 
     private getPipeline(key: string, create: () => ComputePipeline): ComputePipeline {
@@ -251,12 +290,19 @@ export class ComputeKernels {
     private execute(commands: ComputeDispatchCommand[], opts?: KernelDispatchOptions): void {
         if (commands.length === 0) return;
         const encoder = opts?.encoder ?? this.device.createCommandEncoder();
-        if (opts?.validateLimits) for (const cmd of commands) validateWorkgroupsForDevice(this.device, cmd.workgroups);
-        encodeDispatchBatch(encoder, commands, opts?.label);
+        encodeDispatchBatchWithLimit(encoder, commands, opts?.label, opts?.validateLimits ? this.device.limits.maxComputeWorkgroupsPerDimension : undefined);
         if (!opts?.encoder) {
             this.queue.submit([encoder.finish()]);
             this.scratch.reset();
         }
+    }
+
+    private executeHistogramCommands(commands: ComputeDispatchCommand[], bins: StorageBuffer, binCount: number, nativeClear: boolean, opts?: KernelDispatchOptions): void {
+        if (!nativeClear) { this.execute(commands, opts); return; }
+        const encoder = opts?.encoder ?? this.device.createCommandEncoder();
+        encoder.clearBuffer(bins.buffer, 0, binCount * 4);
+        encodeDispatchBatchWithLimit(encoder, commands, opts?.label, opts?.validateLimits ? this.device.limits.maxComputeWorkgroupsPerDimension : undefined);
+        if (!opts?.encoder) { this.queue.submit([encoder.finish()]); this.scratch.reset(); }
     }
 
     private writeScalarU32(dst: BufferResource, value: number): void {
@@ -447,7 +493,7 @@ export class ComputeKernels {
     private encodeScanExclusiveU32Into(commands: ComputeDispatchCommand[], input: BufferResource, count: number, out: BufferResource, labelPrefix: string): void {
         assert(Number.isInteger(count) && count >= 0, `encodeScanExclusiveU32Into: count must be an integer >= 0 (got ${count})`);
         if (count === 0) return;
-        const numBlocks = ceilDiv(count, 512);
+        const numBlocks = ceilDiv(count, 1024);
         const blockSums: BufferResource = this.scratch.acquire(numBlocks * 4, `${labelPrefix}:blockSums`);
         {
             const pipeline = this.getScanBlockExclusiveU32Pipeline();
@@ -481,6 +527,37 @@ export class ComputeKernels {
         }
     }
 
+    private encodeRadixZeroScanInto(commands: ComputeDispatchCommand[], keys: BufferResource, count: number, prefix: BufferResource, bit: number, labelPrefix: string): void {
+        const numBlocks = ceilDiv(count, 1024);
+        const blockSums: BufferResource = this.scratch.acquire(numBlocks * 4, `${labelPrefix}:blockSums`);
+        const pipeline = this.getRadixFlagsPipeline(bit);
+        const bg = pipeline.createBindGroup(0, {
+            0: this.bindSized(keys, count * 4),
+            1: this.bindSized(prefix, count * 4),
+            2: this.bindSized(blockSums, numBlocks * 4)
+        }, `${labelPrefix}:scanBlocks:bg`);
+        commands.push({
+            pipeline,
+            bindGroups: [bg],
+            workgroups: makeWorkgroupCounts(numBlocks, 1, 1),
+            label: `${labelPrefix}:scanBlocks`
+        });
+        if (numBlocks <= 1) return;
+        const blockOffsets: BufferResource = this.scratch.acquire(numBlocks * 4, `${labelPrefix}:blockOffsets`);
+        this.encodeScanExclusiveU32Into(commands, blockSums, numBlocks, blockOffsets, `${labelPrefix}:scanBlockSums`);
+        const addPipeline = this.getScanAddBlockOffsetsU32Pipeline();
+        const addBg = addPipeline.createBindGroup(0, {
+            0: this.bindSized(prefix, count * 4),
+            1: this.bindSized(blockOffsets, numBlocks * 4)
+        }, `${labelPrefix}:addOffsets:bg`);
+        commands.push({
+            pipeline: addPipeline,
+            bindGroups: [addBg],
+            workgroups: workgroups1D(count, 256),
+            label: `${labelPrefix}:addOffsets`
+        });
+    }
+
     private getHistogramClearPipeline(): ComputePipeline {
         const key = "kernels:histogram:clearAtomicU32";
         return this.getPipeline(key, () => {
@@ -500,13 +577,13 @@ export class ComputeKernels {
         });
     }
 
-    private getHistogramPipeline(): ComputePipeline {
-        const key = "kernels:histogram:u32";
+    private getHistogramPipeline(local256: boolean = false): ComputePipeline {
+        const key = local256 ? "kernels:histogram:u32:local256" : "kernels:histogram:u32";
         return this.getPipeline(key, () => {
             return new ComputePipeline(this.device, {
                 label: key,
                 code: histogramU32WGSL,
-                entryPoint: "main",
+                entryPoint: local256 ? "main_local_256" : "main",
                 bindGroups: [
                     {
                         label: `${key}:bg0`,
@@ -534,7 +611,8 @@ export class ComputeKernels {
                             storageBufferLayout({ binding: 0, readOnly: true }),
                             storageBufferLayout({ binding: 1, readOnly: true }),
                             storageBufferLayout({ binding: 2, readOnly: true }),
-                            storageBufferLayout({ binding: 3, readOnly: false })
+                            storageBufferLayout({ binding: 3, readOnly: false }),
+                            storageBufferLayout({ binding: 4, readOnly: false })
                         ]
                     }
                 ]
@@ -556,7 +634,8 @@ export class ComputeKernels {
                         label: `${key}:bg0`,
                         entries: [
                             storageBufferLayout({ binding: 0, readOnly: true }),
-                            storageBufferLayout({ binding: 1, readOnly: false })
+                            storageBufferLayout({ binding: 1, readOnly: false }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
                         ]
                     }
                 ]
@@ -579,8 +658,7 @@ export class ComputeKernels {
                         entries: [
                             storageBufferLayout({ binding: 0, readOnly: true }),
                             storageBufferLayout({ binding: 1, readOnly: true }),
-                            storageBufferLayout({ binding: 2, readOnly: true }),
-                            storageBufferLayout({ binding: 3, readOnly: false })
+                            storageBufferLayout({ binding: 2, readOnly: false })
                         ]
                     }
                 ]
@@ -604,9 +682,8 @@ export class ComputeKernels {
                             storageBufferLayout({ binding: 0, readOnly: true }),
                             storageBufferLayout({ binding: 1, readOnly: true }),
                             storageBufferLayout({ binding: 2, readOnly: true }),
-                            storageBufferLayout({ binding: 3, readOnly: true }),
-                            storageBufferLayout({ binding: 4, readOnly: false }),
-                            storageBufferLayout({ binding: 5, readOnly: false })
+                            storageBufferLayout({ binding: 3, readOnly: false }),
+                            storageBufferLayout({ binding: 4, readOnly: false })
                         ]
                     }
                 ]
@@ -676,13 +753,13 @@ export class ComputeKernels {
         });
     }
 
-    private getScaleHistogramF32Pipeline(): ComputePipeline {
-        const key = "kernels:scale:histogramF32";
+    private getScaleHistogramF32Pipeline(local256: boolean = false): ComputePipeline {
+        const key = local256 ? "kernels:scale:histogramF32:local256" : "kernels:scale:histogramF32";
         return this.getPipeline(key, () => {
             return new ComputePipeline(this.device, {
                 label: key,
                 code: scaleHistogramF32WGSL,
-                entryPoint: "main",
+                entryPoint: local256 ? "main_local_256" : "main",
                 bindGroups: [
                     {
                         label: `${key}:bg0`,
@@ -1100,21 +1177,17 @@ export class ComputeKernels {
         assert(values.byteLength >= count * 4, "extractScaleValuesF32: values buffer too small for count");
         assert(flags.byteLength >= count * 4, "extractScaleValuesF32: flags buffer too small for count");
         if (count === 0) return { values, flags };
-        const params = this.device.createBuffer({
-            size: 32,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-            label: "scale:extract:params"
-        });
-        this.queue.writeBuffer(params, 0, new Uint32Array([
-            count >>> 0,
-            componentCount >>> 0,
-            componentIndex >>> 0,
-            scaleValueModeToId(valueMode) >>> 0,
-            stride >>> 0,
-            offset >>> 0,
-            0,
-            0
-        ]));
+        const params = this.getScaleExtractParamsBuffer();
+        const paramsData = this.scaleExtractParamsData;
+        paramsData[0] = count >>> 0;
+        paramsData[1] = componentCount >>> 0;
+        paramsData[2] = componentIndex >>> 0;
+        paramsData[3] = scaleValueModeToId(valueMode) >>> 0;
+        paramsData[4] = stride >>> 0;
+        paramsData[5] = offset >>> 0;
+        paramsData[6] = 0;
+        paramsData[7] = 0;
+        this.queue.writeBuffer(params, 0, paramsData);
         const commands: ComputeDispatchCommand[] = [];
         const pipeline = this.getScaleExtractF32Pipeline();
         const bg = pipeline.createBindGroup(0, {
@@ -1130,7 +1203,6 @@ export class ComputeKernels {
             label: "scale:extract"
         });
         this.execute(commands, opts);
-        params.destroy();
         return { values, flags };
     }
 
@@ -1145,7 +1217,9 @@ export class ComputeKernels {
         });
         assert(bins.byteLength >= binCount * 4, "histogramF32: bins buffer is too small for binCount");
         const commands: ComputeDispatchCommand[] = [];
-        if (binCount > 0 && (opts.clear ?? true)) {
+        const shouldClear = binCount > 0 && (opts.clear ?? true);
+        const nativeClear = shouldClear && (bins.usage & GPUBufferUsage.COPY_DST) !== 0;
+        if (shouldClear && !nativeClear) {
             const pipelineClear = this.getHistogramClearPipeline();
             const bgClear = pipelineClear.createBindGroup(0, {
                 0: this.bindSized(bins, binCount * 4)
@@ -1157,22 +1231,17 @@ export class ComputeKernels {
                 label: "histogramF32:clear"
             });
         }
-        let params: GPUBuffer | null = null;
         if (count > 0 && binCount > 0 && Number.isFinite(opts.minValue) && Number.isFinite(opts.maxValue) && opts.maxValue > opts.minValue) {
-            params = this.device.createBuffer({
-                size: 16,
-                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-                label: "histogramF32:params"
-            });
-            const raw = new ArrayBuffer(16);
-            const dv = new DataView(raw);
+            const params = this.getScaleHistogramParamsBuffer();
+            const raw = this.scaleHistogramParamsData;
+            const dv = this.scaleHistogramParamsView;
             dv.setUint32(0, count >>> 0, true);
             dv.setUint32(4, binCount >>> 0, true);
             dv.setFloat32(8, opts.minValue, true);
             dv.setFloat32(12, opts.maxValue, true);
             this.queue.writeBuffer(params, 0, raw);
-
-            const pipelineHist = this.getScaleHistogramF32Pipeline();
+            const local256 = binCount <= 256;
+            const pipelineHist = this.getScaleHistogramF32Pipeline(local256);
             const bgHist = pipelineHist.createBindGroup(0, {
                 0: this.bindSized(values, count * 4),
                 1: this.bindSized(bins, binCount * 4),
@@ -1181,12 +1250,11 @@ export class ComputeKernels {
             commands.push({
                 pipeline: pipelineHist,
                 bindGroups: [bgHist],
-                workgroups: workgroups1D(count, 256),
+                workgroups: workgroups1D(count, local256 ? 1024 : 256),
                 label: "histogramF32:accum"
             });
         }
-        this.execute(commands, opts);
-        params?.destroy();
+        this.executeHistogramCommands(commands, bins, binCount, nativeClear, opts);
         return bins;
     }
 
@@ -1201,17 +1269,13 @@ export class ComputeKernels {
         assert(out.byteLength >= count * 4, "remapScaleF32: out buffer is too small for requested count");
         if (count === 0) return out;
         const transform = normalizeScaleTransform(opts.transform);
-        const packed = new Float32Array(20);
+        const packed = this.scaleTransformPacked;
         packScaleTransform(transform, packed, 0);
-        const params = this.device.createBuffer({
-            size: 80,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-            label: "scale:remap:params"
-        });
-        const raw = new ArrayBuffer(80);
-        const dv = new DataView(raw);
+        const params = this.getScaleRemapParamsBuffer();
+        const raw = this.scaleRemapParamsData;
+        const dv = this.scaleRemapParamsView;
         dv.setUint32(0, count >>> 0, true);
-        const f32 = new Float32Array(raw);
+        const f32 = this.scaleRemapParamsF32;
         f32[4] = packed[4];
         f32[5] = packed[5];
         f32[6] = 0;
@@ -1243,7 +1307,6 @@ export class ComputeKernels {
                 label: "scale:remap"
             }
         ], opts);
-        params.destroy();
         return out;
     }
 
@@ -1329,7 +1392,9 @@ export class ComputeKernels {
         });
         assert(bins.byteLength >= binCount * 4, "histogramU32: bins buffer is too small for binCount");
         const commands: ComputeDispatchCommand[] = [];
-        if (binCount > 0 && (opts.clear ?? true)) {
+        const shouldClear = binCount > 0 && (opts.clear ?? true);
+        const nativeClear = shouldClear && (bins.usage & GPUBufferUsage.COPY_DST) !== 0;
+        if (shouldClear && !nativeClear) {
             const pipelineClear = this.getHistogramClearPipeline();
             const bgClear = pipelineClear.createBindGroup(0, {
                 0: this.bindSized(bins, binCount * 4)
@@ -1342,7 +1407,8 @@ export class ComputeKernels {
             });
         }
         if (count > 0 && binCount > 0) {
-            const pipelineHist = this.getHistogramPipeline();
+            const local256 = binCount <= 256;
+            const pipelineHist = this.getHistogramPipeline(local256);
             const bgHist = pipelineHist.createBindGroup(0, {
                 0: this.bindSized(keys, count * 4),
                 1: this.bindSized(bins, binCount * 4)
@@ -1350,11 +1416,11 @@ export class ComputeKernels {
             commands.push({
                 pipeline: pipelineHist,
                 bindGroups: [bgHist],
-                workgroups: workgroups1D(count, 256),
+                workgroups: workgroups1D(count, local256 ? 1024 : 256),
                 label: "histogramU32:accum"
             });
         }
-        this.execute(commands, opts);
+        this.executeHistogramCommands(commands, bins, binCount, nativeClear, opts);
         return bins;
     }
 
@@ -1388,14 +1454,14 @@ export class ComputeKernels {
         const prefix: BufferResource = this.scratch.acquire(count * 4, `compact:${type}:prefix`);
         const commands: ComputeDispatchCommand[] = [];
         this.encodeScanExclusiveU32Into(commands, flags, count, prefix, `compact:${type}:scan`);
-        this.encodeReduceScalar(commands, "u32", "sum", flags, count, countOut, `compact:${type}:count`);
         {
             const pipeline = this.getCompactPipeline(type);
             const bg = pipeline.createBindGroup(0, {
                 0: this.bindSized(input, count * 4),
                 1: this.bindSized(flags, count * 4),
                 2: this.bindSized(prefix, count * 4),
-                3: this.bindSized(out, count * 4)
+                3: this.bindSized(out, count * 4),
+                4: this.bindSized(countOut, 4)
             }, `compact:${type}:compact:bg`);
             commands.push({
                 pipeline,
@@ -1425,9 +1491,7 @@ export class ComputeKernels {
             }
             return out;
         }
-        const flags: BufferResource = this.scratch.acquire(count * 4, "radix:flags");
         const prefix: BufferResource = this.scratch.acquire(count * 4, "radix:prefix");
-        const zerosCount: BufferResource = this.scratch.acquire(4, "radix:zerosCount");
         const scratchKeys: BufferResource = this.scratch.acquire(count * 4, "radix:keysScratch");
         const bufA: BufferResource = scratchKeys;
         const bufB: BufferResource = out;
@@ -1435,28 +1499,13 @@ export class ComputeKernels {
         let outBuf: BufferResource = bufA;
         const commands: ComputeDispatchCommand[] = [];
         for (let bit = 0; bit < 32; bit++) {
-            {
-                const pipeline = this.getRadixFlagsPipeline(bit);
-                const bg = pipeline.createBindGroup(0, {
-                    0: this.bindSized(inBuf, count * 4),
-                    1: this.bindSized(flags, count * 4)
-                }, `radix:bit${bit}:flags:bg`);
-                commands.push({
-                    pipeline,
-                    bindGroups: [bg],
-                    workgroups: workgroups1D(count, 256),
-                    label: `radix:bit${bit}:flags`
-                });
-            }
-            this.encodeScanExclusiveU32Into(commands, flags, count, prefix, `radix:bit${bit}:scan`);
-            this.encodeReduceScalar(commands, "u32", "sum", flags, count, zerosCount, `radix:bit${bit}:zerosCount`);
+            this.encodeRadixZeroScanInto(commands, inBuf, count, prefix, bit, `radix:bit${bit}:scan`);
             {
                 const pipeline = this.getRadixScatterPipeline(bit);
                 const bg = pipeline.createBindGroup(0, {
                     0: this.bindSized(inBuf, count * 4),
                     1: this.bindSized(prefix, count * 4),
-                    2: this.bindSized(zerosCount, 4),
-                    3: this.bindSized(outBuf, count * 4)
+                    2: this.bindSized(outBuf, count * 4)
                 }, `radix:bit${bit}:scatter:bg`);
                 commands.push({
                     pipeline,
@@ -1507,9 +1556,7 @@ export class ComputeKernels {
             }
             return { keys: outKeys, values: outValues };
         }
-        const flags: BufferResource = this.scratch.acquire(count * 4, "radix:flags");
         const prefix: BufferResource = this.scratch.acquire(count * 4, "radix:prefix");
-        const zerosCount: BufferResource = this.scratch.acquire(4, "radix:zerosCount");
         const scratchKeys: BufferResource = this.scratch.acquire(count * 4, "radix:keysScratch");
         const scratchValues: BufferResource = this.scratch.acquire(count * 4, "radix:valuesScratch");
         const keyBufA: BufferResource = scratchKeys;
@@ -1522,30 +1569,15 @@ export class ComputeKernels {
         let outValuesBuf: BufferResource = valueBufA;
         const commands: ComputeDispatchCommand[] = [];
         for (let bit = 0; bit < 32; bit++) {
-            {
-                const pipeline = this.getRadixFlagsPipeline(bit);
-                const bg = pipeline.createBindGroup(0, {
-                    0: this.bindSized(inKeys, count * 4),
-                    1: this.bindSized(flags, count * 4)
-                }, `radixPairs:bit${bit}:flags:bg`);
-                commands.push({
-                    pipeline,
-                    bindGroups: [bg],
-                    workgroups: workgroups1D(count, 256),
-                    label: `radixPairs:bit${bit}:flags`
-                });
-            }
-            this.encodeScanExclusiveU32Into(commands, flags, count, prefix, `radixPairs:bit${bit}:scan`);
-            this.encodeReduceScalar(commands, "u32", "sum", flags, count, zerosCount, `radixPairs:bit${bit}:zerosCount`);
+            this.encodeRadixZeroScanInto(commands, inKeys, count, prefix, bit, `radixPairs:bit${bit}:scan`);
             {
                 const pipeline = this.getRadixScatterPairsPipeline(bit);
                 const bg = pipeline.createBindGroup(0, {
                     0: this.bindSized(inKeys, count * 4),
                     1: this.bindSized(inValues, count * 4),
                     2: this.bindSized(prefix, count * 4),
-                    3: this.bindSized(zerosCount, 4),
-                    4: this.bindSized(outKeysBuf, count * 4),
-                    5: this.bindSized(outValuesBuf, count * 4)
+                    3: this.bindSized(outKeysBuf, count * 4),
+                    4: this.bindSized(outValuesBuf, count * 4)
                 }, `radixPairs:bit${bit}:scatter:bg`);
                 commands.push({
                     pipeline,

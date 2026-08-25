@@ -178,7 +178,64 @@ const compute = new Compute(device, device.queue);
     a.destroy();
 }
 
-// 9) Cleanup releases the shared compute context before its browser GPU device.
+// 9) Checked scalar indexing handles negative strides, scalars, empty layouts, and invalid indices locally.
+{
+    const reversed = compute.CPUndarray.zeros("u32", { shape: [3], stridesBytes: [-4], offsetBytes: 8 });
+    reversed.set(10, 0);
+    reversed.set(20, 1);
+    reversed.set(30, 2);
+    assert.deepStrictEqual([reversed.get(0), reversed.get(1), reversed.get(2)], [10, 20, 30]);
+    assert.throws(() => reversed.get(), /expected 1 indices/);
+    assert.throws(() => reversed.get(-1), /integer >= 0/);
+    assert.throws(() => reversed.get(1.5), /integer >= 0/);
+    assert.throws(() => reversed.get(3), /out of bounds/);
+    assert.throws(() => reversed.get(0x1_0000_0000), /fit in u32/);
+    reversed.destroy();
+
+    const scalar = compute.CPUndarray.zeros("f64", { shape: [] });
+    scalar.set(Math.PI);
+    assert.strictEqual(scalar.get(), Math.PI);
+    assert.throws(() => scalar.get(0), /expected 0 indices/);
+    scalar.destroy();
+
+    const empty = compute.CPUndarray.empty("u8", { shape: [0, 3] });
+    assert.strictEqual(empty.byteLength, 0);
+    assert.throws(() => empty.get(0, 0), /out of bounds/);
+    empty.destroy();
+    assert.throws(() => compute.CPUndarray.empty("u8", { shape: [0x1_0000_0000], stridesBytes: [0] }), /fit in u32/);
+}
+
+// 10) Concurrent GPU ndarray readbacks use reusable slots and preserve direct-to-Wasm destinations.
+{
+    const arrays = Array.from({ length: 5 }, (_, i) => compute.CPUndarray.fromArray("u32", [4], [i, i + 1, i + 2, i + 3]));
+    const gpu = arrays.map((a) => a.uploadToGPU(compute, { copySrc: true }));
+    const cpu = await Promise.all(gpu.map((a) => a.readbackToCPU()));
+    for (let i = 0; i < cpu.length; i++) assert.deepStrictEqual(Array.from(cpu[i].data()), [i, i + 1, i + 2, i + 3]);
+    for (const a of cpu) a.destroy();
+    for (const a of gpu) a.destroy();
+    for (const a of arrays) a.destroy();
+}
+
+// 11) Odd-byte and zero-byte ndarrays preserve logical lengths across aligned GPU storage/readback.
+{
+    const odd = compute.CPUndarray.fromArray("u8", [3], [0x12, 0x34, 0x56]);
+    const oddGpu = odd.uploadToGPU(compute, { copySrc: true });
+    const oddBack = await oddGpu.readbackToCPU();
+    assert.deepStrictEqual(Array.from(oddBack.data()), [0x12, 0x34, 0x56]);
+    oddBack.destroy();
+    oddGpu.destroy();
+    odd.destroy();
+
+    const empty = compute.CPUndarray.empty("u8", { shape: [0] });
+    const emptyGpu = empty.uploadToGPU(compute, { copySrc: true });
+    const emptyBack = await emptyGpu.readbackToCPU();
+    assert.strictEqual(emptyBack.byteLength, 0);
+    emptyBack.destroy();
+    emptyGpu.destroy();
+    empty.destroy();
+}
+
+// 12) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

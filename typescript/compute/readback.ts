@@ -61,6 +61,10 @@ export class ReadbackRing {
         assert(!this.destroyed, "ReadbackRing is destroyed");
     }
 
+    get isDestroyed(): boolean {
+        return this.destroyed;
+    }
+
     private assertSourceCanReadback(src: ReadbackSource): void {
         if (src instanceof StorageBuffer) {
             assert(src.canReadback, "ReadbackRing requires the source StorageBuffer to be created with copySrc: true");
@@ -70,7 +74,7 @@ export class ReadbackRing {
         if (usage !== null) assert((usage & GPUBufferUsage.COPY_SRC) !== 0, "ReadbackRing requires the source GPUBuffer to have GPUBufferUsage.COPY_SRC");
     }
 
-    async read(src: ReadbackSource, srcOffsetBytes: number = 0, sizeBytes?: number, opts: { label?: string } = {}): Promise<ArrayBuffer> {
+    private validateReadRange(src: ReadbackSource, srcOffsetBytes: number, sizeBytes?: number): number {
         this.ensureNotDestroyed();
         assert(this.slots.length > 0, "ReadbackRing has no slots");
         assert(isNonNegativeInt(srcOffsetBytes), `srcOffsetBytes must be an integer >= 0 (got ${srcOffsetBytes})`);
@@ -82,12 +86,18 @@ export class ReadbackRing {
         const size = sizeBytes ?? remaining;
         assert(isNonNegativeInt(size), `sizeBytes must be an integer >= 0 (got ${size})`);
         assert(size <= remaining, `sizeBytes (${size}) exceeds remaining bytes (${remaining})`);
-        const alignedSize = Math.max(4, alignTo(size, 4));
-        assert(alignedSize <= remaining, `Aligned copy size (${alignedSize}) exceeds remaining bytes (${remaining}). copyBufferToBuffer requires multiples of 4.`);
+        return size;
+    }
+
+    private async copyMappedBytes(src: ReadbackSource, srcOffsetBytes: number, size: number, opts: { label?: string }, destination: () => Uint8Array): Promise<void> {
+        if (size === 0) return;
+        const alignedSize = alignTo(size, 4);
+        const physicalByteLength = Number(resolveGPUBuffer(src).size);
+        assert(srcOffsetBytes + alignedSize <= physicalByteLength, `Aligned copy range (offset ${srcOffsetBytes}, size ${alignedSize}) exceeds physical source bytes (${physicalByteLength})`);
         const slotIndex = this.cursor;
         this.cursor = (this.cursor + 1) % this.slots.length;
         const slot = this.slots[slotIndex];
-        const run = async (): Promise<ArrayBuffer> => {
+        const run = async (): Promise<void> => {
             this.ensureNotDestroyed();
             if (slot.buffer.mapState === "mapped" || slot.buffer.mapState === "pending") {
                 try { slot.buffer.unmap(); } catch { /* ignore */ }
@@ -106,17 +116,32 @@ export class ReadbackRing {
             try {
                 await slot.buffer.mapAsync(GPUMapMode.READ, 0, alignedSize);
                 const mapped = slot.buffer.getMappedRange(0, alignedSize);
-                const out = (mapped as ArrayBuffer).slice(0, size);
+                const out = destination();
+                assert(out.byteLength >= size, `readback destination is too small (${out.byteLength} bytes for ${size} bytes)`);
+                out.set(new Uint8Array(mapped, 0, size), 0);
                 slot.buffer.unmap();
-                return out;
-            } catch (e) {
-                try { slot.buffer.unmap(); } catch { /* ignore */ }
-                throw e;
-            }
+            } catch (e) { try { slot.buffer.unmap(); } catch { /* ignore */ } throw e; }
         };
         const job = slot.tail.then(run, run);
         slot.tail = job.then(() => { /* done */ }, () => { /* done */ });
         return job;
+    }
+
+    async read(src: ReadbackSource, srcOffsetBytes: number = 0, sizeBytes?: number, opts: { label?: string } = {}): Promise<ArrayBuffer> {
+        const size = this.validateReadRange(src, srcOffsetBytes, sizeBytes);
+        const out = new Uint8Array(size);
+        await this.copyMappedBytes(src, srcOffsetBytes, size, opts, () => out);
+        return out.buffer;
+    }
+
+    async readIntoWasmMemory(mem: WebAssembly.Memory, dstPtrBytes: number, src: ReadbackSource, srcOffsetBytes: number = 0, sizeBytes?: number, opts: { label?: string } = {}): Promise<void> {
+        assert(isNonNegativeInt(dstPtrBytes), `dstPtrBytes must be an integer >= 0 (got ${dstPtrBytes})`);
+        const size = this.validateReadRange(src, srcOffsetBytes, sizeBytes);
+        await this.copyMappedBytes(src, srcOffsetBytes, size, opts, () => {
+            const buffer = mem.buffer as unknown as ArrayBuffer;
+            assert(dstPtrBytes + size <= buffer.byteLength, `readback destination exceeds WebAssembly memory (${dstPtrBytes} + ${size} > ${buffer.byteLength})`);
+            return new Uint8Array(buffer, dstPtrBytes, size);
+        });
     }
 
     async readAs<T extends ArrayBufferView<ArrayBuffer>>(ctor: TypedArrayConstructor<T>, src: ReadbackSource, srcOffsetBytes: number = 0, sizeBytes?: number, opts: { label?: string } = {}): Promise<T> {
@@ -154,13 +179,11 @@ export class ReadbackRing {
     destroy(): void {
         if (this.destroyed) return;
         this.destroyed = true;
-
         for (const slot of this.slots) {
             try { if (slot.buffer.mapState === "mapped" || slot.buffer.mapState === "pending") slot.buffer.unmap(); } catch { /* ignore */ }
             try { slot.buffer.destroy(); } catch { /* ignore */ }
             slot.tail = Promise.resolve();
         }
-
         this.slots.length = 0;
     }
 }

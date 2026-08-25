@@ -104,8 +104,8 @@ export class StorageBuffer extends GpuBuffer {
         if (desc.data) {
             const src = resolveSourceRange(desc.data);
             const dstBytes = new Uint8Array(buffer.getMappedRange());
-            dstBytes.fill(0);
             dstBytes.set(new Uint8Array(src.buffer, src.offset, src.size), 0);
+            if (src.size < dstBytes.byteLength) dstBytes.fill(0, src.size);
             buffer.unmap();
         }
         super(device, queue, buffer, byteLength, usage);
@@ -174,8 +174,8 @@ export class UniformBuffer extends GpuBuffer {
         if (desc.data) {
             const src = resolveSourceRange(desc.data);
             const dstBytes = new Uint8Array(buffer.getMappedRange());
-            dstBytes.fill(0);
             dstBytes.set(new Uint8Array(src.buffer, src.offset, src.size), 0);
+            if (src.size < dstBytes.byteLength) dstBytes.fill(0, src.size);
             buffer.unmap();
         }
         super(device, queue, buffer, byteLength, usage);

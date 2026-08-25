@@ -146,7 +146,48 @@ const compute = new Compute(device, device.queue);
     bufOut.destroy();
 }
 
-// 4) Cleanup releases the shared compute context before its browser GPU device.
+// 4) Repeated batch state, zero-sized dispatches, object workgroups, and submit:false preserve semantics.
+{
+    const code = `
+        @group(0) @binding(0) var<storage, read_write> out : array<u32>;
+        @compute @workgroup_size(1) fn main() { out[0] = out[0] + 1u; }
+    `;
+    const out = compute.createStorageBuffer({ data: new Uint32Array([0]), copySrc: true });
+    const pipeline = compute.createPipeline({ code });
+    const bg = pipeline.createBindGroup(0, { 0: out });
+    const command = { pipeline, bindGroups: [bg], workgroups: { x: 1 } };
+    const commandBuffer = compute.dispatchBatch([
+        { pipeline, bindGroups: [bg], workgroups: [0, 1, 1], label: "skip-zero" },
+        command,
+        { pipeline, bindGroups: [null, undefined], workgroups: { x: 1 } },
+        command,
+        command
+    ], "repeated-state", { submit: false, validateLimits: true });
+    compute.queue.submit([commandBuffer]);
+    await compute.queue.onSubmittedWorkDone();
+    assert.deepStrictEqual(Array.from(await out.readAs(Uint32Array)), [4]);
+    command.workgroups.x = 0;
+    compute.dispatchBatch([command], "mutated-state", { validateLimits: true });
+    command.workgroups.x = 1;
+    compute.dispatchBatch([command], "mutated-state", { validateLimits: true });
+    await compute.queue.onSubmittedWorkDone();
+    assert.deepStrictEqual(Array.from(await out.readAs(Uint32Array)), [5], "Command state must not be memoized across calls");
+    let beganInvalidPass = false;
+    const observingEncoder = {
+        beginComputePass() {
+            beganInvalidPass = true;
+            throw new Error("beginComputePass must not be reached for an invalid batch");
+        }
+    };
+    assert.throws(() => compute.encodeDispatchBatch(observingEncoder, [
+        { pipeline, bindGroups: [bg], workgroups: { x: 1 } },
+        { pipeline, bindGroups: [null, undefined], workgroups: { x: device.limits.maxComputeWorkgroupsPerDimension + 1 } }
+    ], "invalid-later-limit", true), /maxComputeWorkgroupsPerDimension/);
+    assert.strictEqual(beganInvalidPass, false, "Validated dispatch batches must reject all invalid commands before opening a compute pass");
+    out.destroy();
+}
+
+// 5) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

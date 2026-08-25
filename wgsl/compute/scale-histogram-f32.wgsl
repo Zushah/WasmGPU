@@ -15,6 +15,8 @@ struct Params {
 @group(0) @binding(1) var<storage, read_write> bins: array<atomic<u32>>;
 @group(0) @binding(2) var<uniform> params: Params;
 
+var<workgroup> local_bins: array<atomic<u32>, 256>;
+
 fn scale_is_nan(v: f32) -> bool {
     let u = bitcast<u32>(v);
     return (u & 0x7F800000u) == 0x7F800000u && (u & 0x007FFFFFu) != 0u;
@@ -143,4 +145,36 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let t = clamp((v - min_value) / (max_value - min_value), 0.0, 0.99999994);
     let b = min(params.bin_count - 1u, u32(t * f32(params.bin_count)));
     atomicAdd(&bins[b], 1u);
+}
+
+@compute @workgroup_size(256)
+fn main_local_256(
+    @builtin(local_invocation_id) lid: vec3<u32>,
+    @builtin(workgroup_id) wid: vec3<u32>,
+) {
+    let tid = lid.x;
+    atomicStore(&local_bins[tid], 0u);
+    workgroupBarrier();
+    if (params.bin_count > 0u && params.max_value > params.min_value) {
+        let base = wid.x * 1024u + tid;
+        for (var j = 0u; j < 4u; j++) {
+            let i = base + j * 256u;
+            if (i < params.count) {
+                let v = values[i];
+                if (scale_is_finite(v)) {
+                    let t = clamp(
+                        (v - params.min_value) / (params.max_value - params.min_value),
+                        0.0,
+                        0.99999994
+                    );
+                    let b = min(params.bin_count - 1u, u32(t * f32(params.bin_count)));
+                    _ = atomicAdd(&local_bins[b], 1u);
+                }
+            }
+        }
+    }
+    workgroupBarrier();
+    if (tid < params.bin_count) {
+        _ = atomicAdd(&bins[tid], atomicLoad(&local_bins[tid]));
+    }
 }

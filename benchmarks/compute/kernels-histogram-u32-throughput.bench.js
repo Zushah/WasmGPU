@@ -15,12 +15,10 @@ export default {
     sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608] },
     gpu: true,
     setup({ compute }, size) {
+        const data = new Uint32Array(size);
+        for (let i = 0; i < size; i++) data[i] = (Math.imul(i, 2654435761) >>> 16) & (BIN_COUNT - 1);
         return {
-            keys: compute.createStorageBuffer({ data: (size) => {
-                const data = new Uint32Array(size);
-                for (let i = 0; i < size; i++) data[i] = (Math.imul(i, 2654435761) >>> 16) & (BIN_COUNT - 1);
-                return data;
-            }}),
+            keys: compute.createStorageBuffer({ data }),
             bins: compute.createStorageBuffer({ byteLength: BIN_COUNT * 4 })
         };
     },
