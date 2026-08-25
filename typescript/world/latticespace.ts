@@ -382,6 +382,10 @@ export class LatticeSpace {
         return hash >>> 0;
     }
 
+    get sortRevision(): number {
+        return this.occluderRevision;
+    }
+
     setScaleTransform(transform: ScaleTransformDescriptor | ScaleTransform): void {
         this._scaleTransform = this.normalizeLatticeScaleTransform(transform);
         this._uniformDirty = true;

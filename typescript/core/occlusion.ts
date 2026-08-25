@@ -5,7 +5,7 @@
  */
 
 import { alignTo, createDepthTexture } from "../utils";
-import { Mesh, getMeshLocalBoundsSource, getMeshVertexBuffers, getMeshVertexSource, hasMeshMorphRuntime } from "../world/mesh";
+import { getMeshLocalBoundsSource, getMeshMorphRevision, getMeshVertexBuffers, getMeshVertexSource, hasMeshMorphRuntime } from "../world/mesh";
 import { PointCloud } from "../world/pointcloud";
 import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
@@ -26,7 +26,7 @@ import type { DrawItem, GlyphFieldDrawItem, LatticeSpaceDrawItem, NodeLinkDrawIt
 import { ensureCullingCapacity } from "./drawlists";
 import { getCullMode } from "./materials";
 import { ensureGlyphFieldBindGroup, ensureLatticeSpaceBindGroup, ensureNodeLinkBindGroup, ensurePointCloudBindGroup, getGlyphFieldBindGroupLayout, getLatticeSpaceBindGroupLayout, getNodeLinkBindGroupLayout, getPointCloudBindGroupLayout } from "./objects";
-import { getObjectId, writeModelUniformSlot } from "./resources";
+import { bindModelUniform, getObjectId } from "./resources";
 import { isOpticallyTransmissiveMaterial } from "./transmission";
 
 const occlusionHashScratch = new ArrayBuffer(4);
@@ -84,9 +84,14 @@ export const destroyOcclusionTextures = (ctx: RendererContext): void => {
 
 export const invalidateOcclusionResources = (ctx: RendererContext): void => {
     destroyOcclusionTextures(ctx);
+    ctx.occlusionResourceGeneration++;
     ctx.latestOcclusionHierarchy = null;
     ctx.latestOcclusionHierarchySerial = 0;
     ctx.pendingOcclusionFrameState = null;
+    if (ctx.occlusionHierarchyWasmPtr) wasm.freeF32(ctx.occlusionHierarchyWasmPtr, ctx.occlusionHierarchyWasmLength);
+    ctx.occlusionHierarchyWasmPtr = 0;
+    ctx.occlusionHierarchyWasmLength = 0;
+    ctx.occlusionHierarchyWasmSerial = 0;
     for (const slot of ctx.occlusionReadbackSlots) {
         slot.metadata = null;
         slot.data = null;
@@ -295,15 +300,19 @@ const viewProjectionMatches = (ctx: RendererContext, currentPtr: WasmPtr, previo
     return true;
 };
 
+const occlusionMetadataMatches = (ctx: RendererContext, camera: Camera, signature: number, meta: OcclusionHierarchyMetadata): boolean => {
+    if (meta.resourceGeneration !== ctx.occlusionResourceGeneration) return false;
+    if (meta.viewportWidth !== ctx.width || meta.viewportHeight !== ctx.height) return false;
+    if (meta.hierarchyWidth !== ctx.occlusionWidth || meta.hierarchyHeight !== ctx.occlusionHeight) return false;
+    if (meta.cameraType !== camera.type || meta.occluderSignature !== signature) return false;
+    return viewProjectionMatches(ctx, ctx.cameraUniformStagingPtr, meta.viewProjection);
+};
+
 export const getValidOcclusionHierarchy = (ctx: RendererContext, camera: Camera, signature: number): { metadata: OcclusionHierarchyMetadata; data: Float32Array } | null => {
     const latest = ctx.latestOcclusionHierarchy;
     if (!latest || !ctx.occlusionHierarchyLayout) return null;
     const meta = latest.metadata;
-    if (meta.viewportWidth !== ctx.width || meta.viewportHeight !== ctx.height) return null;
-    if (meta.hierarchyWidth !== ctx.occlusionWidth || meta.hierarchyHeight !== ctx.occlusionHeight) return null;
-    if (meta.cameraType !== camera.type) return null;
-    if (meta.occluderSignature !== signature) return null;
-    if (!viewProjectionMatches(ctx, ctx.cameraUniformStagingPtr, meta.viewProjection)) return null;
+    if (!occlusionMetadataMatches(ctx, camera, signature, meta)) return null;
     return latest;
 };
 
@@ -326,8 +335,8 @@ export const applyOcclusionFiltering = (ctx: RendererContext, _camera: Camera, c
     }
     cullf.prepareWorldSpheresFromPtrs(ctx.cullCentersPtr, ctx.cullRadiiPtr, worldPtrsPtr, localCentersPtr, localRadiiPtr, candidates.length);
     const layout = hierarchy.metadata.layout;
-    const depthPtr = frameArena.allocF32(hierarchy.data.length) as WasmPtr;
-    wasm.f32view(depthPtr, hierarchy.data.length).set(hierarchy.data);
+    const depthPtr = ctx.occlusionHierarchyWasmSerial === ctx.latestOcclusionHierarchySerial && ctx.occlusionHierarchyWasmLength === hierarchy.data.length ? ctx.occlusionHierarchyWasmPtr : frameArena.allocF32(hierarchy.data.length) as WasmPtr;
+    if (depthPtr !== ctx.occlusionHierarchyWasmPtr) wasm.f32view(depthPtr, hierarchy.data.length).set(hierarchy.data);
     const mipOffsetsPtr = frameArena.alloc(layout.offsets.byteLength, 4) as WasmPtr;
     const mipWidthsPtr = frameArena.alloc(layout.widths.byteLength, 4) as WasmPtr;
     const mipHeightsPtr = frameArena.alloc(layout.heights.byteLength, 4) as WasmPtr;
@@ -350,22 +359,10 @@ export const applyOcclusionFiltering = (ctx: RendererContext, _camera: Camera, c
     for (let i = 0; i < candidates.length; i++) candidateSet.add(candidates[i].objectId);
     const out = wasm.u32view(outPtr, visibleCount);
     for (let i = 0; i < visibleCount; i++) visibleSet.add(candidates[out[i]].objectId);
-    filterOpaqueDrawListInPlace(ctx.opaqueDrawList, (item) => {
-        const id = getObjectId(ctx, item.mesh);
-        return !candidateSet.has(id) || visibleSet.has(id);
-    });
-    filterOpaqueDrawListInPlace(ctx.opaquePointCloudDrawList, (item) => {
-        const id = getObjectId(ctx, item.cloud);
-        return !candidateSet.has(id) || visibleSet.has(id);
-    });
-    filterOpaqueDrawListInPlace(ctx.opaqueGlyphFieldDrawList, (item) => {
-        const id = getObjectId(ctx, item.field);
-        return !candidateSet.has(id) || visibleSet.has(id);
-    });
-    filterOpaqueDrawListInPlace(ctx.opaqueNodeLinkDrawList, (item) => {
-        const id = getObjectId(ctx, item.link);
-        return !candidateSet.has(id) || visibleSet.has(id);
-    });
+    filterOpaqueDrawListInPlace(ctx.opaqueDrawList, (item) => { const id = getObjectId(ctx, item.mesh); return !candidateSet.has(id) || visibleSet.has(id); });
+    filterOpaqueDrawListInPlace(ctx.opaquePointCloudDrawList, (item) => { const id = getObjectId(ctx, item.cloud); return !candidateSet.has(id) || visibleSet.has(id); });
+    filterOpaqueDrawListInPlace(ctx.opaqueGlyphFieldDrawList, (item) => { const id = getObjectId(ctx, item.field); return !candidateSet.has(id) || visibleSet.has(id); });
+    filterOpaqueDrawListInPlace(ctx.opaqueNodeLinkDrawList, (item) => { const id = getObjectId(ctx, item.link); return !candidateSet.has(id) || visibleSet.has(id); });
     filterOpaqueDrawListInPlace(ctx.opaqueLatticeSpaceDrawList, (item) => { const id = getObjectId(ctx, item.space); return !candidateSet.has(id) || visibleSet.has(id); });
     visibleSet.clear();
     candidateSet.clear();
@@ -413,6 +410,8 @@ const getMeshOccluderToken = (ctx: RendererContext, item: DrawItem): number => {
     hash = mixOcclusionHash(hash, item.mirrored ? 1 : 0);
     hash = mixOcclusionHash(hash, item.skinned ? 1 : 0);
     hash = mixOcclusionHash(hash, hasMeshMorphRuntime(mesh) ? 1 : 0);
+    hash = mixOcclusionHash(hash, getMeshMorphRevision(mesh));
+    hash = mixOcclusionHash(hash, mesh.geometry.morphBaseRevision);
     hash = mixOcclusionHash(hash, hashWorldMatrix(mesh.transform.worldMatrixPtr as WasmPtr));
     if (material instanceof UnlitMaterial) hash = mixOcclusionHashF32(hash, material.alphaCutoff);
     if (material instanceof StandardMaterial) {
@@ -438,11 +437,12 @@ export const captureOcclusionHierarchy = (ctx: RendererContext, camera: Camera):
     if (safeOccluderCount <= 0) return;
     ensureOcclusionResources(ctx);
     if (!ctx.occlusionHierarchyTexture || !ctx.occlusionDepthView || !ctx.occlusionHierarchyLayout) return;
+    if (getValidOcclusionHierarchy(ctx, camera, frameState.signature)) return;
+    for (const pending of ctx.occlusionReadbackSlots) if (pending.state === "mapping" && pending.metadata && occlusionMetadataMatches(ctx, camera, frameState.signature, pending.metadata)) return;
     const slot = getIdleOcclusionReadbackSlot(ctx);
     if (!slot) return;
     ensureOcclusionReadbackBuffer(ctx, slot, ctx.occlusionHierarchyLayout.totalBytes);
     if (!slot.buffer) return;
-    ctx.modelBufferIndex = 0;
     const encoder = ctx.device.createCommandEncoder();
     const capturePass = encoder.beginRenderPass({
         colorAttachments: [
@@ -502,6 +502,7 @@ export const captureOcclusionHierarchy = (ctx: RendererContext, camera: Camera):
         );
     }
     const metadata: OcclusionHierarchyMetadata = {
+        resourceGeneration: ctx.occlusionResourceGeneration,
         viewportWidth: ctx.width,
         viewportHeight: ctx.height,
         hierarchyWidth: ctx.occlusionWidth,
@@ -533,9 +534,17 @@ export const captureOcclusionHierarchy = (ctx: RendererContext, camera: Camera):
         }
         slot.data = data;
         slot.state = "ready";
-        if (slot.metadata && slot.serial >= ctx.latestOcclusionHierarchySerial) {
+        if (slot.metadata && slot.metadata.resourceGeneration === ctx.occlusionResourceGeneration && slot.serial >= ctx.latestOcclusionHierarchySerial) {
             ctx.latestOcclusionHierarchySerial = slot.serial;
             ctx.latestOcclusionHierarchy = { metadata: slot.metadata, data };
+            if (data.length > ctx.occlusionHierarchyWasmLength) {
+                if (ctx.occlusionHierarchyWasmPtr) wasm.freeF32(ctx.occlusionHierarchyWasmPtr, ctx.occlusionHierarchyWasmLength);
+                ctx.occlusionHierarchyWasmPtr = wasm.allocF32(data.length) as WasmPtr;
+                if (!ctx.occlusionHierarchyWasmPtr) throw new Error(`Renderer occlusion hierarchy allocation failed (${data.length} f32 elements).`);
+                ctx.occlusionHierarchyWasmLength = data.length;
+            }
+            wasm.f32view(ctx.occlusionHierarchyWasmPtr, data.length).set(data);
+            ctx.occlusionHierarchyWasmSerial = slot.serial;
         }
     }).catch(() => {
         slot.data = null;
@@ -566,9 +575,7 @@ const executeOcclusionMeshDrawList = (ctx: RendererContext, pass: GPURenderPassE
             pass.setPipeline(pipeline);
             lastPipeline = pipeline;
         }
-        const slot = ctx.modelBufferIndex++;
-        writeModelUniformSlot(ctx, slot, item.mesh.transform.worldMatrixPtr as WasmPtr);
-        pass.setBindGroup(0, ctx.globalBindGroups[slot]);
+        bindModelUniform(ctx, pass, item.mesh.transform.worldMatrixPtr as WasmPtr);
         const geometryBuffers = getMeshVertexBuffers(item.mesh, ctx.device, ctx.queue);
         pass.setVertexBuffer(0, geometryBuffers.positionBuffer);
         if (geometry.isIndexed && geometry.indexBuffer) {
@@ -585,10 +592,8 @@ const executeOcclusionPointCloudDrawList = (ctx: RendererContext, pass: GPURende
         const cloud = item.cloud;
         ensurePointCloudBindGroup(ctx, cloud);
         if (!cloud.bindGroup) continue;
-        const slot = ctx.modelBufferIndex++;
-        writeModelUniformSlot(ctx, slot, cloud.transform.worldMatrixPtr as WasmPtr);
+        bindModelUniform(ctx, pass, cloud.transform.worldMatrixPtr as WasmPtr);
         pass.setPipeline(getOrCreateOcclusionPointCloudPipeline(ctx));
-        pass.setBindGroup(0, ctx.globalBindGroups[slot]);
         if (cloud !== lastCloud) {
             pass.setBindGroup(1, cloud.bindGroup);
             lastCloud = cloud;
@@ -616,9 +621,7 @@ const executeOcclusionGlyphFieldDrawList = (ctx: RendererContext, pass: GPURende
             pass.setVertexBuffer(0, item.geometry.positionBuffer!);
             lastGeometry = item.geometry;
         }
-        const slot = ctx.modelBufferIndex++;
-        writeModelUniformSlot(ctx, slot, field.transform.worldMatrixPtr as WasmPtr);
-        pass.setBindGroup(0, ctx.globalBindGroups[slot]);
+        bindModelUniform(ctx, pass, field.transform.worldMatrixPtr as WasmPtr);
         if (field !== lastField) {
             pass.setBindGroup(1, field.bindGroup);
             lastField = field;
@@ -649,9 +652,7 @@ const executeOcclusionNodeLinkDrawList = (ctx: RendererContext, pass: GPURenderP
             pass.setVertexBuffer(0, item.geometry.positionBuffer!);
             lastGeometry = item.geometry;
         }
-        const slot = ctx.modelBufferIndex++;
-        writeModelUniformSlot(ctx, slot, link.transform.worldMatrixPtr as WasmPtr);
-        pass.setBindGroup(0, ctx.globalBindGroups[slot]);
+        bindModelUniform(ctx, pass, link.transform.worldMatrixPtr as WasmPtr);
         if (link !== lastLink) {
             pass.setBindGroup(1, link.bindGroup);
             lastLink = link;
@@ -688,9 +689,7 @@ const executeOcclusionLatticeSpaceDrawList = (ctx: RendererContext, pass: GPURen
             pass.setPipeline(pipeline);
             lastPipeline = pipeline;
         }
-        const slot = ctx.modelBufferIndex++;
-        writeModelUniformSlot(ctx, slot, space.transform.worldMatrixPtr as WasmPtr);
-        pass.setBindGroup(0, ctx.globalBindGroups[slot]);
+        bindModelUniform(ctx, pass, space.transform.worldMatrixPtr as WasmPtr);
         if (space !== lastSpace) {
             pass.setBindGroup(1, space.bindGroup);
             lastSpace = space;

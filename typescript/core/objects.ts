@@ -6,7 +6,7 @@
 
 import { ceilDiv } from "../utils";
 import { Geometry } from "../graphics/geometry";
-import { Material, StandardMaterial } from "../graphics/material";
+import { BlendMode, Material, StandardMaterial } from "../graphics/material";
 import { TransformStore } from "./transform";
 import { Mesh, getMeshVertexBuffers, hasMeshMorphRuntime } from "../world/mesh";
 import { PointCloud } from "../world/pointcloud";
@@ -14,7 +14,7 @@ import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
 import { SplatField } from "../world/splatfield";
 import { LatticeSpace } from "../world/latticespace";
-import { animf, driver, frameArena, mat4f, transformf } from "../wasm";
+import { animf, driver, frameArena, mat4f, transformf, wasm } from "../wasm";
 import type { WasmPtr } from "../wasm";
 import pointCloudWGSL from "../../wgsl/world/pointcloud.wgsl";
 import glyphFieldWGSL from "../../wgsl/world/glyphfield.wgsl";
@@ -22,18 +22,16 @@ import nodeLinkWGSL from "../../wgsl/world/nodelink.wgsl";
 import splatFieldWGSL from "../../wgsl/world/splatfield.wgsl";
 import splatFieldSortWGSL from "../../wgsl/world/splatfield-sort.wgsl";
 import splatFieldRadixFlagsWGSL from "../../wgsl/world/splatfield-radix-flags.wgsl";
-import splatFieldRadixCountZerosWGSL from "../../wgsl/world/splatfield-radix-count-zeros.wgsl";
 import splatFieldRadixScatterPairsWGSL from "../../wgsl/world/splatfield-radix-scatter-pairs.wgsl";
 import latticeSpaceWGSL from "../../wgsl/world/latticespace.wgsl";
 import latticeSpaceSortWGSL from "../../wgsl/world/latticespace-sort.wgsl";
 import latticeSpaceRadixFlagsWGSL from "../../wgsl/world/latticespace-radix-flags.wgsl";
-import latticeSpaceRadixCountZerosWGSL from "../../wgsl/world/latticespace-radix-count-zeros.wgsl";
 import latticeSpaceRadixScatterPairsWGSL from "../../wgsl/world/latticespace-radix-scatter-pairs.wgsl";
 import scanBlockExclusiveU32WGSL from "../../wgsl/compute/scan-block-exclusive-u32.wgsl";
 import scanAddBlockOffsetsU32WGSL from "../../wgsl/compute/scan-add-block-offsets-u32.wgsl";
 import type { RendererContext } from "./context";
 import type { DrawItem, GlyphFieldDrawItem, LatticeSpaceDrawItem, LatticeSpaceSortScanLevel, LatticeSpaceSortState, NodeLinkDrawItem, PointCloudDrawItem, SplatFieldDrawItem, SplatFieldSortScanLevel, SplatFieldSortState } from "./types";
-import { ensureInstanceBuffer, ensureModelBufferPool, getObjectId } from "./resources";
+import { bindModelUniform, ensureInstanceBuffer, getObjectId } from "./resources";
 import { bindSizedBuffer, ensureMaterialBindGroup, getBlendState, getCullMode, getOrCreatePipeline, getOrCreateShaderModule, getPremultipliedAlphaBlendState, materialSupportsInstancing } from "./materials";
 
 export const warmMeshDrawList = (ctx: RendererContext, items: DrawItem[]): void => {
@@ -211,11 +209,6 @@ export const executeDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder
             drawInstancedRun(ctx, pass, geometry, material, items, i, runCount);
         } else {
             for (let k = i; k < j; k++) {
-                if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-                const modelSlot = ctx.modelBufferIndex++;
-                const modelBuffer = ctx.modelUniformBuffers[modelSlot];
-                const globalBindGroup = ctx.globalBindGroups[modelSlot];
-                const bytes = driver.bytes();
                 const mesh = items[k].mesh;
                 const skin = first.skinned ? mesh.skin : null;
                 if (skin) {
@@ -223,26 +216,18 @@ export const executeDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder
                     pass.setBindGroup(2, skin.bindGroup!);
                 }
                 if (first.receiveShadow) ctx.shadowRenderer.bindReceiver(pass, first.skinned);
-                const modelPtr = mesh.transform.worldMatrixPtr as WasmPtr;
-                const invPtr = ctx.modelUniformStagingPtr;
-                const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-                mat4f.invert(invPtr, modelPtr);
-                mat4f.transpose(normalPtr, invPtr);
-                ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-                ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
-                pass.setBindGroup(0, globalBindGroup);
+                bindModelUniform(ctx, pass, mesh.transform.worldMatrixPtr as WasmPtr);
                 if (geometry.isIndexed) pass.drawIndexed(geometry.indexCount);
                 else pass.draw(geometry.vertexCount);
             }
         }
         i = j;
     }
+    if (items === ctx.opaqueDrawList && ctx.instanceRunCache.length > ctx.instanceRunCacheIndex) ctx.instanceRunCache.length = ctx.instanceRunCacheIndex;
 };
 
 export const executePointCloudDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, items: PointCloudDrawItem[]): void => {
     if (items.length === 0) return;
-    const bytes = driver.bytes();
-    const mat4 = mat4f;
     let lastPipeline: GPURenderPipeline | null = null;
     for (let i = 0; i < items.length; i++) {
         const item = items[i];
@@ -255,18 +240,7 @@ export const executePointCloudDrawList = (ctx: RendererContext, pass: GPURenderP
             pass.setPipeline(item.pipeline);
             lastPipeline = item.pipeline;
         }
-        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-        const modelSlot = ctx.modelBufferIndex++;
-        const modelBuffer = ctx.modelUniformBuffers[modelSlot];
-        const globalBindGroup = ctx.globalBindGroups[modelSlot];
-        const modelPtr = cloud.transform.worldMatrixPtr as WasmPtr;
-        const invPtr = ctx.modelUniformStagingPtr as WasmPtr;
-        const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-        mat4.invert(invPtr, modelPtr);
-        mat4.transpose(normalPtr, invPtr);
-        ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-        ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
-        pass.setBindGroup(0, globalBindGroup);
+        bindModelUniform(ctx, pass, cloud.transform.worldMatrixPtr as WasmPtr);
         pass.setBindGroup(1, cloud.bindGroup);
         pass.draw(6, cloud.pointCount);
     }
@@ -274,7 +248,6 @@ export const executePointCloudDrawList = (ctx: RendererContext, pass: GPURenderP
 
 export const executeSplatFieldDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, items: SplatFieldDrawItem[]): void => {
     if (items.length === 0) return;
-    const bytes = driver.bytes();
     let lastPipeline: GPURenderPipeline | null = null;
     let lastField: SplatField | null = null;
     for (let i = 0; i < items.length; i++) {
@@ -293,25 +266,13 @@ export const executeSplatFieldDrawList = (ctx: RendererContext, pass: GPURenderP
             pass.setBindGroup(1, field.bindGroup);
             lastField = field;
         }
-        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-        const modelSlot = ctx.modelBufferIndex++;
-        const modelBuffer = ctx.modelUniformBuffers[modelSlot];
-        const globalBindGroup = ctx.globalBindGroups[modelSlot];
-        const modelPtr = field.transform.worldMatrixPtr as WasmPtr;
-        const invPtr = ctx.modelUniformStagingPtr as WasmPtr;
-        const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-        mat4f.invert(invPtr, modelPtr);
-        mat4f.transpose(normalPtr, invPtr);
-        ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-        ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
-        pass.setBindGroup(0, globalBindGroup);
+        bindModelUniform(ctx, pass, field.transform.worldMatrixPtr as WasmPtr);
         pass.draw(6, field.splatCount);
     }
 };
 
 export const executeLatticeSpaceDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, items: LatticeSpaceDrawItem[]): void => {
     if (items.length === 0) return;
-    const bytes = driver.bytes();
     let lastPipeline: GPURenderPipeline | null = null;
     for (const item of items) {
         const space = item.space;
@@ -319,15 +280,8 @@ export const executeLatticeSpaceDrawList = (ctx: RendererContext, pass: GPURende
         ensureLatticeSpaceBindGroup(ctx, space);
         if (!space.bindGroup) continue;
         if (item.pipeline !== lastPipeline) { pass.setPipeline(item.pipeline); lastPipeline = item.pipeline; }
-        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-        const slot = ctx.modelBufferIndex++;
-        const modelPtr = space.transform.worldMatrixPtr as WasmPtr;
-        const invPtr = ctx.modelUniformStagingPtr as WasmPtr;
-        const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-        mat4f.invert(invPtr, modelPtr); mat4f.transpose(normalPtr, invPtr);
-        ctx.queue.writeBuffer(ctx.modelUniformBuffers[slot], 0, bytes, modelPtr, 16 * 4);
-        ctx.queue.writeBuffer(ctx.modelUniformBuffers[slot], 16 * 4, bytes, normalPtr, 16 * 4);
-        pass.setBindGroup(0, ctx.globalBindGroups[slot]); pass.setBindGroup(1, space.bindGroup);
+        bindModelUniform(ctx, pass, space.transform.worldMatrixPtr as WasmPtr);
+        pass.setBindGroup(1, space.bindGroup);
         if (space.dimensionCount === 2) pass.draw(6);
         else pass.draw(36, space.drawCellCount);
     }
@@ -335,7 +289,6 @@ export const executeLatticeSpaceDrawList = (ctx: RendererContext, pass: GPURende
 
 export const executeGlyphFieldDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, list: GlyphFieldDrawItem[]): void => {
     if (list.length === 0) return;
-    const bytes = driver.bytes();
     let lastPipeline: GPURenderPipeline | null = null;
     let lastGeometry: Geometry | null = null;
     let lastField: GlyphField | null = null;
@@ -364,18 +317,7 @@ export const executeGlyphFieldDrawList = (ctx: RendererContext, pass: GPURenderP
             pass.setBindGroup(1, field.bindGroup);
             lastField = field;
         }
-        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-        const modelSlot = ctx.modelBufferIndex++;
-        const modelBuffer = ctx.modelUniformBuffers[modelSlot];
-        const globalBindGroup = ctx.globalBindGroups[modelSlot];
-        const modelPtr = field.transform.worldMatrixPtr as WasmPtr;
-        const invPtr = ctx.modelUniformStagingPtr;
-        const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-        mat4f.invert(invPtr, modelPtr);
-        mat4f.transpose(normalPtr, invPtr);
-        ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-        ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
-        pass.setBindGroup(0, globalBindGroup);
+        bindModelUniform(ctx, pass, field.transform.worldMatrixPtr as WasmPtr);
         if (geometry.isIndexed) pass.drawIndexed(geometry.indexCount, field.instanceCount);
         else pass.draw(geometry.vertexCount, field.instanceCount);
     }
@@ -383,7 +325,6 @@ export const executeGlyphFieldDrawList = (ctx: RendererContext, pass: GPURenderP
 
 export const executeNodeLinkDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, list: NodeLinkDrawItem[]): void => {
     if (list.length === 0) return;
-    const bytes = driver.bytes();
     let lastPipeline: GPURenderPipeline | null = null;
     let lastGeometry: Geometry | null = null;
     let lastLink: NodeLink | null = null;
@@ -409,18 +350,7 @@ export const executeNodeLinkDrawList = (ctx: RendererContext, pass: GPURenderPas
             pass.setBindGroup(1, link.bindGroup);
             lastLink = link;
         }
-        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-        const slot = ctx.modelBufferIndex++;
-        const modelBuffer = ctx.modelUniformBuffers[slot];
-        const globalBindGroup = ctx.globalBindGroups[slot];
-        const modelPtr = link.transform.worldMatrixPtr as WasmPtr;
-        const invPtr = ctx.modelUniformStagingPtr;
-        const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-        mat4f.invert(invPtr, modelPtr);
-        mat4f.transpose(normalPtr, invPtr);
-        ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-        ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
-        pass.setBindGroup(0, globalBindGroup);
+        bindModelUniform(ctx, pass, link.transform.worldMatrixPtr as WasmPtr);
         if (item.passKind === "node-points") {
             pass.draw(6, link.nodeCount);
         } else if (item.passKind === "edge-lines") {
@@ -438,19 +368,48 @@ export const executeNodeLinkDrawList = (ctx: RendererContext, pass: GPURenderPas
 };
 
 export const drawInstancedRun = (ctx: RendererContext, pass: GPURenderPassEncoder, geometry: Geometry, material: Material, items: DrawItem[], start: number, count: number): void => {
-    const ptrsPtr = frameArena.alloc(count * 4, 4) as WasmPtr;
-    const u32 = TransformStore.global().u32();
-    const ptrsBase = ptrsPtr >>> 2;
-    for (let i = 0; i < count; i++) u32[ptrsBase + i] = items[start + i].mesh.transform.worldMatrixPtr >>> 0;
-    const outPtr = frameArena.allocF32(count * 32) as WasmPtr;
-    transformf.packModelNormalMat4FromPtrs(outPtr, ptrsPtr, count);
     const outBytes = count * ctx.INSTANCE_STRIDE_BYTES;
     const dstOffset = ctx.instanceBufferOffset;
     const dstEnd = dstOffset + outBytes;
     ensureInstanceBuffer(ctx, dstEnd);
-    const bytes = driver.bytes();
-    ctx.queue.writeBuffer(ctx.instanceBuffer!, dstOffset, bytes, outPtr, outBytes);
-    pass.setBindGroup(0, ctx.globalBindGroups[0]);
+    const cacheIndex = ctx.instanceRunCacheIndex++;
+    let cache = ctx.instanceRunCache[cacheIndex];
+    const store = TransformStore.global();
+    const world = store.f32();
+    let reusable = !!cache && cache.generation === ctx.instanceBufferGeneration && cache.offset === dstOffset && cache.count === count;
+    if (reusable) {
+        for (let i = 0; i < count && reusable; i++) {
+            const mesh = items[start + i].mesh;
+            if (cache.meshes[i] !== mesh) { reusable = false; break; }
+            const base = mesh.transform.worldMatrixPtr >>> 2;
+            const snapshotBase = i * 16;
+            for (let j = 0; j < 16; j++) if (!Object.is(cache.matrices[snapshotBase + j], world[base + j])) { reusable = false; break; }
+        }
+    }
+    if (!reusable) {
+        const ptrsPtr = frameArena.alloc(count * 4, 4) as WasmPtr;
+        const u32 = store.u32();
+        const ptrsBase = ptrsPtr >>> 2;
+        if (!cache || cache.count !== count) {
+            cache = { generation: ctx.instanceBufferGeneration, offset: dstOffset, count, meshes: new Array<Mesh>(count), matrices: new Float32Array(count * 16) };
+            ctx.instanceRunCache[cacheIndex] = cache;
+        }
+        cache.generation = ctx.instanceBufferGeneration;
+        cache.offset = dstOffset;
+        cache.count = count;
+        for (let i = 0; i < count; i++) {
+            const mesh = items[start + i].mesh;
+            const ptr = mesh.transform.worldMatrixPtr;
+            u32[ptrsBase + i] = ptr >>> 0;
+            cache.meshes[i] = mesh;
+            cache.matrices.set(world.subarray(ptr >>> 2, (ptr >>> 2) + 16), i * 16);
+        }
+        const outPtr = frameArena.allocF32(count * 32) as WasmPtr;
+        transformf.packModelNormalMat4FromPtrs(outPtr, ptrsPtr, count);
+        ctx.queue.writeBuffer(ctx.instanceBuffer!, dstOffset, driver.bytes(), outPtr, outBytes);
+        ctx.instanceRunUploadCount++;
+    }
+    pass.setBindGroup(0, ctx.modelUniformBindGroup!, [0]);
     if (items[start].receiveShadow) ctx.shadowRenderer.bindReceiver(pass, false);
     if (material instanceof StandardMaterial) {
         pass.setVertexBuffer(4, geometry.tangentBuffer);
@@ -467,7 +426,7 @@ export const drawInstancedRun = (ctx: RendererContext, pass: GPURenderPassEncode
 
 export const getOrCreateSplatFieldSortState = (ctx: RendererContext, field: SplatField): SplatFieldSortState => {
     let state = ctx.splatFieldSortStates.get(field);
-    if (!state) { state = { sortedIndexBuffer: null, sortedIndexCapacity: 0, transformBuffer: null }; ctx.splatFieldSortStates.set(field, state); }
+    if (!state) { state = { sortedIndexBuffer: null, sortedIndexCapacity: 0, transformBuffer: null, lastMvp: new Float32Array(16), lastRevision: -1, lastCount: -1, valid: false, sortCount: 0, radixBindGroupKey: null, radixBindGroups: [] }; ctx.splatFieldSortStates.set(field, state); }
     if (!state.transformBuffer) state.transformBuffer = ctx.device.createBuffer({ size: 16 * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     if (field.splatCount > state.sortedIndexCapacity) {
         state.sortedIndexBuffer?.destroy();
@@ -475,6 +434,8 @@ export const getOrCreateSplatFieldSortState = (ctx: RendererContext, field: Spla
         while (cap < field.splatCount) cap *= 2;
         state.sortedIndexCapacity = cap;
         state.sortedIndexBuffer = ctx.device.createBuffer({ size: cap * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+        state.valid = false;
+        state.radixBindGroupKey = null;
         field.bindGroupKey = null;
     }
     return state;
@@ -497,17 +458,13 @@ export const ensureSplatSortCapacity = (ctx: RendererContext, count: number): vo
     ctx.splatSortKeyB?.destroy();
     ctx.splatSortIndexA?.destroy();
     ctx.splatSortIndexB?.destroy();
-    ctx.splatSortFlags?.destroy();
     ctx.splatSortPrefix?.destroy();
-    ctx.splatSortZerosCount?.destroy();
     ctx.splatSortCapacity = cap;
     ctx.splatSortKeyA = ctx.device.createBuffer({ size: cap * 4, usage: keyUsage });
     ctx.splatSortKeyB = ctx.device.createBuffer({ size: cap * 4, usage: keyUsage });
     ctx.splatSortIndexA = ctx.device.createBuffer({ size: cap * 4, usage: indexUsage });
     ctx.splatSortIndexB = ctx.device.createBuffer({ size: cap * 4, usage: indexUsage });
-    ctx.splatSortFlags = ctx.device.createBuffer({ size: cap * 4, usage: GPUBufferUsage.STORAGE });
     ctx.splatSortPrefix = ctx.device.createBuffer({ size: cap * 4, usage: GPUBufferUsage.STORAGE });
-    ctx.splatSortZerosCount = ctx.device.createBuffer({ size: 4, usage: GPUBufferUsage.STORAGE });
 };
 
 export const ensureSplatSortScanLevel = (ctx: RendererContext, level: number, count: number): SplatFieldSortScanLevel => {
@@ -652,7 +609,8 @@ export const getSplatSortFlagsBindGroupLayout = (ctx: RendererContext): GPUBindG
     ctx.splatSortFlagsBindGroupLayout = ctx.device.createBindGroupLayout({
         entries: [
             { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
+            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+            { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
         ]
     });
     return ctx.splatSortFlagsBindGroupLayout;
@@ -681,18 +639,6 @@ export const getSplatSortScanAddBindGroupLayout = (ctx: RendererContext): GPUBin
     return ctx.splatSortScanAddBindGroupLayout;
 };
 
-export const getSplatSortZeroCountBindGroupLayout = (ctx: RendererContext): GPUBindGroupLayout => {
-    if (ctx.splatSortZeroCountBindGroupLayout) return ctx.splatSortZeroCountBindGroupLayout;
-    ctx.splatSortZeroCountBindGroupLayout = ctx.device.createBindGroupLayout({
-        entries: [
-            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-            { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
-        ]
-    });
-    return ctx.splatSortZeroCountBindGroupLayout;
-};
-
 export const getSplatSortScatterBindGroupLayout = (ctx: RendererContext): GPUBindGroupLayout => {
     if (ctx.splatSortScatterBindGroupLayout) return ctx.splatSortScatterBindGroupLayout;
     ctx.splatSortScatterBindGroupLayout = ctx.device.createBindGroupLayout({
@@ -700,9 +646,8 @@ export const getSplatSortScatterBindGroupLayout = (ctx: RendererContext): GPUBin
             { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
             { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
             { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-            { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-            { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
-            { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
+            { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+            { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
         ]
     });
     return ctx.splatSortScatterBindGroupLayout;
@@ -769,21 +714,6 @@ export const getOrCreateSplatSortScanAddPipeline = (ctx: RendererContext): GPUCo
     return pipeline;
 };
 
-export const getOrCreateSplatSortZeroCountPipeline = (ctx: RendererContext): GPUComputePipeline => {
-    const key = "splat:sort:zerosCount";
-    const cached = ctx.computePipelineCache.get(key);
-    if (cached) return cached;
-    const pipeline = ctx.device.createComputePipeline({
-        layout: ctx.device.createPipelineLayout({ bindGroupLayouts: [getSplatSortZeroCountBindGroupLayout(ctx)] }),
-        compute: {
-            module: getOrCreateShaderModule(ctx, splatFieldRadixCountZerosWGSL),
-            entryPoint: "main"
-        }
-    });
-    ctx.computePipelineCache.set(key, pipeline);
-    return pipeline;
-};
-
 export const getOrCreateSplatSortScatterPipeline = (ctx: RendererContext, bit: number): GPUComputePipeline => {
     const key = `splat:sort:scatter:${bit | 0}`;
     const cached = ctx.computePipelineCache.get(key);
@@ -838,58 +768,58 @@ export const encodeSplatFieldSort = (ctx: RendererContext, pass: GPUComputePassE
     const mvpPtr = frameArena.allocF32(16) as WasmPtr;
     mat4f.mul(mvpPtr, ctx.cameraUniformStagingPtr, field.transform.worldMatrixPtr as WasmPtr);
     ctx.queue.writeBuffer(state.transformBuffer, 0, driver.bytes(), mvpPtr, 16 * 4);
-    const keygenBg = ctx.device.createBindGroup({
-        layout: getSplatSortKeygenBindGroupLayout(ctx),
-        entries: [
-            { binding: 0, resource: bindSizedBuffer(ctx, field.centerOpacityBuffer, count * 16) },
-            { binding: 1, resource: { buffer: state.transformBuffer } },
-            { binding: 2, resource: bindSizedBuffer(ctx, ctx.splatSortKeyA!, count * 4) },
-            { binding: 3, resource: bindSizedBuffer(ctx, ctx.splatSortIndexA!, count * 4) }
-        ]
-    });
+    const blocks = ceilDiv(count, 1024);
+    const scan = ensureSplatSortScanLevel(ctx, 0, blocks);
+    const bindGroupKey = [count, field.centerOpacityBuffer, state.transformBuffer, ctx.splatSortKeyA, ctx.splatSortKeyB, ctx.splatSortIndexA, ctx.splatSortIndexB, ctx.splatSortPrefix, scan.blockSums, scan.blockOffsets].map((value) => typeof value === "number" ? value : getObjectId(ctx, value!)).join(":");
+    if (state.radixBindGroupKey !== bindGroupKey) {
+        const flags = (keys: GPUBuffer): GPUBindGroup => ctx.device.createBindGroup({ layout: getSplatSortFlagsBindGroupLayout(ctx), entries: [
+            { binding: 0, resource: bindSizedBuffer(ctx, keys, count * 4) },
+            { binding: 1, resource: bindSizedBuffer(ctx, ctx.splatSortPrefix!, count * 4) },
+            { binding: 2, resource: bindSizedBuffer(ctx, scan.blockSums!, blocks * 4) }
+        ] });
+        const scatter = (keysIn: GPUBuffer, valuesIn: GPUBuffer, keysOut: GPUBuffer, valuesOut: GPUBuffer): GPUBindGroup => ctx.device.createBindGroup({ layout: getSplatSortScatterBindGroupLayout(ctx), entries: [
+            { binding: 0, resource: bindSizedBuffer(ctx, keysIn, count * 4) },
+            { binding: 1, resource: bindSizedBuffer(ctx, valuesIn, count * 4) },
+            { binding: 2, resource: bindSizedBuffer(ctx, ctx.splatSortPrefix!, count * 4) },
+            { binding: 3, resource: bindSizedBuffer(ctx, keysOut, count * 4) },
+            { binding: 4, resource: bindSizedBuffer(ctx, valuesOut, count * 4) }
+        ] });
+        state.radixBindGroups = [
+            ctx.device.createBindGroup({ layout: getSplatSortKeygenBindGroupLayout(ctx), entries: [
+                { binding: 0, resource: bindSizedBuffer(ctx, field.centerOpacityBuffer, count * 16) },
+                { binding: 1, resource: { buffer: state.transformBuffer } },
+                { binding: 2, resource: bindSizedBuffer(ctx, ctx.splatSortKeyA!, count * 4) },
+                { binding: 3, resource: bindSizedBuffer(ctx, ctx.splatSortIndexA!, count * 4) }
+            ] }),
+            flags(ctx.splatSortKeyA!), flags(ctx.splatSortKeyB!),
+            scatter(ctx.splatSortKeyA!, ctx.splatSortIndexA!, ctx.splatSortKeyB!, ctx.splatSortIndexB!),
+            scatter(ctx.splatSortKeyB!, ctx.splatSortIndexB!, ctx.splatSortKeyA!, ctx.splatSortIndexA!),
+            blocks > 1 ? ctx.device.createBindGroup({ layout: getSplatSortScanAddBindGroupLayout(ctx), entries: [
+                { binding: 0, resource: bindSizedBuffer(ctx, ctx.splatSortPrefix!, count * 4) },
+                { binding: 1, resource: bindSizedBuffer(ctx, scan.blockOffsets!, blocks * 4) }
+            ] }) : null
+        ];
+        state.radixBindGroupKey = bindGroupKey;
+    }
     pass.setPipeline(getOrCreateSplatSortKeygenPipeline(ctx));
-    pass.setBindGroup(0, keygenBg);
+    pass.setBindGroup(0, state.radixBindGroups[0]!);
     pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
     let keyIn = ctx.splatSortKeyA!;
     let keyOut = ctx.splatSortKeyB!;
     let valueIn = ctx.splatSortIndexA!;
     let valueOut = ctx.splatSortIndexB!;
     for (let bit = 0; bit < 32; bit++) {
-        const flagsBg = ctx.device.createBindGroup({
-            layout: getSplatSortFlagsBindGroupLayout(ctx),
-            entries: [
-                { binding: 0, resource: bindSizedBuffer(ctx, keyIn, count * 4) },
-                { binding: 1, resource: bindSizedBuffer(ctx, ctx.splatSortFlags!, count * 4) }
-            ]
-        });
         pass.setPipeline(getOrCreateSplatSortFlagsPipeline(ctx, bit));
-        pass.setBindGroup(0, flagsBg);
-        pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
-        encodeSplatSortScanExclusive(ctx, pass, ctx.splatSortFlags!, count, ctx.splatSortPrefix!);
-        const zerosCountBg = ctx.device.createBindGroup({
-            layout: getSplatSortZeroCountBindGroupLayout(ctx),
-            entries: [
-                { binding: 0, resource: bindSizedBuffer(ctx, ctx.splatSortFlags!, count * 4) },
-                { binding: 1, resource: bindSizedBuffer(ctx, ctx.splatSortPrefix!, count * 4) },
-                { binding: 2, resource: bindSizedBuffer(ctx, ctx.splatSortZerosCount!, 4) }
-            ]
-        });
-        pass.setPipeline(getOrCreateSplatSortZeroCountPipeline(ctx));
-        pass.setBindGroup(0, zerosCountBg);
-        pass.dispatchWorkgroups(1, 1, 1);
-        const scatterBg = ctx.device.createBindGroup({
-            layout: getSplatSortScatterBindGroupLayout(ctx),
-            entries: [
-                { binding: 0, resource: bindSizedBuffer(ctx, keyIn, count * 4) },
-                { binding: 1, resource: bindSizedBuffer(ctx, valueIn, count * 4) },
-                { binding: 2, resource: bindSizedBuffer(ctx, ctx.splatSortPrefix!, count * 4) },
-                { binding: 3, resource: bindSizedBuffer(ctx, ctx.splatSortZerosCount!, 4) },
-                { binding: 4, resource: bindSizedBuffer(ctx, keyOut, count * 4) },
-                { binding: 5, resource: bindSizedBuffer(ctx, valueOut, count * 4) }
-            ]
-        });
+        pass.setBindGroup(0, state.radixBindGroups[1 + (bit & 1)]!);
+        pass.dispatchWorkgroups(blocks, 1, 1);
+        if (blocks > 1) {
+            encodeSplatSortScanExclusive(ctx, pass, scan.blockSums!, blocks, scan.blockOffsets!, 1);
+            pass.setPipeline(getOrCreateSplatSortScanAddPipeline(ctx));
+            pass.setBindGroup(0, state.radixBindGroups[5]!);
+            pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
+        }
         pass.setPipeline(getOrCreateSplatSortScatterPipeline(ctx, bit));
-        pass.setBindGroup(0, scatterBg);
+        pass.setBindGroup(0, state.radixBindGroups[3 + (bit & 1)]!);
         pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
         const nextKeyIn = keyOut;
         keyOut = keyOut === ctx.splatSortKeyA ? ctx.splatSortKeyB! : ctx.splatSortKeyA!;
@@ -917,16 +847,29 @@ export const encodeSplatFieldSorts = (ctx: RendererContext, encoder: GPUCommandE
         if (!field.centerOpacityBuffer || !field.rotationBuffer || !field.scaleBuffer) continue;
         if (field.splatCount <= 0) continue;
         const state = getOrCreateSplatFieldSortState(ctx, field);
+        const signaturePtr = frameArena.allocF32(16) as WasmPtr;
+        mat4f.mul(signaturePtr, ctx.cameraUniformStagingPtr, field.transform.worldMatrixPtr as WasmPtr);
+        const signature = wasm.f32view(signaturePtr, 16);
+        let unchanged = field.sortCacheable && state.valid && state.lastRevision === field.sortRevision && state.lastCount === field.splatCount;
+        for (let i = 0; i < 16 && unchanged; i++) if (!Object.is(state.lastMvp[i], signature[i])) unchanged = false;
+        if (unchanged) continue;
         const computePass = encoder.beginComputePass();
         const finalIndices = encodeSplatFieldSort(ctx, computePass, field, state);
         computePass.end();
-        if (finalIndices && state.sortedIndexBuffer) encoder.copyBufferToBuffer(finalIndices, 0, state.sortedIndexBuffer, 0, field.splatCount * 4);
+        if (finalIndices && state.sortedIndexBuffer) {
+            encoder.copyBufferToBuffer(finalIndices, 0, state.sortedIndexBuffer, 0, field.splatCount * 4);
+            state.lastMvp.set(signature);
+            state.lastRevision = field.sortRevision;
+            state.lastCount = field.splatCount;
+            state.valid = field.sortCacheable;
+            state.sortCount++;
+        }
     }
 };
 
 export const getOrCreateLatticeSpaceSortState = (ctx: RendererContext, space: LatticeSpace): LatticeSpaceSortState => {
     let state = ctx.latticeSpaceSortStates.get(space);
-    if (!state) { state = { sortedIndexBuffer: null, sortedIndexCapacity: 0, identityKey: null, transformBuffer: null }; ctx.latticeSpaceSortStates.set(space, state); }
+    if (!state) { state = { sortedIndexBuffer: null, sortedIndexCapacity: 0, identityKey: null, transformBuffer: null, lastMvp: new Float32Array(16), lastRevision: -1, lastCount: -1, valid: false, sortCount: 0, radixBindGroupKey: null, radixBindGroups: [] }; ctx.latticeSpaceSortStates.set(space, state); }
     if (!state.transformBuffer) state.transformBuffer = ctx.device.createBuffer({ label: "LatticeSpace.sortTransform", size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     if (space.drawCellCount > state.sortedIndexCapacity) {
         state.sortedIndexBuffer?.destroy();
@@ -938,11 +881,14 @@ export const getOrCreateLatticeSpaceSortState = (ctx: RendererContext, space: La
             size: capacity * 4,
             usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC
         });
+        state.valid = false;
+        state.radixBindGroupKey = null;
         state.identityKey = null;
     }
     const range = space.indexRange;
     const identityKey = `${space.dimensionCount}:${range.min.join(",")}:${range.max.join(",")}`;
-    if (state.sortedIndexBuffer && state.identityKey !== identityKey) {
+    const needsIdentity = space.dimensionCount !== 3 || space.blendMode === BlendMode.Opaque;
+    if (needsIdentity && state.sortedIndexBuffer && state.identityKey !== identityKey) {
         const sizeX = range.max[0] - range.min[0];
         const sizeY = range.max[1] - range.min[1];
         const indices = new Uint32Array(space.drawCellCount);
@@ -970,16 +916,14 @@ export const ensureLatticeSortCapacity = (ctx: RendererContext, count: number): 
     if (count <= ctx.latticeSortCapacity) return;
     let capacity = Math.max(256, ctx.latticeSortCapacity || 256);
     while (capacity < count) capacity *= 2;
-    for (const buffer of [ctx.latticeSortKeyA, ctx.latticeSortKeyB, ctx.latticeSortIndexA, ctx.latticeSortIndexB, ctx.latticeSortFlags, ctx.latticeSortPrefix, ctx.latticeSortZerosCount]) buffer?.destroy();
+    for (const buffer of [ctx.latticeSortKeyA, ctx.latticeSortKeyB, ctx.latticeSortIndexA, ctx.latticeSortIndexB, ctx.latticeSortPrefix]) buffer?.destroy();
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
     ctx.latticeSortCapacity = capacity;
     ctx.latticeSortKeyA = ctx.device.createBuffer({ size: capacity * 4, usage });
     ctx.latticeSortKeyB = ctx.device.createBuffer({ size: capacity * 4, usage });
     ctx.latticeSortIndexA = ctx.device.createBuffer({ size: capacity * 4, usage });
     ctx.latticeSortIndexB = ctx.device.createBuffer({ size: capacity * 4, usage });
-    ctx.latticeSortFlags = ctx.device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE });
     ctx.latticeSortPrefix = ctx.device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE });
-    ctx.latticeSortZerosCount = ctx.device.createBuffer({ size: 4, usage: GPUBufferUsage.STORAGE });
 };
 
 export const ensureLatticeSortScanLevel = (ctx: RendererContext, level: number, count: number): LatticeSpaceSortScanLevel => {
@@ -1096,7 +1040,8 @@ const getLatticeSortFlagsLayout = (ctx: RendererContext): GPUBindGroupLayout => 
     return ctx.latticeSortFlagsBindGroupLayout ??= ctx.device.createBindGroupLayout({
         entries: [
             { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
+            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+            { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
         ]
     });
 };
@@ -1120,25 +1065,14 @@ const getLatticeSortScanAddLayout = (ctx: RendererContext): GPUBindGroupLayout =
     });
 };
 
-const getLatticeSortZeroLayout = (ctx: RendererContext): GPUBindGroupLayout => {
-    return ctx.latticeSortZeroCountBindGroupLayout ??= ctx.device.createBindGroupLayout({
-        entries: [
-            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-            { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-            { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
-        ]
-    });
-};
-
 const getLatticeSortScatterLayout = (ctx: RendererContext): GPUBindGroupLayout => {
     return ctx.latticeSortScatterBindGroupLayout ??= ctx.device.createBindGroupLayout({
         entries: [
             { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
             { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
             { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-            { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "read-only-storage" } },
-            { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
-            { binding: 5, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
+            { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
+            { binding: 4, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
         ]
     });
 };
@@ -1188,16 +1122,41 @@ export const encodeLatticeSpaceSort = (ctx: RendererContext, pass: GPUComputePas
     const mvpPtr = frameArena.allocF32(16) as WasmPtr;
     mat4f.mul(mvpPtr, ctx.cameraUniformStagingPtr, space.transform.worldMatrixPtr as WasmPtr);
     ctx.queue.writeBuffer(state.transformBuffer, 0, driver.bytes(), mvpPtr, 64);
+    const blocks = ceilDiv(count, 1024);
+    const scan = ensureLatticeSortScanLevel(ctx, 0, blocks);
+    const bindGroupKey = [count, space.uniformBuffer, state.transformBuffer, ctx.latticeSortKeyA, ctx.latticeSortKeyB, ctx.latticeSortIndexA, ctx.latticeSortIndexB, ctx.latticeSortPrefix, scan.blockSums, scan.blockOffsets].map((value) => typeof value === "number" ? value : getObjectId(ctx, value!)).join(":");
+    if (state.radixBindGroupKey !== bindGroupKey) {
+        const flags = (keys: GPUBuffer): GPUBindGroup => ctx.device.createBindGroup({ layout: getLatticeSortFlagsLayout(ctx), entries: [
+            { binding: 0, resource: bindSizedBuffer(ctx, keys, count * 4) },
+            { binding: 1, resource: bindSizedBuffer(ctx, ctx.latticeSortPrefix!, count * 4) },
+            { binding: 2, resource: bindSizedBuffer(ctx, scan.blockSums!, blocks * 4) }
+        ] });
+        const scatter = (keysIn: GPUBuffer, valuesIn: GPUBuffer, keysOut: GPUBuffer, valuesOut: GPUBuffer): GPUBindGroup => ctx.device.createBindGroup({ layout: getLatticeSortScatterLayout(ctx), entries: [
+            { binding: 0, resource: bindSizedBuffer(ctx, keysIn, count * 4) },
+            { binding: 1, resource: bindSizedBuffer(ctx, valuesIn, count * 4) },
+            { binding: 2, resource: bindSizedBuffer(ctx, ctx.latticeSortPrefix!, count * 4) },
+            { binding: 3, resource: bindSizedBuffer(ctx, keysOut, count * 4) },
+            { binding: 4, resource: bindSizedBuffer(ctx, valuesOut, count * 4) }
+        ] });
+        state.radixBindGroups = [
+            ctx.device.createBindGroup({ layout: getLatticeSortKeygenLayout(ctx), entries: [
+                { binding: 0, resource: { buffer: space.uniformBuffer } },
+                { binding: 1, resource: { buffer: state.transformBuffer } },
+                { binding: 2, resource: bindSizedBuffer(ctx, ctx.latticeSortKeyA!, count * 4) },
+                { binding: 3, resource: bindSizedBuffer(ctx, ctx.latticeSortIndexA!, count * 4) }
+            ] }),
+            flags(ctx.latticeSortKeyA!), flags(ctx.latticeSortKeyB!),
+            scatter(ctx.latticeSortKeyA!, ctx.latticeSortIndexA!, ctx.latticeSortKeyB!, ctx.latticeSortIndexB!),
+            scatter(ctx.latticeSortKeyB!, ctx.latticeSortIndexB!, ctx.latticeSortKeyA!, ctx.latticeSortIndexA!),
+            blocks > 1 ? ctx.device.createBindGroup({ layout: getLatticeSortScanAddLayout(ctx), entries: [
+                { binding: 0, resource: bindSizedBuffer(ctx, ctx.latticeSortPrefix!, count * 4) },
+                { binding: 1, resource: bindSizedBuffer(ctx, scan.blockOffsets!, blocks * 4) }
+            ] }) : null
+        ];
+        state.radixBindGroupKey = bindGroupKey;
+    }
     pass.setPipeline(latticePipeline(ctx, "lattice:sort:keygen", latticeSpaceSortWGSL, getLatticeSortKeygenLayout(ctx)));
-    pass.setBindGroup(0, ctx.device.createBindGroup({
-        layout: getLatticeSortKeygenLayout(ctx),
-        entries: [
-            { binding: 0, resource: { buffer: space.uniformBuffer } },
-            { binding: 1, resource: { buffer: state.transformBuffer } },
-            { binding: 2, resource: bindSizedBuffer(ctx, ctx.latticeSortKeyA!, count * 4) },
-            { binding: 3, resource: bindSizedBuffer(ctx, ctx.latticeSortIndexA!, count * 4) }
-        ]
-    }));
+    pass.setBindGroup(0, state.radixBindGroups[0]!);
     pass.dispatchWorkgroups(ceilDiv(count, 256));
     let keyIn = ctx.latticeSortKeyA!;
     let keyOut = ctx.latticeSortKeyB!;
@@ -1205,37 +1164,16 @@ export const encodeLatticeSpaceSort = (ctx: RendererContext, pass: GPUComputePas
     let valueOut = ctx.latticeSortIndexB!;
     for (let bit = 0; bit < 32; bit++) {
         pass.setPipeline(latticePipeline(ctx, `lattice:sort:flags:${bit}`, latticeSpaceRadixFlagsWGSL, getLatticeSortFlagsLayout(ctx), { BIT: bit }));
-        pass.setBindGroup(0, ctx.device.createBindGroup({
-            layout: getLatticeSortFlagsLayout(ctx),
-            entries: [
-                { binding: 0, resource: bindSizedBuffer(ctx, keyIn, count * 4) },
-                { binding: 1, resource: bindSizedBuffer(ctx, ctx.latticeSortFlags!, count * 4) }
-            ]
-        }));
-        pass.dispatchWorkgroups(ceilDiv(count, 256));
-        encodeLatticeSortScanExclusive(ctx, pass, ctx.latticeSortFlags!, count, ctx.latticeSortPrefix!);
-        pass.setPipeline(latticePipeline(ctx, "lattice:sort:zeros", latticeSpaceRadixCountZerosWGSL, getLatticeSortZeroLayout(ctx)));
-        pass.setBindGroup(0, ctx.device.createBindGroup({
-            layout: getLatticeSortZeroLayout(ctx),
-            entries: [
-                { binding: 0, resource: bindSizedBuffer(ctx, ctx.latticeSortFlags!, count * 4) },
-                { binding: 1, resource: bindSizedBuffer(ctx, ctx.latticeSortPrefix!, count * 4) },
-                { binding: 2, resource: bindSizedBuffer(ctx, ctx.latticeSortZerosCount!, 4) }
-            ]
-        }));
-        pass.dispatchWorkgroups(1);
+        pass.setBindGroup(0, state.radixBindGroups[1 + (bit & 1)]!);
+        pass.dispatchWorkgroups(blocks);
+        if (blocks > 1) {
+            encodeLatticeSortScanExclusive(ctx, pass, scan.blockSums!, blocks, scan.blockOffsets!, 1);
+            pass.setPipeline(latticePipeline(ctx, "lattice:sort:scan:add", scanAddBlockOffsetsU32WGSL, getLatticeSortScanAddLayout(ctx)));
+            pass.setBindGroup(0, state.radixBindGroups[5]!);
+            pass.dispatchWorkgroups(ceilDiv(count, 256));
+        }
         pass.setPipeline(latticePipeline(ctx, `lattice:sort:scatter:${bit}`, latticeSpaceRadixScatterPairsWGSL, getLatticeSortScatterLayout(ctx), { BIT: bit }));
-        pass.setBindGroup(0, ctx.device.createBindGroup({
-            layout: getLatticeSortScatterLayout(ctx),
-            entries: [
-                { binding: 0, resource: bindSizedBuffer(ctx, keyIn, count * 4) },
-                { binding: 1, resource: bindSizedBuffer(ctx, valueIn, count * 4) },
-                { binding: 2, resource: bindSizedBuffer(ctx, ctx.latticeSortPrefix!, count * 4) },
-                { binding: 3, resource: bindSizedBuffer(ctx, ctx.latticeSortZerosCount!, 4) },
-                { binding: 4, resource: bindSizedBuffer(ctx, keyOut, count * 4) },
-                { binding: 5, resource: bindSizedBuffer(ctx, valueOut, count * 4) }
-            ]
-        }));
+        pass.setBindGroup(0, state.radixBindGroups[3 + (bit & 1)]!);
         pass.dispatchWorkgroups(ceilDiv(count, 256));
         [keyIn, keyOut] = [keyOut, keyIn];
         [valueIn, valueOut] = [valueOut, valueIn];
@@ -1253,10 +1191,24 @@ export const encodeLatticeSpaceSorts = (ctx: RendererContext, encoder: GPUComman
         if (space.dimensionCount !== 3 || space.drawCellCount <= 0) continue;
         ensureLatticeSpaceBindGroup(ctx, space);
         const state = getOrCreateLatticeSpaceSortState(ctx, space);
+        const signaturePtr = frameArena.allocF32(16) as WasmPtr;
+        mat4f.mul(signaturePtr, ctx.cameraUniformStagingPtr, space.transform.worldMatrixPtr as WasmPtr);
+        const signature = wasm.f32view(signaturePtr, 16);
+        let unchanged = state.valid && state.lastRevision === space.sortRevision && state.lastCount === space.drawCellCount;
+        for (let i = 0; i < 16 && unchanged; i++) if (!Object.is(state.lastMvp[i], signature[i])) unchanged = false;
+        if (unchanged) continue;
         const pass = encoder.beginComputePass();
         const result = encodeLatticeSpaceSort(ctx, pass, space, state);
         pass.end();
-        if (result && state.sortedIndexBuffer) encoder.copyBufferToBuffer(result, 0, state.sortedIndexBuffer, 0, space.drawCellCount * 4);
+        if (result && state.sortedIndexBuffer) {
+            encoder.copyBufferToBuffer(result, 0, state.sortedIndexBuffer, 0, space.drawCellCount * 4);
+            state.lastMvp.set(signature);
+            state.lastRevision = space.sortRevision;
+            state.lastCount = space.drawCellCount;
+            state.valid = true;
+            state.sortCount++;
+            state.identityKey = null;
+        }
     }
 };
 

@@ -676,6 +676,14 @@ const makeRenderableField = (count = 3, zValues = null) => {
     assert.ok(sortedState, "Expected renderer to create per-field splat sort state");
     assert.ok(rendererAny.splatSortCapacity >= sortedField.splatCount, "Expected shared sort scratch to cover the field count");
     assert.deepStrictEqual(Array.from(await readBufferAsU32(sortedState.sortedIndexBuffer, 3, rendererAny.device, rendererAny.queue)), [0, 2, 1], "Expected splats to be GPU-sorted back to front");
+    assert.strictEqual(sortedState.sortCount, 1);
+    renderer.render(scene, perspectiveCamera);
+    await rendererAny.queue.onSubmittedWorkDone();
+    assert.strictEqual(sortedState.sortCount, 1, "Stable owned SplatField frames should reuse sorted indices");
+    sortedField.transform.setPosition(0.1, 0, 0);
+    renderer.render(scene, perspectiveCamera);
+    await rendererAny.queue.onSubmittedWorkDone();
+    assert.strictEqual(sortedState.sortCount, 2, "SplatField transform changes should invalidate sorted-index reuse");
 
     uncapturedError = null;
     assert.doesNotThrow(() => renderer.render(scene, makeOrthographicCamera()));
@@ -740,7 +748,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
     nearPlaneField.destroy();
 
     const smallField = makeRenderableField(3);
-    const largeField = makeRenderableField(300);
+    const largeField = makeRenderableField(1031);
     smallField.transform.setPosition(0, 0, -6);
     largeField.transform.setPosition(0, 0, 0);
     scene.add(smallField).add(largeField);
@@ -748,12 +756,24 @@ const makeRenderableField = (count = 3, zValues = null) => {
     assert.doesNotThrow(() => renderer.render(scene, perspectiveCamera));
     await rendererAny.queue.onSubmittedWorkDone();
     assert.strictEqual(uncapturedError, null, "Expected mixed-size same-frame splat sorting to avoid shared scratch lifetime errors");
-    assert.ok(rendererAny.splatSortCapacity >= 300, "Expected shared sort scratch to be preallocated for the largest same-frame splatfield");
+    assert.ok(rendererAny.splatSortCapacity >= 1031, "Expected shared sort scratch to be preallocated for the largest same-frame splatfield");
     assert.ok(rendererAny.splatFieldSortStates.has(smallField), "Expected same-frame small-field sort state to exist");
     assert.ok(rendererAny.splatFieldSortStates.has(largeField), "Expected same-frame large-field sort state to exist");
+    const largeOrder = await readBufferAsU32(rendererAny.splatFieldSortStates.get(largeField).sortedIndexBuffer, 1031, rendererAny.device, rendererAny.queue);
+    assert.strictEqual(largeOrder[0], 1030, "Expected non-workgroup-aligned large sort to place the farthest splat first");
+    assert.strictEqual(largeOrder[1030], 0, "Expected non-workgroup-aligned large sort to place the nearest splat last");
     scene.clearSplatFields();
     smallField.destroy();
     largeField.destroy();
+
+    const equalDepthField = makeRenderableField(513, new Array(513).fill(0));
+    scene.add(equalDepthField);
+    renderer.render(scene, perspectiveCamera);
+    await rendererAny.queue.onSubmittedWorkDone();
+    const equalOrder = await readBufferAsU32(rendererAny.splatFieldSortStates.get(equalDepthField).sortedIndexBuffer, 513, rendererAny.device, rendererAny.queue);
+    assert.deepStrictEqual(Array.from(equalOrder), Array.from({ length: 513 }, (_, i) => i), "Specialized SplatField radix sort should remain stable for repeated equal keys");
+    scene.clearSplatFields();
+    equalDepthField.destroy();
 
     const externalBuffers = createExternalSplatBuffers(rendererAny.device, rendererAny.queue, 2, [-1, 0]);
     const externalField = new SplatField({
@@ -768,6 +788,11 @@ const makeRenderableField = (count = 3, zValues = null) => {
     await rendererAny.queue.onSubmittedWorkDone();
     assert.strictEqual(uncapturedError, null, "Expected external splatfields without colors to render without uncaptured WebGPU errors");
     assert.ok(externalField.colorBuffer, "Expected renderer upload path to synthesize missing external colors");
+    const externalState = rendererAny.splatFieldSortStates.get(externalField);
+    const externalSortCount = externalState.sortCount;
+    renderer.render(scene, perspectiveCamera);
+    await rendererAny.queue.onSubmittedWorkDone();
+    assert.ok(externalState.sortCount > externalSortCount, "Borrowed external SplatField buffers must sort conservatively every frame");
     scene.clearSplatFields();
     externalField.destroy();
     externalBuffers.centerOpacityBuffer.destroy();

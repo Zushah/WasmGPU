@@ -2,7 +2,7 @@
 
 Latest commit: Tuesday, August 25, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Sunday, August 23, 2026, [**`a2816a7`**](https://www.github.com/Zushah/WasmGPU/commit/a2816a7).
+Parent commit: Tuesday, August 25, 2026, [**`48167f4`**](https://www.github.com/Zushah/WasmGPU/commit/48167f4).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -343,22 +343,23 @@ Lights, cameras, and controls changes should be checked against renderer uniform
 
 ### 1.10. Rendering pipeline
 
-The public renderer class is implemented in `./typescript/core/renderer.ts`. It stores the WebGPU device, queue, canvas context, and swapchain format. It owns renderer-created bind group layouts, fallback resources, pipeline caches, shader caches, model buffers, instance buffers, culling scratch memory, pick resources, optional shadow resources, optional occlusion hierarchy resources, and optional SMAA resources. The helper files under `./typescript/core/` split the implementation mechanically by responsibility: `./typescript/core/resources.ts`, `./typescript/core/timing.ts`, `./typescript/core/postprocessing.ts`, `./typescript/core/transmission.ts`, `./typescript/core/shadows.ts`, `./typescript/core/drawlists.ts`, `./typescript/core/materials.ts`, `./typescript/core/objects.ts`, `./typescript/core/picking.ts`, and `./typescript/core/occlusion.ts`.
+The public renderer class is implemented in `./typescript/core/renderer.ts`. It stores the WebGPU device, queue, canvas context, and swapchain format. It owns renderer-created bind group layouts, fallback resources, pipeline caches, shader caches, a growable packed model-uniform buffer, instance buffers, culling scratch memory, pick resources, optional shadow resources, optional occlusion hierarchy resources, and optional SMAA resources. The helper files under `./typescript/core/` split the implementation mechanically by responsibility: `./typescript/core/resources.ts`, `./typescript/core/timing.ts`, `./typescript/core/postprocessing.ts`, `./typescript/core/transmission.ts`, `./typescript/core/shadows.ts`, `./typescript/core/drawlists.ts`, `./typescript/core/materials.ts`, `./typescript/core/objects.ts`, `./typescript/core/picking.ts`, and `./typescript/core/occlusion.ts`.
 
 `Renderer.create()` requests a WebGPU adapter and device. It currently supports descriptor fields for antialiasing, power preference, canvas format, frustum culling, frustum culling stats, occlusion culling, occlusion culling stats, and requested device limits such as maximum buffer and binding sizes.
 
 `Renderer.render(scene, camera)` currently performs these steps:
 
 - resize the canvas and recreate size-dependent resources when needed;
-- reset model and instance buffer offsets;
-- allocate camera, lighting, and model staging memory from the WebAssembly frame arena;
+- reset pick-uniform and instance-buffer offsets;
+- allocate camera, lighting, and packed model staging memory from the WebAssembly frame arena;
 - update camera matrices and scene transforms;
 - resolve explicitly enabled directional shadow views, lazily create compatible shadow resources, and prepare shadow metadata and independent caster lists;
 - write camera and lighting uniforms;
 - build unfiltered draw lists for meshes, pointclouds, glyphfields, nodelinks, splatfields, and latticespaces;
+- collect distinct non-instanced model records, pack their model and normal matrices in one Rust call, and upload one aligned dynamic-uniform range;
 - aggregate render-only frustum culling stats when enabled;
 - optionally reuse a valid previous-frame occlusion hierarchy to conservatively filter opaque meshes, pointclouds, glyphfields, nodelinks, and latticespaces;
-- GPU-sort visible splats and transparent 3D lattice cells inside their respective renderer-private sort paths before transparent draw encoding;
+- GPU-sort dirty visible splats and transparent 3D lattice cells inside their respective renderer-private sort paths before transparent draw encoding, reusing stable sorted indices and persistent specialized bind groups when inputs are unchanged;
 - encode required shadow depth layers before the main lighting pass;
 - encode render passes for opaque objects, transmission copies and passes when needed, transparent objects, and optional SMAA;
 - encode timestamp query resolve and readback when GPU timing is available;
@@ -367,11 +368,15 @@ The public renderer class is implemented in `./typescript/core/renderer.ts`. It 
 
 The renderer reads scene objects, transform world matrices, material state, texture views, geometry buffers, pointcloud buffers, glyphfield buffers, nodelink buffers, splatfield buffers, latticespace data and mask buffers, camera matrices, light data, and WebAssembly culling results. It mutates GPU buffers, bind groups, pipeline caches, draw-list pools, pick textures, timing query buffers, private splatfield and latticespace sort buffers, internal counters, and the bounded ring of occlusion readback slots. Splatfield bind groups include a spherical harmonic storage-buffer binding; non-SH splatfields use a renderer-owned dummy buffer for that binding. Picking helpers are in `./typescript/core/picking.ts` while render-only previous-frame occlusion helpers are in `./typescript/core/occlusion.ts`. Note that picking and warmup do not apply render-only previous-frame occlusion filtering.
 
+Opaque mesh submission reuses packed instance runs while their exact membership, geometry identities, buffer generation, and world matrices remain unchanged. Transparent submission preserves the exact global comparator across all six object-family lists with a fixed-head k-way merge, avoiding construction and sorting of a copied combined list; a single populated family executes directly.
+
 Changing render behavior usually means checking `./typescript/core/renderer.ts`, the relevant helper module(s) under `./typescript/core/`, the graphics classes in `./typescript/graphics/`, object classes in `./typescript/world/`, WGSL shader variants in `./wgsl/`, and renderer-focused tests in `./tests/`.
 
 ### 1.11. Browser runtime resources
 
 Browser runtime resources are WebGPU objects created and mutated by renderer and compute paths. The renderer creates the adapter, device, queue, canvas context, render targets, depth targets, texture views, samplers, bind group layouts, bind groups, render pipelines, and render pass descriptors. The compute subsystem stores device and queue references from the runtime and creates storage buffers, uniform buffers, compute pipelines, bind groups, scratch buffers, and readback staging buffers.
+
+Model and normal matrices occupy 128-byte records in one growable uniform buffer. Record offsets use `minUniformBufferOffsetAlignment`, one bind group spans the buffer, and draw calls select records with dynamic offsets. Picking retains its independent uniform-buffer pool because its identifier payload has a different lifecycle. Static opaque instance runs reuse their prior packed buffer range until a conservative run-cache check detects a change.
 
 Active shadows add one renderer-owned `depth32float` texture array, per-layer render views, one comparison sampler, metadata/view/model uniform buffers, bind groups, and cached caster pipelines. Reconfiguration destroys and replaces incompatible shadow textures and buffers; disabling the final active scene shadow releases the lazy resources on the next prepare.
 
@@ -522,7 +527,7 @@ Per-frame work spans TypeScript, WebAssembly, and WebGPU:
 - Animation sampling mutates transforms and morph weights before rendering when the application updates players.
 - Overlay updates are DOM work and can be marked dirty by camera, viewport, scale, colormap, or interaction changes.
 
-The code contains several performance-sensitive patterns: reusable draw-list arrays, draw item pools, model buffer pools, pipeline and shader caches, bind group caches, culling scratch buffers, frame arena staging memory, scratch compute buffers, and readback ring slots. The occlusion path uses a bounded ring of hierarchy readback slots and intentionally becomes a no-op when no safe previous-frame hierarchy is ready. Changes in these areas should avoid new per-object or per-frame allocations unless the allocation is bounded and measured.
+The code contains several performance-sensitive patterns: reusable draw-list arrays, draw item pools, packed dynamic-uniform staging, static instance-run reuse, fixed-head transparent merging, pipeline and shader caches, bind group caches, culling scratch buffers, frame arena staging memory, specialized radix-sort scratch buffers, and readback ring slots. Splatfield and latticespace sorting use separate renderer-private four-elements-per-invocation radix kernels and persistent per-object GPU state; external splat GPU buffers conservatively sort every frame because mutations are not observable. The occlusion path uses a bounded ring of hierarchy readback slots, suppresses equivalent in-flight captures, keeps the newest decoded hierarchy in persistent WebAssembly memory, and intentionally becomes a no-op when no safe previous-frame hierarchy is ready. Changes in these areas should avoid new per-object or per-frame allocations unless the allocation is bounded and measured.
 
 ### 1.22. Visible invariants
 
@@ -543,6 +548,10 @@ These invariants are visible in the current code:
 - Disposed transforms throw on later use.
 - Transform parenting rejects cycles.
 - The renderer calls transform updates before reading world matrices for draw lists.
+- Packed model-uniform offsets satisfy the device's dynamic-uniform alignment, and each submitted transform maps to one model/normal record for the frame.
+- Transparent object-family lists use the same total-order comparator as the global fixed-head merge, including deterministic cross-family ties.
+- Cached opaque instance runs are reused only while exact membership, geometry, instance-buffer generation, and world matrices remain unchanged.
+- Splatfield and transparent 3D latticespace sorted indices are reused only while their conservative sort revision, count, camera matrix, and object transform inputs remain unchanged, and externally mutable splat GPU buffers always invalidate reuse.
 - Render-only previous-frame occlusion culling reuses hierarchy data only when viewport size, hierarchy layout, camera type, view-projection matrix, and occluder signature still match; otherwise it is skipped for that frame.
 - Render-only occlusion filtering never runs for picking or warmup.
 - Geometry and materials use reference counts, and meshes release references on destruction.

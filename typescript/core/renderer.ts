@@ -8,10 +8,10 @@ import { createDepthTexture } from "../utils";
 import { Transform } from "./transform";
 import { Geometry } from "../graphics/geometry";
 import { Material, BlendMode, CullMode } from "../graphics/material";
-import { frameArena, mat4, WasmPtr } from "../wasm";
+import { frameArena, mat4, wasm, WasmPtr } from "../wasm";
 import { Scene } from "../world/scene";
 import { Camera, PerspectiveCamera } from "../world/camera";
-import { Mesh } from "../world/mesh";
+import { Mesh, hasMeshMorphRuntime } from "../world/mesh";
 import { PointCloud } from "../world/pointcloud";
 import { GlyphField } from "../world/glyphfield";
 import { NodeLink } from "../world/nodelink";
@@ -50,12 +50,11 @@ import {
     createSkinBindGroupLayout as createSkinBindGroupLayoutImpl,
     createUniformBuffers as createUniformBuffersImpl,
     ensureInstanceBuffer as ensureInstanceBufferImpl,
-    ensureModelBufferPool as ensureModelBufferPoolImpl,
     getObjectId as getObjectIdImpl,
+    prepareModelUniforms as prepareModelUniformsImpl,
     refreshWasmStagingViews as refreshWasmStagingViewsImpl,
     writeCameraUniforms as writeCameraUniformsImpl,
-    writeLightingUniforms as writeLightingUniformsImpl,
-    writeModelUniformSlot as writeModelUniformSlotImpl
+    writeLightingUniforms as writeLightingUniformsImpl
 } from "./resources";
 import {
     createGpuTimingResources as createGpuTimingResourcesImpl,
@@ -141,7 +140,6 @@ import {
     getOrCreateSplatSortScanAddPipeline as getOrCreateSplatSortScanAddPipelineImpl,
     getOrCreateSplatSortScanBlockPipeline as getOrCreateSplatSortScanBlockPipelineImpl,
     getOrCreateSplatSortScatterPipeline as getOrCreateSplatSortScatterPipelineImpl,
-    getOrCreateSplatSortZeroCountPipeline as getOrCreateSplatSortZeroCountPipelineImpl,
     getPointCloudBindGroupKey as getPointCloudBindGroupKeyImpl,
     getPointCloudBindGroupLayout as getPointCloudBindGroupLayoutImpl,
     getPointCloudPipelineCacheKey as getPointCloudPipelineCacheKeyImpl,
@@ -152,7 +150,6 @@ import {
     getSplatSortScanAddBindGroupLayout as getSplatSortScanAddBindGroupLayoutImpl,
     getSplatSortScanBlockBindGroupLayout as getSplatSortScanBlockBindGroupLayoutImpl,
     getSplatSortScatterBindGroupLayout as getSplatSortScatterBindGroupLayoutImpl,
-    getSplatSortZeroCountBindGroupLayout as getSplatSortZeroCountBindGroupLayoutImpl,
     warmGlyphFieldDrawList as warmGlyphFieldDrawListImpl,
     warmLatticeSpaceDrawList as warmLatticeSpaceDrawListImpl,
     warmInstancedRunResources as warmInstancedRunResourcesImpl,
@@ -226,16 +223,24 @@ export class Renderer {
     transmissionSourceView: GPUTextureView | null = null;
     transmissionSourceRevision: number = 0;
     globalBindGroupLayout!: GPUBindGroupLayout;
-    globalBindGroups: GPUBindGroup[] = [];
     skinBindGroupLayout!: GPUBindGroupLayout;
     cameraUniformBuffer!: GPUBuffer;
-    modelUniformBuffers: GPUBuffer[] = [];
-    modelBufferIndex: number = 0;
-    readonly MODEL_BUFFER_POOL_SIZE = 64;
+    modelUniformBuffer: GPUBuffer | null = null;
+    modelUniformBufferCapacity: number = 0;
+    modelUniformStride: number = 256;
+    modelUniformBindGroup: GPUBindGroup | null = null;
+    readonly modelUniformSlots: Map<number, number> = new Map();
+    readonly modelUniformPtrScratch: WasmPtr[] = [];
+    pickUniformIndex: number = 0;
+    readonly INITIAL_UNIFORM_CAPACITY = 64;
     lightingUniformBuffer!: GPUBuffer;
     instanceBuffer: GPUBuffer | null = null;
     instanceBufferCapacityBytes: number = 0;
     instanceBufferOffset: number = 0;
+    instanceBufferGeneration: number = 0;
+    instanceRunCacheIndex: number = 0;
+    instanceRunUploadCount: number = 0;
+    readonly instanceRunCache: Array<{ generation: number; offset: number; count: number; meshes: Mesh[]; matrices: Float32Array }> = [];
     readonly INSTANCE_STRIDE_BYTES = 128;
     readonly framePreparedSkins: Set<object> = new Set();
     frameSkinPreparationCount: number = 0;
@@ -263,16 +268,13 @@ export class Renderer {
     splatSortKeyB: GPUBuffer | null = null;
     splatSortIndexA: GPUBuffer | null = null;
     splatSortIndexB: GPUBuffer | null = null;
-    splatSortFlags: GPUBuffer | null = null;
     splatSortPrefix: GPUBuffer | null = null;
-    splatSortZerosCount: GPUBuffer | null = null;
     splatSortScanLevels: SplatFieldSortScanLevel[] = [];
     computePipelineCache: Map<string, GPUComputePipeline> = new Map();
     splatSortKeygenBindGroupLayout: GPUBindGroupLayout | null = null;
     splatSortFlagsBindGroupLayout: GPUBindGroupLayout | null = null;
     splatSortScanBlockBindGroupLayout: GPUBindGroupLayout | null = null;
     splatSortScanAddBindGroupLayout: GPUBindGroupLayout | null = null;
-    splatSortZeroCountBindGroupLayout: GPUBindGroupLayout | null = null;
     splatSortScatterBindGroupLayout: GPUBindGroupLayout | null = null;
     glyphFieldBindGroupLayout: GPUBindGroupLayout | null = null;
     glyphFieldDummyAttributesBuffer: GPUBuffer | null = null;
@@ -305,15 +307,12 @@ export class Renderer {
     latticeSortKeyB: GPUBuffer | null = null;
     latticeSortIndexA: GPUBuffer | null = null;
     latticeSortIndexB: GPUBuffer | null = null;
-    latticeSortFlags: GPUBuffer | null = null;
     latticeSortPrefix: GPUBuffer | null = null;
-    latticeSortZerosCount: GPUBuffer | null = null;
     latticeSortScanLevels: LatticeSpaceSortScanLevel[] = [];
     latticeSortKeygenBindGroupLayout: GPUBindGroupLayout | null = null;
     latticeSortFlagsBindGroupLayout: GPUBindGroupLayout | null = null;
     latticeSortScanBlockBindGroupLayout: GPUBindGroupLayout | null = null;
     latticeSortScanAddBindGroupLayout: GPUBindGroupLayout | null = null;
-    latticeSortZeroCountBindGroupLayout: GPUBindGroupLayout | null = null;
     latticeSortScatterBindGroupLayout: GPUBindGroupLayout | null = null;
     cullGlyphFieldScratch: GlyphField[] = [];
     transparentMergedDrawList: TransparentDrawItem[] = [];
@@ -346,6 +345,10 @@ export class Renderer {
     pendingOcclusionFrameState: OcclusionFrameState | null = null;
     latestOcclusionHierarchy: { metadata: OcclusionHierarchyMetadata; data: Float32Array } | null = null;
     latestOcclusionHierarchySerial: number = 0;
+    occlusionResourceGeneration: number = 0;
+    occlusionHierarchyWasmPtr: WasmPtr = 0;
+    occlusionHierarchyWasmLength: number = 0;
+    occlusionHierarchyWasmSerial: number = 0;
     occlusionHierarchyTexture: GPUTexture | null = null;
     occlusionHierarchyMipViews: GPUTextureView[] = [];
     occlusionDepthTexture: GPUTexture | null = null;
@@ -535,9 +538,10 @@ export class Renderer {
         ensureCullingCapacityImpl(this, count);
     }
 
-    prepareSceneFrameBase(scene: Scene, camera: Camera, prepareShadows: boolean = false): void {
-        this.modelBufferIndex = 0;
+    prepareSceneFrameBase(scene: Scene, camera: Camera, prepareShadows: boolean = false, prepareAllModels: boolean = false): void {
+        this.pickUniformIndex = 0;
         this.instanceBufferOffset = 0;
+        this.instanceRunCacheIndex = 0;
         this.framePreparedSkins.clear();
         this.frameSkinPreparationCount = 0;
         this.frameFrustumTested = 0;
@@ -557,6 +561,7 @@ export class Renderer {
         this.buildGlyphFieldDrawLists(scene, camera);
         this.buildNodeLinkDrawLists(scene, camera);
         this.buildLatticeSpaceDrawLists(scene, camera);
+        this.prepareFrameModelUniforms(prepareAllModels);
     }
 
     private applyRenderCullingAndStats(camera: Camera): void {
@@ -797,9 +802,12 @@ export class Renderer {
         this.fallbackOcclusionTex?.destroy();
         this.fallbackAnisotropyTexture?.destroy();
         this.cameraUniformBuffer?.destroy();
-        for (const buffer of this.modelUniformBuffers) buffer.destroy();
+        this.modelUniformBuffer?.destroy();
+        this.modelUniformBuffer = null;
+        this.modelUniformBufferCapacity = 0;
+        this.modelUniformBindGroup = null;
+        this.modelUniformSlots.clear();
         for (const buffer of this.pickUniformBuffers) buffer.destroy();
-        this.modelUniformBuffers = [];
         this.pickUniformBuffers = [];
         this.pickBindGroups = [];
         this.pickBindGroupLayout = null;
@@ -826,12 +834,16 @@ export class Renderer {
         this.occlusionReducePipeline = null;
         this.latestOcclusionHierarchy = null;
         this.latestOcclusionHierarchySerial = 0;
+        if (this.occlusionHierarchyWasmPtr) wasm.freeF32(this.occlusionHierarchyWasmPtr, this.occlusionHierarchyWasmLength);
+        this.occlusionHierarchyWasmPtr = 0;
+        this.occlusionHierarchyWasmLength = 0;
+        this.occlusionHierarchyWasmSerial = 0;
         this.pendingOcclusionFrameState = null;
         this.lightingUniformBuffer?.destroy();
         this.instanceBuffer?.destroy();
         this.instanceBuffer = null;
         this.instanceBufferCapacityBytes = 0;
-        this.globalBindGroups = [];
+        this.instanceRunCache.length = 0;
         this.pipelineCache.clear();
         this.computePipelineCache.clear();
         this.shaderCache.clear();
@@ -847,16 +859,12 @@ export class Renderer {
         this.splatSortKeyB?.destroy();
         this.splatSortIndexA?.destroy();
         this.splatSortIndexB?.destroy();
-        this.splatSortFlags?.destroy();
         this.splatSortPrefix?.destroy();
-        this.splatSortZerosCount?.destroy();
         this.splatSortKeyA = null;
         this.splatSortKeyB = null;
         this.splatSortIndexA = null;
         this.splatSortIndexB = null;
-        this.splatSortFlags = null;
         this.splatSortPrefix = null;
-        this.splatSortZerosCount = null;
         this.splatSortCapacity = 0;
         for (const level of this.splatSortScanLevels) { level.blockSums?.destroy(); level.blockOffsets?.destroy(); }
         this.splatSortScanLevels = [];
@@ -864,7 +872,6 @@ export class Renderer {
         this.splatSortFlagsBindGroupLayout = null;
         this.splatSortScanBlockBindGroupLayout = null;
         this.splatSortScanAddBindGroupLayout = null;
-        this.splatSortZeroCountBindGroupLayout = null;
         this.splatSortScatterBindGroupLayout = null;
         this.glyphFieldBindGroupLayout = null;
         this.nodeLinkBindGroupLayout = null;
@@ -881,14 +888,12 @@ export class Renderer {
         this.latticeSpaceBindGroupLayout = null;
         for (const [space, state] of this.latticeSpaceSortStates) destroyLatticeSpaceSortStateImpl(this, space, state);
         this.latticeSpaceSortStates.clear();
-        for (const buffer of [this.latticeSortKeyA, this.latticeSortKeyB, this.latticeSortIndexA, this.latticeSortIndexB, this.latticeSortFlags, this.latticeSortPrefix, this.latticeSortZerosCount]) buffer?.destroy();
+        for (const buffer of [this.latticeSortKeyA, this.latticeSortKeyB, this.latticeSortIndexA, this.latticeSortIndexB, this.latticeSortPrefix]) buffer?.destroy();
         this.latticeSortKeyA = null;
         this.latticeSortKeyB = null;
         this.latticeSortIndexA = null;
         this.latticeSortIndexB = null;
-        this.latticeSortFlags = null;
         this.latticeSortPrefix = null;
-        this.latticeSortZerosCount = null;
         this.latticeSortCapacity = 0;
         for (const level of this.latticeSortScanLevels) { level.blockSums?.destroy(); level.blockOffsets?.destroy(); }
         this.latticeSortScanLevels = [];
@@ -896,7 +901,6 @@ export class Renderer {
         this.latticeSortFlagsBindGroupLayout = null;
         this.latticeSortScanBlockBindGroupLayout = null;
         this.latticeSortScanAddBindGroupLayout = null;
-        this.latticeSortZeroCountBindGroupLayout = null;
         this.latticeSortScatterBindGroupLayout = null;
         this.nodeLinkSphereGeometry = null;
         this.nodeLinkCubeGeometry = null;
@@ -934,8 +938,32 @@ export class Renderer {
         return getPickBindGroupLayoutImpl(this);
     }
 
-    private ensureModelBufferPool(requiredCount: number): void {
-        ensureModelBufferPoolImpl(this, requiredCount);
+    private prepareFrameModelUniforms(prepareAllModels: boolean = false): void {
+        const ptrs = this.modelUniformPtrScratch;
+        ptrs.length = 0;
+        for (let i = 0; i < this.opaqueDrawList.length; ) {
+            const first = this.opaqueDrawList[i];
+            let end = i + 1;
+            while (end < this.opaqueDrawList.length) {
+                const item = this.opaqueDrawList[end];
+                if (item.pipeline !== first.pipeline || item.material !== first.material || item.vertexSourceId !== first.vertexSourceId) break;
+                end++;
+            }
+            const instanced = !prepareAllModels && !this.occlusionCullingEnabled && end - i > 1 && !first.skinned && !hasMeshMorphRuntime(first.mesh) && this.materialSupportsInstancing(first.material);
+            if (!instanced) for (let j = i; j < end; j++) ptrs.push(this.opaqueDrawList[j].mesh.transform.worldMatrixPtr as WasmPtr);
+            i = end;
+        }
+        for (const item of this.transparentDrawList) ptrs.push(item.mesh.transform.worldMatrixPtr as WasmPtr);
+        for (const item of this.opaquePointCloudDrawList) ptrs.push(item.cloud.transform.worldMatrixPtr as WasmPtr);
+        for (const item of this.transparentPointCloudDrawList) ptrs.push(item.cloud.transform.worldMatrixPtr as WasmPtr);
+        for (const item of this.transparentSplatFieldDrawList) ptrs.push(item.field.transform.worldMatrixPtr as WasmPtr);
+        for (const item of this.opaqueGlyphFieldDrawList) ptrs.push(item.field.transform.worldMatrixPtr as WasmPtr);
+        for (const item of this.transparentGlyphFieldDrawList) ptrs.push(item.field.transform.worldMatrixPtr as WasmPtr);
+        for (const item of this.opaqueNodeLinkDrawList) ptrs.push(item.link.transform.worldMatrixPtr as WasmPtr);
+        for (const item of this.transparentNodeLinkDrawList) ptrs.push(item.link.transform.worldMatrixPtr as WasmPtr);
+        for (const item of this.opaqueLatticeSpaceDrawList) ptrs.push(item.space.transform.worldMatrixPtr as WasmPtr);
+        for (const item of this.transparentLatticeSpaceDrawList) ptrs.push(item.space.transform.worldMatrixPtr as WasmPtr);
+        prepareModelUniformsImpl(this, ptrs);
     }
 
     private createFallbackTextures(): void {
@@ -956,10 +984,6 @@ export class Renderer {
 
     private resizeTransmissionTargets(needSceneTarget: boolean): void {
         resizeTransmissionTargetsImpl(this, needSceneTarget);
-    }
-
-    private writeModelUniformSlot(slot: number, modelPtr: WasmPtr): void {
-        writeModelUniformSlotImpl(this, slot, modelPtr);
     }
 
     unprojectDepth(camera: Camera, px: number, py: number, depth: number): [number, number, number] {
@@ -1227,10 +1251,6 @@ export class Renderer {
         return getSplatSortScanAddBindGroupLayoutImpl(this);
     }
 
-    private getSplatSortZeroCountBindGroupLayout(): GPUBindGroupLayout {
-        return getSplatSortZeroCountBindGroupLayoutImpl(this);
-    }
-
     private getSplatSortScatterBindGroupLayout(): GPUBindGroupLayout {
         return getSplatSortScatterBindGroupLayoutImpl(this);
     }
@@ -1249,10 +1269,6 @@ export class Renderer {
 
     private getOrCreateSplatSortScanAddPipeline(): GPUComputePipeline {
         return getOrCreateSplatSortScanAddPipelineImpl(this);
-    }
-
-    private getOrCreateSplatSortZeroCountPipeline(): GPUComputePipeline {
-        return getOrCreateSplatSortZeroCountPipelineImpl(this);
     }
 
     private getOrCreateSplatSortScatterPipeline(bit: number): GPUComputePipeline {

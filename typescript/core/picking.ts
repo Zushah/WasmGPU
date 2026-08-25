@@ -31,7 +31,7 @@ import type { RendererContext } from "./context";
 import type { DecodedPickSample, DrawItem, GlyphFieldDrawItem, LatticeSpaceDrawItem, NodeLinkDrawItem, PointCloudDrawItem, RendererPickHit, RendererPickRegionBounds, RendererPickRegionResult, ResolvedPickRegionQuery, SplatFieldDrawItem } from "./types";
 import { getCullMode } from "./materials";
 import { ensureGlyphFieldBindGroup, ensureLatticeSpaceBindGroup, ensureNodeLinkBindGroup, ensurePointCloudBindGroup, ensureSplatFieldBindGroup, getGlyphFieldBindGroupLayout, getLatticeSpaceBindGroupLayout, getNodeLinkBindGroupLayout, getPointCloudBindGroupLayout, getSplatFieldBindGroupLayout } from "./objects";
-import { ensureModelBufferPool, getObjectId } from "./resources";
+import { bindModelUniform, ensurePickUniformPool, getObjectId } from "./resources";
 
 const alignTo256 = (x: number): number => (x + 255) & ~255;
 
@@ -140,7 +140,7 @@ const resolveLassoPickQuery = (ctx: RendererContext, points: PickLassoPoint[], m
     };
 };
 
-const preparePickFrame = (ctx: RendererContext, scene: Scene, camera: Camera): void => { ctx.prepareSceneFrameBase(scene, camera); if (!ctx.pickIdView || !ctx.pickDepthView || !ctx.pickDepthPayloadView) resizePickTargets(ctx); };
+const preparePickFrame = (ctx: RendererContext, scene: Scene, camera: Camera): void => { ctx.prepareSceneFrameBase(scene, camera, false, true); if (!ctx.pickIdView || !ctx.pickDepthView || !ctx.pickDepthPayloadView) resizePickTargets(ctx); };
 
 const resolveRendererPickHit = (ctx: RendererContext, camera: Camera, sample: DecodedPickSample): RendererPickHit | null => {
     const obj = ctx.objectsById.get(sample.objectId);
@@ -158,10 +158,8 @@ const resolveRendererPickHit = (ctx: RendererContext, camera: Camera, sample: De
 const pointInPolygon = (x: number, y: number, polygon: Array<{ x: number; y: number }>): boolean => {
     let inside = false;
     for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i++) {
-        const xi = polygon[i].x;
-        const yi = polygon[i].y;
-        const xj = polygon[j].x;
-        const yj = polygon[j].y;
+        const xi = polygon[i].x, yi = polygon[i].y;
+        const xj = polygon[j].x, yj = polygon[j].y;
         const intersects = ((yi > y) !== (yj > y)) && (x < (((xj - xi) * (y - yi)) / ((yj - yi) || 1e-12)) + xi);
         if (intersects) inside = !inside;
     }
@@ -360,7 +358,7 @@ const ensurePickReadbackBuffers = (ctx: RendererContext, copyWidth: number, copy
 };
 
 const writePickUniform = (ctx: RendererContext, slot: number, objectId: number, elementBase: number = 0): void => {
-    if (slot >= ctx.pickUniformBuffers.length) ensureModelBufferPool(ctx, slot + 1);
+    if (slot >= ctx.pickUniformBuffers.length) ensurePickUniformPool(ctx, slot + 1);
     const data = new Uint32Array([objectId >>> 0, elementBase >>> 0, 0, 0]);
     ctx.queue.writeBuffer(ctx.pickUniformBuffers[slot], 0, data.buffer, data.byteOffset, data.byteLength);
 };
@@ -405,19 +403,10 @@ const executeMeshPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncode
             lastSkinned = item.skinned;
             lastSkinned8 = item.skinned8;
         } else if (hasMeshMorphRuntime(mesh)) getMeshVertexBuffers(mesh, ctx.device, ctx.queue);
-        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-        const slot = ctx.modelBufferIndex++;
-        const modelBuffer = ctx.modelUniformBuffers[slot];
-        const globalBindGroup = ctx.globalBindGroups[slot];
-        const modelPtr = mesh.transform.worldMatrixPtr as WasmPtr;
-        const invPtr = ctx.modelUniformStagingPtr;
-        const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-        mat4f.invert(invPtr, modelPtr);
-        mat4f.transpose(normalPtr, invPtr);
-        ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-        ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
+        const slot = ctx.pickUniformIndex++;
+        ensurePickUniformPool(ctx, slot + 1);
         writePickUniform(ctx, slot, getObjectId(ctx, mesh), 0);
-        pass.setBindGroup(0, globalBindGroup);
+        bindModelUniform(ctx, pass, mesh.transform.worldMatrixPtr as WasmPtr);
         pass.setBindGroup(1, ctx.pickBindGroups[slot]);
         if (item.skinned) {
             const skin = mesh.skin;
@@ -443,7 +432,6 @@ const executeMeshPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncode
 };
 
 const executePointCloudPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, items: PointCloudDrawItem[]): void => {
-    const bytes = driver.bytes();
     let lastPipeline: GPURenderPipeline | null = null;
     let lastCloud: PointCloud | null = null;
     for (let i = 0; i < items.length; i++) {
@@ -457,19 +445,10 @@ const executePointCloudPickDrawList = (ctx: RendererContext, pass: GPURenderPass
             lastPipeline = pipeline;
             lastCloud = null;
         }
-        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-        const slot = ctx.modelBufferIndex++;
-        const modelBuffer = ctx.modelUniformBuffers[slot];
-        const globalBindGroup = ctx.globalBindGroups[slot];
-        const modelPtr = cloud.transform.worldMatrixPtr as WasmPtr;
-        const invPtr = ctx.modelUniformStagingPtr;
-        const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-        mat4f.invert(invPtr, modelPtr);
-        mat4f.transpose(normalPtr, invPtr);
-        ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-        ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
+        const slot = ctx.pickUniformIndex++;
+        ensurePickUniformPool(ctx, slot + 1);
         writePickUniform(ctx, slot, getObjectId(ctx, cloud), 0);
-        pass.setBindGroup(0, globalBindGroup);
+        bindModelUniform(ctx, pass, cloud.transform.worldMatrixPtr as WasmPtr);
         if (cloud !== lastCloud) {
             pass.setBindGroup(1, cloud.bindGroup);
             lastCloud = cloud;
@@ -480,7 +459,6 @@ const executePointCloudPickDrawList = (ctx: RendererContext, pass: GPURenderPass
 };
 
 const executeGlyphPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, items: GlyphFieldDrawItem[]): void => {
-    const bytes = driver.bytes();
     let lastPipeline: GPURenderPipeline | null = null;
     let lastGeometry: Geometry | null = null;
     let lastField: GlyphField | null = null;
@@ -504,19 +482,10 @@ const executeGlyphPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncod
             if (geometry.isIndexed) pass.setIndexBuffer(geometry.indexBuffer!, "uint32");
             lastGeometry = geometry;
         }
-        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-        const slot = ctx.modelBufferIndex++;
-        const modelBuffer = ctx.modelUniformBuffers[slot];
-        const globalBindGroup = ctx.globalBindGroups[slot];
-        const modelPtr = field.transform.worldMatrixPtr as WasmPtr;
-        const invPtr = ctx.modelUniformStagingPtr;
-        const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-        mat4f.invert(invPtr, modelPtr);
-        mat4f.transpose(normalPtr, invPtr);
-        ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-        ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
+        const slot = ctx.pickUniformIndex++;
+        ensurePickUniformPool(ctx, slot + 1);
         writePickUniform(ctx, slot, getObjectId(ctx, field), 0);
-        pass.setBindGroup(0, globalBindGroup);
+        bindModelUniform(ctx, pass, field.transform.worldMatrixPtr as WasmPtr);
         if (field !== lastField) {
             pass.setBindGroup(1, field.bindGroup);
             lastField = field;
@@ -528,7 +497,6 @@ const executeGlyphPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncod
 };
 
 const executeNodeLinkPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, items: NodeLinkDrawItem[]): void => {
-    const bytes = driver.bytes();
     let lastPipeline: GPURenderPipeline | null = null;
     let lastGeometry: Geometry | null = null;
     let lastLink: NodeLink | null = null;
@@ -550,20 +518,11 @@ const executeNodeLinkPickDrawList = (ctx: RendererContext, pass: GPURenderPassEn
             if (item.geometry.isIndexed) pass.setIndexBuffer(item.geometry.indexBuffer!, "uint32");
             lastGeometry = item.geometry;
         }
-        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-        const slot = ctx.modelBufferIndex++;
-        const modelBuffer = ctx.modelUniformBuffers[slot];
-        const globalBindGroup = ctx.globalBindGroups[slot];
-        const modelPtr = link.transform.worldMatrixPtr as WasmPtr;
-        const invPtr = ctx.modelUniformStagingPtr;
-        const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-        mat4f.invert(invPtr, modelPtr);
-        mat4f.transpose(normalPtr, invPtr);
-        ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-        ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
+        const slot = ctx.pickUniformIndex++;
+        ensurePickUniformPool(ctx, slot + 1);
         const elementBase = (item.passKind === "edge-lines" || item.passKind === "edge-cylinders") ? link.nodeCount : 0;
         writePickUniform(ctx, slot, getObjectId(ctx, link), elementBase);
-        pass.setBindGroup(0, globalBindGroup);
+        bindModelUniform(ctx, pass, link.transform.worldMatrixPtr as WasmPtr);
         if (link !== lastLink) {
             pass.setBindGroup(1, link.bindGroup);
             lastLink = link;
@@ -586,7 +545,6 @@ const executeNodeLinkPickDrawList = (ctx: RendererContext, pass: GPURenderPassEn
 };
 
 const executeSplatFieldPickDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, items: SplatFieldDrawItem[]): void => {
-    const bytes = driver.bytes();
     let lastPipeline: GPURenderPipeline | null = null;
     let lastField: SplatField | null = null;
     for (let i = 0; i < items.length; i++) {
@@ -600,19 +558,10 @@ const executeSplatFieldPickDrawList = (ctx: RendererContext, pass: GPURenderPass
             lastPipeline = pipeline;
             lastField = null;
         }
-        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-        const slot = ctx.modelBufferIndex++;
-        const modelBuffer = ctx.modelUniformBuffers[slot];
-        const globalBindGroup = ctx.globalBindGroups[slot];
-        const modelPtr = field.transform.worldMatrixPtr as WasmPtr;
-        const invPtr = ctx.modelUniformStagingPtr;
-        const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-        mat4f.invert(invPtr, modelPtr);
-        mat4f.transpose(normalPtr, invPtr);
-        ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-        ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
+        const slot = ctx.pickUniformIndex++;
+        ensurePickUniformPool(ctx, slot + 1);
         writePickUniform(ctx, slot, getObjectId(ctx, field), 0);
-        pass.setBindGroup(0, globalBindGroup);
+        bindModelUniform(ctx, pass, field.transform.worldMatrixPtr as WasmPtr);
         if (field !== lastField) {
             pass.setBindGroup(1, field.bindGroup);
             lastField = field;
@@ -623,7 +572,6 @@ const executeSplatFieldPickDrawList = (ctx: RendererContext, pass: GPURenderPass
 };
 
 const executeLatticeSpacePickDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder, items: LatticeSpaceDrawItem[]): void => {
-    const bytes = driver.bytes();
     let lastPipeline: GPURenderPipeline | null = null;
     let lastSpace: LatticeSpace | null = null;
     for (const item of items) {
@@ -637,17 +585,10 @@ const executeLatticeSpacePickDrawList = (ctx: RendererContext, pass: GPURenderPa
             lastPipeline = pipeline;
             lastSpace = null;
         }
-        if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-        const slot = ctx.modelBufferIndex++;
-        const modelPtr = space.transform.worldMatrixPtr as WasmPtr;
-        const invPtr = ctx.modelUniformStagingPtr;
-        const normalPtr = (ctx.modelUniformStagingPtr + 64) as WasmPtr;
-        mat4f.invert(invPtr, modelPtr);
-        mat4f.transpose(normalPtr, invPtr);
-        ctx.queue.writeBuffer(ctx.modelUniformBuffers[slot], 0, bytes, modelPtr, 64);
-        ctx.queue.writeBuffer(ctx.modelUniformBuffers[slot], 64, bytes, normalPtr, 64);
+        const slot = ctx.pickUniformIndex++;
+        ensurePickUniformPool(ctx, slot + 1);
         writePickUniform(ctx, slot, getObjectId(ctx, space), 0);
-        pass.setBindGroup(0, ctx.globalBindGroups[slot]);
+        bindModelUniform(ctx, pass, space.transform.worldMatrixPtr as WasmPtr);
         if (space !== lastSpace) {
             pass.setBindGroup(1, space.bindGroup);
             lastSpace = space;

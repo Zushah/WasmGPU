@@ -106,6 +106,13 @@ export type SplatFieldSortState = {
     sortedIndexBuffer: GPUBuffer | null;
     sortedIndexCapacity: number;
     transformBuffer: GPUBuffer | null;
+    lastMvp: Float32Array;
+    lastRevision: number;
+    lastCount: number;
+    valid: boolean;
+    sortCount: number;
+    radixBindGroupKey: string | null;
+    radixBindGroups: Array<GPUBindGroup | null>;
 };
 
 export type SplatFieldSortScanLevel = {
@@ -120,6 +127,13 @@ export type LatticeSpaceSortState = {
     sortedIndexCapacity: number;
     identityKey: string | null;
     transformBuffer: GPUBuffer | null;
+    lastMvp: Float32Array;
+    lastRevision: number;
+    lastCount: number;
+    valid: boolean;
+    sortCount: number;
+    radixBindGroupKey: string | null;
+    radixBindGroups: Array<GPUBindGroup | null>;
 };
 
 export type LatticeSpaceSortScanLevel = {
@@ -152,6 +166,7 @@ export type OcclusionHierarchyLayout = {
 };
 
 export type OcclusionHierarchyMetadata = {
+    resourceGeneration: number;
     viewportWidth: number;
     viewportHeight: number;
     hierarchyWidth: number;

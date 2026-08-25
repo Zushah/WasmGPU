@@ -19,6 +19,7 @@ type MeshBoundsSource = {
 };
 
 type MeshMorphRuntime = MeshBoundsSource & {
+    revision: number;
     targetCount: number;
     weights: Float32Array;
     sourceRevision: number;
@@ -97,6 +98,7 @@ const updateMeshMorphCPUState = (runtime: MeshMorphRuntime, geometry: Geometry):
     runtime.boundsRadius = bounds.sphereRadius;
     runtime.dirty = false;
     runtime.sourceRevision = sourceRevision;
+    if (sourceChanged) runtime.revision++;
     runtime.gpuDirty = runtime.positionDirty || runtime.normalDirty || runtime.colorDirty;
     return true;
 };
@@ -115,6 +117,7 @@ export const initializeMeshMorphRuntime = (mesh: Mesh, weights: ArrayLike<number
     const targetCount = mesh.geometry.morphTargets.length | 0;
     if (targetCount <= 0) return;
     const runtime: MeshMorphRuntime = {
+        revision: 1,
         targetCount,
         weights: resolveWeights(weights, targetCount),
         sourceRevision: mesh.geometry.morphBaseRevision,
@@ -168,6 +171,7 @@ export const setMeshMorphWeights = (mesh: Mesh, weights: ArrayLike<number>): voi
     if (!changed) return;
     runtime.weights.set(next);
     runtime.dirty = true;
+    runtime.revision++;
 };
 
 export const setMeshMorphWeight = (mesh: Mesh, index: number, weight: number): void => {
@@ -179,7 +183,10 @@ export const setMeshMorphWeight = (mesh: Mesh, index: number, weight: number): v
     if (runtime.weights[slot] === next) return;
     runtime.weights[slot] = next;
     runtime.dirty = true;
+    runtime.revision++;
 };
+
+export const getMeshMorphRevision = (mesh: Mesh): number => meshMorphRuntimes.get(mesh)?.revision ?? 0;
 
 export const getMeshMorphWeights = (mesh: Mesh): Float32Array | null => {
     const runtime = meshMorphRuntimes.get(mesh);

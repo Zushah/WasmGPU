@@ -6,7 +6,7 @@
 
 import assert from "./utils/assert.js";
 import { createApproxHelpers, createBrowserCanvasScope, createWebGPUCanvasDouble as createMockCanvas, runIntentionalWebGPUTeardown, setupTest } from "./utils/helpers.js";
-import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, Texture2D, Skin, Transform, BlendMode, CullMode, PointCloud, GlyphField, NodeLink, AmbientLight, DirectionalLight, wasm } from "../release/WasmGPU.js";
+import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, Texture2D, Skin, Transform, BlendMode, CullMode, PointCloud, GlyphField, NodeLink, AmbientLight, DirectionalLight, wasm, webassemblyInterop } from "../release/WasmGPU.js";
 
 const baseGpu = navigator.gpu;
 const originalRequestAdapter = baseGpu.requestAdapter.bind(baseGpu);
@@ -224,14 +224,25 @@ await setupTest({ initWebAssembly });
     });
 
     assert.doesNotThrow(() => renderer.render(scene, camera));
+    const firstCaptureSerial = rendererAny.occlusionCaptureSerial;
+    assert.doesNotThrow(() => renderer.render(scene, camera));
+    assert.equal(rendererAny.occlusionCaptureSerial, firstCaptureSerial, "Equivalent in-flight occlusion capture should be reused");
     if (typeof rendererAny.queue.onSubmittedWorkDone === "function") await rendererAny.queue.onSubmittedWorkDone();
-    await Promise.resolve();
+    await Promise.all(rendererAny.occlusionReadbackSlots.map((slot) => slot.pending).filter(Boolean));
     assert.ok(rendererAny.occlusionHierarchyTexture);
     assert.ok(rendererAny.occlusionCaptureSerial >= 1);
+    assert.ok(rendererAny.occlusionHierarchyWasmPtr, "Decoded hierarchy should have persistent renderer-owned WASM storage");
+    assert.doesNotThrow(() => renderer.render(scene, camera));
+    assert.equal(rendererAny.occlusionCaptureSerial, firstCaptureSerial, "Still-valid ready occlusion hierarchy should prevent recapture");
+    camera.transform.setPosition(0.25, 0, 5);
+    assert.doesNotThrow(() => renderer.render(scene, camera));
+    assert.ok(rendererAny.occlusionCaptureSerial > firstCaptureSerial, "Camera changes should invalidate occlusion hierarchy reuse");
     assert.equal(uncapturedError, null);
 
     scene.destroy();
     await runIntentionalWebGPUTeardown(() => renderer.destroy());
+    assert.equal(rendererAny.occlusionHierarchyWasmPtr, 0, "Renderer destruction should release persistent hierarchy storage");
+    assert.equal(rendererAny.occlusionHierarchyWasmLength, 0);
 }
 
 // 7) Strict previous-frame validity skips occlusion filtering when the stored view-projection does not match.
@@ -251,6 +262,7 @@ await setupTest({ initWebAssembly });
     assert.ok(layout);
     rendererAny.latestOcclusionHierarchy = {
         metadata: {
+            resourceGeneration: rendererAny.occlusionResourceGeneration,
             viewportWidth: rendererAny.width,
             viewportHeight: rendererAny.height,
             hierarchyWidth: rendererAny.occlusionWidth,
@@ -281,6 +293,17 @@ await setupTest({ initWebAssembly });
     const camera = createCamera();
 
     const safeMesh = new Mesh(Geometry.box(), new UnlitMaterial());
+    const morphBaseMemory = new WebAssembly.Memory({ initial: 1 });
+    const morphBaseModule = webassemblyInterop.fromMemory(morphBaseMemory, { name: "renderer:morph-occlusion-base" });
+    const morphBaseNormals = new Float32Array(morphBaseMemory.buffer, 0, 9);
+    morphBaseNormals.set([0, 0, 1, 0, 0, 1, 0, 0, 1]);
+    const morphBaseNormalsView = morphBaseModule.view({ ptr: 0, length: 9, dtype: "f32", name: "renderer:morph-occlusion-normals" });
+    const morphGeometry = new Geometry({
+        positions: new Float32Array([-1, -1, 0, 1, -1, 0, 0, 1, 0]),
+        wasmNormals: morphBaseNormalsView,
+        morphTargets: [{ positions: new Float32Array([0, 0, 0, 0, 0, 0, 0, 0.5, 0]) }]
+    });
+    const morphMesh = new Mesh(morphGeometry, new UnlitMaterial());
     const alphaCutMesh = new Mesh(Geometry.box(), new UnlitMaterial({ alphaCutoff: 0.5 }));
     const customMesh = new Mesh(Geometry.box(), new CustomMaterial({
         fragmentShader: `
@@ -327,24 +350,53 @@ await setupTest({ initWebAssembly });
         depthTest: true
     });
 
-    scene.add(safeMesh).add(alphaCutMesh).add(customMesh).add(safeCloud).add(additiveCloud).add(safeGlyph).add(safeGraph);
+    scene.add(safeMesh).add(morphMesh).add(alphaCutMesh).add(customMesh).add(safeCloud).add(additiveCloud).add(safeGlyph).add(safeGraph);
     rendererAny.prepareSceneFrameBase(scene, camera);
     const frameState = rendererAny.buildOcclusionFrameState();
 
-    assert.equal(frameState.meshOccluders.length, 1);
+    assert.equal(frameState.meshOccluders.length, 2);
     assert.equal(frameState.meshOccluders[0].mesh, safeMesh);
+    assert.equal(frameState.meshOccluders[1].mesh, morphMesh);
     assert.equal(frameState.pointCloudOccluders.length, 1);
     assert.equal(frameState.pointCloudOccluders[0].cloud, safeCloud);
     assert.equal(frameState.glyphOccluders.length, 1);
     assert.equal(frameState.glyphOccluders[0].field, safeGlyph);
     assert.ok(frameState.nodeLinkOccluders.length >= 1);
     assert.ok(frameState.nodeLinkOccluders.every((item) => item.link === safeGraph));
+    morphBaseNormals[0] = 0.25;
+    morphGeometry.refreshWasmVertices();
+    const changedMorphFrameState = rendererAny.buildOcclusionFrameState();
+    assert.notEqual(changedMorphFrameState.signature, frameState.signature, "A morph-base geometry revision must invalidate occlusion reuse before bounds refresh observes the source change");
 
     scene.destroy();
     await runIntentionalWebGPUTeardown(() => renderer.destroy());
 }
 
 // 9) Picking APIs return stable empty and region result shapes.
+{
+    const renderer = await Renderer.create(browserCanvases.createCanvas(128, 128), { antialias: false, frustumCulling: false });
+    const rendererAny = renderer;
+    const scene = new Scene();
+    const camera = createCamera();
+    const geometry = Geometry.box();
+    const material = new UnlitMaterial({ blendMode: BlendMode.Transparent, opacity: 0.5 });
+    const farMesh = new Mesh(geometry.retain(), material.retain()); farMesh.transform.setPosition(0, 0, -4);
+    const tieMesh = new Mesh(geometry, material); tieMesh.transform.setPosition(0, 0, 0);
+    const makeCloud = (z) => { const cloud = new PointCloud({ data: new Float32Array([0, 0, 0, 1]), blendMode: BlendMode.Transparent, depthWrite: false, scaleTransform: { componentCount: 4, componentIndex: 3, stride: 4, offset: 0 } }); cloud.transform.setPosition(0, 0, z); return cloud; };
+    const middleCloud = makeCloud(-2);
+    const tieCloud = makeCloud(0);
+    scene.add(farMesh).add(tieMesh).add(middleCloud).add(tieCloud);
+    renderer.render(scene, camera);
+    assert.deepEqual(rendererAny.transparentMergedDrawList.map((item) => "mesh" in item ? item.mesh : item.cloud), [farMesh, middleCloud, tieMesh, tieCloud], "Fixed-family merge should preserve exact global depth and type tie ordering");
+    scene.remove(middleCloud).remove(tieCloud);
+    renderer.render(scene, camera);
+    assert.equal(rendererAny.transparentMergedDrawList.length, 0, "A single transparent family should execute without copying into the merged scratch list");
+    middleCloud.destroy(); tieCloud.destroy();
+    scene.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
+}
+
+// 10) Picking APIs return stable empty and region result shapes.
 {
     const canvas = browserCanvases.createCanvas(128, 128);
     const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false });
@@ -676,7 +728,57 @@ await setupTest({ initWebAssembly });
     } finally { normalMap.texture.destroy(); anisotropyMap.texture.destroy(); whiteMap.texture.destroy(); blackMap.texture.destroy(); zeroMap.texture.destroy(); patternTexture.destroy(); normalMap.bitmap.close(); anisotropyMap.bitmap.close(); whiteMap.bitmap.close(); blackMap.bitmap.close(); zeroMap.bitmap.close(); patternBitmap.close(); await runIntentionalWebGPUTeardown(() => renderer.destroy()); }
 }
 
-// 16) Cleanup removes every real canvas element created by renderer integration themes.
+// 16) Packed model uniforms grow as one dynamic buffer, and static opaque instance runs reuse uploads with focused invalidation.
+{
+    const canvas = browserCanvases.createCanvas(128, 128);
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false });
+    const rendererAny = renderer;
+    const scene = new Scene();
+    const camera = createCamera();
+    const geometry = Geometry.box();
+    for (let i = 0; i < 70; i++) {
+        if (i > 0) geometry.retain();
+        const mesh = new Mesh(geometry, new UnlitMaterial({ color: [0.5 + i * 0.001, 0.5, 0.5] }));
+        mesh.transform.setPosition((i % 10) * 0.02, Math.floor(i / 10) * 0.02, 0);
+        scene.add(mesh);
+    }
+    const instanceGeometry = Geometry.box();
+    const instanceMaterial = new UnlitMaterial();
+    const meshes = [];
+    for (let i = 0; i < 3; i++) {
+        if (i > 0) { instanceGeometry.retain(); instanceMaterial.retain(); }
+        const mesh = new Mesh(instanceGeometry, instanceMaterial);
+        mesh.transform.setPosition(i * 0.1, -0.5, 0);
+        meshes.push(mesh);
+        scene.add(mesh);
+    }
+    renderer.render(scene, camera);
+    assert.equal(rendererAny.modelUniformBuffers, undefined, "Legacy per-model GPU buffer pool should remain eliminated");
+    assert.ok(rendererAny.modelUniformBindGroup, "Packed model submission should use one reusable global bind group");
+    assert.equal(rendererAny.globalBindGroups, undefined, "The legacy global bind-group array should remain eliminated");
+    assert.ok(rendererAny.modelUniformBufferCapacity >= 70, "Packed model buffer should grow for every non-instanced distinct transform");
+    assert.equal(rendererAny.modelUniformSlots.size, 70);
+    assert.equal(rendererAny.modelUniformStride % renderer.gpu.device.limits.minUniformBufferOffsetAlignment, 0);
+    const uploadsAfterFirstFrame = rendererAny.instanceRunUploadCount;
+    renderer.render(scene, camera);
+    assert.equal(rendererAny.instanceRunUploadCount, uploadsAfterFirstFrame, "Unchanged opaque instance data should not be repacked or uploaded");
+    meshes[0].transform.setPosition(0.5, 0, 0);
+    renderer.render(scene, camera);
+    assert.ok(rendererAny.instanceRunUploadCount > uploadsAfterFirstFrame, "Transform changes should invalidate static instance reuse");
+    const uploadsAfterTransform = rendererAny.instanceRunUploadCount;
+    meshes.at(-1).visible = false;
+    renderer.render(scene, camera);
+    assert.ok(rendererAny.instanceRunUploadCount > uploadsAfterTransform, "Run membership changes should invalidate static instance reuse");
+    assert.ok(rendererAny.instanceRunCache.length > 0);
+    meshes[0].visible = false;
+    meshes[1].visible = false;
+    renderer.render(scene, camera);
+    assert.equal(rendererAny.instanceRunCache.length, 0, "Unused trailing instance-cache entries must release stale mesh references");
+    scene.destroy();
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
+}
+
+// 17) Cleanup removes every real canvas element created by renderer integration themes.
 {
     browserCanvases.restore();
 }

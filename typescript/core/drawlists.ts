@@ -19,10 +19,33 @@ import { animf, cullf, driver, frameArena, frustumf, mat4f, wasm } from "../wasm
 import type { WasmPtr } from "../wasm";
 import type { RendererContext } from "./context";
 import type { DrawItem, GlyphFieldDrawItem, LatticeSpaceDrawItem, NodeLinkDrawItem, PointCloudDrawItem, SplatFieldDrawItem, TransparentDrawItem } from "./types";
-import { ensureModelBufferPool, getObjectId } from "./resources";
+import { bindModelUniform, getObjectId } from "./resources";
 import { destroyLatticeSpaceSortState, destroySplatFieldSortState, ensureGlyphFieldBindGroup, ensureLatticeSpaceBindGroup, ensureNodeLinkBindGroup, ensurePointCloudBindGroup, ensureSplatFieldBindGroup, getOrCreateGlyphFieldPipeline, getOrCreateLatticeSpacePipeline, getOrCreateNodeLinkPipeline, getOrCreatePointCloudPipeline, getOrCreateSplatFieldPipeline } from "./objects";
 import { ensureMaterialBindGroup, getOrCreatePipeline, isMirroredWorldMatrix, materialSupportsSkinning } from "./materials";
 import { isOpticallyTransmissiveMaterial } from "./transmission";
+
+const transparentTypeOrder = (item: TransparentDrawItem): number => {
+    if ("mesh" in item) return 0;
+    if ("field" in item && "geometry" in item) return 1;
+    if ("cloud" in item) return 2;
+    if ("link" in item) return 3;
+    if ("space" in item) return 4;
+    return 5;
+};
+
+export const compareTransparentDrawItems = (a: TransparentDrawItem, b: TransparentDrawItem): number => {
+    const depth = b.sortKey - a.sortKey;
+    if (depth !== 0) return depth;
+    const pipeline = a.pipelineId - b.pipelineId;
+    if (pipeline !== 0) return pipeline;
+    if ("mesh" in a && "mesh" in b) return (a.materialId - b.materialId) || (a.geometryId - b.geometryId) || (a.vertexSourceId - b.vertexSourceId) || ((a.skinned ? 1 : 0) - (b.skinned ? 1 : 0)) || ((a.skinned8 ? 1 : 0) - (b.skinned8 ? 1 : 0));
+    if ("cloud" in a && "cloud" in b) return a.cloudId - b.cloudId;
+    if ("field" in a && "geometry" in a && "field" in b && "geometry" in b) return (a.geometryId - b.geometryId) || (a.fieldId - b.fieldId);
+    if ("link" in a && "link" in b) return (a.geometryId - b.geometryId) || (a.linkId - b.linkId);
+    if ("field" in a && !("geometry" in a) && "field" in b && !("geometry" in b)) return a.fieldId - b.fieldId;
+    if ("space" in a && "space" in b) return a.spaceId - b.spaceId;
+    return transparentTypeOrder(a) - transparentTypeOrder(b);
+};
 
 export const acquireDrawItem = (ctx: RendererContext): DrawItem => {
     const i = ctx.drawItemPoolUsed++;
@@ -218,7 +241,7 @@ export const buildDrawLists = (ctx: RendererContext, scene: Scene, camera: Camer
         for (let k = 0; k < visibleCount; k++) pushMesh(candidates[storeU32[visBase + k]]);
     }
     ctx.opaqueDrawList.sort((a, b) => (a.pipelineId - b.pipelineId) || (a.materialId - b.materialId) || (a.vertexSourceId - b.vertexSourceId));
-    ctx.transparentDrawList.sort((a, b) => (b.sortKey - a.sortKey) || (a.pipelineId - b.pipelineId) || (a.materialId - b.materialId) || (a.vertexSourceId - b.vertexSourceId));
+    ctx.transparentDrawList.sort(compareTransparentDrawItems);
 };
 
 export const buildPointCloudDrawLists = (ctx: RendererContext, scene: Scene): void => {
@@ -308,7 +331,7 @@ export const buildPointCloudDrawLists = (ctx: RendererContext, scene: Scene): vo
         }
     }
     ctx.opaquePointCloudDrawList.sort((a, b) => a.pipelineId - b.pipelineId || a.cloudId - b.cloudId);
-    ctx.transparentPointCloudDrawList.sort((a, b) => b.sortKey - a.sortKey || a.pipelineId - b.pipelineId || a.cloudId - b.cloudId);
+    ctx.transparentPointCloudDrawList.sort(compareTransparentDrawItems);
 };
 
 export const buildSplatFieldDrawLists = (ctx: RendererContext, scene: Scene, camera: Camera): void => {
@@ -390,7 +413,7 @@ export const buildSplatFieldDrawLists = (ctx: RendererContext, scene: Scene, cam
         item.sortKey = dx * dx + dy * dy + dz * dz;
         ctx.transparentSplatFieldDrawList.push(item);
     }
-    ctx.transparentSplatFieldDrawList.sort((a, b) => b.sortKey - a.sortKey || a.pipelineId - b.pipelineId || a.fieldId - b.fieldId);
+    ctx.transparentSplatFieldDrawList.sort(compareTransparentDrawItems);
 };
 
 export const buildGlyphFieldDrawLists = (ctx: RendererContext, scene: Scene, camera: Camera): void => {
@@ -481,17 +504,7 @@ export const buildGlyphFieldDrawLists = (ctx: RendererContext, scene: Scene, cam
             return a.fieldId - b.fieldId;
         });
     }
-    if (ctx.transparentGlyphFieldDrawList.length > 0) {
-        ctx.transparentGlyphFieldDrawList.sort((a, b) => {
-            const d0 = b.sortKey - a.sortKey;
-            if (d0 !== 0) return d0;
-            const d1 = a.pipelineId - b.pipelineId;
-            if (d1 !== 0) return d1;
-            const d2 = a.geometryId - b.geometryId;
-            if (d2 !== 0) return d2;
-            return a.fieldId - b.fieldId;
-        });
-    }
+    if (ctx.transparentGlyphFieldDrawList.length > 0) ctx.transparentGlyphFieldDrawList.sort(compareTransparentDrawItems);
 };
 
 export const getNodeLinkNodeGeometry = (ctx: RendererContext, mode: NodeLink["nodeGeometryMode"]): Geometry => { if (mode === "cubes") { if (!ctx.nodeLinkCubeGeometry) ctx.nodeLinkCubeGeometry = Geometry.box(1, 1, 1); return ctx.nodeLinkCubeGeometry; } if (!ctx.nodeLinkSphereGeometry) ctx.nodeLinkSphereGeometry = Geometry.sphere(0.5, 16, 12); return ctx.nodeLinkSphereGeometry; };
@@ -586,7 +599,7 @@ export const buildNodeLinkDrawLists = (ctx: RendererContext, scene: Scene, camer
         }
     }
     ctx.opaqueNodeLinkDrawList.sort((a, b) => a.pipelineId - b.pipelineId || a.geometryId - b.geometryId || a.linkId - b.linkId);
-    ctx.transparentNodeLinkDrawList.sort((a, b) => b.sortKey - a.sortKey || a.pipelineId - b.pipelineId || a.geometryId - b.geometryId || a.linkId - b.linkId);
+    ctx.transparentNodeLinkDrawList.sort(compareTransparentDrawItems);
 };
 
 export const buildLatticeSpaceDrawLists = (ctx: RendererContext, scene: Scene, camera: Camera): void => {
@@ -645,77 +658,35 @@ export const buildLatticeSpaceDrawLists = (ctx: RendererContext, scene: Scene, c
         if (space.blendMode === BlendMode.Opaque) ctx.opaqueLatticeSpaceDrawList.push(item); else ctx.transparentLatticeSpaceDrawList.push(item);
     }
     ctx.opaqueLatticeSpaceDrawList.sort((a, b) => a.pipelineId - b.pipelineId || a.spaceId - b.spaceId);
-    ctx.transparentLatticeSpaceDrawList.sort((a, b) => b.sortKey - a.sortKey || a.pipelineId - b.pipelineId || a.spaceId - b.spaceId);
+    ctx.transparentLatticeSpaceDrawList.sort(compareTransparentDrawItems);
 };
 
 export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPURenderPassEncoder): void => {
-    ctx.transparentMergedDrawList.length = 0;
-    for (const item of ctx.transparentDrawList) ctx.transparentMergedDrawList.push(item);
-    for (const item of ctx.transparentGlyphFieldDrawList) ctx.transparentMergedDrawList.push(item);
-    for (const item of ctx.transparentPointCloudDrawList) ctx.transparentMergedDrawList.push(item);
-    for (const item of ctx.transparentNodeLinkDrawList) ctx.transparentMergedDrawList.push(item);
-    for (const item of ctx.transparentSplatFieldDrawList) ctx.transparentMergedDrawList.push(item);
-    for (const item of ctx.transparentLatticeSpaceDrawList) ctx.transparentMergedDrawList.push(item);
-    if (ctx.transparentMergedDrawList.length === 0) return;
-    const typeOrder = (x: TransparentDrawItem): number => {
-        if ("mesh" in x) return 0;
-        if ("field" in x && "geometry" in x) return 1;
-        if ("cloud" in x) return 2;
-        if ("link" in x) return 3;
-        if ("space" in x) return 4;
-        return 5;
-    };
-    ctx.transparentMergedDrawList.sort((a, b) => {
-        const d0 = b.sortKey - a.sortKey;
-        if (d0 !== 0) return d0;
-        const d1 = a.pipelineId - b.pipelineId;
-        if (d1 !== 0) return d1;
-        const aIsMesh = "mesh" in a;
-        const bIsMesh = "mesh" in b;
-        if (aIsMesh && bIsMesh) {
-            const am = a as DrawItem;
-            const bm = b as DrawItem;
-            return (
-                (am.materialId - bm.materialId) ||
-                (am.geometryId - bm.geometryId) ||
-                (am.vertexSourceId - bm.vertexSourceId) ||
-                ((am.skinned ? 1 : 0) - (bm.skinned ? 1 : 0)) ||
-                ((am.skinned8 ? 1 : 0) - (bm.skinned8 ? 1 : 0))
-            );
+    const families: TransparentDrawItem[][] = [ctx.transparentDrawList, ctx.transparentGlyphFieldDrawList, ctx.transparentPointCloudDrawList, ctx.transparentNodeLinkDrawList, ctx.transparentSplatFieldDrawList, ctx.transparentLatticeSpaceDrawList];
+    let populated = 0;
+    let single: TransparentDrawItem[] | null = null;
+    let total = 0;
+    for (const family of families) if (family.length > 0) { populated++; single = family; total += family.length; }
+    if (total === 0) return;
+    let executionList: TransparentDrawItem[];
+    if (populated === 1) { ctx.transparentMergedDrawList.length = 0; executionList = single!; }
+    else {
+        const merged = ctx.transparentMergedDrawList;
+        merged.length = 0;
+        const indices = [0, 0, 0, 0, 0, 0];
+        while (merged.length < total) {
+            let selectedFamily = -1;
+            let selected: TransparentDrawItem | null = null;
+            for (let familyIndex = 0; familyIndex < families.length; familyIndex++) {
+                const candidate = families[familyIndex][indices[familyIndex]];
+                if (!candidate) continue;
+                if (!selected || compareTransparentDrawItems(candidate, selected) < 0) { selected = candidate; selectedFamily = familyIndex; }
+            }
+            merged.push(selected!);
+            indices[selectedFamily]++;
         }
-        const aIsCloud = "cloud" in a;
-        const bIsCloud = "cloud" in b;
-        if (aIsCloud && bIsCloud) {
-            const ap = a as PointCloudDrawItem;
-            const bp = b as PointCloudDrawItem;
-            return ap.cloudId - bp.cloudId;
-        }
-        const aIsGlyph = "field" in a && "geometry" in a;
-        const bIsGlyph = "field" in b && "geometry" in b;
-        if (aIsGlyph && bIsGlyph) {
-            const ag = a as GlyphFieldDrawItem;
-            const bg = b as GlyphFieldDrawItem;
-            return (ag.geometryId - bg.geometryId) || (ag.fieldId - bg.fieldId);
-        }
-        const aIsNodeLink = "link" in a;
-        const bIsNodeLink = "link" in b;
-        if (aIsNodeLink && bIsNodeLink) {
-            const an = a as NodeLinkDrawItem;
-            const bn = b as NodeLinkDrawItem;
-            return (an.geometryId - bn.geometryId) || (an.linkId - bn.linkId);
-        }
-        const aIsSplat = "field" in a && !("geometry" in a);
-        const bIsSplat = "field" in b && !("geometry" in b);
-        if (aIsSplat && bIsSplat) {
-            const as = a as SplatFieldDrawItem;
-            const bs = b as SplatFieldDrawItem;
-            return as.fieldId - bs.fieldId;
-        }
-        const aIsLattice = "space" in a;
-        const bIsLattice = "space" in b;
-        if (aIsLattice && bIsLattice) return (a as LatticeSpaceDrawItem).spaceId - (b as LatticeSpaceDrawItem).spaceId;
-        return typeOrder(a) - typeOrder(b);
-    });
+        executionList = merged;
+    }
     const bytes = driver.bytes();
     let lastPipeline: GPURenderPipeline | null = null;
     let lastMaterial: Material | null = null;
@@ -728,8 +699,8 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
     let lastGlyph: GlyphField | null = null;
     let lastNodeLink: NodeLink | null = null;
     let lastLatticeSpace: LatticeSpace | null = null;
-    for (let i = 0; i < ctx.transparentMergedDrawList.length; i++) {
-        const item = ctx.transparentMergedDrawList[i];
+    for (let i = 0; i < executionList.length; i++) {
+        const item = executionList[i];
         if ("space" in item) {
             const drawItem = item as LatticeSpaceDrawItem;
             const space = drawItem.space;
@@ -751,16 +722,7 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
                 pass.setBindGroup(1, space.bindGroup);
                 lastLatticeSpace = space;
             }
-            if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-            const slot = ctx.modelBufferIndex++;
-            const modelPtr = space.transform.worldMatrixPtr as WasmPtr;
-            const invPtr = ctx.modelUniformStagingPtr;
-            const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-            mat4f.invert(invPtr, modelPtr);
-            mat4f.transpose(normalPtr, invPtr);
-            ctx.queue.writeBuffer(ctx.modelUniformBuffers[slot], 0, bytes, modelPtr, 64);
-            ctx.queue.writeBuffer(ctx.modelUniformBuffers[slot], 64, bytes, normalPtr, 64);
-            pass.setBindGroup(0, ctx.globalBindGroups[slot]);
+            bindModelUniform(ctx, pass, space.transform.worldMatrixPtr as WasmPtr);
             if (space.dimensionCount === 2) pass.draw(6);
             else pass.draw(36, space.drawCellCount);
             continue;
@@ -826,18 +788,7 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
                     pass.setBindGroup(2, skin.bindGroup!);
                 }
             }
-            if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-            const modelSlot = ctx.modelBufferIndex++;
-            const modelBuffer = ctx.modelUniformBuffers[modelSlot];
-            const globalBindGroup = ctx.globalBindGroups[modelSlot];
-            const modelPtr = mesh.transform.worldMatrixPtr as WasmPtr;
-            const invPtr = ctx.modelUniformStagingPtr;
-            const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-            mat4f.invert(invPtr, modelPtr);
-            mat4f.transpose(normalPtr, invPtr);
-            ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-            ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
-            pass.setBindGroup(0, globalBindGroup);
+            bindModelUniform(ctx, pass, mesh.transform.worldMatrixPtr as WasmPtr);
             if (geometry.isIndexed) pass.drawIndexed(geometry.indexCount);
             else pass.draw(geometry.vertexCount);
             continue;
@@ -878,18 +829,7 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
                 lastMaterial = null;
                 lastNodeLink = null;
             }
-            if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-            const modelSlot = ctx.modelBufferIndex++;
-            const modelBuffer = ctx.modelUniformBuffers[modelSlot];
-            const globalBindGroup = ctx.globalBindGroups[modelSlot];
-            const modelPtr = field.transform.worldMatrixPtr as WasmPtr;
-            const invPtr = ctx.modelUniformStagingPtr;
-            const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-            mat4f.invert(invPtr, modelPtr);
-            mat4f.transpose(normalPtr, invPtr);
-            ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-            ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
-            pass.setBindGroup(0, globalBindGroup);
+            bindModelUniform(ctx, pass, field.transform.worldMatrixPtr as WasmPtr);
             if (geometry.isIndexed) pass.drawIndexed(geometry.indexCount, field.instanceCount);
             else pass.draw(geometry.vertexCount, field.instanceCount);
             continue;
@@ -922,18 +862,7 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
                 lastMaterial = null;
                 lastNodeLink = null;
             }
-            if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-            const modelSlot = ctx.modelBufferIndex++;
-            const modelBuffer = ctx.modelUniformBuffers[modelSlot];
-            const globalBindGroup = ctx.globalBindGroups[modelSlot];
-            const modelPtr = cloud.transform.worldMatrixPtr as WasmPtr;
-            const invPtr = ctx.modelUniformStagingPtr;
-            const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-            mat4f.invert(invPtr, modelPtr);
-            mat4f.transpose(normalPtr, invPtr);
-            ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-            ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
-            pass.setBindGroup(0, globalBindGroup);
+            bindModelUniform(ctx, pass, cloud.transform.worldMatrixPtr as WasmPtr);
             pass.draw(6, cloud.pointCount);
             continue;
         }
@@ -965,18 +894,7 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
                 lastMaterial = null;
                 lastNodeLink = null;
             }
-            if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-            const modelSlot = ctx.modelBufferIndex++;
-            const modelBuffer = ctx.modelUniformBuffers[modelSlot];
-            const globalBindGroup = ctx.globalBindGroups[modelSlot];
-            const modelPtr = field.transform.worldMatrixPtr as WasmPtr;
-            const invPtr = ctx.modelUniformStagingPtr;
-            const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-            mat4f.invert(invPtr, modelPtr);
-            mat4f.transpose(normalPtr, invPtr);
-            ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-            ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
-            pass.setBindGroup(0, globalBindGroup);
+            bindModelUniform(ctx, pass, field.transform.worldMatrixPtr as WasmPtr);
             pass.draw(6, field.splatCount);
             continue;
         }
@@ -1013,18 +931,7 @@ export const executeTransparentMergedDrawList = (ctx: RendererContext, pass: GPU
                 lastGlyph = null;
                 lastMaterial = null;
             }
-            if (ctx.modelBufferIndex >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, ctx.modelBufferIndex + 1);
-            const modelSlot = ctx.modelBufferIndex++;
-            const modelBuffer = ctx.modelUniformBuffers[modelSlot];
-            const globalBindGroup = ctx.globalBindGroups[modelSlot];
-            const modelPtr = link.transform.worldMatrixPtr as WasmPtr;
-            const invPtr = ctx.modelUniformStagingPtr;
-            const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-            mat4f.invert(invPtr, modelPtr);
-            mat4f.transpose(normalPtr, invPtr);
-            ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-            ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
-            pass.setBindGroup(0, globalBindGroup);
+            bindModelUniform(ctx, pass, link.transform.worldMatrixPtr as WasmPtr);
             if (drawItem.passKind === "node-points") {
                 pass.draw(6, link.nodeCount);
             } else if (drawItem.passKind === "edge-lines") {

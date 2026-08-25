@@ -223,6 +223,8 @@ export class SplatField {
     private _externalColorBufferSrgb: boolean = false;
     private _shDegree: SplatFieldSHDegree = 0;
     private _usesSphericalHarmonics: boolean = false;
+    private _sortRevision: number = 0;
+    private _sortCacheable: boolean = true;
 
     constructor(desc: SplatFieldDescriptor = {}) {
         if (desc.name !== undefined) this.name = desc.name;
@@ -632,6 +634,8 @@ export class SplatField {
     }
 
     private setCPUData(desc: SplatFieldDescriptor): void {
+        this._sortCacheable = true;
+        this._sortRevision++;
         this.clearAllWasmState(true);
         const positions = desc.positions ?? null;
         const rotations = desc.rotations ?? null;
@@ -715,6 +719,8 @@ export class SplatField {
     }
 
     private setExternalData(desc: SplatFieldDescriptor): void {
+        this._sortCacheable = false;
+        this._sortRevision++;
         this.clearAllWasmState(true);
         assert(!!desc.centerOpacityBuffer && !!desc.rotationBuffer && !!desc.scaleBuffer, "SplatField: centerOpacityBuffer, rotationBuffer, and scaleBuffer are required when using external buffers.");
         assert(Number.isInteger(desc.splatCount) && (desc.splatCount ?? -1) >= 0, "SplatField: splatCount is required when using external buffers.");
@@ -858,6 +864,8 @@ export class SplatField {
         else this._centerOpacityCPU = null;
         this.updateWasmBounds(options);
         this._wasmCenterOpacityDirty = true;
+        this._sortCacheable = true;
+        this._sortRevision++;
         this.assertWasmCoreSourcesAvailable("refreshWasmCenterOpacity");
     }
 
@@ -1256,6 +1264,14 @@ export class SplatField {
 
     get dirtyUniforms(): boolean {
         return this._uniformDirty;
+    }
+
+    get sortRevision(): number {
+        return this._sortRevision;
+    }
+
+    get sortCacheable(): boolean {
+        return this._sortCacheable;
     }
 
     markUniformsClean(): void {

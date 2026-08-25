@@ -8,20 +8,13 @@ import { Scene } from "../world/scene";
 import type { Camera } from "../world/camera";
 import { DirectionalLight, PointLight, SpotLight, resolveLightDirection, resolveLightPosition } from "../world/light";
 import { TransformStore } from "./transform";
-import { driver, mat4f, wasm } from "../wasm";
+import { driver, frameArena, mat4f, transformf, wasm } from "../wasm";
 import type { WasmPtr } from "../wasm";
 import type { RendererContext } from "./context";
 
 export const refreshWasmStagingViews = (ctx: RendererContext): void => {
     const buf = wasm.memory().buffer as ArrayBuffer;
-    const needRefresh =
-        buf !== ctx._wasmBuffer ||
-        !ctx.cameraUniformStagingView ||
-        ctx.cameraUniformStagingView.byteOffset !== ctx.cameraUniformStagingPtr ||
-        !ctx.lightingUniformStagingView ||
-        ctx.lightingUniformStagingView.byteOffset !== ctx.lightingUniformStagingPtr ||
-        !ctx.modelUniformStagingView ||
-        ctx.modelUniformStagingView.byteOffset !== ctx.modelUniformStagingPtr;
+    const needRefresh = buf !== ctx._wasmBuffer || !ctx.cameraUniformStagingView || ctx.cameraUniformStagingView.byteOffset !== ctx.cameraUniformStagingPtr || !ctx.lightingUniformStagingView || ctx.lightingUniformStagingView.byteOffset !== ctx.lightingUniformStagingPtr || !ctx.modelUniformStagingView || ctx.modelUniformStagingView.byteOffset !== ctx.modelUniformStagingPtr;
     if (!needRefresh) return;
     ctx._wasmBuffer = buf;
     ctx.cameraUniformStagingView = wasm.f32view(ctx.cameraUniformStagingPtr, 20);
@@ -50,7 +43,7 @@ export const createGlobalBindGroupLayout = (ctx: RendererContext): void => {
             {
                 binding: 1,
                 visibility: GPUShaderStage.VERTEX,
-                buffer: { type: "uniform", minBindingSize: 128 }
+                buffer: { type: "uniform", hasDynamicOffset: true, minBindingSize: 128 }
             },
             {
                 binding: 2,
@@ -80,25 +73,12 @@ export const createUniformBuffers = (ctx: RendererContext): void => {
         size: (8 + (Scene.MAX_LIGHTS * 16)) * 4,
         usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
     });
-    ctx.modelUniformBuffers = [];
-    ctx.globalBindGroups = [];
     ctx.pickUniformBuffers = [];
     ctx.pickBindGroups = [];
     const pickLayout = ctx.getPickBindGroupLayout();
-    for (let i = 0; i < ctx.MODEL_BUFFER_POOL_SIZE; i++) {
-        const modelBuffer = ctx.device.createBuffer({
-            size: 128,
-            usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
-        });
-        ctx.modelUniformBuffers.push(modelBuffer);
-        ctx.globalBindGroups.push(ctx.device.createBindGroup({
-            layout: ctx.globalBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: ctx.cameraUniformBuffer } },
-                { binding: 1, resource: { buffer: modelBuffer } },
-                { binding: 2, resource: { buffer: ctx.lightingUniformBuffer } }
-            ]
-        }));
+    ctx.modelUniformStride = Math.max(128, ctx.device.limits.minUniformBufferOffsetAlignment || 256);
+    ensureModelUniformCapacity(ctx, ctx.INITIAL_UNIFORM_CAPACITY);
+    for (let i = 0; i < ctx.INITIAL_UNIFORM_CAPACITY; i++) {
         const pickBuffer = ctx.device.createBuffer({
             size: 16,
             usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST
@@ -115,27 +95,15 @@ export const createUniformBuffers = (ctx: RendererContext): void => {
     ctx._wasmBuffer = null;
 };
 
-export const ensureModelBufferPool = (ctx: RendererContext, requiredCount: number): void => {
-    const current = ctx.modelUniformBuffers.length;
+export const ensurePickUniformPool = (ctx: RendererContext, requiredCount: number): void => {
+    const current = ctx.pickUniformBuffers.length;
     if (requiredCount <= current) return;
     let newSize = Math.max(1, current);
     while (newSize < requiredCount) newSize *= 2;
-    ctx.modelUniformBuffers.length = newSize;
-    ctx.globalBindGroups.length = newSize;
     ctx.pickUniformBuffers.length = newSize;
     ctx.pickBindGroups.length = newSize;
     const pickLayout = ctx.getPickBindGroupLayout();
     for (let i = current; i < newSize; i++) {
-        const modelBuffer = ctx.device.createBuffer({ size: 128, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
-        ctx.modelUniformBuffers[i] = modelBuffer;
-        ctx.globalBindGroups[i] = ctx.device.createBindGroup({
-            layout: ctx.globalBindGroupLayout,
-            entries: [
-                { binding: 0, resource: { buffer: ctx.cameraUniformBuffer } },
-                { binding: 1, resource: { buffer: modelBuffer } },
-                { binding: 2, resource: { buffer: ctx.lightingUniformBuffer } }
-            ]
-        });
         const pickBuffer = ctx.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
         ctx.pickUniformBuffers[i] = pickBuffer;
         ctx.pickBindGroups[i] = ctx.device.createBindGroup({
@@ -143,6 +111,55 @@ export const ensureModelBufferPool = (ctx: RendererContext, requiredCount: numbe
             entries: [{ binding: 0, resource: { buffer: pickBuffer } }]
         });
     }
+};
+
+export const ensureModelUniformCapacity = (ctx: RendererContext, requiredCount: number): void => {
+    if (requiredCount <= ctx.modelUniformBufferCapacity && ctx.modelUniformBuffer && ctx.modelUniformBindGroup) return;
+    let capacity = Math.max(1, ctx.modelUniformBufferCapacity || ctx.INITIAL_UNIFORM_CAPACITY);
+    while (capacity < requiredCount) capacity *= 2;
+    const byteLength = capacity * ctx.modelUniformStride;
+    if (byteLength > ctx.device.limits.maxBufferSize) throw new Error(`Renderer model uniform capacity exceeds maxBufferSize (${byteLength} > ${ctx.device.limits.maxBufferSize}).`);
+    ctx.modelUniformBuffer?.destroy();
+    ctx.modelUniformBuffer = ctx.device.createBuffer({ label: "WasmGPU packed model uniforms", size: byteLength, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+    ctx.modelUniformBufferCapacity = capacity;
+    ctx.modelUniformBindGroup = ctx.device.createBindGroup({
+        layout: ctx.globalBindGroupLayout,
+        entries: [
+            { binding: 0, resource: { buffer: ctx.cameraUniformBuffer } },
+            { binding: 1, resource: { buffer: ctx.modelUniformBuffer, size: 128 } },
+            { binding: 2, resource: { buffer: ctx.lightingUniformBuffer } }
+        ]
+    });
+};
+
+export const prepareModelUniforms = (ctx: RendererContext, modelPtrs: readonly WasmPtr[]): void => {
+    ctx.modelUniformSlots.clear();
+    for (const ptr of modelPtrs) if (!ctx.modelUniformSlots.has(ptr)) ctx.modelUniformSlots.set(ptr, ctx.modelUniformSlots.size);
+    const count = ctx.modelUniformSlots.size;
+    if (count <= 0) return;
+    ensureModelUniformCapacity(ctx, count);
+    const ptrsPtr = frameArena.alloc(count * 4, 4) as WasmPtr;
+    const ptrs = wasm.u32view(ptrsPtr, count);
+    for (const [ptr, slot] of ctx.modelUniformSlots) ptrs[slot] = ptr >>> 0;
+    const packedPtr = frameArena.allocF32(count * 32) as WasmPtr;
+    transformf.packModelNormalMat4FromPtrs(packedPtr, ptrsPtr, count);
+    const uploadPtr = frameArena.alloc(count * ctx.modelUniformStride, ctx.modelUniformStride) as WasmPtr;
+    const src = wasm.u8view(packedPtr, count * 128);
+    const dst = wasm.u8view(uploadPtr, count * ctx.modelUniformStride);
+    for (let slot = 0; slot < count; slot++) dst.set(src.subarray(slot * 128, slot * 128 + 128), slot * ctx.modelUniformStride);
+    ctx.queue.writeBuffer(ctx.modelUniformBuffer!, 0, driver.bytes(), uploadPtr, count * ctx.modelUniformStride);
+};
+
+export const getModelUniformSlot = (ctx: RendererContext, modelPtr: WasmPtr): number => {
+    const slot = ctx.modelUniformSlots.get(modelPtr);
+    if (slot === undefined) throw new Error("Renderer model transform was not prepared for this pass.");
+    return slot;
+};
+
+export const bindModelUniform = (ctx: RendererContext, pass: GPURenderPassEncoder, modelPtr: WasmPtr): number => {
+    const slot = getModelUniformSlot(ctx, modelPtr);
+    pass.setBindGroup(0, ctx.modelUniformBindGroup!, [slot * ctx.modelUniformStride]);
+    return slot;
 };
 
 export const createFallbackTextures = (ctx: RendererContext): void => {
@@ -191,18 +208,6 @@ export const createFallbackTextures = (ctx: RendererContext): void => {
     const anisotropy = create1x1([255, 128, 255, 255], false);
     ctx.fallbackAnisotropyTexture = anisotropy.tex;
     ctx.fallbackAnisotropyViewLinear = anisotropy.linear;
-};
-
-export const writeModelUniformSlot = (ctx: RendererContext, slot: number, modelPtr: WasmPtr): void => {
-    if (slot >= ctx.modelUniformBuffers.length) ensureModelBufferPool(ctx, slot + 1);
-    const modelBuffer = ctx.modelUniformBuffers[slot];
-    const invPtr = ctx.modelUniformStagingPtr;
-    const normalPtr = (ctx.modelUniformStagingPtr + 16 * 4) as WasmPtr;
-    mat4f.invert(invPtr, modelPtr);
-    mat4f.transpose(normalPtr, invPtr);
-    const bytes = driver.bytes();
-    ctx.queue.writeBuffer(modelBuffer, 0, bytes, modelPtr, 16 * 4);
-    ctx.queue.writeBuffer(modelBuffer, 16 * 4, bytes, normalPtr, 16 * 4);
 };
 
 export const writeCameraUniforms = (ctx: RendererContext, camera: Camera): void => {
@@ -284,4 +289,5 @@ export const ensureInstanceBuffer = (ctx: RendererContext, byteLength: number): 
     while (cap < byteLength) cap *= 2;
     ctx.instanceBufferCapacityBytes = cap;
     ctx.instanceBuffer = ctx.device.createBuffer({ size: cap, usage: GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST });
+    ctx.instanceBufferGeneration++;
 };

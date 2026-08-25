@@ -215,6 +215,17 @@ const readU32 = (buffer, count, localCompute = compute) => readBufferAsU32(local
     assert.ok(state?.sortedIndexBuffer, "Expected localized LatticeSpace sort state");
     assert.ok(rendererAny.latticeSortCapacity >= volume.drawCellCount);
     assert.deepStrictEqual(Array.from(await readU32(state.sortedIndexBuffer, 3, localCompute)), [2, 1, 0], "Expected transparent cells sorted back to front");
+    assert.strictEqual(state.sortCount, 1);
+    renderer.render(scene, camera);
+    await rendererAny.queue.onSubmittedWorkDone();
+    assert.strictEqual(state.sortCount, 1, "Stable LatticeSpace frames should reuse sorted indices");
+    camera.transform.setPosition(0.25, 0, 6);
+    renderer.render(scene, camera);
+    await rendererAny.queue.onSubmittedWorkDone();
+    assert.strictEqual(state.sortCount, 2, "Camera changes should invalidate LatticeSpace sorted-index reuse");
+    camera.transform.setPosition(0, 0, 6);
+    renderer.render(scene, camera);
+    await rendererAny.queue.onSubmittedWorkDone();
 
     const hit = await renderer.pick(scene, camera, 96, 96);
     assert.ok(hit, "Expected center pick to hit the volume");
@@ -223,11 +234,16 @@ const readU32 = (buffer, count, localCompute = compute) => readBufferAsU32(local
     assert.strictEqual(hit.elementIndex, 0);
     numberApproxEqual(hit.worldPosition[2], 2.4, 0.03, "Expected the outward-wound front voxel face to determine pick depth");
 
+    const beforeRangeSorts = state.sortCount;
+    volume.indexRange = { min: [0, 0, 1], max: [1, 1, 3] };
+    renderer.render(scene, camera);
+    await rendererAny.queue.onSubmittedWorkDone();
+    assert.ok(state.sortCount > beforeRangeSorts, "LatticeSpace index-range changes should invalidate sorted-index reuse");
+
     volume.blendMode = BlendMode.Opaque;
     volume.depthWrite = true;
     volume.cellScale = 1;
     volume.cullMode = CullMode.Front;
-    volume.indexRange = { min: [0, 0, 1], max: [1, 1, 3] };
     renderer.render(scene, camera);
     await rendererAny.queue.onSubmittedWorkDone();
     assert.deepStrictEqual(Array.from(await readU32(state.sortedIndexBuffer, 2, localCompute)), [1, 2], "Expected opaque identity indices to refresh after indexRange changes");
@@ -241,6 +257,16 @@ const readU32 = (buffer, count, localCompute = compute) => readBufferAsU32(local
     assert.strictEqual(sortedDestroyed(), 1);
     assert.strictEqual(transformDestroyed(), 1);
     volume.destroy();
+
+    const equalVolume = new LatticeSpace({ dimensions: [33, 33, 1], colorMode: "solid", solidColor: [0.4, 0.6, 0.8, 0.5], origin: [-0.16, -0.16, -2], spacing: [0.01, 0.01, 1], blendMode: BlendMode.Transparent, depthWrite: false });
+    scene.add(equalVolume);
+    renderer.render(scene, camera);
+    await rendererAny.queue.onSubmittedWorkDone();
+    const equalState = rendererAny.latticeSpaceSortStates.get(equalVolume);
+    const equalOrder = await readU32(equalState.sortedIndexBuffer, 1089, localCompute);
+    assert.deepStrictEqual(Array.from(equalOrder), Array.from({ length: 1089 }, (_, i) => i), "Specialized LatticeSpace radix sort should remain stable for large non-aligned equal-key input");
+    scene.remove(equalVolume);
+    equalVolume.destroy();
 
     renderer.render(scene, camera);
     await rendererAny.queue.onSubmittedWorkDone();
