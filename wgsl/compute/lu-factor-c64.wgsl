@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Batched complex64 LU factorization with partial pivoting.
+ * Batched c64 LU factorization with partial pivoting.
  * Input matrices use row-major (batch, n, n) layout with one vec2<f32>
  * per entry. The kernel overwrites each matrix with compact L/U factors
  * and writes pivot rows to `ipiv`.

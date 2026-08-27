@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Blocked complex64 LU upper-panel solve.
+ * Blocked c64 LU upper-panel solve.
  * The kernel updates A12 by solving L11 * U12 = A12 for the active panel.
  * Each thread owns one full column of U12 and accumulates the freshly
  * solved U values in registers, so no thread reads a U value that another

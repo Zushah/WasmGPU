@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Batched complex64 solve for LU factors with partial pivoting.
+ * Batched c64 solve for LU factors with partial pivoting.
  * The kernel applies `ipiv`, performs forward and back substitution,
  * and writes the solution to `x`.
  */

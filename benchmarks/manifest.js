@@ -19,6 +19,12 @@ import computeRadixPairs from "./compute/kernels-radix-sort-pairs-u32-throughput
 import computeScaleExtract from "./compute/kernels-scale-extract-f32-throughput.bench.js";
 import computeScaleHistogram from "./compute/kernels-scale-histogram-f32-throughput.bench.js";
 import computeScaleRemap from "./compute/kernels-scale-remap-f32-throughput.bench.js";
+import computeAddF32 from "./compute/kernels-add-f32-throughput.bench.js";
+import computeDotF32 from "./compute/kernels-dot-f32-throughput.bench.js";
+import computeAxpyF32 from "./compute/kernels-axpy-f32-throughput.bench.js";
+import computeGemmF32 from "./compute/kernels-gemm-f32-throughput.bench.js";
+import computeGemmU32 from "./compute/kernels-gemm-u32-throughput.bench.js";
+import computeGemmC64 from "./compute/kernels-gemm-c64-throughput.bench.js";
 import storageBufferWrite from "./compute/storagebuffer-write-throughput.bench.js";
 import readbackRingRead from "./compute/readbackring-read-throughput.bench.js";
 import ndarrayUpload from "./compute/cpundarray-upload-to-gpu-throughput.bench.js";
@@ -76,6 +82,12 @@ export const benchmarks = [
     computeScaleExtract,
     computeScaleHistogram,
     computeScaleRemap,
+    computeAddF32,
+    computeDotF32,
+    computeAxpyF32,
+    computeGemmF32,
+    computeGemmU32,
+    computeGemmC64,
     storageBufferWrite,
     readbackRingRead,
     ndarray,

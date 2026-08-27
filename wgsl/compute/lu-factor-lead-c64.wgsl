@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Blocked complex64 LU panel factorization for columns [kk, kk + pw).
+ * Blocked c64 LU panel factorization for columns [kk, kk + pw).
  * The kernel factors the active panel, applies full-row swaps, and writes
  * pivot rows to `ipiv`.
  */

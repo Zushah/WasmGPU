@@ -432,16 +432,13 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// 15) Batched LU complex64 (partial pivot by |a|^2: factor + solve).
+// 15) Batched LU c64 (partial pivot by |a|^2: factor + solve).
 {
-    assert.strictEqual(typeof kernels.luFactorComplex64Batched, "function", "Missing kernel: luFactorComplex64Batched");
-    assert.strictEqual(typeof kernels.luSolveComplex64Batched, "function", "Missing kernel: luSolveComplex64Batched");
+    assert.strictEqual(typeof kernels.luFactorC64Batched, "function", "Missing kernel: luFactorC64Batched");
+    assert.strictEqual(typeof kernels.luSolveC64Batched, "function", "Missing kernel: luSolveC64Batched");
 
     const cxMul = (ar, ai, br, bi) => [ar * br - ai * bi, ar * bi + ai * br];
-    const cxDiv = (ar, ai, br, bi) => {
-        const d = br * br + bi * bi;
-        return [(ar * br + ai * bi) / d, (ai * br - ar * bi) / d];
-    };
+    const cxDiv = (ar, ai, br, bi) => { const d = br * br + bi * bi; return [(ar * br + ai * bi) / d, (ai * br - ar * bi) / d]; };
 
     const luFactorCpuPivotedComplex = (aFlat2, n) => {
         const A = Float32Array.from(aFlat2);
@@ -570,8 +567,8 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     const bufRhs = compute.createStorageBuffer({ label: "lu:c64:rhs", data: rhs, copySrc: true });
     const bufX = compute.createStorageBuffer({ label: "lu:c64:x", byteLength: batch * n * 8, copySrc: true });
 
-    kernels.luFactorComplex64Batched(bufA, bufIpiv, batch, n);
-    kernels.luSolveComplex64Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
+    kernels.luFactorC64Batched(bufA, bufIpiv, batch, n);
+    kernels.luSolveC64Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
 
     const gotLu = await bufA.readAs(Float32Array);
     const gotIpiv = await bufIpiv.readAs(Uint32Array);
@@ -581,12 +578,8 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
         const slice = new Float32Array(n * n * 2);
         for (let t = 0; t < n * n * 2; t++) slice[t] = a[b * n * n * 2 + t];
         const { A: wantLu, ipiv: wantIpiv } = luFactorCpuPivotedComplex(slice, n);
-        for (let t = 0; t < n * n * 2; t++) {
-            numberApproxEqual(gotLu[b * n * n * 2 + t], wantLu[t], 5e-4, `LU c64 factor batch ${b} index ${t}`);
-        }
-        for (let k = 0; k < n; k++) {
-            assert.strictEqual(gotIpiv[b * n + k] >>> 0, wantIpiv[k] >>> 0, `ipiv c64 batch ${b} k=${k}`);
-        }
+        for (let t = 0; t < n * n * 2; t++) numberApproxEqual(gotLu[b * n * n * 2 + t], wantLu[t], 5e-4, `LU c64 factor batch ${b} index ${t}`);
+        for (let k = 0; k < n; k++) assert.strictEqual(gotIpiv[b * n + k] >>> 0, wantIpiv[k] >>> 0, `ipiv c64 batch ${b} k=${k}`);
         const bRhs = rhs.subarray(b * n * 2, (b + 1) * n * 2);
         const wantX = luSolveCpuPivotedComplex(wantLu, wantIpiv, n, bRhs);
         for (let i = 0; i < n; i++) {
@@ -608,7 +601,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// 16) Complex64 solve fallback path for n > 512 (identity LU should return rhs unchanged).
+// 16) C64 solve fallback path for n > 512 (identity LU should return rhs unchanged).
 {
     const batch = 1;
     const n = 513;
@@ -628,7 +621,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     const bufRhs = compute.createStorageBuffer({ label: "lu:c64:large:rhs", data: rhs, copySrc: false });
     const bufX = compute.createStorageBuffer({ label: "lu:c64:large:x", byteLength: batch * n * 8, copySrc: true });
 
-    kernels.luSolveComplex64Batched(bufLu, bufIpiv, bufRhs, bufX, batch, n);
+    kernels.luSolveC64Batched(bufLu, bufIpiv, bufRhs, bufX, batch, n);
 
     const gotX = await bufX.readAs(Float32Array);
     arraysApproxEqual(gotX, rhs, 1e-5, "LU c64 large solve mismatch");
@@ -681,8 +674,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
             for (let j = 0; j < n; j++) ax += a[b * n * n + i * n + j] * gotX[b * n + j];
             resMax = Math.max(resMax, Math.abs(ax - rhs[b * n + i]));
         }
-        assert.ok(resMax / Math.max(bMax, 1e-30) < 1e-3,
-            `f32 blocked LU residual too large: batch ${b} -> ${resMax}/${bMax}`);
+        assert.ok(resMax / Math.max(bMax, 1e-30) < 1e-3, `f32 blocked LU residual too large: batch ${b} -> ${resMax}/${bMax}`);
     }
 }
 
@@ -725,8 +717,8 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     const bufRhs = compute.createStorageBuffer({ label: "lu:c64:blk:rhs", data: rhs, copySrc: false });
     const bufX = compute.createStorageBuffer({ label: "lu:c64:blk:x", byteLength: batch * n * 8, copySrc: true });
 
-    kernels.luFactorComplex64Batched(bufA, bufIpiv, batch, n);
-    kernels.luSolveComplex64Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
+    kernels.luFactorC64Batched(bufA, bufIpiv, batch, n);
+    kernels.luSolveC64Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
     const gotX = await bufX.readAs(Float32Array);
 
     for (let b = 0; b < batch; b++) {
@@ -751,12 +743,149 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
             const tr = (b * n + i) * 2;
             resMax = Math.max(resMax, Math.hypot(axr - rhs[tr], axi - rhs[tr + 1]));
         }
-        assert.ok(resMax / Math.max(bMax, 1e-30) < 1e-3,
-            `c64 blocked LU residual too large: batch ${b} -> ${resMax}/${bMax}`);
+        assert.ok(resMax / Math.max(bMax, 1e-30) < 1e-3, `c64 blocked LU residual too large: batch ${b} -> ${resMax}/${bMax}`);
     }
 }
 
-// 19) Cleanup releases the shared compute context before its browser GPU device.
+// 19) Explicit f32/u32/c64 vector arithmetic methods.
+{
+    for (const name of ["addF32", "subF32", "mulF32", "sclF32", "dotF32", "axpyF32", "gemmF32", "addU32", "subU32", "mulU32", "sclU32", "dotU32", "axpyU32", "gemmU32", "addC64", "subC64", "mulC64", "sclC64", "dotC64", "axpyC64", "gemmC64"]) assert.strictEqual(typeof kernels[name], "function", `Missing kernel: ${name}`);
+
+    const af = compute.createStorageBuffer({ data: new Float32Array([1, -2, 3]) });
+    const bf = compute.createStorageBuffer({ data: new Float32Array([4, 5, -6]) });
+    arraysApproxEqual(await kernels.addF32(af, bf).readAs(Float32Array), new Float32Array([5, 3, -3]), 1e-6, "addF32");
+    arraysApproxEqual(await kernels.subF32(af, bf).readAs(Float32Array), new Float32Array([-3, -7, 9]), 1e-6, "subF32");
+    arraysApproxEqual(await kernels.mulF32(af, bf).readAs(Float32Array), new Float32Array([4, -10, -18]), 1e-6, "mulF32");
+    arraysApproxEqual(await kernels.sclF32(af, -2).readAs(Float32Array), new Float32Array([-2, 4, -6]), 1e-6, "sclF32");
+    arraysApproxEqual(await kernels.axpyF32(af, bf, 2).readAs(Float32Array), new Float32Array([6, 1, 0]), 1e-6, "axpyF32");
+
+    const au = compute.createStorageBuffer({ data: new Uint32Array([1, 7, 0xFFFFFFFF]) });
+    const bu = compute.createStorageBuffer({ data: new Uint32Array([4, 3, 2]) });
+    arraysEqualU32(await kernels.addU32(au, bu).readAs(Uint32Array), new Uint32Array([5, 10, 1]), "addU32");
+    arraysEqualU32(await kernels.subU32(au, bu).readAs(Uint32Array), new Uint32Array([0xFFFFFFFD, 4, 0xFFFFFFFD]), "subU32");
+    arraysEqualU32(await kernels.mulU32(au, bu).readAs(Uint32Array), new Uint32Array([4, 21, 0xFFFFFFFE]), "mulU32");
+    arraysEqualU32(await kernels.sclU32(au, 3).readAs(Uint32Array), new Uint32Array([3, 21, 0xFFFFFFFD]), "sclU32");
+    arraysEqualU32(await kernels.axpyU32(au, bu, 2).readAs(Uint32Array), new Uint32Array([6, 17, 0]), "axpyU32");
+
+    const ac = compute.createStorageBuffer({ data: new Float32Array([1, 2, -3, 4, 0.5, -1]) });
+    const bc = compute.createStorageBuffer({ data: new Float32Array([3, -1, 2, 5, -2, 4]) });
+    arraysApproxEqual(await kernels.addC64(ac, bc).readAs(Float32Array), new Float32Array([4, 1, -1, 9, -1.5, 3]), 1e-6, "addC64");
+    arraysApproxEqual(await kernels.subC64(ac, bc).readAs(Float32Array), new Float32Array([-2, 3, -5, -1, 2.5, -5]), 1e-6, "subC64");
+    arraysApproxEqual(await kernels.mulC64(ac, bc).readAs(Float32Array), new Float32Array([5, 5, -26, -7, 3, 4]), 1e-6, "mulC64");
+    arraysApproxEqual(await kernels.sclC64(ac, [2, -1]).readAs(Float32Array), new Float32Array([4, 3, -2, 11, 0, -2.5]), 1e-6, "sclC64");
+    arraysApproxEqual(await kernels.axpyC64(ac, bc, [2, -1]).readAs(Float32Array), new Float32Array([7, 2, 0, 16, -2, 1.5]), 1e-6, "axpyC64");
+
+    const prefix = kernels.addF32(af, bf, { count: 2 });
+    assert.strictEqual(prefix.byteLength, 8, "prefix output logical size");
+    arraysApproxEqual(await prefix.readAs(Float32Array), new Float32Array([5, 3]), 1e-6, "prefix addF32");
+    assert.throws(() => kernels.addF32(compute.createStorageBuffer({ data: new Float32Array([1]) }), bf, { count: 2 }), /insufficient capacity/);
+    assert.throws(() => kernels.addF32(af, compute.createStorageBuffer({ data: new Float32Array([1]) })), /logical lengths must match/);
+    assert.throws(() => kernels.addF32(af, bf, { out: compute.createStorageBuffer({ byteLength: 4 }) }), /insufficient capacity/);
+    assert.throws(() => kernels.addF32(af, bf, { out: af }), /distinct/);
+    assert.throws(() => kernels.addF32(compute.createStorageBuffer({ byteLength: 5 }), bf, { count: 0 }), /divisible/);
+    const empty = kernels.mulC64(ac, bc, { count: 0 });
+    assert.strictEqual(empty.byteLength, 0, "zero-count c64 output logical size");
+}
+
+// 20) Dot products, including u32 wrap, non-conjugating c64, and zero count.
+{
+    const af = compute.createStorageBuffer({ data: new Float32Array([1.5, -2, 4]) });
+    const bf = compute.createStorageBuffer({ data: new Float32Array([2, 3, -0.5]) });
+    numberApproxEqual((await kernels.dotF32(af, bf).readAs(Float32Array))[0], -5, 1e-5, "dotF32");
+    const au = compute.createStorageBuffer({ data: new Uint32Array([0xFFFFFFFF, 2]) });
+    const bu = compute.createStorageBuffer({ data: new Uint32Array([2, 3]) });
+    assert.strictEqual((await kernels.dotU32(au, bu).readAs(Uint32Array))[0], 4, "dotU32 wrap");
+    const ac = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, -1]) });
+    const bc = compute.createStorageBuffer({ data: new Float32Array([2, 1, -4, 2]) });
+    const dotc = await kernels.dotC64(ac, bc).readAs(Float32Array);
+    arraysApproxEqual(dotc, new Float32Array([-10, 15]), 1e-5, "dotC64 non-conjugating");
+    const manyF = new Float32Array(1025); manyF.fill(1.25);
+    const manyFBuffer = compute.createStorageBuffer({ data: manyF });
+    numberApproxEqual((await kernels.dotF32(manyFBuffer, manyFBuffer).readAs(Float32Array))[0], 1025 * 1.25 * 1.25, 1e-3, "dotF32 multipass");
+    const manyC = new Float32Array(513 * 2);
+    for (let i = 0; i < 513; i++) { manyC[2 * i] = 1; manyC[2 * i + 1] = 1; }
+    const manyCBuffer = compute.createStorageBuffer({ data: manyC });
+    arraysApproxEqual(await kernels.dotC64(manyCBuffer, manyCBuffer).readAs(Float32Array), new Float32Array([0, 1026]), 1e-3, "dotC64 multipass");
+    arraysApproxEqual(await kernels.dotC64(ac, bc, { count: 0 }).readAs(Float32Array), new Float32Array([0, 0]), 1e-6, "dotC64 zero");
+    assert.strictEqual((await kernels.dotU32(au, bu, { count: 0 }).readAs(Uint32Array))[0], 0, "dotU32 zero");
+}
+
+// 21) Scalar parameter buffers remain independent in a shared caller encoder.
+{
+    const input = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3]) });
+    const outA = compute.createStorageBuffer({ byteLength: 12, copySrc: true });
+    const outB = compute.createStorageBuffer({ byteLength: 12, copySrc: true });
+    const encoder = device.createCommandEncoder();
+    kernels.sclF32(input, 2, { out: outA, encoder });
+    kernels.sclF32(input, -3, { out: outB, encoder });
+    device.queue.submit([encoder.finish()]);
+    arraysApproxEqual(await outA.readAs(Float32Array), new Float32Array([2, 4, 6]), 1e-6, "shared encoder first scalar");
+    arraysApproxEqual(await outB.readAs(Float32Array), new Float32Array([-3, -6, -9]), 1e-6, "shared encoder second scalar");
+}
+
+// 22) Tiled row-major GEMM for f32, u32, and c64, including alpha/beta and k=0.
+{
+    const af = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, 4, 5, 6]) });
+    const bf = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, 4, 5, 6]) });
+    const cf = compute.createStorageBuffer({ data: new Float32Array([1, 1, 1, 1]), copySrc: true });
+    arraysApproxEqual(await kernels.gemmF32(af, bf, 2, 2, 3, { out: cf, alpha: 2, beta: 3 }).readAs(Float32Array), new Float32Array([47, 59, 101, 131]), 1e-5, "gemmF32 alpha/beta");
+    const zeroF = compute.createStorageBuffer({ byteLength: 0 });
+    const c0f = compute.createStorageBuffer({ data: new Float32Array([2, -3]), copySrc: true });
+    arraysApproxEqual(await kernels.gemmF32(zeroF, zeroF, 1, 2, 0, { out: c0f, beta: -2 }).readAs(Float32Array), new Float32Array([-4, 6]), 1e-6, "gemmF32 k=0");
+
+    const au = compute.createStorageBuffer({ data: new Uint32Array([1, 2, 3, 4, 5, 6]) });
+    const bu = compute.createStorageBuffer({ data: new Uint32Array([1, 2, 3, 4, 5, 6]) });
+    const cu = compute.createStorageBuffer({ data: new Uint32Array([1, 1, 1, 1]), copySrc: true });
+    arraysEqualU32(await kernels.gemmU32(au, bu, 2, 2, 3, { out: cu, alpha: 2, beta: 3 }).readAs(Uint32Array), new Uint32Array([47, 59, 101, 131]), "gemmU32 alpha/beta");
+    const zeroU = compute.createStorageBuffer({ byteLength: 0 });
+    const c0u = compute.createStorageBuffer({ data: new Uint32Array([2, 3]), copySrc: true });
+    arraysEqualU32(await kernels.gemmU32(zeroU, zeroU, 1, 2, 0, { out: c0u, beta: 4 }).readAs(Uint32Array), new Uint32Array([8, 12]), "gemmU32 k=0");
+
+    const ac = compute.createStorageBuffer({ data: new Float32Array([1, 1, 2, -1]) });
+    const bc = compute.createStorageBuffer({ data: new Float32Array([3, 2, -1, 4]) });
+    const cc = compute.createStorageBuffer({ data: new Float32Array([2, -1]), copySrc: true });
+    arraysApproxEqual(await kernels.gemmC64(ac, bc, 1, 1, 2, { out: cc, alpha: [2, -1], beta: [-1, 0.5] }).readAs(Float32Array), new Float32Array([18.5, 27]), 1e-5, "gemmC64 alpha/beta");
+    const zeroC = compute.createStorageBuffer({ byteLength: 0 });
+    const c0c = compute.createStorageBuffer({ data: new Float32Array([2, 3]), copySrc: true });
+    arraysApproxEqual(await kernels.gemmC64(zeroC, zeroC, 1, 1, 0, { out: c0c, beta: [0, 2] }).readAs(Float32Array), new Float32Array([-6, 4]), 1e-6, "gemmC64 k=0");
+
+    // A rectangular, non-tile-aligned product for every dtype.
+    const rectA = new Float32Array(3 * 5); const rectB = new Float32Array(5 * 7);
+    for (let i = 0; i < rectA.length; i++) rectA[i] = (i % 5) - 2;
+    for (let i = 0; i < rectB.length; i++) rectB[i] = (i % 7) * 0.25 - 0.5;
+    const want = new Float32Array(21);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 7; j++) for (let q = 0; q < 5; q++) want[i * 7 + j] += rectA[i * 5 + q] * rectB[q * 7 + j];
+    arraysApproxEqual(await kernels.gemmF32(compute.createStorageBuffer({ data: rectA }), compute.createStorageBuffer({ data: rectB }), 3, 7, 5).readAs(Float32Array), want, 1e-5, "rectangular gemmF32");
+    const rectAU = Uint32Array.from(rectA, x => (x + 2) >>> 0); const rectBU = Uint32Array.from(rectB, x => Math.round((x + 0.5) * 4) >>> 0);
+    const wantU = new Uint32Array(21);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 7; j++) for (let q = 0; q < 5; q++) wantU[i * 7 + j] = (wantU[i * 7 + j] + Math.imul(rectAU[i * 5 + q], rectBU[q * 7 + j])) >>> 0;
+    arraysEqualU32(await kernels.gemmU32(compute.createStorageBuffer({ data: rectAU }), compute.createStorageBuffer({ data: rectBU }), 3, 7, 5).readAs(Uint32Array), wantU, "rectangular gemmU32");
+    const rectAC = new Float32Array(30); const rectBC = new Float32Array(70); const wantC = new Float32Array(42);
+    for (let i = 0; i < 15; i++) { rectAC[2 * i] = rectA[i]; rectAC[2 * i + 1] = (i % 3) - 1; }
+    for (let i = 0; i < 35; i++) { rectBC[2 * i] = rectB[i]; rectBC[2 * i + 1] = (i % 2) * 0.5; }
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 7; j++) for (let q = 0; q < 5; q++) { const ai = 2 * (i * 5 + q); const bi = 2 * (q * 7 + j); const ci = 2 * (i * 7 + j); wantC[ci] += rectAC[ai] * rectBC[bi] - rectAC[ai + 1] * rectBC[bi + 1]; wantC[ci + 1] += rectAC[ai] * rectBC[bi + 1] + rectAC[ai + 1] * rectBC[bi]; }
+    arraysApproxEqual(await kernels.gemmC64(compute.createStorageBuffer({ data: rectAC }), compute.createStorageBuffer({ data: rectBC }), 3, 7, 5).readAs(Float32Array), wantC, 1e-4, "rectangular gemmC64");
+
+    assert.throws(() => kernels.gemmF32(af, bf, -1, 2, 3), /m must/);
+    assert.throws(() => kernels.gemmF32(af, bf, 1.5, 2, 3), /m must/);
+    assert.throws(() => kernels.gemmF32(compute.createStorageBuffer({ byteLength: 4 }), bf, 2, 2, 3), /a has insufficient/);
+    assert.throws(() => kernels.gemmF32(af, compute.createStorageBuffer({ byteLength: 4 }), 2, 2, 3), /b has insufficient/);
+    assert.throws(() => kernels.gemmF32(af, bf, 2, 2, 3, { out: compute.createStorageBuffer({ byteLength: 4 }) }), /out has insufficient/);
+    assert.throws(() => kernels.gemmU32(au, bu, 2, -1, 3), /n must/);
+    assert.throws(() => kernels.gemmU32(compute.createStorageBuffer({ byteLength: 4 }), bu, 2, 2, 3), /a has insufficient/);
+    assert.throws(() => kernels.gemmU32(au, compute.createStorageBuffer({ byteLength: 4 }), 2, 2, 3), /b has insufficient/);
+    assert.throws(() => kernels.gemmU32(au, bu, 2, 2, 3, { out: compute.createStorageBuffer({ byteLength: 4 }) }), /out has insufficient/);
+    assert.throws(() => kernels.gemmC64(ac, bc, 1, 1, 1.5), /k must/);
+    assert.throws(() => kernels.gemmC64(compute.createStorageBuffer({ byteLength: 8 }), bc, 1, 1, 2), /a has insufficient/);
+    assert.throws(() => kernels.gemmC64(ac, compute.createStorageBuffer({ byteLength: 8 }), 1, 1, 2), /b has insufficient/);
+    assert.throws(() => kernels.gemmC64(ac, bc, 1, 1, 2, { out: compute.createStorageBuffer({ byteLength: 4 }) }), /divisible|insufficient/);
+    assert.throws(() => kernels.gemmF32(af, bf, 2, 2, 3, { out: af }), /distinct/);
+    assert.throws(() => kernels.gemmU32(au, bu, 2, 2, 3, { out: bu }), /distinct/);
+    assert.throws(() => kernels.gemmC64(ac, bc, 1, 1, 2, { out: bc }), /distinct/);
+    assert.strictEqual(kernels.gemmF32(zeroF, compute.createStorageBuffer({ byteLength: 21 * 4 }), 0, 7, 3).byteLength, 0, "gemm m=0 output");
+}
+
+// 23) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

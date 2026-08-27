@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Batched complex64 solve for LU factors with partial pivoting using
+ * Batched c64 solve for LU factors with partial pivoting using
  * one workgroup per matrix. The kernel caches the right-hand side in
  * workgroup memory, performs blocked forward and back substitution, and
  * writes the solution to `x`.

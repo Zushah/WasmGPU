@@ -7,7 +7,7 @@
 import { StorageBuffer, type StorageBufferDescriptor, UniformBuffer, type UniformBufferDescriptor } from "./buffer";
 import { ComputePipeline, type ComputePipelineDescriptor } from "./pipeline";
 import { workgroups1D, workgroups2D, workgroups3D, type WorkgroupCounts } from "./workgroups";
-import { encodeDispatch, encodeDispatchBatch, encodeDispatchBatchWithLimit, type ComputeDispatchCommand, validateWorkgroupsForDevice } from "./dispatch";
+import { encodeDispatch, encodeDispatchBatchWithLimit, type ComputeDispatchCommand, validateWorkgroupsForDevice } from "./dispatch";
 import { ComputeKernels } from "./kernels";
 import { RGBA8BufferCanvasBlitter, type BlitRGBA8BufferToCanvasOptions, type RGBA8BufferSource } from "./blit";
 import { ReadbackRing, type ReadbackRingDescriptor } from "./readback";
@@ -131,7 +131,7 @@ export type { DispatchWorkgroups, ComputeDispatchCommand } from "./dispatch";
 export { RGBA8BufferCanvasBlitter } from "./blit";
 export type { RGBA8BufferSource, BlitRGBA8BufferToCanvasOptions } from "./blit";
 export { ComputeKernels } from "./kernels";
-export type { KernelDispatchOptions, ReduceOptions, ArgReduceOptions, ScanOptions, HistogramOptions, CompactOptions, RadixSortOptions, RadixSortPairsOptions, RadixSortPairsResult, CopyOptions, ScaleExtractOptions, ScaleExtractResult, ScaleHistogramOptions, ScaleRemapOptions, ReduceOp, ArgReduceOp } from "./kernels";
+export type { KernelDispatchOptions, VectorKernelOptions, C64Scalar, GemmF32Options, GemmU32Options, GemmC64Options, ReduceOptions, ArgReduceOptions, ScanOptions, HistogramOptions, CompactOptions, RadixSortOptions, RadixSortPairsOptions, RadixSortPairsResult, CopyOptions, ScaleExtractOptions, ScaleExtractResult, ScaleHistogramOptions, ScaleRemapOptions, ReduceOp, ArgReduceOp } from "./kernels";
 export { ReadbackRing } from "./readback";
 export type { ReadbackSource, ReadbackRingDescriptor } from "./readback";
 export { Ndarray, CPUndarray, GPUndarray, dtypeInfo } from "./ndarray";

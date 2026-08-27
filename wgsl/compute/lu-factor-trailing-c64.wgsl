@@ -3,7 +3,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  *
- * Blocked complex64 LU trailing update.
+ * Blocked c64 LU trailing update.
  * The kernel updates A22 -= L21 * U12 for the active panel using
  * workgroup tiles.
  */

@@ -35,18 +35,39 @@ import copyU32WGSL from "../../wgsl/compute/copy-u32.wgsl";
 import scaleExtractF32WGSL from "../../wgsl/compute/scale-extract-f32.wgsl";
 import scaleHistogramF32WGSL from "../../wgsl/compute/scale-histogram-f32.wgsl";
 import scaleRemapF32WGSL from "../../wgsl/compute/scale-remap-f32.wgsl";
+import addF32WGSL from "../../wgsl/compute/add-f32.wgsl";
+import addU32WGSL from "../../wgsl/compute/add-u32.wgsl";
+import addC64WGSL from "../../wgsl/compute/add-c64.wgsl";
+import subF32WGSL from "../../wgsl/compute/sub-f32.wgsl";
+import subU32WGSL from "../../wgsl/compute/sub-u32.wgsl";
+import subC64WGSL from "../../wgsl/compute/sub-c64.wgsl";
+import mulF32WGSL from "../../wgsl/compute/mul-f32.wgsl";
+import mulU32WGSL from "../../wgsl/compute/mul-u32.wgsl";
+import mulC64WGSL from "../../wgsl/compute/mul-c64.wgsl";
+import sclF32WGSL from "../../wgsl/compute/scl-f32.wgsl";
+import sclU32WGSL from "../../wgsl/compute/scl-u32.wgsl";
+import sclC64WGSL from "../../wgsl/compute/scl-c64.wgsl";
+import dotF32WGSL from "../../wgsl/compute/dot-f32.wgsl";
+import dotU32WGSL from "../../wgsl/compute/dot-u32.wgsl";
+import dotC64WGSL from "../../wgsl/compute/dot-c64.wgsl";
+import axpyF32WGSL from "../../wgsl/compute/axpy-f32.wgsl";
+import axpyU32WGSL from "../../wgsl/compute/axpy-u32.wgsl";
+import axpyC64WGSL from "../../wgsl/compute/axpy-c64.wgsl";
+import gemmF32WGSL from "../../wgsl/compute/gemm-f32.wgsl";
+import gemmU32WGSL from "../../wgsl/compute/gemm-u32.wgsl";
+import gemmC64WGSL from "../../wgsl/compute/gemm-c64.wgsl";
 import luFactorRealWGSL from "../../wgsl/compute/lu-factor-f32.wgsl";
 import luFactorRealLeadWGSL from "../../wgsl/compute/lu-factor-lead-f32.wgsl";
 import luFactorRealUpperWGSL from "../../wgsl/compute/lu-factor-upper-f32.wgsl";
 import luFactorRealTrailingWGSL from "../../wgsl/compute/lu-factor-trailing-f32.wgsl";
-import luFactorComplexSmallWGSL from "../../wgsl/compute/lu-factor-complex64.wgsl";
-import luFactorComplexLeadWGSL from "../../wgsl/compute/lu-factor-lead-complex64.wgsl";
-import luFactorComplexUpperWGSL from "../../wgsl/compute/lu-factor-upper-complex64.wgsl";
-import luFactorComplexTrailingWGSL from "../../wgsl/compute/lu-factor-trailing-complex64.wgsl";
+import luFactorC64SmallWGSL from "../../wgsl/compute/lu-factor-c64.wgsl";
+import luFactorC64LeadWGSL from "../../wgsl/compute/lu-factor-lead-c64.wgsl";
+import luFactorC64UpperWGSL from "../../wgsl/compute/lu-factor-upper-c64.wgsl";
+import luFactorC64TrailingWGSL from "../../wgsl/compute/lu-factor-trailing-c64.wgsl";
 import luSolveRealWGSL from "../../wgsl/compute/lu-solve-large-f32.wgsl";
 import luSolveRealSharedWGSL from "../../wgsl/compute/lu-solve-shared-f32.wgsl";
-import luSolveComplexLargeWGSL from "../../wgsl/compute/lu-solve-large-complex64.wgsl";
-import luSolveComplexWGSL from "../../wgsl/compute/lu-solve-shared-complex64.wgsl";
+import luSolveC64LargeWGSL from "../../wgsl/compute/lu-solve-large-c64.wgsl";
+import luSolveC64WGSL from "../../wgsl/compute/lu-solve-shared-c64.wgsl";
 import { normalizeScaleTransform, packScaleTransform, scaleClampModeToId, scaleModeToId, scaleValueModeToId } from "../scaling/transform";
 import type { ScaleTransform, ScaleValueMode } from "../scaling/types";
 
@@ -55,6 +76,8 @@ export type KernelDispatchOptions = {
     label?: string;
     validateLimits?: boolean;
 };
+
+export type C64Scalar = readonly [number, number];
 
 export type ReduceOptions = KernelDispatchOptions & {
     count?: number;
@@ -134,6 +157,29 @@ export type ScaleRemapOptions = KernelDispatchOptions & {
     transform: ScaleTransform;
 };
 
+export type VectorKernelOptions = KernelDispatchOptions & {
+    count?: number;
+    out?: StorageBuffer;
+};
+
+export type GemmF32Options = KernelDispatchOptions & {
+    out?: StorageBuffer;
+    alpha?: number;
+    beta?: number;
+};
+
+export type GemmU32Options = KernelDispatchOptions & {
+    out?: StorageBuffer;
+    alpha?: number;
+    beta?: number;
+};
+
+export type GemmC64Options = KernelDispatchOptions & {
+    out?: StorageBuffer;
+    alpha?: C64Scalar;
+    beta?: C64Scalar;
+};
+
 export type CompactResult = {
     output: StorageBuffer;
     count: StorageBuffer;
@@ -146,30 +192,11 @@ export type RadixSortPairsResult = {
 
 type ReduceType = "u32" | "f32";
 
-const bytesPerElement = (type: ReduceType): number => {
-    return 4;
-};
-
-const identityU32 = (op: ReduceOp): number => {
-    if (op === "sum") return 0;
-    if (op === "min") return 0xFFFFFFFF;
-    return 0;
-};
-
-const identityF32Bits = (op: ReduceOp): number => {
-    if (op === "sum") return 0x00000000;
-    if (op === "min") return 0x7F800000;
-    return 0xFF800000;
-};
-
-const identityArgPairBits = (op: ArgReduceOp): { valueBits: number; index: number } => {
-    if (op === "argmin") return { valueBits: 0x7F800000, index: 0xFFFFFFFF };
-    return { valueBits: 0xFF800000, index: 0xFFFFFFFF };
-};
-
-const assertByteLengthMultipleOf = (byteLength: number, unit: number, label: string): void => {
-    assert((byteLength % unit) === 0, `${label}: byteLength (${byteLength}) must be divisible by ${unit}`);
-};
+const bytesPerElement = (type: ReduceType): number => 4;
+const identityU32 = (op: ReduceOp): number => { if (op === "sum") return 0; if (op === "min") return 0xFFFFFFFF; return 0; };
+const identityF32Bits = (op: ReduceOp): number => { if (op === "sum") return 0x00000000; if (op === "min") return 0x7F800000; return 0xFF800000; };
+const identityArgPairBits = (op: ArgReduceOp): { valueBits: number; index: number } => { if (op === "argmin") return { valueBits: 0x7F800000, index: 0xFFFFFFFF }; return { valueBits: 0xFF800000, index: 0xFFFFFFFF }; };
+const assertByteLengthMultipleOf = (byteLength: number, unit: number, label: string): void => assert((byteLength % unit) === 0, `${label}: byteLength (${byteLength}) must be divisible by ${unit}`);
 
 export class ComputeKernels {
     readonly device: GPUDevice;
@@ -192,10 +219,7 @@ export class ComputeKernels {
     constructor(device: GPUDevice, queue: GPUQueue) {
         this.device = device;
         this.queue = queue;
-        this.scratch = new ScratchBufferPool(device, {
-            usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST,
-            labelPrefix: "kernels:scratch"
-        });
+        this.scratch = new ScratchBufferPool(device, { usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST, labelPrefix: "kernels:scratch" });
         this.pipelines = new Map();
         this.luBatchedParamsBuffer = null;
         this.luBlockedParamsBuffer = null;
@@ -227,24 +251,12 @@ export class ComputeKernels {
     }
 
     private getLuBatchedParamsBuffer(): GPUBuffer {
-        if (!this.luBatchedParamsBuffer) {
-            this.luBatchedParamsBuffer = this.device.createBuffer({
-                size: 16,
-                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-                label: "kernels:luBatchedParams"
-            });
-        }
+        if (!this.luBatchedParamsBuffer) this.luBatchedParamsBuffer = this.device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: "kernels:luBatchedParams" });
         return this.luBatchedParamsBuffer;
     }
 
     private getLuBlockedParamsBuffer(): GPUBuffer {
-        if (!this.luBlockedParamsBuffer) {
-            this.luBlockedParamsBuffer = this.device.createBuffer({
-                size: 32,
-                usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
-                label: "kernels:luBlockedParams"
-            });
-        }
+        if (!this.luBlockedParamsBuffer) this.luBlockedParamsBuffer = this.device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST, label: "kernels:luBlockedParams" });
         return this.luBlockedParamsBuffer;
     }
 
@@ -265,10 +277,7 @@ export class ComputeKernels {
 
     private getPipeline(key: string, create: () => ComputePipeline): ComputePipeline {
         let p = this.pipelines.get(key);
-        if (!p) {
-            p = create();
-            this.pipelines.set(key, p);
-        }
+        if (!p) { p = create(); this.pipelines.set(key, p); }
         return p;
     }
 
@@ -291,10 +300,7 @@ export class ComputeKernels {
         if (commands.length === 0) return;
         const encoder = opts?.encoder ?? this.device.createCommandEncoder();
         encodeDispatchBatchWithLimit(encoder, commands, opts?.label, opts?.validateLimits ? this.device.limits.maxComputeWorkgroupsPerDimension : undefined);
-        if (!opts?.encoder) {
-            this.queue.submit([encoder.finish()]);
-            this.scratch.reset();
-        }
+        if (!opts?.encoder) { this.queue.submit([encoder.finish()]); this.scratch.reset(); }
     }
 
     private executeHistogramCommands(commands: ComputeDispatchCommand[], bins: StorageBuffer, binCount: number, nativeClear: boolean, opts?: KernelDispatchOptions): void {
@@ -795,6 +801,474 @@ export class ComputeKernels {
         });
     }
 
+    private getAddF32Pipeline(): ComputePipeline {
+        const key = "kernels:add:f32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: addF32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getAddU32Pipeline(): ComputePipeline {
+        const key = "kernels:add:u32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: addU32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getAddC64Pipeline(): ComputePipeline {
+        const key = "kernels:add:c64";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: addC64WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getSubF32Pipeline(): ComputePipeline {
+        const key = "kernels:sub:f32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: subF32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getSubU32Pipeline(): ComputePipeline {
+        const key = "kernels:sub:u32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: subU32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getSubC64Pipeline(): ComputePipeline {
+        const key = "kernels:sub:c64";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: subC64WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getMulF32Pipeline(): ComputePipeline {
+        const key = "kernels:mul:f32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: mulF32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getMulU32Pipeline(): ComputePipeline {
+        const key = "kernels:mul:u32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: mulU32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getMulC64Pipeline(): ComputePipeline {
+        const key = "kernels:mul:c64";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: mulC64WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getSclF32Pipeline(): ComputePipeline {
+        const key = "kernels:scl:f32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: sclF32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: false }),
+                            storageBufferLayout({ binding: 2, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getSclU32Pipeline(): ComputePipeline {
+        const key = "kernels:scl:u32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: sclU32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: false }),
+                            storageBufferLayout({ binding: 2, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getSclC64Pipeline(): ComputePipeline {
+        const key = "kernels:scl:c64";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: sclC64WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: false }),
+                            storageBufferLayout({ binding: 2, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getDotF32Pipeline(): ComputePipeline {
+        const key = "kernels:dot:f32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: dotF32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getDotU32Pipeline(): ComputePipeline {
+        const key = "kernels:dot:u32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: dotU32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getDotC64Pipeline(): ComputePipeline {
+        const key = "kernels:dot:c64";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: dotC64WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getDotC64ReducePipeline(): ComputePipeline {
+        const key = "kernels:dot:c64:reduce";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: dotC64WGSL,
+                entryPoint: "reduce",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getAxpyF32Pipeline(): ComputePipeline {
+        const key = "kernels:axpy:f32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: axpyF32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false }),
+                            storageBufferLayout({ binding: 3, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getAxpyU32Pipeline(): ComputePipeline {
+        const key = "kernels:axpy:u32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: axpyU32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false }),
+                            storageBufferLayout({ binding: 3, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getAxpyC64Pipeline(): ComputePipeline {
+        const key = "kernels:axpy:c64";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: axpyC64WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false }),
+                            storageBufferLayout({ binding: 3, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getGemmF32Pipeline(): ComputePipeline {
+        const key = "kernels:gemm:f32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: gemmF32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false }),
+                            storageBufferLayout({ binding: 3, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getGemmU32Pipeline(): ComputePipeline {
+        const key = "kernels:gemm:u32";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: gemmU32WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false }),
+                            storageBufferLayout({ binding: 3, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
+    private getGemmC64Pipeline(): ComputePipeline {
+        const key = "kernels:gemm:c64";
+        return this.getPipeline(key, () => {
+            return new ComputePipeline(this.device, {
+                label: key,
+                code: gemmC64WGSL,
+                entryPoint: "main",
+                bindGroups: [
+                    {
+                        label: `${key}:bg0`,
+                        entries: [
+                            storageBufferLayout({ binding: 0, readOnly: true }),
+                            storageBufferLayout({ binding: 1, readOnly: true }),
+                            storageBufferLayout({ binding: 2, readOnly: false }),
+                            storageBufferLayout({ binding: 3, readOnly: true })
+                        ]
+                    }
+                ]
+            });
+        });
+    }
+
     private getLuFactorRealPipeline(): ComputePipeline {
         const key = "kernels:lu:factorReal";
         return this.getPipeline(key, () => {
@@ -923,12 +1397,12 @@ export class ComputeKernels {
         });
     }
 
-    private getLuFactorComplexLeadPipeline(): ComputePipeline {
-        const key = "kernels:lu:factorComplexLead";
+    private getLuFactorC64LeadPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorC64Lead";
         return this.getPipeline(key, () => {
             return new ComputePipeline(this.device, {
                 label: key,
-                code: luFactorComplexLeadWGSL,
+                code: luFactorC64LeadWGSL,
                 entryPoint: "main",
                 bindGroups: [
                     {
@@ -944,12 +1418,12 @@ export class ComputeKernels {
         });
     }
 
-    private getLuFactorComplexUpperPipeline(): ComputePipeline {
-        const key = "kernels:lu:factorComplexUpper";
+    private getLuFactorC64UpperPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorC64Upper";
         return this.getPipeline(key, () => {
             return new ComputePipeline(this.device, {
                 label: key,
-                code: luFactorComplexUpperWGSL,
+                code: luFactorC64UpperWGSL,
                 entryPoint: "main",
                 bindGroups: [
                     {
@@ -964,12 +1438,12 @@ export class ComputeKernels {
         });
     }
 
-    private getLuFactorComplexTrailingPipeline(): ComputePipeline {
-        const key = "kernels:lu:factorComplexTrailing";
+    private getLuFactorC64TrailingPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorC64Trailing";
         return this.getPipeline(key, () => {
             return new ComputePipeline(this.device, {
                 label: key,
-                code: luFactorComplexTrailingWGSL,
+                code: luFactorC64TrailingWGSL,
                 entryPoint: "main",
                 bindGroups: [
                     {
@@ -984,12 +1458,12 @@ export class ComputeKernels {
         });
     }
 
-    private getLuFactorComplexSmallPipeline(): ComputePipeline {
-        const key = "kernels:lu:factorComplexSmall";
+    private getLuFactorC64SmallPipeline(): ComputePipeline {
+        const key = "kernels:lu:factorC64Small";
         return this.getPipeline(key, () => {
             return new ComputePipeline(this.device, {
                 label: key,
-                code: luFactorComplexSmallWGSL,
+                code: luFactorC64SmallWGSL,
                 entryPoint: "main",
                 bindGroups: [
                     {
@@ -1005,12 +1479,12 @@ export class ComputeKernels {
         });
     }
 
-    private getLuSolveComplexLargePipeline(): ComputePipeline {
-        const key = "kernels:lu:solveComplexLarge";
+    private getLuSolveC64LargePipeline(): ComputePipeline {
+        const key = "kernels:lu:solveC64Large";
         return this.getPipeline(key, () => {
             return new ComputePipeline(this.device, {
                 label: key,
-                code: luSolveComplexLargeWGSL,
+                code: luSolveC64LargeWGSL,
                 entryPoint: "main",
                 bindGroups: [
                     {
@@ -1028,12 +1502,12 @@ export class ComputeKernels {
         });
     }
 
-    private getLuSolveComplexPipeline(): ComputePipeline {
-        const key = "kernels:lu:solveComplex";
+    private getLuSolveC64Pipeline(): ComputePipeline {
+        const key = "kernels:lu:solveC64";
         return this.getPipeline(key, () => {
             return new ComputePipeline(this.device, {
                 label: key,
-                code: luSolveComplexWGSL,
+                code: luSolveC64WGSL,
                 entryPoint: "main",
                 bindGroups: [
                     {
@@ -1081,6 +1555,357 @@ export class ComputeKernels {
             workgroups: workgroups1D(count, 256),
             label: `${labelPrefix}:copy`
         });
+    }
+
+    private resolveVectorPairCount(a: StorageBuffer, b: StorageBuffer, elemBytes: number, count: number | undefined, label: string): number {
+        assertByteLengthMultipleOf(a.byteLength, elemBytes, `${label}: a`);
+        assertByteLengthMultipleOf(b.byteLength, elemBytes, `${label}: b`);
+        const aCount = a.byteLength / elemBytes;
+        const bCount = b.byteLength / elemBytes;
+        if (count === undefined) { assert(aCount === bCount, `${label}: input logical lengths must match when count is omitted (${aCount} != ${bCount})`); return aCount; }
+        assert(Number.isInteger(count) && count >= 0, `${label}: count must be an integer >= 0 (got ${count})`);
+        assert(count <= aCount, `${label}: a has insufficient capacity for count ${count}`);
+        assert(count <= bCount, `${label}: b has insufficient capacity for count ${count}`);
+        return count;
+    }
+
+    private resolveVectorOutput(a: StorageBuffer, b: StorageBuffer | null, elemBytes: number, count: number, out: StorageBuffer | undefined, label: string): StorageBuffer {
+        const result = out ?? new StorageBuffer(this.device, this.queue, { label: `${label}:out`, byteLength: count * elemBytes, copySrc: true });
+        assertByteLengthMultipleOf(result.byteLength, elemBytes, `${label}: out`);
+        assert(result.byteLength >= count * elemBytes, `${label}: out has insufficient capacity for count ${count}`);
+        assert(result !== a && result !== b, `${label}: out must be distinct from all inputs`);
+        return result;
+    }
+
+    private validateGemmDimensions(m: number, n: number, k: number, label: string): { aCount: number; bCount: number; cCount: number } {
+        assert(Number.isInteger(m) && m >= 0, `${label}: m must be an integer >= 0 (got ${m})`);
+        assert(Number.isInteger(n) && n >= 0, `${label}: n must be an integer >= 0 (got ${n})`);
+        assert(Number.isInteger(k) && k >= 0, `${label}: k must be an integer >= 0 (got ${k})`);
+        assert(m <= 0xFFFFFFFF && n <= 0xFFFFFFFF && k <= 0xFFFFFFFF, `${label}: dimensions must fit in u32`);
+        const aCount = m * k;
+        const bCount = k * n;
+        const cCount = m * n;
+        assert(Number.isSafeInteger(aCount) && Number.isSafeInteger(bCount) && Number.isSafeInteger(cCount), `${label}: matrix element-count overflow`);
+        assert(aCount <= 0xFFFFFFFF && bCount <= 0xFFFFFFFF && cCount <= 0xFFFFFFFF, `${label}: matrix element count must fit in u32`);
+        return { aCount, bCount, cCount };
+    }
+
+    addF32(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 4, opts.count, "addF32");
+        const out = this.resolveVectorOutput(a, b, 4, count, opts.out, "addF32");
+        if (count === 0) return out;
+        const pipeline = this.getAddF32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "addF32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "addF32" }], opts);
+        return out;
+    }
+
+    addU32(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 4, opts.count, "addU32");
+        const out = this.resolveVectorOutput(a, b, 4, count, opts.out, "addU32");
+        if (count === 0) return out;
+        const pipeline = this.getAddU32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "addU32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "addU32" }], opts);
+        return out;
+    }
+
+    addC64(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 8, opts.count, "addC64");
+        const out = this.resolveVectorOutput(a, b, 8, count, opts.out, "addC64");
+        if (count === 0) return out;
+        const pipeline = this.getAddC64Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 8), 1: this.bindSized(b, count * 8), 2: this.bindSized(out, count * 8) }, "addC64:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "addC64" }], opts);
+        return out;
+    }
+
+    subF32(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 4, opts.count, "subF32");
+        const out = this.resolveVectorOutput(a, b, 4, count, opts.out, "subF32");
+        if (count === 0) return out;
+        const pipeline = this.getSubF32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "subF32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "subF32" }], opts);
+        return out;
+    }
+
+    subU32(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 4, opts.count, "subU32");
+        const out = this.resolveVectorOutput(a, b, 4, count, opts.out, "subU32");
+        if (count === 0) return out;
+        const pipeline = this.getSubU32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "subU32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "subU32" }], opts);
+        return out;
+    }
+
+    subC64(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 8, opts.count, "subC64");
+        const out = this.resolveVectorOutput(a, b, 8, count, opts.out, "subC64");
+        if (count === 0) return out;
+        const pipeline = this.getSubC64Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 8), 1: this.bindSized(b, count * 8), 2: this.bindSized(out, count * 8) }, "subC64:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "subC64" }], opts);
+        return out;
+    }
+
+    mulF32(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 4, opts.count, "mulF32");
+        const out = this.resolveVectorOutput(a, b, 4, count, opts.out, "mulF32");
+        if (count === 0) return out;
+        const pipeline = this.getMulF32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "mulF32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "mulF32" }], opts);
+        return out;
+    }
+
+    mulU32(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 4, opts.count, "mulU32");
+        const out = this.resolveVectorOutput(a, b, 4, count, opts.out, "mulU32");
+        if (count === 0) return out;
+        const pipeline = this.getMulU32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "mulU32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "mulU32" }], opts);
+        return out;
+    }
+
+    mulC64(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 8, opts.count, "mulC64");
+        const out = this.resolveVectorOutput(a, b, 8, count, opts.out, "mulC64");
+        if (count === 0) return out;
+        const pipeline = this.getMulC64Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 8), 1: this.bindSized(b, count * 8), 2: this.bindSized(out, count * 8) }, "mulC64:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "mulC64" }], opts);
+        return out;
+    }
+
+    sclF32(input: StorageBuffer, scalar: number, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveCount(input, 4, opts.count);
+        const out = this.resolveVectorOutput(input, null, 4, count, opts.out, "sclF32");
+        if (count === 0) return out;
+        const params = this.scratch.acquire(4, "sclF32:params");
+        this.queue.writeBuffer(params, 0, new Float32Array([scalar]));
+        const pipeline = this.getSclF32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(input, count * 4), 1: this.bindSized(out, count * 4), 2: { buffer: params, size: 4 } }, "sclF32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "sclF32" }], opts);
+        return out;
+    }
+
+    sclU32(input: StorageBuffer, scalar: number, opts: VectorKernelOptions = {}): StorageBuffer {
+        assert(Number.isInteger(scalar) && scalar >= 0 && scalar <= 0xFFFFFFFF, `sclU32: scalar must be a u32 integer (got ${scalar})`);
+        const count = this.resolveCount(input, 4, opts.count);
+        const out = this.resolveVectorOutput(input, null, 4, count, opts.out, "sclU32");
+        if (count === 0) return out;
+        const params = this.scratch.acquire(4, "sclU32:params");
+        this.queue.writeBuffer(params, 0, new Uint32Array([scalar]));
+        const pipeline = this.getSclU32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(input, count * 4), 1: this.bindSized(out, count * 4), 2: { buffer: params, size: 4 } }, "sclU32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "sclU32" }], opts);
+        return out;
+    }
+
+    sclC64(input: StorageBuffer, scalar: C64Scalar, opts: VectorKernelOptions = {}): StorageBuffer {
+        assert(Array.isArray(scalar) && scalar.length === 2 && typeof scalar[0] === "number" && typeof scalar[1] === "number", `sclC64: scalar must be a [real, imaginary] tuple`);
+        const count = this.resolveCount(input, 8, opts.count);
+        const out = this.resolveVectorOutput(input, null, 8, count, opts.out, "sclC64");
+        if (count === 0) return out;
+        const params = this.scratch.acquire(8, "sclC64:params");
+        this.queue.writeBuffer(params, 0, new Float32Array(scalar));
+        const pipeline = this.getSclC64Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(input, count * 8), 1: this.bindSized(out, count * 8), 2: { buffer: params, size: 8 } }, "sclC64:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "sclC64" }], opts);
+        return out;
+    }
+
+    axpyF32(x: StorageBuffer, y: StorageBuffer, alpha: number, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(x, y, 4, opts.count, "axpyF32");
+        const out = this.resolveVectorOutput(x, y, 4, count, opts.out, "axpyF32");
+        if (count === 0) return out;
+        const params = this.scratch.acquire(4, "axpyF32:params");
+        this.queue.writeBuffer(params, 0, new Float32Array([alpha]));
+        const pipeline = this.getAxpyF32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(x, count * 4), 1: this.bindSized(y, count * 4), 2: this.bindSized(out, count * 4), 3: { buffer: params, size: 4 } }, "axpyF32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "axpyF32" }], opts);
+        return out;
+    }
+
+    axpyU32(x: StorageBuffer, y: StorageBuffer, alpha: number, opts: VectorKernelOptions = {}): StorageBuffer {
+        assert(Number.isInteger(alpha) && alpha >= 0 && alpha <= 0xFFFFFFFF, `axpyU32: alpha must be a u32 integer (got ${alpha})`);
+        const count = this.resolveVectorPairCount(x, y, 4, opts.count, "axpyU32");
+        const out = this.resolveVectorOutput(x, y, 4, count, opts.out, "axpyU32");
+        if (count === 0) return out;
+        const params = this.scratch.acquire(4, "axpyU32:params");
+        this.queue.writeBuffer(params, 0, new Uint32Array([alpha]));
+        const pipeline = this.getAxpyU32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(x, count * 4), 1: this.bindSized(y, count * 4), 2: this.bindSized(out, count * 4), 3: { buffer: params, size: 4 } }, "axpyU32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "axpyU32" }], opts);
+        return out;
+    }
+
+    axpyC64(x: StorageBuffer, y: StorageBuffer, alpha: C64Scalar, opts: VectorKernelOptions = {}): StorageBuffer {
+        assert(Array.isArray(alpha) && alpha.length === 2 && typeof alpha[0] === "number" && typeof alpha[1] === "number", `axpyC64: alpha must be a [real, imaginary] tuple`);
+        const count = this.resolveVectorPairCount(x, y, 8, opts.count, "axpyC64");
+        const out = this.resolveVectorOutput(x, y, 8, count, opts.out, "axpyC64");
+        if (count === 0) return out;
+        const params = this.scratch.acquire(8, "axpyC64:params");
+        this.queue.writeBuffer(params, 0, new Float32Array(alpha));
+        const pipeline = this.getAxpyC64Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(x, count * 8), 1: this.bindSized(y, count * 8), 2: this.bindSized(out, count * 8), 3: { buffer: params, size: 8 } }, "axpyC64:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "axpyC64" }], opts);
+        return out;
+    }
+
+    dotF32(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 4, opts.count, "dotF32");
+        const out = opts.out ?? new StorageBuffer(this.device, this.queue, { label: "dotF32:out", byteLength: 4, copySrc: true });
+        assertByteLengthMultipleOf(out.byteLength, 4, "dotF32: out");
+        assert(out.byteLength >= 4, "dotF32: out must be at least 4 bytes");
+        assert(out !== a && out !== b, "dotF32: out must be distinct from all inputs");
+        if (count === 0) { this.writeScalarF32(out, 0); return out; }
+        const commands: ComputeDispatchCommand[] = [];
+        const partialCount = ceilDiv(count, 512);
+        const partial: BufferResource = partialCount === 1 ? out : this.scratch.acquire(partialCount * 4, "dotF32:partial");
+        const pipeline = this.getDotF32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(partial, partialCount * 4) }, "dotF32:bg");
+        commands.push({ pipeline, bindGroups: [bg], workgroups: makeWorkgroupCounts(partialCount, 1, 1), label: "dotF32" });
+        if (partialCount > 1) this.encodeReduceScalar(commands, "f32", "sum", partial, partialCount, out, "dotF32");
+        this.execute(commands, opts);
+        return out;
+    }
+
+    dotU32(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 4, opts.count, "dotU32");
+        const out = opts.out ?? new StorageBuffer(this.device, this.queue, { label: "dotU32:out", byteLength: 4, copySrc: true });
+        assertByteLengthMultipleOf(out.byteLength, 4, "dotU32: out");
+        assert(out.byteLength >= 4, "dotU32: out must be at least 4 bytes");
+        assert(out !== a && out !== b, "dotU32: out must be distinct from all inputs");
+        if (count === 0) { this.writeScalarU32(out, 0); return out; }
+        const commands: ComputeDispatchCommand[] = [];
+        const partialCount = ceilDiv(count, 512);
+        const partial: BufferResource = partialCount === 1 ? out : this.scratch.acquire(partialCount * 4, "dotU32:partial");
+        const pipeline = this.getDotU32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(partial, partialCount * 4) }, "dotU32:bg");
+        commands.push({ pipeline, bindGroups: [bg], workgroups: makeWorkgroupCounts(partialCount, 1, 1), label: "dotU32" });
+        if (partialCount > 1) this.encodeReduceScalar(commands, "u32", "sum", partial, partialCount, out, "dotU32");
+        this.execute(commands, opts);
+        return out;
+    }
+
+    dotC64(a: StorageBuffer, b: StorageBuffer, opts: VectorKernelOptions = {}): StorageBuffer {
+        const count = this.resolveVectorPairCount(a, b, 8, opts.count, "dotC64");
+        const out = opts.out ?? new StorageBuffer(this.device, this.queue, { label: "dotC64:out", byteLength: 8, copySrc: true });
+        assertByteLengthMultipleOf(out.byteLength, 8, "dotC64: out");
+        assert(out.byteLength >= 8, "dotC64: out must be at least 8 bytes");
+        assert(out !== a && out !== b, "dotC64: out must be distinct from all inputs");
+        if (count === 0) { this.queue.writeBuffer(out.buffer, 0, new Float32Array([0, 0])); return out; }
+        const commands: ComputeDispatchCommand[] = [];
+        let n = count;
+        let input: BufferResource = a;
+        let pass = 0;
+        while (true) {
+            const partialCount = ceilDiv(n, 512);
+            const partial: BufferResource = partialCount === 1 ? out : this.scratch.acquire(partialCount * 8, `dotC64:partial:${pass}`);
+            const pipeline = pass === 0 ? this.getDotC64Pipeline() : this.getDotC64ReducePipeline();
+            const second: BufferResource = pass === 0 ? b : input;
+            const bg = pipeline.createBindGroup(0, { 0: this.bindSized(input, n * 8), 1: this.bindSized(second, n * 8), 2: this.bindSized(partial, partialCount * 8) }, `dotC64:${pass}:bg`);
+            commands.push({ pipeline, bindGroups: [bg], workgroups: makeWorkgroupCounts(partialCount, 1, 1), label: `dotC64:${pass}` });
+            if (partialCount === 1) break;
+            input = partial;
+            n = partialCount;
+            pass++;
+        }
+        this.execute(commands, opts);
+        return out;
+    }
+
+    gemmF32(a: StorageBuffer, b: StorageBuffer, m: number, n: number, k: number, opts: GemmF32Options = {}): StorageBuffer {
+        const sizes = this.validateGemmDimensions(m, n, k, "gemmF32");
+        assertByteLengthMultipleOf(a.byteLength, 4, "gemmF32: a");
+        assertByteLengthMultipleOf(b.byteLength, 4, "gemmF32: b");
+        assert(a.byteLength >= sizes.aCount * 4, "gemmF32: a has insufficient capacity");
+        assert(b.byteLength >= sizes.bCount * 4, "gemmF32: b has insufficient capacity");
+        const out = opts.out ?? new StorageBuffer(this.device, this.queue, { label: "gemmF32:out", byteLength: sizes.cCount * 4, copySrc: true });
+        assertByteLengthMultipleOf(out.byteLength, 4, "gemmF32: out");
+        assert(out.byteLength >= sizes.cCount * 4, "gemmF32: out has insufficient capacity");
+        assert(out !== a && out !== b, "gemmF32: out must be distinct from a and b");
+        if (m === 0 || n === 0) return out;
+        const raw = new ArrayBuffer(32);
+        const view = new DataView(raw);
+        view.setUint32(0, m, true);
+        view.setUint32(4, n, true);
+        view.setUint32(8, k, true);
+        view.setFloat32(12, opts.alpha ?? 1, true);
+        view.setFloat32(16, opts.beta ?? 0, true);
+        const params = this.scratch.acquire(32, "gemmF32:params");
+        this.queue.writeBuffer(params, 0, raw);
+        const pipeline = this.getGemmF32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, sizes.aCount * 4), 1: this.bindSized(b, sizes.bCount * 4), 2: this.bindSized(out, sizes.cCount * 4), 3: { buffer: params, size: 32 } }, "gemmF32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: makeWorkgroupCounts(ceilDiv(n, 16), ceilDiv(m, 16), 1), label: "gemmF32" }], opts);
+        return out;
+    }
+
+    gemmU32(a: StorageBuffer, b: StorageBuffer, m: number, n: number, k: number, opts: GemmU32Options = {}): StorageBuffer {
+        const alpha = opts.alpha ?? 1;
+        const beta = opts.beta ?? 0;
+        assert(Number.isInteger(alpha) && alpha >= 0 && alpha <= 0xFFFFFFFF, `gemmU32: alpha must be a u32 integer (got ${alpha})`);
+        assert(Number.isInteger(beta) && beta >= 0 && beta <= 0xFFFFFFFF, `gemmU32: beta must be a u32 integer (got ${beta})`);
+        const sizes = this.validateGemmDimensions(m, n, k, "gemmU32");
+        assertByteLengthMultipleOf(a.byteLength, 4, "gemmU32: a");
+        assertByteLengthMultipleOf(b.byteLength, 4, "gemmU32: b");
+        assert(a.byteLength >= sizes.aCount * 4, "gemmU32: a has insufficient capacity");
+        assert(b.byteLength >= sizes.bCount * 4, "gemmU32: b has insufficient capacity");
+        const out = opts.out ?? new StorageBuffer(this.device, this.queue, { label: "gemmU32:out", byteLength: sizes.cCount * 4, copySrc: true });
+        assertByteLengthMultipleOf(out.byteLength, 4, "gemmU32: out");
+        assert(out.byteLength >= sizes.cCount * 4, "gemmU32: out has insufficient capacity");
+        assert(out !== a && out !== b, "gemmU32: out must be distinct from a and b");
+        if (m === 0 || n === 0) return out;
+        const data = new Uint32Array(8);
+        data[0] = m;
+        data[1] = n;
+        data[2] = k;
+        data[3] = alpha;
+        data[4] = beta;
+        const params = this.scratch.acquire(32, "gemmU32:params");
+        this.queue.writeBuffer(params, 0, data);
+        const pipeline = this.getGemmU32Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, sizes.aCount * 4), 1: this.bindSized(b, sizes.bCount * 4), 2: this.bindSized(out, sizes.cCount * 4), 3: { buffer: params, size: 32 } }, "gemmU32:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: makeWorkgroupCounts(ceilDiv(n, 16), ceilDiv(m, 16), 1), label: "gemmU32" }], opts);
+        return out;
+    }
+
+    gemmC64(a: StorageBuffer, b: StorageBuffer, m: number, n: number, k: number, opts: GemmC64Options = {}): StorageBuffer {
+        const alpha = opts.alpha ?? [1, 0];
+        const beta = opts.beta ?? [0, 0];
+        assert(Array.isArray(alpha) && alpha.length === 2 && typeof alpha[0] === "number" && typeof alpha[1] === "number", `gemmC64: alpha must be a [real, imaginary] tuple`);
+        assert(Array.isArray(beta) && beta.length === 2 && typeof beta[0] === "number" && typeof beta[1] === "number", `gemmC64: beta must be a [real, imaginary] tuple`);
+        const sizes = this.validateGemmDimensions(m, n, k, "gemmC64");
+        assertByteLengthMultipleOf(a.byteLength, 8, "gemmC64: a");
+        assertByteLengthMultipleOf(b.byteLength, 8, "gemmC64: b");
+        assert(a.byteLength >= sizes.aCount * 8, "gemmC64: a has insufficient capacity");
+        assert(b.byteLength >= sizes.bCount * 8, "gemmC64: b has insufficient capacity");
+        const out = opts.out ?? new StorageBuffer(this.device, this.queue, { label: "gemmC64:out", byteLength: sizes.cCount * 8, copySrc: true });
+        assertByteLengthMultipleOf(out.byteLength, 8, "gemmC64: out");
+        assert(out.byteLength >= sizes.cCount * 8, "gemmC64: out has insufficient capacity");
+        assert(out !== a && out !== b, "gemmC64: out must be distinct from a and b");
+        if (m === 0 || n === 0) return out;
+        const raw = new ArrayBuffer(32);
+        const view = new DataView(raw);
+        view.setUint32(0, m, true);
+        view.setUint32(4, n, true);
+        view.setUint32(8, k, true);
+        view.setFloat32(12, alpha[0], true);
+        view.setFloat32(16, alpha[1], true);
+        view.setFloat32(20, beta[0], true);
+        view.setFloat32(24, beta[1], true);
+        const params = this.scratch.acquire(32, "gemmC64:params");
+        this.queue.writeBuffer(params, 0, raw);
+        const aBinding: BufferResource = sizes.aCount === 0 ? this.scratch.acquire(8, "gemmC64:emptyA") : a;
+        const bBinding: BufferResource = sizes.bCount === 0 ? this.scratch.acquire(8, "gemmC64:emptyB") : b;
+        const pipeline = this.getGemmC64Pipeline();
+        const bg = pipeline.createBindGroup(0, { 0: this.bindSized(aBinding, Math.max(8, sizes.aCount * 8)), 1: this.bindSized(bBinding, Math.max(8, sizes.bCount * 8)), 2: this.bindSized(out, sizes.cCount * 8), 3: { buffer: params, size: 32 } }, "gemmC64:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: makeWorkgroupCounts(ceilDiv(n, 16), ceilDiv(m, 16), 1), label: "gemmC64" }], opts);
+        return out;
     }
 
     copyU32(src: BufferResource, opts: CopyOptions = {}): StorageBuffer {
@@ -1603,14 +2428,6 @@ export class ComputeKernels {
         return { keys: outKeys, values: outValues };
     }
 
-    /**
-    * In-place batched LU factorization with **partial pivoting**.
-    * Matrices are `(batchCount, n, n)` row-major `f32`. On return each block holds compact
-    * `L` (strict lower, unit diagonal implicit) and `U` (upper including diagonal) of **P A**
-    * where row swaps are recorded in `ipiv` (`ipiv[b*n + k]` = row swapped with row `k`
-    * at step `k`, 0-based). For `n < 160` this uses the small-matrix path; larger systems use
-    * the blocked panel/update path.
-     */
     luFactorF32Batched(matrices: StorageBuffer, ipiv: StorageBuffer, batchCount: number, n: number, opts: KernelDispatchOptions = {}): void {
         assert(!opts.encoder, "luFactorF32Batched does not support opts.encoder");
         assert(Number.isInteger(batchCount) && batchCount >= 0, `luFactorF32Batched: batchCount must be an integer >= 0 (got ${batchCount})`);
@@ -1625,92 +2442,40 @@ export class ComputeKernels {
         assert(ipiv.byteLength >= ipivBytes, `luFactorF32Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
         if (n < 160) {
             const params = this.getLuBatchedParamsBuffer();
-            this.queue.writeBuffer(params, 0, new Uint32Array([
-                batchCount >>> 0,
-                n >>> 0,
-                elemsPerMatrix >>> 0,
-                0
-            ]));
+            this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, 0]));
             const pipeline = this.getLuFactorRealPipeline();
-            const bg = pipeline.createBindGroup(0, {
-                0: { buffer: params, size: 16 },
-                1: this.bindSized(matrices, needBytes),
-                2: this.bindSized(ipiv, ipivBytes)
-            }, "luFactorF32Batched:bg");
+            const bg = pipeline.createBindGroup(0, { 0: { buffer: params, size: 16 }, 1: this.bindSized(matrices, needBytes), 2: this.bindSized(ipiv, ipivBytes) }, "luFactorF32Batched:bg");
             this.execute([{ pipeline, bindGroups: [bg], workgroups: { x: batchCount, y: 1, z: 1 }, label: "luFactorF32Batched" }], opts);
             return;
         }
-
         const params = this.getLuBlockedParamsBuffer();
         const leadPipe = this.getLuFactorRealLeadPipeline();
         const upperPipe = this.getLuFactorRealUpperPipeline();
         const trailingPipe = this.getLuFactorRealTrailingPipeline();
-
-        const bgLead = leadPipe.createBindGroup(0, {
-            0: { buffer: params, size: 32 },
-            1: this.bindSized(matrices, needBytes),
-            2: this.bindSized(ipiv, ipivBytes)
-        }, "luFactorF32:lead:bg");
-        const bgUpper = upperPipe.createBindGroup(0, {
-            0: { buffer: params, size: 32 },
-            1: this.bindSized(matrices, needBytes)
-        }, "luFactorF32:upper:bg");
-        const bgTrailing = trailingPipe.createBindGroup(0, {
-            0: { buffer: params, size: 32 },
-            1: this.bindSized(matrices, needBytes)
-        }, "luFactorF32:trailing:bg");
-
+        const bgLead = leadPipe.createBindGroup(0, { 0: { buffer: params, size: 32 }, 1: this.bindSized(matrices, needBytes), 2: this.bindSized(ipiv, ipivBytes) }, "luFactorF32:lead:bg");
+        const bgUpper = upperPipe.createBindGroup(0, { 0: { buffer: params, size: 32 }, 1: this.bindSized(matrices, needBytes) }, "luFactorF32:upper:bg");
+        const bgTrailing = trailingPipe.createBindGroup(0, { 0: { buffer: params, size: 32 }, 1: this.bindSized(matrices, needBytes) }, "luFactorF32:trailing:bg");
         const PANEL_B = 16;
         for (let kk = 0; kk < n; kk += PANEL_B) {
             const pw = Math.min(PANEL_B, n - kk);
             const trail = n - (kk + pw);
-
-            this.queue.writeBuffer(params, 0, new Uint32Array([
-                batchCount >>> 0,
-                n >>> 0,
-                elemsPerMatrix >>> 0,
-                kk >>> 0,
-                pw >>> 0,
-                0, 0, 0
-            ]));
-
-            const cmds: ComputeDispatchCommand[] = [
-                { pipeline: leadPipe, bindGroups: [bgLead], workgroups: { x: batchCount, y: 1, z: 1 }, label: `luFactorF32:lead:kk${kk}` }
-            ];
-
+            this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, kk >>> 0, pw >>> 0, 0, 0, 0]));
+            const cmds: ComputeDispatchCommand[] = [{ pipeline: leadPipe, bindGroups: [bgLead], workgroups: { x: batchCount, y: 1, z: 1 }, label: `luFactorF32:lead:kk${kk}` }];
             if (trail > 0) {
                 const totalTrsm = batchCount * trail;
-                cmds.push({
-                    pipeline: upperPipe,
-                    bindGroups: [bgUpper],
-                    workgroups: workgroups1D(totalTrsm, 256),
-                    label: `luFactorF32:upper:kk${kk}`
-                });
-
+                cmds.push({ pipeline: upperPipe, bindGroups: [bgUpper], workgroups: workgroups1D(totalTrsm, 256), label: `luFactorF32:upper:kk${kk}` });
                 const mDim = trail;
                 const nDim = trail;
                 const tileM = 16;
                 const tileN = 8;
                 const mTiles = Math.ceil(mDim / tileM);
                 const nTiles = Math.ceil(nDim / tileN);
-                cmds.push({
-                    pipeline: trailingPipe,
-                    bindGroups: [bgTrailing],
-                    workgroups: { x: nTiles, y: mTiles, z: batchCount },
-                    label: `luFactorF32:trailing:kk${kk}`
-                });
+                cmds.push({ pipeline: trailingPipe, bindGroups: [bgTrailing], workgroups: { x: nTiles, y: mTiles, z: batchCount }, label: `luFactorF32:trailing:kk${kk}` });
             }
-
             this.execute(cmds, opts);
         }
     }
 
-    /**
-    * Batched solve `A x = b` given `lu` and `ipiv` from {@link luFactorF32Batched} for the
-    * same `batchCount` and `n`. `rhs` is `(batchCount, n)` contiguous `f32`; `outX` receives
-    * the solution. For `n <= 512` this uses the shared-memory path; larger systems use the
-    * large-matrix fallback. `lu`, `ipiv`, `rhs`, and `outX` must be pairwise distinct `StorageBuffer` instances.
-     */
     luSolveF32Batched(lu: StorageBuffer, ipiv: StorageBuffer, rhs: StorageBuffer, outX: StorageBuffer, batchCount: number, n: number, opts: KernelDispatchOptions = {}): void {
         assert(!opts.encoder, "luSolveF32Batched does not support opts.encoder");
         assert(Number.isInteger(batchCount) && batchCount >= 0, `luSolveF32Batched: batchCount must be an integer >= 0 (got ${batchCount})`);
@@ -1727,174 +2492,79 @@ export class ComputeKernels {
         assert(rhs.byteLength >= rhsBytes, `luSolveF32Batched: rhs buffer too small (need ${rhsBytes} bytes, have ${rhs.byteLength})`);
         assert(outX.byteLength >= rhsBytes, `luSolveF32Batched: outX buffer too small (need ${rhsBytes} bytes, have ${outX.byteLength})`);
         const params = this.getLuBatchedParamsBuffer();
-        this.queue.writeBuffer(params, 0, new Uint32Array([
-            batchCount >>> 0,
-            n >>> 0,
-            elemsPerMatrix >>> 0,
-            0
-        ]));
+        this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, 0]));
         const pipeline = (n <= 512) ? this.getLuSolveRealSharedPipeline() : this.getLuSolveRealPipeline();
-        const bg = pipeline.createBindGroup(0, {
-            0: { buffer: params, size: 16 },
-            1: this.bindSized(lu, luBytes),
-            2: this.bindSized(rhs, rhsBytes),
-            3: this.bindSized(outX, rhsBytes),
-            4: this.bindSized(ipiv, ipivBytes)
-        }, "luSolveF32Batched:bg");
-        this.execute([
-            {
-                pipeline,
-                bindGroups: [bg],
-                workgroups: { x: batchCount, y: 1, z: 1 },
-                label: "luSolveF32Batched"
-            }
-        ], opts);
+        const bg = pipeline.createBindGroup(0, { 0: { buffer: params, size: 16 }, 1: this.bindSized(lu, luBytes), 2: this.bindSized(rhs, rhsBytes), 3: this.bindSized(outX, rhsBytes), 4: this.bindSized(ipiv, ipivBytes) }, "luSolveF32Batched:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: { x: batchCount, y: 1, z: 1 }, label: "luSolveF32Batched" }], opts);
     }
 
-    /**
-     * In-place batched **complex64** LU (`interleaved re,im` as **8 bytes** per matrix entry,
-     * row-major `(batchCount, n, n)`). Same pivot convention as {@link luFactorF32Batched};
-     * `ipiv` is `batchCount * n` **u32** (bytes = `batchCount * n * 4`).
-     */
-    luFactorComplex64Batched(matrices: StorageBuffer, ipiv: StorageBuffer, batchCount: number, n: number, opts: KernelDispatchOptions = {}): void {
-        assert(!opts.encoder, "luFactorComplex64Batched does not support opts.encoder");
-        assert(Number.isInteger(batchCount) && batchCount >= 0, `luFactorComplex64Batched: batchCount must be an integer >= 0 (got ${batchCount})`);
-        assert(Number.isInteger(n) && n >= 0, `luFactorComplex64Batched: n must be an integer >= 0 (got ${n})`);
-        assert(matrices !== ipiv, "luFactorComplex64Batched: matrices and ipiv must be distinct StorageBuffer instances");
+    luFactorC64Batched(matrices: StorageBuffer, ipiv: StorageBuffer, batchCount: number, n: number, opts: KernelDispatchOptions = {}): void {
+        assert(!opts.encoder, "luFactorC64Batched does not support opts.encoder");
+        assert(Number.isInteger(batchCount) && batchCount >= 0, `luFactorC64Batched: batchCount must be an integer >= 0 (got ${batchCount})`);
+        assert(Number.isInteger(n) && n >= 0, `luFactorC64Batched: n must be an integer >= 0 (got ${n})`);
+        assert(matrices !== ipiv, "luFactorC64Batched: matrices and ipiv must be distinct StorageBuffer instances");
         if (batchCount === 0 || n === 0) return;
         const elemsPerMatrix = n * n;
-        assert(Number.isFinite(elemsPerMatrix) && elemsPerMatrix <= 0xFFFFFFFF, "luFactorComplex64Batched: n*n overflow");
+        assert(Number.isFinite(elemsPerMatrix) && elemsPerMatrix <= 0xFFFFFFFF, "luFactorC64Batched: n*n overflow");
         const needBytes = batchCount * elemsPerMatrix * 8;
         const ipivBytes = batchCount * n * 4;
-        assert(matrices.byteLength >= needBytes, `luFactorComplex64Batched: matrices buffer too small (need ${needBytes} bytes, have ${matrices.byteLength})`);
-        assert(ipiv.byteLength >= ipivBytes, `luFactorComplex64Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
-        // Heuristic: blocked kernel overhead dominates for small n.
+        assert(matrices.byteLength >= needBytes, `luFactorC64Batched: matrices buffer too small (need ${needBytes} bytes, have ${matrices.byteLength})`);
+        assert(ipiv.byteLength >= ipivBytes, `luFactorC64Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
         if (n < 160) {
             const params = this.getLuBatchedParamsBuffer();
-            this.queue.writeBuffer(params, 0, new Uint32Array([
-                batchCount >>> 0,
-                n >>> 0,
-                elemsPerMatrix >>> 0,
-                0
-            ]));
-            const pipeline = this.getLuFactorComplexSmallPipeline();
-            const bg = pipeline.createBindGroup(0, {
-                0: { buffer: params, size: 16 },
-                1: this.bindSized(matrices, needBytes),
-                2: this.bindSized(ipiv, ipivBytes)
-            }, "luFactorComplex64Batched:bg");
-            this.execute([{ pipeline, bindGroups: [bg], workgroups: { x: batchCount, y: 1, z: 1 }, label: "luFactorComplex64Batched" }], opts);
+            this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, 0]));
+            const pipeline = this.getLuFactorC64SmallPipeline();
+            const bg = pipeline.createBindGroup(0, { 0: { buffer: params, size: 16 }, 1: this.bindSized(matrices, needBytes), 2: this.bindSized(ipiv, ipivBytes) }, "luFactorC64Batched:bg");
+            this.execute([{ pipeline, bindGroups: [bg], workgroups: { x: batchCount, y: 1, z: 1 }, label: "luFactorC64Batched" }], opts);
             return;
         }
-
-        // Blocked LU: panel + TRSM + GEMM (multi-dispatch per panel).
         const params = this.getLuBlockedParamsBuffer();
-        const leadPipe = this.getLuFactorComplexLeadPipeline();
-        const upperPipe = this.getLuFactorComplexUpperPipeline();
-        const trailingPipe = this.getLuFactorComplexTrailingPipeline();
-
-        const bgLead = leadPipe.createBindGroup(0, {
-            0: { buffer: params, size: 32 },
-            1: this.bindSized(matrices, needBytes),
-            2: this.bindSized(ipiv, ipivBytes)
-        }, "luFactorComplex64:lead:bg");
-        const bgUpper = upperPipe.createBindGroup(0, {
-            0: { buffer: params, size: 32 },
-            1: this.bindSized(matrices, needBytes)
-        }, "luFactorComplex64:upper:bg");
-        const bgTrailing = trailingPipe.createBindGroup(0, {
-            0: { buffer: params, size: 32 },
-            1: this.bindSized(matrices, needBytes)
-        }, "luFactorComplex64:trailing:bg");
-
+        const leadPipe = this.getLuFactorC64LeadPipeline();
+        const upperPipe = this.getLuFactorC64UpperPipeline();
+        const trailingPipe = this.getLuFactorC64TrailingPipeline();
+        const bgLead = leadPipe.createBindGroup(0, { 0: { buffer: params, size: 32 }, 1: this.bindSized(matrices, needBytes), 2: this.bindSized(ipiv, ipivBytes) }, "luFactorC64:lead:bg");
+        const bgUpper = upperPipe.createBindGroup(0, { 0: { buffer: params, size: 32 }, 1: this.bindSized(matrices, needBytes) }, "luFactorC64:upper:bg");
+        const bgTrailing = trailingPipe.createBindGroup(0, { 0: { buffer: params, size: 32 }, 1: this.bindSized(matrices, needBytes) }, "luFactorC64:trailing:bg");
         const PANEL_B = 16;
         for (let kk = 0; kk < n; kk += PANEL_B) {
             const pw = Math.min(PANEL_B, n - kk);
             const trail = n - (kk + pw);
-
-            this.queue.writeBuffer(params, 0, new Uint32Array([
-                batchCount >>> 0,
-                n >>> 0,
-                elemsPerMatrix >>> 0,
-                kk >>> 0,
-                pw >>> 0,
-                0, 0, 0
-            ]));
-
-            const cmds: ComputeDispatchCommand[] = [
-                { pipeline: leadPipe, bindGroups: [bgLead], workgroups: { x: batchCount, y: 1, z: 1 }, label: `luFactorComplex64:lead:kk${kk}` }
-            ];
-
+            this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, kk >>> 0, pw >>> 0, 0, 0, 0]));
+            const cmds: ComputeDispatchCommand[] = [{ pipeline: leadPipe, bindGroups: [bgLead], workgroups: { x: batchCount, y: 1, z: 1 }, label: `luFactorC64:lead:kk${kk}` }];
             if (trail > 0) {
                 const totalTrsm = batchCount * trail;
-                cmds.push({
-                    pipeline: upperPipe,
-                    bindGroups: [bgUpper],
-                    workgroups: workgroups1D(totalTrsm, 256),
-                    label: `luFactorComplex64:upper:kk${kk}`
-                });
-
+                cmds.push({ pipeline: upperPipe, bindGroups: [bgUpper], workgroups: workgroups1D(totalTrsm, 256), label: `luFactorC64:upper:kk${kk}` });
                 const mDim = trail;
                 const nDim = trail;
                 const tileM = 16;
                 const tileN = 8;
                 const mTiles = Math.ceil(mDim / tileM);
                 const nTiles = Math.ceil(nDim / tileN);
-                cmds.push({
-                    pipeline: trailingPipe,
-                    bindGroups: [bgTrailing],
-                    workgroups: { x: nTiles, y: mTiles, z: batchCount },
-                    label: `luFactorComplex64:trailing:kk${kk}`
-                });
+                cmds.push({ pipeline: trailingPipe, bindGroups: [bgTrailing], workgroups: { x: nTiles, y: mTiles, z: batchCount }, label: `luFactorC64:trailing:kk${kk}` });
             }
-
             this.execute(cmds, opts);
         }
     }
 
-    /**
-     * Batched **complex64** solve `A x = b` using `lu` + `ipiv` from {@link luFactorComplex64Batched}.
-     * `rhs` / `outX` are `(batchCount, n)` with **8 bytes** per component (re, im) per entry.
-    * For `n <= 512`, this picks the shared-memory path; larger systems use the
-    * large-matrix path that does not rely on workgroup-local storage.
-     */
-    luSolveComplex64Batched(lu: StorageBuffer, ipiv: StorageBuffer, rhs: StorageBuffer, outX: StorageBuffer, batchCount: number, n: number, opts: KernelDispatchOptions = {}): void {
-        assert(!opts.encoder, "luSolveComplex64Batched does not support opts.encoder");
-        assert(Number.isInteger(batchCount) && batchCount >= 0, `luSolveComplex64Batched: batchCount must be an integer >= 0 (got ${batchCount})`);
-        assert(Number.isInteger(n) && n >= 0, `luSolveComplex64Batched: n must be an integer >= 0 (got ${n})`);
-        assert(lu !== rhs && lu !== outX && lu !== ipiv && rhs !== outX && rhs !== ipiv && outX !== ipiv, "luSolveComplex64Batched: lu, ipiv, rhs, and outX must be distinct StorageBuffer instances");
+    luSolveC64Batched(lu: StorageBuffer, ipiv: StorageBuffer, rhs: StorageBuffer, outX: StorageBuffer, batchCount: number, n: number, opts: KernelDispatchOptions = {}): void {
+        assert(!opts.encoder, "luSolveC64Batched does not support opts.encoder");
+        assert(Number.isInteger(batchCount) && batchCount >= 0, `luSolveC64Batched: batchCount must be an integer >= 0 (got ${batchCount})`);
+        assert(Number.isInteger(n) && n >= 0, `luSolveC64Batched: n must be an integer >= 0 (got ${n})`);
+        assert(lu !== rhs && lu !== outX && lu !== ipiv && rhs !== outX && rhs !== ipiv && outX !== ipiv, "luSolveC64Batched: lu, ipiv, rhs, and outX must be distinct StorageBuffer instances");
         if (batchCount === 0 || n === 0) return;
         const elemsPerMatrix = n * n;
-        assert(Number.isFinite(elemsPerMatrix) && elemsPerMatrix <= 0xFFFFFFFF, "luSolveComplex64Batched: n*n overflow");
+        assert(Number.isFinite(elemsPerMatrix) && elemsPerMatrix <= 0xFFFFFFFF, "luSolveC64Batched: n*n overflow");
         const luBytes = batchCount * elemsPerMatrix * 8;
         const rhsBytes = batchCount * n * 8;
         const ipivBytes = batchCount * n * 4;
-        assert(lu.byteLength >= luBytes, `luSolveComplex64Batched: lu buffer too small (need ${luBytes} bytes, have ${lu.byteLength})`);
-        assert(ipiv.byteLength >= ipivBytes, `luSolveComplex64Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
-        assert(rhs.byteLength >= rhsBytes, `luSolveComplex64Batched: rhs buffer too small (need ${rhsBytes} bytes, have ${rhs.byteLength})`);
-        assert(outX.byteLength >= rhsBytes, `luSolveComplex64Batched: outX buffer too small (need ${rhsBytes} bytes, have ${outX.byteLength})`);
+        assert(lu.byteLength >= luBytes, `luSolveC64Batched: lu buffer too small (need ${luBytes} bytes, have ${lu.byteLength})`);
+        assert(ipiv.byteLength >= ipivBytes, `luSolveC64Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
+        assert(rhs.byteLength >= rhsBytes, `luSolveC64Batched: rhs buffer too small (need ${rhsBytes} bytes, have ${rhs.byteLength})`);
+        assert(outX.byteLength >= rhsBytes, `luSolveC64Batched: outX buffer too small (need ${rhsBytes} bytes, have ${outX.byteLength})`);
         const params = this.getLuBatchedParamsBuffer();
-        this.queue.writeBuffer(params, 0, new Uint32Array([
-            batchCount >>> 0,
-            n >>> 0,
-            elemsPerMatrix >>> 0,
-            0
-        ]));
-        const pipeline = (n <= 512) ? this.getLuSolveComplexPipeline() : this.getLuSolveComplexLargePipeline();
-        const bg = pipeline.createBindGroup(0, {
-            0: { buffer: params, size: 16 },
-            1: this.bindSized(lu, luBytes),
-            2: this.bindSized(rhs, rhsBytes),
-            3: this.bindSized(outX, rhsBytes),
-            4: this.bindSized(ipiv, ipivBytes)
-        }, "luSolveComplex64Batched:bg");
-        this.execute([
-            {
-                pipeline,
-                bindGroups: [bg],
-                workgroups: { x: batchCount, y: 1, z: 1 },
-                label: "luSolveComplex64Batched"
-            }
-        ], opts);
+        this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, 0]));
+        const pipeline = (n <= 512) ? this.getLuSolveC64Pipeline() : this.getLuSolveC64LargePipeline();
+        const bg = pipeline.createBindGroup(0, { 0: { buffer: params, size: 16 }, 1: this.bindSized(lu, luBytes), 2: this.bindSized(rhs, rhsBytes), 3: this.bindSized(outX, rhsBytes), 4: this.bindSized(ipiv, ipivBytes) }, "luSolveC64Batched:bg");
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: { x: batchCount, y: 1, z: 1 }, label: "luSolveC64Batched" }], opts);
     }
 }
