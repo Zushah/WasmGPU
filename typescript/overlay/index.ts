@@ -8,7 +8,7 @@ export { OverlaySystem } from "./system";
 export { AxisTriadLayer } from "./axisTriadLayer";
 export { GridLayer } from "./gridLayer";
 export { LegendLayer } from "./legendLayer";
-export type { OverlayInvalidationReason, OverlayVisualChangeKind, OverlayVisualChangeListener, OverlayVisualChangeEmitter, ScreenCorner, ScreenAnchorDescriptor, WorldAnchorDescriptor, OverlayAnchorDescriptor, OverlayLayer, OverlaySystemDescriptor, OverlayUpdateRequest, OverlayUpdateContext, AxisTriadLayerDescriptor, GridPlane, GridLayerDescriptor, OverlayLegendExplicitSource, OverlayLegendNodeLinkSource, OverlayLegendSource, LegendLayerDescriptor } from "./types";
+export type { OverlayInvalidationReason, OverlayVisualChangeKind, OverlayVisualChangeListener, OverlayVisualChangeEmitter, ScreenCorner, ScreenAnchorDescriptor, WorldAnchorDescriptor, OverlayAnchorDescriptor, OverlayCSSStyleProperty, OverlayCSSStyle, OverlayLayer, OverlaySystemDescriptor, OverlayUpdateRequest, OverlayUpdateContext, AxisTriadDirection, AxisTriadDirections, AxisTriadStyle, AxisTriadLayerDescriptor, GridPlane, GridAxis, GridLabelSide, GridAxisMetadata, GridStyle, GridLayerDescriptor, OverlayLegendExplicitSource, OverlayLegendNodeLinkSource, OverlayLegendSource, LegendOrientation, LegendStyle, LegendLayerDescriptor } from "./types";
 export { AnnotationToolkit, mapAnnotationProbeReadout } from "./annotation/toolkit";
 export type { AnnotationToolkitRuntime, AnnotationToolkitDescriptor, AnnotationAttachDescriptor, AnnotationChangeListener, AnnotationModeListener, AnnotationReadoutListener, AnnotationStagingListener } from "./annotation/toolkit";
 export { AnnotationStore, computeAngleRadians, computeDistanceWorld, createAnnotationAnchor } from "./annotation/store";

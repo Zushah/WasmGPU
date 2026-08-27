@@ -243,13 +243,15 @@
             });
             const grid = wgpu.createOverlay.grid({
                 id: "graph-grid",
-                plane: "xz",
+                plane: "xy",
                 origin: [0, 0, 0],
                 extentMode: "scene-fit",
                 targetMinorSpacingPx: 26,
                 majorStepFactor: 5,
                 maxLines: 160,
-                maxLabels: 42
+                maxLabels: 42,
+                uAxis: { name: "x", labelSide: "both" },
+                vAxis: { name: "y", labelSide: "both" }
             });
             const worldTriad = wgpu.createOverlay.axisTriad({
                 id: "graph-world-triad",
@@ -260,8 +262,8 @@
             });
             const screenTriad = wgpu.createOverlay.axisTriad({
                 id: "graph-screen-triad",
-                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-26, -26] },
-                sizePx: 52,
+                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-75, -75] },
+                sizePx: 50,
                 lineWidthPx: 2,
                 labels: ["x", "y", "z"]
             });
@@ -280,6 +282,16 @@
                 formatValue: (value) => fmt(value, 4)
             });
             overlaySystem.addLayer(grid).addLayer(worldTriad).addLayer(screenTriad).addLayer(legend);
+            const configureGraphOverlays = (mode, scalarLabel) => {
+                if (mode === "cartesianCurve") {
+                    overlaySystem.setLayerEnabled("graph-grid", true);
+                    grid.setPlane("xy").setAxisMetadata("u", { name: "x", labelSide: "both" }).setAxisMetadata("v", { name: "y", labelSide: "both" });
+                } else if (mode === "cartesianSurface") {
+                    overlaySystem.setLayerEnabled("graph-grid", true);
+                    grid.setPlane("xz").setAxisMetadata("u", { name: "x", labelSide: "both" }).setAxisMetadata("v", { name: "z", labelSide: "both" });
+                } else overlaySystem.setLayerEnabled("graph-grid", false);
+                legend.setTitle(`Mapped ${scalarLabel}`).setSubtitle(modeSpecs[mode].label);
+            };
 
             // Pyodide setup
             const pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.3/full/" });
@@ -541,6 +553,7 @@
                     activeMesh = built.mesh;
                     activePlot = built.plot;
                     activeProbe = null;
+                    configureGraphOverlays(mode, activePlot.meta.scalarLabel);
                     scene.add(activeMesh);
                     legend.setSource(activeMesh.material);
                     overlaySystem.setView(activeCamera, scene);

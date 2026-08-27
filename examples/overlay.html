@@ -18,6 +18,8 @@
             .topbar a.active { background: rgba(50, 95, 150, 0.46); }
             .hud { position: fixed; left: 10px; top: 52px; display: flex; flex-direction: column; gap: 10px; width: 340px; z-index: 6; }
             .pane { padding: 10px; background: rgba(5, 10, 18, 0.78); border: 1px solid rgba(180, 210, 255, 0.2); white-space: pre-line; min-height: 120px; }
+            .overlay-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+            .overlay-controls button, .overlay-controls select { font: 11px monospace; padding: 4px; background: rgba(10, 16, 28, 0.95); color: #d8e2ef; border: 1px solid rgba(180, 210, 255, 0.25); }
             .annotation-controls { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 8px; margin-bottom: 8px; }
             .annotation-controls label { display: flex; flex-direction: column; gap: 2px; font-size: 11px; }
             .annotation-controls input, .annotation-controls select, .annotation-controls button { font: 11px monospace; padding: 3px; background: rgba(10, 16, 28, 0.95); color: #d8e2ef; border: 1px solid rgba(180, 210, 255, 0.25); }
@@ -35,12 +37,14 @@
         </div>
         <div class="hud">
             <div class="pane nav"></div>
+            <div class="pane overlay-controls-pane"></div>
             <div class="pane annotation"></div>
         </div>
         <script src="../release/WasmGPU.iife.min.js"></script>
         <script type="module">
             const canvas = document.querySelector("canvas.main");
             const navHud = document.querySelector(".nav");
+            const overlayHud = document.querySelector(".overlay-controls-pane");
             const annotationHud = document.querySelector(".annotation");
 
             const fmt = (n, d = 3) => Number.isFinite(n) ? n.toFixed(d) : "nan";
@@ -142,41 +146,50 @@
                 interactionThrottleMs: 30,
                 autoUpdate: true
             });
-            overlaySystem
-                .addLayer(wgpu.createOverlay.grid({
-                    id: "overlay-grid",
-                    plane: "xz",
-                    origin: [0, 0, 0],
-                    extentMode: "scene-fit",
-                    targetMinorSpacingPx: 28,
-                    majorStepFactor: 5,
-                    maxLines: 180,
-                    maxLabels: 50
-                }))
-                .addLayer(wgpu.createOverlay.axisTriad({
-                    id: "overlay-world-triad",
-                    anchor: { kind: "world", position: [0, 0, 0] },
-                    lengthWorld: 3.2,
-                    lineWidthPx: 2,
-                    labels: ["X", "Y", "Z"]
-                }))
-                .addLayer(wgpu.createOverlay.axisTriad({
-                    id: "overlay-screen-triad",
-                    anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-26, -26] },
-                    sizePx: 52,
-                    lineWidthPx: 2,
-                    labels: ["x", "y", "z"]
-                }))
-                .addLayer(wgpu.createOverlay.legend({
-                    id: "overlay-legend",
-                    title: "PointCloud Scalar",
-                    source: points,
-                    anchor: { kind: "screen", corner: "top-right", offsetPx: [-14, 14] },
-                    widthPx: 24,
-                    heightPx: 220,
-                    tickCount: 8,
-                    strictParity: true
-                }));
+            const gridLayer = wgpu.createOverlay.grid({
+                id: "overlay-grid",
+                plane: "xz",
+                origin: [0, 0, 0],
+                extentMode: "scene-fit",
+                targetMinorSpacingPx: 28,
+                majorStepFactor: 5,
+                maxLines: 180,
+                maxLabels: 50,
+                uAxis: { name: "Distance X", unit: "wu", labelSide: "min" },
+                vAxis: { name: "Distance Z", unit: "wu", labelSide: "min" },
+                tickFormatter: (value, axis) => `${axis.toUpperCase()}:${value.toFixed(1)}`
+            });
+            const worldTriad = wgpu.createOverlay.axisTriad({
+                id: "overlay-world-triad",
+                anchor: { kind: "world", position: [0, 0, 0] },
+                lengthWorld: 3.2,
+                lineWidthPx: 2,
+                labels: ["X", "Y", "Z"],
+                arrowSizePx: 8,
+                originSizePx: 8
+            });
+            const screenTriad = wgpu.createOverlay.axisTriad({
+                id: "overlay-screen-triad",
+                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-75, -75] },
+                sizePx: 50,
+                lineWidthPx: 2,
+                labels: ["x", "y", "z"],
+                directions: { x: "positive", y: "positive", z: "positive" },
+                negativeLabels: ["-x", "-y", "-z"]
+            });
+            const legendLayer = wgpu.createOverlay.legend({
+                id: "overlay-legend",
+                title: "PointCloud Scalar",
+                subtitle: "Helical sample intensity",
+                units: "a.u.",
+                source: points,
+                anchor: { kind: "screen", corner: "top-right", offsetPx: [-15, 15] },
+                widthPx: 24,
+                heightPx: 220,
+                tickCount: 8,
+                strictParity: true
+            });
+            overlaySystem.addLayer(gridLayer).addLayer(worldTriad).addLayer(screenTriad).addLayer(legendLayer);
 
             // WasmGPU: annotation toolkit (marker + distance + angle + readouts).
             const annotation = wgpu.createAnnotation.toolkit({
@@ -207,6 +220,50 @@
             let activeCamera = perspective;
             let currentView = "front";
             let hoverPickToken = 0;
+
+            const setupOverlayPane = () => {
+                overlayHud.innerHTML = `<strong>Mutable overlays</strong><div class="overlay-controls">
+                    <button data-layer="overlay-grid">grid on/off</button>
+                    <button data-layer="overlay-world-triad">world triad on/off</button>
+                    <button data-layer="overlay-screen-triad">screen triad on/off</button>
+                    <button data-layer="overlay-legend">legend on/off</button>
+                    <button id="overlay-signed">signed axes: +</button>
+                    <button id="overlay-sides">cycle grid sides</button>
+                    <button id="overlay-orientation">legend horizontal</button>
+                    <button id="overlay-style">style preset</button>
+                </div>`;
+                for (const button of overlayHud.querySelectorAll("[data-layer]")) button.addEventListener("click", () => {
+                    const id = button.dataset.layer;
+                    overlaySystem.setLayerEnabled(id, !overlaySystem.isLayerEnabled(id));
+                });
+                let signed = false;
+                overlayHud.querySelector("#overlay-signed").addEventListener("click", (event) => {
+                    signed = !signed;
+                    const direction = signed ? "both" : "positive";
+                    screenTriad.setDirections({ x: direction, y: direction, z: direction });
+                    event.currentTarget.textContent = `signed axes: ${signed ? "±" : "+"}`;
+                });
+                const sides = ["min", "max", "both", "none"];
+                let sideIndex = 0;
+                overlayHud.querySelector("#overlay-sides").addEventListener("click", () => {
+                    sideIndex = (sideIndex + 1) % sides.length;
+                    gridLayer.setLabelSides(sides[sideIndex], sides[sideIndex]);
+                });
+                let horizontal = false;
+                overlayHud.querySelector("#overlay-orientation").addEventListener("click", (event) => {
+                    horizontal = !horizontal;
+                    legendLayer.setOrientation(horizontal ? "horizontal" : "vertical").setGradientSize(horizontal ? 220 : 24, horizontal ? 24 : 220);
+                    event.currentTarget.textContent = `legend ${horizontal ? "vertical" : "horizontal"}`;
+                });
+                let vivid = false;
+                overlayHud.querySelector("#overlay-style").addEventListener("click", () => {
+                    vivid = !vivid;
+                    const glow = vivid ? "drop-shadow(0 0 3px rgba(120,210,255,.9))" : "";
+                    screenTriad.setStyle({ axisLine: { filter: glow }, arrowhead: { filter: glow }, label: { fontWeight: vivid ? "700" : "400" } });
+                    gridLayer.setStyle({ tickLabel: { color: vivid ? "#fff6b0" : "rgba(220, 235, 255, 0.9)" }, axisTitle: { fontWeight: vivid ? "700" : "400" } });
+                    legendLayer.setStyle({ container: { boxShadow: vivid ? "0 0 14px rgba(80,160,255,.35)" : "none" }, gradient: { borderColor: vivid ? "#fff6b0" : "rgba(180, 210, 255, 0.35)" } });
+                });
+            };
 
             const getRelativePointer = (event) => {
                 const rect = canvas.getBoundingClientRect();
@@ -423,6 +480,7 @@
 
             window.addEventListener("resize", updateProjection);
             setupAnnotationPane();
+            setupOverlayPane();
             applyUnits();
             updateProjection();
             fitCurrent(currentView, false);

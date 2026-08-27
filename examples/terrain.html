@@ -266,6 +266,14 @@
                 dampingFactor: 0.08,
                 preventDefaultKeys: true
             });
+            const overlaySystem = wgpu.createOverlay.system({
+                controls, camera, scene,
+                zIndex: 4, interactionThrottleMs: 30, autoUpdate: true
+            }).addLayer(wgpu.createOverlay.axisTriad({
+                id: "terrain-screen-triad",
+                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-75, -75] },
+                sizePx: 50, labels: ["x", "y", "z"], arrowSizePx: 7, originSizePx: 6
+            }));
             const heightfield = createHeightfield(HEIGHTFIELD_RESOLUTION, WORLD_SIZE, WORLD_SIZE);
             const terrain = createTerrain(TERRAIN_RESOLUTION, TERRAIN_RESOLUTION, heightfield);
             const terrainParams = wgpu.compute.createUniformBuffer({ data: new Float32Array([-0.42, 0.80, 0.43, 0, 0.36, 0.19, 0.74, 0.05]) });

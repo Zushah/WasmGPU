@@ -292,19 +292,22 @@
                 autoUpdate: true
             }).addLayer(wgpu.createOverlay.axisTriad({
                 id: "quantum-axis-triad",
-                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-26, -26] },
-                sizePx: 52,
+                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-75, -75] },
+                sizePx: 50,
                 lineWidthPx: 2,
                 labels: ["x", "y", "z"]
             })).addLayer(wgpu.createOverlay.legend({
                 id: "quantum-amplitude-legend",
                 title: "Signed ψ / sampled peak",
+                subtitle: state.orbital.label,
                 source: volume,
                 anchor: { kind: "screen", corner: "top-right", offsetPx: [-14, 14] },
-                widthPx: 24,
-                heightPx: 220,
-                tickCount: 7,
-                strictParity: true
+                orientation: "horizontal",
+                widthPx: 220,
+                heightPx: 24,
+                tickCount: 5,
+                strictParity: true,
+                formatValue: (value) => fmt(value, 2)
             }));
 
             const physicalCoordinateForHit = (hit) => {
@@ -356,6 +359,7 @@
 
             const applyOrbital = () => {
                 state.orbital = orbitals[ui.orbital.value];
+                overlaySystem.getLayer("quantum-amplitude-legend")?.setSubtitle(state.orbital.label);
                 state.samples = sampleOrbital(state.orbital);
                 state.pick = null;
                 ui.threshold.value = String(state.orbital.threshold);

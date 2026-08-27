@@ -18,7 +18,9 @@ import type { ScaleTransform, ScaleTransformDescriptor } from "../scaling";
 export type OverlayInvalidationReason = "manual" | "camera" | "viewport" | "layout" | "scale" | "colormap" | "interaction";
 
 export type OverlayVisualChangeKind = "scale" | "colormap" | "visual";
+
 export type OverlayVisualChangeListener = (kind: OverlayVisualChangeKind) => void;
+
 export type OverlayVisualChangeEmitter = {
     onVisualChange?: (listener: OverlayVisualChangeListener) => (() => void);
 };
@@ -39,6 +41,10 @@ export type WorldAnchorDescriptor = {
 };
 
 export type OverlayAnchorDescriptor = ScreenAnchorDescriptor | WorldAnchorDescriptor;
+
+export type OverlayCSSStyleProperty = "background" | "backgroundColor" | "border" | "borderColor" | "borderRadius" | "boxShadow" | "color" | "filter" | "font" | "fontFamily" | "fontSize" | "fontStyle" | "fontWeight" | "letterSpacing" | "lineHeight" | "opacity" | "outline" | "textShadow" | "textTransform";
+
+export type OverlayCSSStyle = Partial<Record<OverlayCSSStyleProperty, string>>;
 
 export type OverlaySystemLike = {
     invalidate: (reason?: OverlayInvalidationReason) => void;
@@ -93,9 +99,50 @@ export type AxisTriadLayerDescriptor = {
     colors?: [string, string, string];
     labelOffsetPx?: number;
     font?: string;
+    directions?: AxisTriadDirections;
+    negativeLabels?: [string, string, string];
+    arrowSizePx?: number;
+    originSizePx?: number;
+    className?: string;
+    style?: AxisTriadStyle;
+};
+
+export type AxisTriadDirection = "positive" | "negative" | "both" | "none";
+
+export type AxisTriadDirections = {
+    x?: AxisTriadDirection;
+    y?: AxisTriadDirection;
+    z?: AxisTriadDirection;
+};
+
+export type AxisTriadStyle = {
+    container?: OverlayCSSStyle;
+    axisLine?: OverlayCSSStyle;
+    arrowhead?: OverlayCSSStyle;
+    label?: OverlayCSSStyle;
+    originMarker?: OverlayCSSStyle;
 };
 
 export type GridPlane = "xy" | "xz" | "yz";
+
+export type GridAxis = "u" | "v";
+
+export type GridLabelSide = "min" | "max" | "both" | "none";
+
+export type GridAxisMetadata = {
+    name?: string;
+    unit?: string;
+    labelSide?: GridLabelSide;
+};
+
+export type GridStyle = {
+    container?: OverlayCSSStyle;
+    minorLine?: OverlayCSSStyle;
+    majorLine?: OverlayCSSStyle;
+    zeroAxisLine?: OverlayCSSStyle;
+    tickLabel?: OverlayCSSStyle;
+    axisTitle?: OverlayCSSStyle;
+};
 
 export type GridLayerDescriptor = {
     id?: string;
@@ -118,6 +165,11 @@ export type GridLayerDescriptor = {
     lineWidthMinorPx?: number;
     lineWidthMajorPx?: number;
     font?: string;
+    tickFormatter?: (value: number, axis: GridAxis) => string;
+    uAxis?: GridAxisMetadata;
+    vAxis?: GridAxisMetadata;
+    className?: string;
+    style?: GridStyle;
 };
 
 export type OverlayLegendExplicitSource = {
@@ -133,6 +185,18 @@ export type OverlayLegendNodeLinkSource = {
 
 export type OverlayLegendSource = PointCloud | GlyphField | NodeLink | LatticeSpace | OverlayLegendNodeLinkSource | DataMaterial | OverlayLegendExplicitSource;
 
+export type LegendOrientation = "vertical" | "horizontal";
+
+export type LegendStyle = {
+    container?: OverlayCSSStyle;
+    title?: OverlayCSSStyle;
+    subtitle?: OverlayCSSStyle;
+    gradient?: OverlayCSSStyle;
+    tickMark?: OverlayCSSStyle;
+    tickLabel?: OverlayCSSStyle;
+    units?: OverlayCSSStyle;
+};
+
 export type LegendLayerDescriptor = {
     id?: string;
     source: OverlayLegendSource;
@@ -144,4 +208,9 @@ export type LegendLayerDescriptor = {
     strictParity?: boolean;
     font?: string;
     formatValue?: (value: number) => string;
+    orientation?: LegendOrientation;
+    subtitle?: string;
+    units?: string;
+    className?: string;
+    style?: LegendStyle;
 };

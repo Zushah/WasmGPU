@@ -2,7 +2,7 @@
 
 Latest commit: Thursday, August 27, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Thursday, August 27, 2026, [**`8676956`**](https://www.github.com/Zushah/WasmGPU/commit/8676956).
+Parent commit: Thursday, August 27, 2026, [**`f6f33a7`**](https://www.github.com/Zushah/WasmGPU/commit/f6f33a7).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -396,7 +396,9 @@ Picking types and selection helpers are implemented in `./typescript/world/picki
 
 The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./typescript/core/engine.ts`. These methods call the renderer and then add object-specific attributes for pointclouds, glyphfields, nodelinks, splatfields, and latticespaces when CPU records are available. Retained splatfield CPU records can include direct color data or spherical harmonic degree and coefficient data. Picking is nearest-footprint/depth picking and does not evaluate spherical harmonic visual contribution. Pick preparation uses the renderer's base scene-preparation path only, so it does not apply render-only occlusion filtering and does not consume previous-frame occlusion results.
 
-The overlay framework lives under `./typescript/overlay/`. `./typescript/overlay/system.ts` creates a DOM overlay root next to the canvas, tracks layers, observes resize and scroll changes, listens to controls when attached, and marks layers dirty for camera, viewport, layout, scale, colormap, or interaction changes. Built-in layers include axis triad, grid, and legend layers.
+The overlay framework lives under `./typescript/overlay/`. `./typescript/overlay/system.ts` creates a DOM overlay root next to the canvas, registers discoverable layers by ID, and gives each registration a system-owned wrapper so all present and future layer output can be hidden without detaching it or rewriting child display styles. The update context still exposes the real system root. Removal remains the resource-lifecycle boundary. The system observes resize and scroll changes, listens to controls when attached, and collects dirty reasons for camera, viewport, layout, scale, colormap, or interaction changes.
+
+Built-in axis triad, grid, and legend layers retain their optional system relationship and self-invalidate after typed runtime mutations. They are DOM/canvas overlays with fixed or pooled node bounds. Grid label collision work only considers candidates that survive its spacing, stride, and budget filters, while legend gradient backing scales with display pixel ratio without changing its CSS-space layout.
 
 Annotations live under `./typescript/overlay/annotation/`. The annotation toolkit owns an `AnnotationStore`; `Scene` does not own annotation records. The store owns marker, distance, and angle records. The toolkit reads picking results, creates marker objects in the scene through the marker renderer, and creates labels through the label layer.
 
@@ -531,7 +533,7 @@ Per-frame work spans TypeScript, WebAssembly, and WebGPU:
 - Transform propagation runs in Rust using WebAssembly memory.
 - Culling and bounds helpers run in Rust when enabled by renderer paths. Current Rust culling work includes frustum culling and conservative previous-frame hierarchical-Z occlusion tests over world-space spheres.
 - Animation sampling mutates transforms and morph weights before rendering when the application updates players.
-- Overlay updates are DOM work and can be marked dirty by camera, viewport, scale, colormap, or interaction changes.
+- Overlay updates are dirty-driven DOM work. Mutable built-in layers self-invalidate, automatic work is coalesced, and disabled registered layers are skipped without detach/recreate churn.
 
 The code contains several performance-sensitive patterns: reusable draw-list arrays, draw item pools, packed dynamic-uniform staging, static instance-run reuse, fixed-head transparent merging, pipeline and shader caches, bind group caches, culling scratch buffers, frame arena staging memory, specialized radix-sort scratch buffers, and readback ring slots. Splatfield and latticespace sorting use separate renderer-private four-elements-per-invocation radix kernels and persistent per-object GPU state; external splat GPU buffers conservatively sort every frame because mutations are not observable. The occlusion path uses a bounded ring of hierarchy readback slots, suppresses equivalent in-flight captures, keeps the newest decoded hierarchy in persistent WebAssembly memory, and intentionally becomes a no-op when no safe previous-frame hierarchy is ready. Changes in these areas should avoid new per-object or per-frame allocations unless the allocation is bounded and measured.
 
@@ -748,7 +750,7 @@ Important files:
 
 - `./typescript/overlay/index.ts`: overlay exports.
 - `./typescript/overlay/types.ts`: layer, anchor, legend, and overlay descriptors.
-- `./typescript/overlay/system.ts`: overlay root, layer registry, dirty tracking, resize and scroll observers, controls binding, and update loop.
+- `./typescript/overlay/system.ts`: overlay root, ID lookup and enabled-state registry, dirty tracking, resize and scroll observers, controls binding, and coalesced update loop.
 - `./typescript/overlay/projection.ts`: world-to-screen projection helpers.
 - `./typescript/overlay/pool.ts`: DOM element pooling.
 - `./typescript/overlay/axisTriadLayer.ts`: axis triad DOM layer.

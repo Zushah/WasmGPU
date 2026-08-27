@@ -367,7 +367,10 @@
                 targetMinorSpacingPx: 28,
                 majorStepFactor: 5,
                 maxLines: 180,
-                maxLabels: 48
+                maxLabels: 48,
+                uAxis: { name: "X", unit: "m", labelSide: "both" },
+                vAxis: { name: "Y", unit: "m", labelSide: "both" },
+                tickFormatter: (value) => fmt(value, 1),
             })).addLayer(wgpu.createOverlay.axisTriad({
                 id: "fluid-world-triad",
                 anchor: { kind: "world", position: [0, 0, 0] },
@@ -376,20 +379,26 @@
                 labels: ["X", "Y", "Z"]
             })).addLayer(wgpu.createOverlay.axisTriad({
                 id: "fluid-screen-triad",
-                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-26, -26] },
-                sizePx: 52,
+                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-75, -75] },
+                sizePx: 50,
                 lineWidthPx: 2,
-                labels: ["x", "y", "z"]
+                labels: ["x", "y", "z"],
+                directions: { x: "both", y: "both", z: "both" },
+                negativeLabels: ["-x", "-y", "-z"],
+                arrowSizePx: 8,
+                originSizePx: 7
             })).addLayer(wgpu.createOverlay.legend({
                 id: "fluid-legend",
                 title: "Speed |u|",
+                subtitle: "velocity magnitude",
                 source: glyphField,
                 anchor: { kind: "screen", corner: "top-right", offsetPx: [-14, 14] },
                 widthPx: 24,
                 heightPx: 220,
                 tickCount: 7,
                 strictParity: true,
-                formatValue: (value) => `${fmt(value, 3)}`
+                formatValue: (value) => `${fmt(value, 3)}`,
+                units: "m/s"
             }));
 
             // Create an annotation toolkit for picking and measuring within the flow field, with custom marker and label rendering options

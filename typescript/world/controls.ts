@@ -523,7 +523,21 @@ export class NavigationControls {
             this._zoom = 1.0;
         }
         const spherical = this.offsetToSpherical(offset);
-        this._theta = spherical.theta;
+        let theta = spherical.theta;
+        const localX = vec3dot(offset, this._axisConvention.right);
+        const localY = vec3dot(offset, this._axisConvention.up);
+        const localZ = vec3dot(offset, this._axisConvention.forward);
+        const horizontalRadius = Math.hypot(localX, localZ);
+        const poleThreshold = Math.max(EPSILON, this._radius * EPSILON);
+        if (horizontalRadius <= poleThreshold && Math.abs(localY) > EPSILON) {
+            const poleSign = localY >= 0 ? 1 : -1;
+            const cameraUp = vec3normalize(this.camera.up, this._axisConvention.forward);
+            const horizontalDirection = vec3scl(cameraUp, -poleSign);
+            const hx = vec3dot(horizontalDirection, this._axisConvention.right);
+            const hz = vec3dot(horizontalDirection, this._axisConvention.forward);
+            if (Math.hypot(hx, hz) > EPSILON) theta = Math.atan2(hx, hz);
+        }
+        this._theta = theta;
         this._phi = spherical.phi;
         this._thetaDelta = 0;
         this._phiDelta = 0;
@@ -1002,6 +1016,16 @@ export class NavigationControls {
 
     private updateOrbit(dt: number): void {
         const damping = this.enableDamping ? (1 - Math.pow(1 - clamp01(this.dampingFactor), dt * 60)) : 1;
+        const hasThetaInput = this.enableRotate && Math.abs(this._thetaDelta) > EPSILON;
+        const hasPhiInput = this.enableRotate && Math.abs(this._phiDelta) > EPSILON;
+        const hasRotationInput = hasThetaInput || hasPhiInput;
+        const atTopPole = this._phi <= EPSILON;
+        const atBottomPole = this._phi >= Math.PI - EPSILON;
+        if (hasThetaInput && (atTopPole || atBottomPole)) {
+            const interactiveMinPhi = Math.max(this.minPolarAngle, ORBIT_POLE_EPS);
+            const interactiveMaxPhi = Math.min(this.maxPolarAngle, Math.PI - ORBIT_POLE_EPS);
+            if (interactiveMinPhi <= interactiveMaxPhi) this._phi = atTopPole ? interactiveMinPhi : interactiveMaxPhi;
+        }
         if (this.enableRotate) {
             this._theta += this._thetaDelta * damping;
             this._phi += this._phiDelta * damping;
@@ -1011,14 +1035,15 @@ export class NavigationControls {
             this._thetaDelta = 0;
             this._phiDelta = 0;
         }
-        const minPhi = Math.max(this.minPolarAngle, ORBIT_POLE_EPS);
-        const maxPhi = Math.min(this.maxPolarAngle, Math.PI - ORBIT_POLE_EPS);
+        const exactPoleIdle = !hasRotationInput && (this._phi <= EPSILON || this._phi >= Math.PI - EPSILON);
+        const minPhi = exactPoleIdle ? Math.max(0, this.minPolarAngle) : Math.max(this.minPolarAngle, ORBIT_POLE_EPS);
+        const maxPhi = exactPoleIdle ? Math.min(Math.PI, this.maxPolarAngle) : Math.min(this.maxPolarAngle, Math.PI - ORBIT_POLE_EPS);
         if (minPhi <= maxPhi) this._phi = clamp(this._phi, minPhi, maxPhi);
         else this._phi = clamp(this._phi, this.minPolarAngle, this.maxPolarAngle);
         this._theta = clamp(this._theta, this.minAzimuthAngle, this.maxAzimuthAngle);
         this.applyDolly(damping, this.computeOrbitBasis());
         this.applyPan(damping);
-        this._radius = clamp(this._radius, this.minDistance, this.maxDistance);
+        this._radius = clamp( this._radius, this.minDistance, this.maxDistance );
         const offset = this.sphericalToOffset(this._theta, this._phi, Math.max(EPSILON, this._radius));
         const position = vec3add(this.target, offset);
         const forward = vec3normalize(vec3sub(this.target, position), vec3scl(this._axisConvention.forward, -1));
@@ -1285,6 +1310,10 @@ export class NavigationControls {
         const worldUp = this._axisConvention.up;
         let upProj = vec3sub(worldUp, vec3scl(forward, vec3dot(worldUp, forward)));
         let mag = vec3mag(upProj);
+        if (mag > EPSILON) return vec3scl(upProj, 1 / mag);
+        const currentUp = this.camera.up;
+        upProj = vec3sub(currentUp, vec3scl(forward, vec3dot(currentUp, forward)));
+        mag = vec3mag(upProj);
         if (mag > EPSILON) return vec3scl(upProj, 1 / mag);
         const forwardAxis = this._axisConvention.forward;
         upProj = vec3sub(forwardAxis, vec3scl(forward, vec3dot(forwardAxis, forward)));

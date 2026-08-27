@@ -131,6 +131,29 @@
             });
             scene.add(points);
 
+            const overlaySystem = wgpu.createOverlay.system({
+                controls,
+                camera: perspective,
+                scene,
+                zIndex: 6,
+                interactionThrottleMs: 30,
+                autoUpdate: true
+            });
+            const scaleLegend = wgpu.createOverlay.legend({
+                id: "scaling-legend",
+                title: "Mapped component 3",
+                subtitle: "linear / none",
+                units: "data units",
+                source: points,
+                anchor: { kind: "screen", corner: "top-right", offsetPx: [-14, 14] },
+                widthPx: 24,
+                heightPx: 240,
+                tickCount: 7,
+                strictParity: true,
+                formatValue: (value) => fmt(value, 4)
+            });
+            overlaySystem.addLayer(scaleLegend);
+
             const scaleState = {
                 stats: null,
                 busy: false,
@@ -176,8 +199,12 @@
 
             // WasmGPU: scalar remap + colormap are demonstrated in this panel.
             const applyScaleTransformFromUI = () => {
-                points.setScaleTransform(getScaleTransformFromUI());
+                const transform = getScaleTransformFromUI();
+                points.setScaleTransform(transform);
                 points.colormap = ui.colormap.value;
+                const valueLabel = transform.valueMode === "magnitude" ? "Mapped magnitude" : `Mapped component ${transform.componentIndex}`;
+                scaleLegend.setTitle(valueLabel).setSubtitle(`${transform.mode} / ${transform.clampMode}`);
+                overlaySystem.invalidate("colormap");
                 refreshScalePane();
             };
 
@@ -328,6 +355,7 @@
                 nextCamera.transform.copyFrom(activeCamera.transform);
                 activeCamera = nextCamera;
                 controls.setCamera(activeCamera);
+                overlaySystem.setView(activeCamera, scene);
                 updateProjection();
                 fitCurrent(currentView, true);
                 updateHud();

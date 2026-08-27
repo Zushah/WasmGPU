@@ -314,11 +314,13 @@
                 anchor: { kind: "world", position: [0, 0, 0] },
                 lengthWorld: 2.5,
                 lineWidthPx: 2,
-                labels: ["X", "Y", "Z"]
+                labels: ["X (Å)", "Y (Å)", "Z (Å)"],
+                arrowSizePx: 8,
+                originSizePx: 7
             })).addLayer(wgpu.createOverlay.axisTriad({
                 id: "protein-screen-triad",
-                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-26, -26] },
-                sizePx: 52,
+                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-75, -75] },
+                sizePx: 50,
                 lineWidthPx: 2,
                 labels: ["x", "y", "z"]
             }));

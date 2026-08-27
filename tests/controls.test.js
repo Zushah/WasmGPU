@@ -10,23 +10,16 @@ import * as WasmGPU from "../release/WasmGPU.js";
 
 const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers(1e-5);
 const browserCanvases = createBrowserCanvasScope();
-
 const makeCanvas = (width = 800, height = 600) => { const listeners = new Map(); return { style: {}, clientWidth: width, clientHeight: height, addEventListener(type, handler) { listeners.set(type, handler); }, removeEventListener(type, handler) { if (listeners.get(type) === handler) listeners.delete(type); }, setPointerCapture() {}, releasePointerCapture() {}, getBoundingClientRect() { return { left: 0, top: 0, width, height, right: width, bottom: height }; }, listeners }; };
-
 const makeEventTarget = () => { const listeners = new Map(); return { addEventListener(type, handler) { listeners.set(type, handler); }, removeEventListener(type, handler) { if (listeners.get(type) === handler) listeners.delete(type); }, listeners }; };
-
 const dispatch = (target, type, event = {}) => target.listeners.get(type)?.({ preventDefault() {}, stopPropagation() {}, target: null, ...event });
-
 const cameraForward = (camera) => { const m = camera.transform.worldMatrix; return [-m[8], -m[9], -m[10]]; };
-
 const cameraUp = (camera) => { const m = camera.transform.worldMatrix; return [m[4], m[5], m[6]]; };
-
 const { device } = await setupTest({ initWebAssembly: WasmGPU.initWebAssembly, webgpu: true });
 const { NavigationControls, OrbitControls, TrackballControls, FlyControls, PerspectiveCamera, OrthographicCamera, Geometry, Mesh, PointCloud, GlyphField, Scene, UnlitMaterial, AxisConventions } = WasmGPU;
 assert.ok(NavigationControls, "Missing export: NavigationControls");
 assert.ok(FlyControls, "Missing export: FlyControls");
 assert.ok(AxisConventions && AxisConventions.Y_UP_RH, "Missing export: AxisConventions");
-
 const pointScaleTransform = { componentCount: 4, componentIndex: 3, stride: 4, offset: 0 };
 const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, offset: 0 };
 
@@ -130,6 +123,33 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
     controls.setView("bottom", { animate: false, distance: 4 });
     arraysApproxEqual(camera.position, [0, -4, 0], 1e-4, "Bottom view position mismatch");
     arraysApproxEqual(camera.up, [0, 0, 1], 1e-4, "Bottom view up mismatch");
+
+    controls.setView("top", { animate: false, distance: 4 });
+    arraysApproxEqual(camera.position, [0, 4, 0], 1e-4, "Top view position mismatch");
+    arraysApproxEqual(camera.up, [0, 0, -1], 1e-4, "Top view up mismatch");
+    controls.update(1 / 60);
+    arraysApproxEqual(camera.position, [0, 4, 0], 1e-4, "Top view should remain exact while idle");
+    arraysApproxEqual(camera.up, [0, 0, -1], 1e-4, "Top view roll should remain stable while idle");
+    controls._phiDelta = 0.05;
+    controls.update(1 / 60);
+    assert.ok(camera.position[1] < 4, "Vertical orbit input should move away from the top pole");
+    assert.ok(camera.up[2] < -0.99, "Leaving the top pole should preserve the expected roll orientation");
+    controls.setView("top", { animate: false, distance: 4 });
+    controls.update(1 / 60);
+    controls._thetaDelta = 0.25;
+    controls.update(1 / 60);
+    const topHorizontalRadius = Math.hypot(camera.position[0], camera.position[2]);
+    assert.ok(topHorizontalRadius > 1e-5, "Horizontal orbit input at the top pole should resume circular motion");
+    controls.setView("bottom", { animate: false, distance: 4 });
+    arraysApproxEqual(camera.position, [0, -4, 0], 1e-4, "Bottom view position mismatch");
+    arraysApproxEqual(camera.up, [0, 0, 1], 1e-4, "Bottom view up mismatch");
+    controls.update(1 / 60);
+    arraysApproxEqual(camera.position, [0, -4, 0], 1e-4, "Bottom view should remain exact while idle");
+    arraysApproxEqual(camera.up, [0, 0, 1], 1e-4, "Bottom view roll should remain stable while idle");
+    controls._phiDelta = -0.05;
+    controls.update(1 / 60);
+    assert.ok(camera.position[1] > -4, "Vertical orbit input should move away from the bottom pole");
+    assert.ok(camera.up[2] > 0.99, "Leaving the bottom pole should preserve the expected roll orientation");
 
     const positionBefore = Array.from(camera.position);
     controls.target = [1, 2, 3];
@@ -262,8 +282,8 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
     const bounds = scene.getBounds();
     assert.strictEqual(bounds.empty, false, "Mixed-scene bounds should not be empty");
     assert.ok(bounds.boxMin[0] <= -5, "Mesh bounds should contribute to scene min X");
-    assert.ok(bounds.boxMax[0] >= 5, "Point-cloud bounds should contribute to scene max X");
-    assert.ok(bounds.boxMax[1] >= 5.5, "Glyph-field bounds should contribute to scene max Y");
+    assert.ok(bounds.boxMax[0] >= 5, "Pointcloud bounds should contribute to scene max X");
+    assert.ok(bounds.boxMax[1] >= 5.5, "Glyphfield bounds should contribute to scene max Y");
 
     const canvas = makeCanvas(1200, 400);
     const perspective = new PerspectiveCamera({ fov: 55, aspect: 3, near: 0.1, far: 500 });
@@ -287,8 +307,8 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
 {
     const explicit = new PointCloud({ pointCount: 4, boundsMin: [-1, -2, -3], boundsMax: [4, 5, 6], scaleTransform: pointScaleTransform });
     const explicitBounds = explicit.getBounds();
-    arraysApproxEqual(explicitBounds.boxMin, [-1, -2, -3], 1e-6, "Explicit point-cloud bounds min mismatch");
-    arraysApproxEqual(explicitBounds.boxMax, [4, 5, 6], 1e-6, "Explicit point-cloud bounds max mismatch");
+    arraysApproxEqual(explicitBounds.boxMin, [-1, -2, -3], 1e-6, "Explicit pointcloud bounds min mismatch");
+    arraysApproxEqual(explicitBounds.boxMax, [4, 5, 6], 1e-6, "Explicit pointcloud bounds max mismatch");
 
     const scene = new Scene();
     scene.add(explicit);

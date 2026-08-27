@@ -128,6 +128,25 @@
             });
             scene.add(points);
 
+            const overlaySystem = wgpu.createOverlay.system({
+                controls,
+                camera: perspective,
+                scene,
+                zIndex: 6,
+                interactionThrottleMs: 30,
+                autoUpdate: true
+            }).addLayer(wgpu.createOverlay.axisTriad({
+                id: "controls-screen-triad",
+                anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-75, -75] },
+                sizePx: 50,
+                lineWidthPx: 2,
+                labels: ["x", "y", "z"],
+                directions: { x: "both", y: "both", z: "both" },
+                negativeLabels: ["-x", "-y", "-z"],
+                arrowSizePx: 8,
+                originSizePx: 7
+            }));
+
             let activeCamera = perspective;
             let currentView = "front";
 
@@ -146,6 +165,7 @@
                 nextCamera.transform.copyFrom(activeCamera.transform);
                 activeCamera = nextCamera;
                 controls.setCamera(activeCamera);
+                overlaySystem.setView(activeCamera, scene);
                 updateProjection();
                 fitCurrent(currentView, true);
                 updateHud();

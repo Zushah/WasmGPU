@@ -8,6 +8,12 @@ import { nowMs } from "../utils";
 import { cameraSignatureEquals, writeCameraSignature } from "./projection";
 import type { OverlayInvalidationReason, OverlayLayer, OverlaySystemDescriptor, OverlaySystemLike, OverlayUpdateRequest } from "./types";
 
+type LayerRegistration = {
+    layer: OverlayLayer;
+    enabled: boolean;
+    wrapper: HTMLDivElement;
+};
+
 const addReasons = (set: Set<OverlayInvalidationReason>, reasons: OverlayUpdateRequest["reasons"]): void => {
     if (!reasons) return;
     if (Array.isArray(reasons)) {
@@ -23,7 +29,7 @@ export class OverlaySystem implements OverlaySystemLike {
     readonly root: HTMLDivElement;
     readonly interactionThrottleMs: number;
     readonly autoUpdate: boolean;
-    private readonly layers: Map<string, OverlayLayer> = new Map();
+    private readonly layers: Map<string, LayerRegistration> = new Map();
     private readonly dirtyReasons: Set<OverlayInvalidationReason> = new Set(["layout"]);
     private resizeObserver: ResizeObserver | null = null;
     private winResizeListener: (() => void) | null = null;
@@ -84,6 +90,23 @@ export class OverlaySystem implements OverlaySystemLike {
         return this.interactionActive;
     }
 
+    getLayer<T extends OverlayLayer = OverlayLayer>(id: string): T | null {
+        return (this.layers.get(id)?.layer as T | undefined) ?? null;
+    }
+
+    isLayerEnabled(id: string): boolean {
+        return this.layers.get(id)?.enabled ?? false;
+    }
+
+    setLayerEnabled(id: string, enabled: boolean): this {
+        const registration = this.layers.get(id);
+        if (!registration || registration.enabled === enabled) return this;
+        registration.enabled = enabled;
+        registration.wrapper.style.display = enabled ? "" : "none";
+        this.invalidate("manual");
+        return this;
+    }
+
     setView(camera: NonNullable<OverlayUpdateRequest["camera"]>, scene: OverlayUpdateRequest["scene"] = null): this {
         this.currentCamera = camera;
         this.currentScene = scene ?? null;
@@ -105,27 +128,36 @@ export class OverlaySystem implements OverlaySystemLike {
 
     addLayer(layer: OverlayLayer): this {
         if (this.layers.has(layer.id)) throw new Error(`OverlaySystem: duplicate layer id '${layer.id}'.`);
-        this.layers.set(layer.id, layer);
-        layer.setSystem?.(this);
-        layer.attach(this.root);
+        const wrapper = document.createElement("div");
+        wrapper.className = "wasmgpu-overlay-layer";
+        wrapper.dataset.overlayLayerId = layer.id;
+        wrapper.style.position = "absolute";
+        wrapper.style.inset = "0";
+        wrapper.style.pointerEvents = "none";
+        this.root.appendChild(wrapper);
+        try { layer.setSystem?.(this); layer.attach(wrapper); }
+        catch (error) { layer.setSystem?.(null); wrapper.remove(); throw error; }
+        this.layers.set(layer.id, { layer, enabled: true, wrapper });
         this.invalidate("manual");
         return this;
     }
 
     removeLayer(id: string): this {
-        const layer = this.layers.get(id);
-        if (!layer) return this;
-        layer.setSystem?.(null);
-        layer.detach();
+        const registration = this.layers.get(id);
+        if (!registration) return this;
+        registration.layer.setSystem?.(null);
+        registration.layer.detach();
+        registration.wrapper.remove();
         this.layers.delete(id);
         this.invalidate("manual");
         return this;
     }
 
     clearLayers(): this {
-        for (const layer of this.layers.values()) {
-            layer.setSystem?.(null);
-            layer.detach();
+        for (const registration of this.layers.values()) {
+            registration.layer.setSystem?.(null);
+            registration.layer.detach();
+            registration.wrapper.remove();
         }
         this.layers.clear();
         this.invalidate("manual");
@@ -164,12 +196,9 @@ export class OverlaySystem implements OverlaySystemLike {
         if (this.interactionActive && this.interactionThrottleMs > 0 && !force) if (Number.isFinite(this.lastUpdateMs) && (time - this.lastUpdateMs) < this.interactionThrottleMs) return false;
         const reasons = new Set(this.dirtyReasons);
         if (this.pendingInteractionFlush) reasons.add("interaction");
-        for (const layer of this.layers.values()) {
-            layer.update({
-                camera, scene: this.currentScene ?? null,
-                width: this.width, height: this.height, dpr: this.dpr,
-                nowMs: time, reasons, root: this.root
-            });
+        for (const registration of this.layers.values()) {
+            if (!registration.enabled) continue;
+            registration.layer.update({ camera, scene: this.currentScene ?? null, width: this.width, height: this.height, dpr: this.dpr, nowMs: time, reasons, root: this.root });
         }
         this.lastUpdateMs = time;
         this.pendingInteractionFlush = false;
@@ -183,25 +212,20 @@ export class OverlaySystem implements OverlaySystemLike {
         this.controlsUnsubInteraction?.();
         this.controlsUnsubChange = null;
         this.controlsUnsubInteraction = null;
-        if (this.resizeObserver) {
-            try { this.resizeObserver.disconnect(); } catch { /* ignore */ }
-            this.resizeObserver = null;
-        }
+        if (this.resizeObserver) { try { this.resizeObserver.disconnect(); } catch { /* ignore */ } this.resizeObserver = null; }
         if (this.winResizeListener) window.removeEventListener("resize", this.winResizeListener);
         if (this.winScrollListener) window.removeEventListener("scroll", this.winScrollListener, true);
         this.winResizeListener = null;
         this.winScrollListener = null;
         this.clearLayers();
+        this.cancelFrame();
         this.root.remove();
     }
 
     private requestFrame(): void {
         if (!this.autoUpdate || this.rafId !== null) return;
         if (typeof requestAnimationFrame !== "function") return;
-        this.rafId = requestAnimationFrame(() => {
-            this.rafId = null;
-            this.update();
-        });
+        this.rafId = requestAnimationFrame(() => { this.rafId = null; this.update(); });
     }
 
     private cancelFrame(): void {
@@ -211,18 +235,12 @@ export class OverlaySystem implements OverlaySystemLike {
     }
 
     private setupResizeEvents(): void {
-        const onResize = () => {
-            this.syncRootBounds();
-            this.invalidate("viewport");
-        };
+        const onResize = () => { this.syncRootBounds(); this.invalidate("viewport"); };
         this.winResizeListener = onResize;
         this.winScrollListener = onResize;
         window.addEventListener("resize", onResize);
         window.addEventListener("scroll", onResize, true);
-        if (typeof ResizeObserver !== "undefined") {
-            this.resizeObserver = new ResizeObserver(onResize);
-            this.resizeObserver.observe(this.canvas);
-        }
+        if (typeof ResizeObserver !== "undefined") { this.resizeObserver = new ResizeObserver(onResize); this.resizeObserver.observe(this.canvas); }
     }
 
     private syncRootBounds(): void {

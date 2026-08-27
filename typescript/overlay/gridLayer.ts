@@ -7,11 +7,21 @@
 import { clamp } from "../utils";
 import { DOMNodePool } from "./pool";
 import { projectWorldToScreen, type ProjectedPoint } from "./projection";
-import type { GridLayerDescriptor, GridPlane, OverlayLayer, OverlayUpdateContext } from "./types";
+import type { GridAxis, GridAxisMetadata, GridLabelSide, GridLayerDescriptor, GridPlane, GridStyle, OverlayCSSStyle, OverlayLayer, OverlaySystemLike, OverlayUpdateContext } from "./types";
 
 type GridAxes = {
     u: [number, number, number];
     v: [number, number, number];
+};
+
+type LabelCandidate = {
+    text: string;
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+    side: string;
+    title: boolean;
 };
 
 const formatTick = (value: number): string => {
@@ -21,6 +31,24 @@ const formatTick = (value: number): string => {
     const rounded = Math.round(value * 1000) / 1000;
     return `${rounded}`;
 };
+
+const applyStyle = (node: HTMLElement | null, style: OverlayCSSStyle | undefined): void => { if (node && style) Object.assign(node.style, style); };
+
+const clearStyle = (node: HTMLElement | null, style: OverlayCSSStyle | undefined): void => { if (node && style) for (const property of Object.keys(style)) (node.style as any)[property] = ""; };
+
+const styleEquals = (a: GridStyle, b: GridStyle): boolean => JSON.stringify(a) === JSON.stringify(b);
+
+const sideIncludes = (side: GridLabelSide, target: "min" | "max"): boolean => side === "both" || side === target;
+
+const sideCount = (side: GridLabelSide): number => side === "both" ? 2 : side === "none" ? 0 : 1;
+
+const metadataText = (metadata: GridAxisMetadata): string => metadata.name ? (metadata.unit ? `${metadata.name} (${metadata.unit})` : metadata.name) : (metadata.unit ?? "");
+
+const intersects = (a: Pick<LabelCandidate, "left" | "top" | "right" | "bottom">, b: Pick<LabelCandidate, "left" | "top" | "right" | "bottom">): boolean => a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top;
+
+const tuple3Equals = (a: readonly number[], b: readonly number[]): boolean => a[0] === b[0] && a[1] === b[1] && a[2] === b[2];
+
+const metadataEquals = (a: GridAxisMetadata, b: GridAxisMetadata): boolean => a.name === b.name && a.unit === b.unit && a.labelSide === b.labelSide;
 
 const niceStep = (target: number): number => {
     const x = Math.max(1e-9, Math.abs(target));
@@ -49,20 +77,20 @@ const worldFromUV = (plane: GridPlane, origin: [number, number, number], u: numb
     return [origin[0], origin[1] + u, origin[2] + v];
 };
 
-const drawLine = (node: HTMLDivElement, x0: number, y0: number, x1: number, y1: number, color: string, widthPx: number): void => {
+const drawLine = (node: HTMLDivElement, x0: number, y0: number, x1: number, y1: number, color: string, widthPx: number, style?: OverlayCSSStyle): void => {
     const dx = x1 - x0;
     const dy = y1 - y0;
     const len = Math.hypot(dx, dy);
-    if (!Number.isFinite(len) || len <= 1e-5) {
-        node.style.display = "none";
-        return;
-    }
+    if (!Number.isFinite(len) || len <= 1e-5) { node.style.display = "none"; return; }
+    node.style.background = color;
+    applyStyle(node, style);
     node.style.display = "";
+    node.style.position = "absolute";
+    node.style.transformOrigin = "0 50%";
     node.style.left = `${x0}px`;
     node.style.top = `${y0}px`;
     node.style.width = `${len}px`;
     node.style.height = `${Math.max(1, widthPx)}px`;
-    node.style.background = color;
     node.style.transform = `translateY(${-0.5 * Math.max(1, widthPx)}px) rotate(${Math.atan2(dy, dx)}rad)`;
 };
 
@@ -85,9 +113,7 @@ const countInteriorTicks = (min: number, max: number, step: number): number => {
     let count = 0;
     let value = Math.ceil((min + eps) / step) * step;
     const limit = max - eps;
-    for (let i = 0; i < 1_000_000 && value <= limit; i++, value += step) {
-        if (value > min + eps && value < max - eps) count++;
-    }
+    for (let i = 0; i < 1_000_000 && value <= limit; i++, value += step) if (value > min + eps && value < max - eps) count++;
     return count;
 };
 
@@ -110,28 +136,35 @@ const buildEdgeAlignedTicks = (min: number, max: number, step: number): number[]
 
 export class GridLayer implements OverlayLayer {
     readonly id: string;
-    private readonly plane: GridPlane;
-    private readonly origin: [number, number, number];
-    private readonly extentMode: "scene-fit" | "fixed";
-    private readonly fixedUMin: number;
-    private readonly fixedUMax: number;
-    private readonly fixedVMin: number;
-    private readonly fixedVMax: number;
-    private readonly targetMinorSpacingPx: number;
-    private readonly majorStepFactor: number;
-    private readonly minLabelSpacingPx: number;
+    private plane: GridPlane;
+    private origin: [number, number, number];
+    private extentMode: "scene-fit" | "fixed";
+    private fixedUMin: number;
+    private fixedUMax: number;
+    private fixedVMin: number;
+    private fixedVMax: number;
+    private targetMinorSpacingPx: number;
+    private majorStepFactor: number;
+    private minLabelSpacingPx: number;
     private readonly maxLines: number;
     private readonly maxLabels: number;
-    private readonly minorColor: string;
-    private readonly majorColor: string;
-    private readonly axisColor: string;
-    private readonly labelColor: string;
-    private readonly lineWidthMinorPx: number;
-    private readonly lineWidthMajorPx: number;
-    private readonly font: string;
+    private minorColor: string;
+    private majorColor: string;
+    private axisColor: string;
+    private labelColor: string;
+    private lineWidthMinorPx: number;
+    private lineWidthMajorPx: number;
+    private font: string;
+    private tickFormatter: (value: number, axis: GridAxis) => string;
+    private uAxis: GridAxisMetadata;
+    private vAxis: GridAxisMetadata;
+    private className: string;
+    private style: GridStyle;
+    private _system: OverlaySystemLike | null = null;
     private container: HTMLDivElement | null = null;
     private linePool: DOMNodePool<HTMLDivElement> | null = null;
     private labelPool: DOMNodePool<HTMLDivElement> | null = null;
+    private measureCtx: CanvasRenderingContext2D | null = null;
 
     constructor(desc: GridLayerDescriptor = {}) {
         this.id = desc.id ?? "overlay-grid";
@@ -154,10 +187,24 @@ export class GridLayer implements OverlayLayer {
         this.lineWidthMinorPx = Math.max(1, desc.lineWidthMinorPx ?? 1);
         this.lineWidthMajorPx = Math.max(1, desc.lineWidthMajorPx ?? 2);
         this.font = desc.font ?? "11px monospace";
+        this.tickFormatter = desc.tickFormatter ?? ((value) => formatTick(value));
+        this.uAxis = { ...desc.uAxis, labelSide: desc.uAxis?.labelSide ?? "min" };
+        this.vAxis = { ...desc.vAxis, labelSide: desc.vAxis?.labelSide ?? "min" };
+        this.className = desc.className ?? "";
+        this.style = desc.style ?? {};
+    }
+
+    setSystem(system: OverlaySystemLike | null): void {
+        this._system = system;
     }
 
     attach(root: HTMLDivElement): void {
         const container = document.createElement("div");
+        container.className = `wasmgpu-overlay-grid${this.className ? ` ${this.className}` : ""}`;
+        container.style.position = "absolute";
+        container.style.inset = "0";
+        container.style.pointerEvents = "none";
+        applyStyle(container, this.style.container);
         container.style.position = "absolute";
         container.style.inset = "0";
         container.style.pointerEvents = "none";
@@ -167,6 +214,7 @@ export class GridLayer implements OverlayLayer {
             const node = document.createElement("div");
             node.style.position = "absolute";
             node.style.transformOrigin = "0 50%";
+            node.className = "wasmgpu-overlay-grid-line";
             return node;
         }, this.maxLines);
         this.labelPool = new DOMNodePool(container, () => {
@@ -175,8 +223,10 @@ export class GridLayer implements OverlayLayer {
             node.style.color = this.labelColor;
             node.style.font = this.font;
             node.style.whiteSpace = "nowrap";
+            node.className = "wasmgpu-overlay-grid-tick-label";
             return node;
         }, this.maxLabels);
+        this.measureCtx = document.createElement("canvas").getContext("2d");
     }
 
     detach(): void {
@@ -184,8 +234,113 @@ export class GridLayer implements OverlayLayer {
         this.labelPool?.clear(true);
         this.linePool = null;
         this.labelPool = null;
+        this.measureCtx = null;
         this.container?.remove();
         this.container = null;
+    }
+
+    setPlane(plane: GridPlane): this {
+        if (plane === this.plane) return this;
+        this.plane = plane;
+        return this.changed("layout");
+    }
+    
+    setOrigin(origin: [number, number, number]): this {
+        if (tuple3Equals(origin, this.origin)) return this;
+        this.origin = [...origin];
+        return this.changed("layout");
+    }
+    
+    setExtentMode(mode: "scene-fit" | "fixed"): this {
+        if (mode === this.extentMode) return this;
+        this.extentMode = mode;
+        return this.changed("layout");
+    }
+    
+    setFixedExtent(uMin: number, uMax: number, vMin: number, vMax: number): this {
+        if (uMin === this.fixedUMin && uMax === this.fixedUMax && vMin === this.fixedVMin && vMax === this.fixedVMax) return this;
+        this.fixedUMin = uMin;
+        this.fixedUMax = uMax;
+        this.fixedVMin = vMin;
+        this.fixedVMax = vMax;
+        return this.changed("layout");
+    }
+    
+    setSpacing(targetMinorSpacingPx: number, majorStepFactor: number = this.majorStepFactor, minLabelSpacingPx: number = this.minLabelSpacingPx): this {
+        const spacing = Math.max(6, targetMinorSpacingPx);
+        const factor = Math.max(2, Math.round(majorStepFactor));
+        const labelSpacing = Math.max(8, minLabelSpacingPx);
+        if (spacing === this.targetMinorSpacingPx && factor === this.majorStepFactor && labelSpacing === this.minLabelSpacingPx) return this;
+        this.targetMinorSpacingPx = spacing;
+        this.majorStepFactor = factor;
+        this.minLabelSpacingPx = labelSpacing;
+        return this.changed("layout");
+    }
+    
+    setColors(minorColor: string, majorColor: string, axisColor: string, labelColor: string = this.labelColor): this {
+        if (minorColor === this.minorColor && majorColor === this.majorColor && axisColor === this.axisColor && labelColor === this.labelColor) return this;
+        this.minorColor = minorColor;
+        this.majorColor = majorColor;
+        this.axisColor = axisColor;
+        this.labelColor = labelColor;
+        return this.changed();
+    }
+    
+    setLineWidths(minorPx: number, majorPx: number): this {
+        const minor = Math.max(1, minorPx);
+        const major = Math.max(1, majorPx);
+        if (minor === this.lineWidthMinorPx && major === this.lineWidthMajorPx) return this;
+        this.lineWidthMinorPx = minor;
+        this.lineWidthMajorPx = major;
+        return this.changed();
+    }
+    
+    setFont(font: string): this {
+        if (font === this.font) return this;
+        this.font = font;
+        return this.changed("layout");
+    }
+    
+    setTickFormatter(formatter: (value: number, axis: GridAxis) => string): this {
+        if (formatter === this.tickFormatter) return this;
+        this.tickFormatter = formatter;
+        return this.changed("layout");
+    }
+    
+    setAxisMetadata(axis: GridAxis, metadata: GridAxisMetadata): this {
+        const current = axis === "u" ? this.uAxis : this.vAxis;
+        const next = { ...metadata, labelSide: metadata.labelSide ?? current.labelSide ?? "min" };
+        if (metadataEquals(next, current)) return this;
+        if (axis === "u") this.uAxis = next;
+        else this.vAxis = next;
+        return this.changed("layout");
+    }
+    
+    setLabelSides(u: GridLabelSide, v: GridLabelSide): this {
+        if (u === this.uAxis.labelSide && v === this.vAxis.labelSide) return this;
+        this.uAxis = { ...this.uAxis, labelSide: u };
+        this.vAxis = { ...this.vAxis, labelSide: v };
+        return this.changed("layout");
+    }
+    
+    setClassName(className: string): this {
+        if (className === this.className) return this;
+        this.className = className;
+        if (this.container) this.container.className = `wasmgpu-overlay-grid${className ? ` ${className}` : ""}`;
+        return this.changed("layout");
+    }
+    
+    setStyle(style: GridStyle): this {
+        if (styleEquals(style, this.style)) return this;
+        const previous = this.style;
+        this.style = style;
+        this.applyCurrentStyles(previous);
+        return this.changed("layout");
+    }
+
+    private changed(reason: "manual" | "layout" = "manual"): this {
+        this._system?.invalidate(reason);
+        return this;
     }
 
     update(ctx: OverlayUpdateContext): void {
@@ -220,15 +375,20 @@ export class GridLayer implements OverlayLayer {
         const axisEpsV = Math.max(edgeEpsV, Math.abs(minorStep) * 1e-3);
         const majorCountU = uTicks.reduce((n, u) => n + (isMajorTick(u, majorStep, majorEpsU) ? 1 : 0), 0);
         const majorCountV = vTicks.reduce((n, v) => n + (isMajorTick(v, majorStep, majorEpsV) ? 1 : 0), 0);
+        const sidesU = sideCount(this.uAxis.labelSide ?? "min");
+        const sidesV = sideCount(this.vAxis.labelSide ?? "min");
+        const titleCount = (metadataText(this.uAxis) ? sidesU : 0) + (metadataText(this.vAxis) ? sidesV : 0);
         for (let i = 0; i < 32; i++) {
-            const estLabelsU = majorCountU > 0 ? Math.ceil(majorCountU / labelStrideU) : 0;
-            const estLabelsV = majorCountV > 0 ? Math.ceil(majorCountV / labelStrideV) : 0;
-            if ((estLabelsU + estLabelsV) <= this.maxLabels) break;
+            const estLabelsU = majorCountU > 0 ? Math.ceil(majorCountU / labelStrideU) * sidesU : 0;
+            const estLabelsV = majorCountV > 0 ? Math.ceil(majorCountV / labelStrideV) * sidesV : 0;
+            if ((estLabelsU + estLabelsV + titleCount) <= this.maxLabels) break;
             if (estLabelsU >= estLabelsV) labelStrideU++;
             else labelStrideV++;
         }
         this.linePool.beginFrame();
         this.labelPool.beginFrame();
+        const tickCandidates: LabelCandidate[] = [];
+        const titleCandidates: LabelCandidate[] = [];
         let uMajorIndex = 0;
         for (let i = 0; i < uTicks.length; i++) {
             const u = uTicks[i];
@@ -240,12 +400,12 @@ export class GridLayer implements OverlayLayer {
             const axis = Math.abs(u) <= axisEpsU;
             const edge = isNear(u, uMin, edgeEpsU) || isNear(u, uMax, edgeEpsU);
             const line = this.linePool.acquire();
-            drawLine(line, p0.x, p0.y, p1.x, p1.y, axis ? this.axisColor : ((major || edge) ? this.majorColor : this.minorColor), (major || axis || edge) ? this.lineWidthMajorPx : this.lineWidthMinorPx);
-            if (major && (uMajorIndex % labelStrideU === 0)) {
-                const label = this.labelPool.acquire();
-                label.textContent = formatTick(u);
-                label.style.left = `${p0.x + 4}px`;
-                label.style.top = `${p0.y + 2}px`;
+            line.className = axis ? "wasmgpu-overlay-grid-line wasmgpu-overlay-grid-zero-axis-line" : (major || edge) ? "wasmgpu-overlay-grid-line wasmgpu-overlay-grid-major-line" : "wasmgpu-overlay-grid-line wasmgpu-overlay-grid-minor-line";
+            drawLine(line, p0.x, p0.y, p1.x, p1.y, axis ? this.axisColor : ((major || edge) ? this.majorColor : this.minorColor), (major || axis || edge) ? this.lineWidthMajorPx : this.lineWidthMinorPx, axis ? this.style.zeroAxisLine : (major || edge) ? this.style.majorLine : this.style.minorLine);
+            if (sidesU > 0 && major && (uMajorIndex % labelStrideU === 0)) {
+                const text = this.tickFormatter(u, "u");
+                if (sideIncludes(this.uAxis.labelSide ?? "min", "min")) tickCandidates.push(this.createLabelCandidate(text, p0.x, p0.y, p0.x - p1.x, p0.y - p1.y, "u-min", false));
+                if (sideIncludes(this.uAxis.labelSide ?? "min", "max")) tickCandidates.push(this.createLabelCandidate(text, p1.x, p1.y, p1.x - p0.x, p1.y - p0.y, "u-max", false));
             }
             if (major) uMajorIndex++;
         }
@@ -260,17 +420,107 @@ export class GridLayer implements OverlayLayer {
             const axis = Math.abs(v) <= axisEpsV;
             const edge = isNear(v, vMin, edgeEpsV) || isNear(v, vMax, edgeEpsV);
             const line = this.linePool.acquire();
-            drawLine(line, p0.x, p0.y, p1.x, p1.y, axis ? this.axisColor : ((major || edge) ? this.majorColor : this.minorColor), (major || axis || edge) ? this.lineWidthMajorPx : this.lineWidthMinorPx);
-            if (major && (vMajorIndex % labelStrideV === 0)) {
-                const label = this.labelPool.acquire();
-                label.textContent = formatTick(v);
-                label.style.left = `${p0.x + 4}px`;
-                label.style.top = `${p0.y + 2}px`;
+            line.className = axis ? "wasmgpu-overlay-grid-line wasmgpu-overlay-grid-zero-axis-line" : (major || edge) ? "wasmgpu-overlay-grid-line wasmgpu-overlay-grid-major-line" : "wasmgpu-overlay-grid-line wasmgpu-overlay-grid-minor-line";
+            drawLine(line, p0.x, p0.y, p1.x, p1.y, axis ? this.axisColor : ((major || edge) ? this.majorColor : this.minorColor), (major || axis || edge) ? this.lineWidthMajorPx : this.lineWidthMinorPx, axis ? this.style.zeroAxisLine : (major || edge) ? this.style.majorLine : this.style.minorLine);
+            if (sidesV > 0 && major && (vMajorIndex % labelStrideV === 0)) {
+                const text = this.tickFormatter(v, "v");
+                if (sideIncludes(this.vAxis.labelSide ?? "min", "min")) tickCandidates.push(this.createLabelCandidate(text, p0.x, p0.y, p0.x - p1.x, p0.y - p1.y, "v-min", false));
+                if (sideIncludes(this.vAxis.labelSide ?? "min", "max")) tickCandidates.push(this.createLabelCandidate(text, p1.x, p1.y, p1.x - p0.x, p1.y - p0.y, "v-max", false));
             }
             if (major) vMajorIndex++;
         }
+        const uTitle = metadataText(this.uAxis);
+        const vTitle = metadataText(this.vAxis);
+        if (uTitle) {
+            const minSeg = this.projectFrontClippedSegment(ctx, worldFromUV(this.plane, this.origin, uMin, vMin), worldFromUV(this.plane, this.origin, uMax, vMin));
+            const maxSeg = this.projectFrontClippedSegment(ctx, worldFromUV(this.plane, this.origin, uMin, vMax), worldFromUV(this.plane, this.origin, uMax, vMax));
+            if (minSeg && maxSeg) {
+                const minX = (minSeg.p0.x + minSeg.p1.x) * 0.5, minY = (minSeg.p0.y + minSeg.p1.y) * 0.5;
+                const maxX = (maxSeg.p0.x + maxSeg.p1.x) * 0.5, maxY = (maxSeg.p0.y + maxSeg.p1.y) * 0.5;
+                if (sideIncludes(this.uAxis.labelSide ?? "min", "min")) titleCandidates.push(this.createLabelCandidate(uTitle, minX, minY, minX - maxX, minY - maxY, "u-min", true));
+                if (sideIncludes(this.uAxis.labelSide ?? "min", "max")) titleCandidates.push(this.createLabelCandidate(uTitle, maxX, maxY, maxX - minX, maxY - minY, "u-max", true));
+            }
+        }
+        if (vTitle) {
+            const minSeg = this.projectFrontClippedSegment(ctx, worldFromUV(this.plane, this.origin, uMin, vMin), worldFromUV(this.plane, this.origin, uMin, vMax));
+            const maxSeg = this.projectFrontClippedSegment(ctx, worldFromUV(this.plane, this.origin, uMax, vMin), worldFromUV(this.plane, this.origin, uMax, vMax));
+            if (minSeg && maxSeg) {
+                const minX = (minSeg.p0.x + minSeg.p1.x) * 0.5, minY = (minSeg.p0.y + minSeg.p1.y) * 0.5;
+                const maxX = (maxSeg.p0.x + maxSeg.p1.x) * 0.5, maxY = (maxSeg.p0.y + maxSeg.p1.y) * 0.5;
+                if (sideIncludes(this.vAxis.labelSide ?? "min", "min")) titleCandidates.push(this.createLabelCandidate(vTitle, minX, minY, minX - maxX, minY - maxY, "v-min", true));
+                if (sideIncludes(this.vAxis.labelSide ?? "min", "max")) titleCandidates.push(this.createLabelCandidate(vTitle, maxX, maxY, maxX - minX, maxY - minY, "v-max", true));
+            }
+        }
+        const acceptedLabels = this.selectLabelCandidates(titleCandidates, tickCandidates);
+        this.container.dataset.labelCandidateCount = `${tickCandidates.length}`;
+        this.container.dataset.labelAcceptedCount = `${acceptedLabels.length}`;
+        for (const candidate of acceptedLabels) {
+            const label = this.labelPool.acquire();
+            label.className = candidate.title ? "wasmgpu-overlay-grid-axis-title" : "wasmgpu-overlay-grid-tick-label";
+            label.dataset.side = candidate.side;
+            label.textContent = candidate.text;
+            label.style.color = this.labelColor;
+            label.style.font = this.font;
+            applyStyle(label, candidate.title ? this.style.axisTitle : this.style.tickLabel);
+            label.style.position = "absolute";
+            label.style.whiteSpace = "nowrap";
+            label.style.left = `${candidate.left}px`;
+            label.style.top = `${candidate.top}px`;
+        }
         this.linePool.endFrame();
         this.labelPool.endFrame();
+    }
+
+    private createLabelCandidate(text: string, anchorX: number, anchorY: number, outwardX: number, outwardY: number, side: string, title: boolean): LabelCandidate {
+        const { width, height } = this.measureLabel(text, title);
+        const length = Math.hypot(outwardX, outwardY);
+        const ox = length > 1e-6 ? outwardX / length : 0;
+        const oy = length > 1e-6 ? outwardY / length : 1;
+        const offset = title ? 16 : 7;
+        const x = anchorX + ox * offset;
+        const y = anchorY + oy * offset;
+        const left = x + (ox < -0.2 ? -width : ox > 0.2 ? 0 : -width * 0.5);
+        const top = y + (oy < -0.2 ? -height : oy > 0.2 ? 0 : -height * 0.5);
+        return { text, left, top, right: left + width, bottom: top + height, side, title };
+    }
+
+    private measureLabel(text: string, title: boolean): { width: number; height: number; } {
+        const style = title ? this.style.axisTitle : this.style.tickLabel;
+        let font = style?.font ?? this.font;
+        if (style?.fontSize) font = /\d+(?:\.\d+)?px/.test(font) ? font.replace(/\d+(?:\.\d+)?px/, style.fontSize) : `${style.fontSize} ${style.fontFamily ?? "sans-serif"}`;
+        if (style?.fontFamily) font = /\d+(?:\.\d+)?px/.test(font) ? font.replace(/(\d+(?:\.\d+)?px).*/, `$1 ${style.fontFamily}`) : `${font} ${style.fontFamily}`;
+        if (style?.fontWeight && !style.font) font = `${style.fontWeight} ${font}`;
+        if (style?.fontStyle && !style.font) font = `${style.fontStyle} ${font}`;
+        if (this.measureCtx) this.measureCtx.font = font;
+        const fontPx = Number.parseFloat(style?.fontSize ?? font) || 11;
+        const letterSpacing = Number.parseFloat(style?.letterSpacing ?? "0") || 0;
+        const measured = this.measureCtx?.measureText(text).width ?? text.length * fontPx * 0.62;
+        return { width: Math.max(fontPx, measured + Math.max(0, text.length - 1) * letterSpacing) + 4, height: fontPx * 1.35 + 2 };
+    }
+
+    private selectLabelCandidates(titles: LabelCandidate[], ticks: LabelCandidate[]): LabelCandidate[] {
+        const accepted: LabelCandidate[] = [];
+        for (const candidate of [...titles, ...ticks]) {
+            if (accepted.length >= this.maxLabels) break;
+            if (accepted.some((existing) => existing.side === candidate.side && intersects(existing, candidate))) continue;
+            accepted.push(candidate);
+        }
+        return accepted;
+    }
+
+    private applyCurrentStyles(previous: GridStyle): void {
+        clearStyle(this.container, previous.container);
+        applyStyle(this.container, this.style.container);
+        if (!this.container) return;
+        this.container.style.position = "absolute";
+        this.container.style.inset = "0";
+        this.container.style.pointerEvents = "none";
+        const replaceAll = (selector: string, before: OverlayCSSStyle | undefined, after: OverlayCSSStyle | undefined): void => { for (const node of this.container!.querySelectorAll<HTMLElement>(selector)) { clearStyle(node, before); applyStyle(node, after); } };
+        replaceAll(".wasmgpu-overlay-grid-minor-line", previous.minorLine, this.style.minorLine);
+        replaceAll(".wasmgpu-overlay-grid-major-line", previous.majorLine, this.style.majorLine);
+        replaceAll(".wasmgpu-overlay-grid-zero-axis-line", previous.zeroAxisLine, this.style.zeroAxisLine);
+        replaceAll(".wasmgpu-overlay-grid-tick-label", previous.tickLabel, this.style.tickLabel);
+        replaceAll(".wasmgpu-overlay-grid-axis-title", previous.axisTitle, this.style.axisTitle);
     }
 
     private projectFrontClippedSegment(ctx: OverlayUpdateContext, worldA: [number, number, number], worldB: [number, number, number]): { p0: ProjectedPoint; p1: ProjectedPoint; } | null {
@@ -327,10 +577,7 @@ export class GridLayer implements OverlayLayer {
         const uv = uvFromBounds(this.plane, bounds);
         const marginU = Math.max(1e-3, (uv.uMax - uv.uMin) * 0.1);
         const marginV = Math.max(1e-3, (uv.vMax - uv.vMin) * 0.1);
-        return {
-            uMin: uv.uMin - marginU, uMax: uv.uMax + marginU,
-            vMin: uv.vMin - marginV, vMax: uv.vMax + marginV
-        };
+        return { uMin: uv.uMin - marginU, uMax: uv.uMax + marginU, vMin: uv.vMin - marginV, vMax: uv.vMax + marginV };
     }
 
     private estimatePixelsPerUnitAxes(ctx: OverlayUpdateContext): { u: number; v: number; } {
