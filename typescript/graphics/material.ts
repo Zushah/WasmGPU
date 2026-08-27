@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { assert, clamp01, createBuffer, resolveGPUBuffer } from "../utils";
+import { assert, clamp01, createBuffer, isGPUBuffer, resolveGPUBuffer } from "../utils";
 import { Texture2D } from "./texture";
 import { Colormap, type BuiltinColormapName } from "./colormap";
 import unlitWGSL from "../../wgsl/graphics/unlit.wgsl";
@@ -25,6 +25,8 @@ import customDefaultVertexWGSL from "../../wgsl/graphics/custom-default-vertex.w
 import shadowReceiverWGSL from "../../wgsl/effects/shadow-receiver.wgsl";
 import { SCALE_UNIFORM_FLOAT_COUNT, cloneScaleTransform, normalizeScaleTransform, packScaleTransform } from "../scaling";
 import type { ScaleSourceDescriptor, ScaleTransform, ScaleTransformDescriptor } from "../scaling";
+import { normalizeBindGroupLayout, normalizeBindingResource, validateResourcesForLayout } from "../wgsl/interop";
+import type { BufferResource, BindGroupLayoutDescriptor, BindGroupResources, BindingResource } from "../wgsl/interop";
 
 export type Color = [number, number, number];
 export type Color4 = [number, number, number, number];
@@ -1421,24 +1423,26 @@ export class DataMaterial extends Material {
     }
 }
 
-export type UniformType = "f32" | "vec2f" | "vec3f" | "vec4f" | "mat4x4f";
-
-export type UniformDefinition = {
-    type: UniformType;
-    value: number | number[];
-};
-
 export type CustomMaterialDescriptor = MaterialDescriptor & {
     vertexShader?: string;
     fragmentShader: string;
-    uniforms?: Record<string, UniformDefinition>;
+    bindGroupLayout?: BindGroupLayoutDescriptor;
+    resources?: BindGroupResources;
+};
+
+const snapshotCustomMaterialResource = (resource: BindingResource): BindingResource => {
+    normalizeBindingResource(resource);
+    if (isGPUBuffer(resource) || !("buffer" in resource)) return resource;
+    if ("device" in resource && "queue" in resource) return resource;
+    const binding = resource as { buffer: BufferResource; offset?: number; size?: number };
+    return { buffer: binding.buffer, offset: binding.offset, size: binding.size };
 };
 
 export class CustomMaterial extends Material {
-    private _vertexShader: string;
-    private _fragmentShader: string;
-    private _uniforms: Record<string, UniformDefinition>;
-    private _uniformLayout: { size: number; offsets: Record<string, number> } | null = null;
+    private readonly _vertexShader: string;
+    private readonly _fragmentShader: string;
+    private readonly _bindGroupLayout: BindGroupLayoutDescriptor;
+    private readonly _resources = new Map<number, BindingResource>();
     private _cachedBindGroupLayout: GPUBindGroupLayout | null = null;
     private _cachedLayoutDevice: GPUDevice | null = null;
 
@@ -1446,87 +1450,48 @@ export class CustomMaterial extends Material {
         super(descriptor);
         this._vertexShader = descriptor.vertexShader ?? this.defaultVertexShader();
         this._fragmentShader = descriptor.fragmentShader;
-        this._uniforms = descriptor.uniforms ?? {};
-    }
-
-    setUniform(name: string, value: number | number[]): void {
-        if (this._uniforms[name]) {
-            this._uniforms[name].value = value;
-            this._dirty = true;
-        }
-    }
-
-    getUniform(name: string): number | number[] | undefined {
-        return this._uniforms[name]?.value;
-    }
-
-    private getUniformSize(type: UniformType): number {
-        switch (type) {
-            case "f32": return 4;
-            case "vec2f": return 8;
-            case "vec3f": return 12;
-            case "vec4f": return 16;
-            case "mat4x4f": return 64;
-        }
-    }
-
-    private getUniformAlignment(type: UniformType): number {
-        switch (type) {
-            case "f32": return 4;
-            case "vec2f": return 8;
-            case "vec3f": return 16;
-            case "vec4f": return 16;
-            case "mat4x4f": return 16;
-        }
-    }
-
-    private getUniformLayout(): { size: number; offsets: Record<string, number> } {
-        if (this._uniformLayout) return this._uniformLayout;
-        let offset = 0;
-        const offsets: Record<string, number> = {};
-        for (const [name, def] of Object.entries(this._uniforms)) {
-            const align = this.getUniformAlignment(def.type);
-            const size = this.getUniformSize(def.type);
-            offset = this.alignTo(offset, align);
-            offsets[name] = offset;
-            offset += size;
-        }
-        const sizeBytes = Math.ceil(offset / 16) * 16 || 16;
-        this._uniformLayout = { size: sizeBytes, offsets };
-        return this._uniformLayout;
-    }
-
-    private alignTo(n: number, alignment: number): number {
-        return (n + alignment - 1) & ~(alignment - 1);
+        this._bindGroupLayout = normalizeBindGroupLayout(descriptor.bindGroupLayout ?? { entries: [] }, "CustomMaterial bind group layout");
+        const resources = descriptor.resources ?? {};
+        validateResourcesForLayout(this._bindGroupLayout, resources, "CustomMaterial");
+        if (Array.isArray(resources)) for (const entry of resources as ReadonlyArray<{ binding: number; resource: BindingResource }>) this._resources.set(entry.binding, snapshotCustomMaterialResource(entry.resource));
+        else for (const key of Object.keys(resources)) this._resources.set(Number(key), snapshotCustomMaterialResource((resources as Record<number, BindingResource>)[Number(key)]));
     }
 
     getUniformBufferSize(): number {
-        return this.getUniformLayout().size;
+        return 0;
     }
 
     getUniformData(): Float32Array {
-        const layout = this.getUniformLayout();
-        const data = this.getUniformDataCache(layout.size / 4);
-        data.fill(0);
-        for (const [name, def] of Object.entries(this._uniforms)) {
-            const floatOffset = layout.offsets[name] >>> 2;
-            if (typeof def.value === "number") data[floatOffset] = def.value;
-            else data.set(def.value as ArrayLike<number>, floatOffset);
-        }
-        return data;
+        this.assertAlive("build uniform data");
+        return new Float32Array(0);
+    }
+
+    getResource(binding: number): BindingResource | undefined {
+        this.assertAlive("get a resource");
+        const resource = this._resources.get(binding);
+        return resource ? snapshotCustomMaterialResource(resource) : undefined;
+    }
+
+    setResource(binding: number, resource: BindingResource): void {
+        this.assertAlive("set a resource");
+        if (!this._bindGroupLayout.entries.some((entry) => entry.binding === binding)) throw new Error(`CustomMaterial: binding ${binding} is not declared by the immutable bind group layout`);
+        this._resources.set(binding, snapshotCustomMaterialResource(resource));
+        this.bindGroup = null;
+        this.bindGroupKey = null;
+    }
+
+    getBindGroupEntries(): GPUBindGroupEntry[] {
+        this.assertAlive("build bind group entries");
+        return this._bindGroupLayout.entries.map((entry) => {
+            const resource = this._resources.get(entry.binding);
+            if (!resource) throw new Error(`CustomMaterial: missing resource for binding ${entry.binding}`);
+            return { binding: entry.binding, resource: normalizeBindingResource(resource) };
+        });
     }
 
     createBindGroupLayout(device: GPUDevice): GPUBindGroupLayout {
         if (this._cachedBindGroupLayout && this._cachedLayoutDevice === device) return this._cachedBindGroupLayout;
-        const layout = device.createBindGroupLayout({
-            entries: [
-                {
-                    binding: 0,
-                    visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-                    buffer: { type: "uniform" }
-                }
-            ]
-        });
+        const layout = device.createBindGroupLayout({ label: this._bindGroupLayout.label, entries: this._bindGroupLayout.entries });
         this._cachedBindGroupLayout = layout;
         this._cachedLayoutDevice = device;
         return layout;
@@ -1537,11 +1502,13 @@ export class CustomMaterial extends Material {
     }
 
     getShaderCode(opts: { instanced?: boolean; skinned?: boolean; skinned8?: boolean } = {}): string {
-        let uniformStruct = "struct CustomUniforms {\n";
-        const uniformEntries = Object.entries(this._uniforms);
-        if (uniformEntries.length === 0) uniformStruct += "    _pad: f32\n";
-        else for (const [name, def] of uniformEntries) uniformStruct += `    ${name}: ${def.type},\n`;
-        uniformStruct += "};\n\n@group(1) @binding(0) var<uniform> custom: CustomUniforms;\n\n";
-        return this._vertexShader + "\n" + uniformStruct + this._fragmentShader;
+        return this._vertexShader + "\n" + this._fragmentShader;
+    }
+
+    protected disposeResources(): void {
+        super.disposeResources();
+        this._resources.clear();
+        this._cachedBindGroupLayout = null;
+        this._cachedLayoutDevice = null;
     }
 }

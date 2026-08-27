@@ -122,8 +122,8 @@ export class Compute {
 
 export { StorageBuffer, UniformBuffer } from "./buffer";
 export type { StorageBufferDescriptor, UniformBufferDescriptor, TypedArrayConstructor } from "./buffer";
-export { ComputePipeline, storageBufferLayout, uniformBufferLayout } from "./pipeline";
-export type { ComputePipelineDescriptor, ComputeBindGroupLayoutDescriptor, ComputeBindGroupResources, StorageBufferBindingLayout, UniformBufferBindingLayout, BufferResource, BufferBindingResource } from "./pipeline";
+export { ComputePipeline } from "./pipeline";
+export type { ComputePipelineDescriptor } from "./pipeline";
 export { ceilDiv, makeWorkgroupSize, makeWorkgroupCounts, workgroups1D, workgroups2D, workgroups3D } from "./workgroups";
 export type { WorkgroupSize, WorkgroupCounts } from "./workgroups";
 export { normalizeWorkgroups, validateWorkgroupsForDevice, encodeDispatch, encodeDispatchBatch } from "./dispatch";

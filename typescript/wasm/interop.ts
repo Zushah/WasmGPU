@@ -479,8 +479,8 @@ export class WasmMemoryView<T extends NumberTypedArray = NumberTypedArray> {
     }
 }
 
-export const webassemblyInterop = {
+export const webassemblyInterop = Object.freeze({
     fromInstance: (instance: WasmInstanceLike, options: WasmModuleOptions = {}): WasmModule => WasmModule.fromInstance(instance, options),
     fromExports: (exportsObject: WasmExportsLike, options: WasmModuleOptions = {}): WasmModule => WasmModule.fromExports(exportsObject, options),
     fromMemory: (memory: WebAssembly.Memory, options: Omit<WasmModuleOptions, "memory"> = {}): WasmModule => WasmModule.fromMemory(memory, options)
-};
+});

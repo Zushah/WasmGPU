@@ -6,7 +6,7 @@
 
 import assert from "./utils/assert.js";
 import { createApproxHelpers, createBrowserCanvasScope, createWebGPUCanvasDouble as createMockCanvas, runIntentionalWebGPUTeardown, setupTest } from "./utils/helpers.js";
-import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, Texture2D, Skin, Transform, BlendMode, CullMode, PointCloud, GlyphField, NodeLink, AmbientLight, DirectionalLight, wasm, webassemblyInterop } from "../release/WasmGPU.js";
+import { initWebAssembly, WasmGPU, Renderer, Scene, PerspectiveCamera, Geometry, Mesh, UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, Texture2D, StorageBuffer, Skin, Transform, BlendMode, CullMode, PointCloud, GlyphField, NodeLink, AmbientLight, DirectionalLight, wasm, webassemblyInterop, webgpuInterop } from "../release/WasmGPU.js";
 
 const baseGpu = navigator.gpu;
 const originalRequestAdapter = baseGpu.requestAdapter.bind(baseGpu);
@@ -73,14 +73,16 @@ await setupTest({ initWebAssembly });
         blendMode: BlendMode.Transparent,
         cullMode: CullMode.None
     });
+    const customBufferA = new StorageBuffer(renderer.gpu.device, renderer.gpu.queue, { data: new Float32Array([0.5, 0, 0, 0]), copySrc: true });
+    const customBufferB = new StorageBuffer(renderer.gpu.device, renderer.gpu.queue, { data: new Float32Array([0.8, 0, 0, 0]), copySrc: true });
     const custom = new CustomMaterial({
         fragmentShader: `
+            @group(1) @binding(0) var<storage, read> gains: array<f32>;
             @fragment
-            fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-                return vec4f(custom.gain, in.uv.x, in.uv.y, 1.0);
-            }
+            fn fs_main(in: VertexOutput) -> @location(0) vec4f { return vec4f(gains[0], in.uv.x, in.uv.y, 1.0); }
         `,
-        uniforms: { gain: { type: "f32", value: 0.5 } }
+        bindGroupLayout: { entries: [webgpuInterop.storageBufferLayout({ binding: 0, readOnly: true, visibility: GPUShaderStage.FRAGMENT, minBindingSize: 4 })] },
+        resources: { 0: customBufferA }
     });
     const data = new DataMaterial({
         data: new Float32Array([0, 0.5, 1]),
@@ -113,7 +115,7 @@ await setupTest({ initWebAssembly });
     numberApproxEqual(camera.aspect, 1);
     assert.ok(unlit.uniformBuffer);
     assert.ok(standard.uniformBuffer);
-    assert.ok(custom.uniformBuffer);
+    assert.equal(custom.uniformBuffer, null, "CustomMaterial must not allocate a managed dummy uniform buffer");
     assert.ok(data.uniformBuffer);
     assert.ok(data.dataBuffer);
     assert.equal(unlit.dirty, false);
@@ -123,7 +125,19 @@ await setupTest({ initWebAssembly });
     assert.ok(meshA.geometry.positionBuffer);
     assert.ok(meshB.geometry.indexBuffer);
 
+    const firstCustomBindGroup = custom.bindGroup;
+    const pipelineCount = renderer.pipelineCache.size;
+    custom.setResource(0, customBufferB);
+    assert.doesNotThrow(() => renderer.render(scene, camera));
+    await renderer.gpu.queue.onSubmittedWorkDone();
+    assert.notEqual(custom.bindGroup, firstCustomBindGroup, "Replacing a custom resource must rebuild its bind group");
+    assert.equal(renderer.pipelineCache.size, pipelineCount, "Replacing a resource must not recreate a render pipeline");
+
     scene.destroy();
+    customBufferB.write(new Float32Array([1.25, 0, 0, 0]));
+    numberApproxEqual((await customBufferB.readAs(Float32Array))[0], 1.25, 1e-6, "Destroying the material must leave its currently bound caller-owned buffer usable");
+    customBufferA.destroy();
+    customBufferB.destroy();
     await runIntentionalWebGPUTeardown(() => renderer.destroy());
 }
 
@@ -448,6 +462,8 @@ await setupTest({ initWebAssembly });
     assert.equal(typeof WasmGPU.prototype.warmup, "function");
     const canvas = createMockCanvas(256, 256);
     const wgpu = await WasmGPU.create(canvas, { antialias: false, frustumCulling: false, canvasFormat: "rgba8unorm" });
+    assert.equal(wgpu.webgpu, webgpuInterop);
+    assert.equal(WasmGPU.webgpu, webgpuInterop);
     const scene = wgpu.createScene([0, 0, 0]);
     const camera = wgpu.createCamera.perspective({ fov: 50, near: 0.1, far: 100 });
     camera.transform.setPosition(0, 0, 5);

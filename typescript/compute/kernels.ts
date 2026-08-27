@@ -6,11 +6,13 @@
 
 import { alignTo, assert, resolveGPUBuffer } from "../utils";
 import { StorageBuffer } from "./buffer";
-import { ComputePipeline, storageBufferLayout, uniformBufferLayout, type BufferResource } from "./pipeline";
-import type { ComputeDispatchCommand } from "./dispatch";
+import { ComputePipeline } from "./pipeline";
 import { encodeDispatchBatchWithLimit } from "./dispatch";
+import type { ComputeDispatchCommand } from "./dispatch";
 import { ceilDiv, makeWorkgroupCounts, workgroups1D } from "./workgroups";
 import { ScratchBufferPool } from "./scratch";
+import { storageBufferLayout, uniformBufferLayout } from "../wgsl";
+import type { BufferResource } from "../wgsl";
 import reduceMaxF32WGSL from "../../wgsl/compute/reduce-max-f32.wgsl";
 import reduceMaxU32WGSL from "../../wgsl/compute/reduce-max-u32.wgsl";
 import reduceMinF32WGSL from "../../wgsl/compute/reduce-min-f32.wgsl";

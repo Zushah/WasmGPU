@@ -6,7 +6,7 @@
 
 import assert from "./utils/assert.js";
 import { createApproxHelpers, destroyTestDevice, setupTest } from "./utils/helpers.js";
-import { UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, Colormap, Texture2D, BlendMode, CullMode, SCALE_UNIFORM_FLOAT_COUNT } from "../release/WasmGPU.js";
+import { UnlitMaterial, StandardMaterial, CustomMaterial, DataMaterial, Colormap, Texture2D, BlendMode, CullMode, webgpuInterop, SCALE_UNIFORM_FLOAT_COUNT } from "../release/WasmGPU.js";
 
 const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
 const expectPackedTextureTransform = (uniforms, offset, expected, msg) => {
@@ -377,14 +377,16 @@ let cleanupPipeline = null;
             clampMin: 0, clampMax: 3
         }
     });
+    const customBuffer = createUniformBuffer(device, device.queue, new Float32Array([0.5, 0, 0, 0]));
     const custom = new CustomMaterial({
         fragmentShader: `
+            struct Params { gain: f32 }
+            @group(1) @binding(0) var<uniform> params: Params;
             @fragment
-            fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-                return vec4f(custom.gain, in.uv.x, 0.0, 1.0);
-            }
+            fn fs_main(in: VertexOutput) -> @location(0) vec4f { return vec4f(params.gain, in.uv.x, 0.0, 1.0); }
         `,
-        uniforms: { gain: { type: "f32", value: 0.5 } }
+        bindGroupLayout: { entries: [webgpuInterop.uniformBufferLayout({ binding: 0, visibility: GPUShaderStage.FRAGMENT, minBindingSize: 16 })] },
+        resources: { 0: customBuffer }
     });
     data.upload(device, device.queue);
 
@@ -392,7 +394,6 @@ let cleanupPipeline = null;
     const standardBuffer = createUniformBuffer(device, device.queue, standard.getUniformData());
     const standardTransmissionBuffer = createUniformBuffer(device, device.queue, standardTransmission.getUniformData());
     const dataBuffer = createUniformBuffer(device, device.queue, data.getUniformData());
-    const customBuffer = createUniformBuffer(device, device.queue, custom.getUniformData());
     const dataColormap = data.getColormapForBinding().getGPUResources(device, device.queue);
 
     assert.ok(device.createBindGroup({
@@ -426,7 +427,7 @@ let cleanupPipeline = null;
             { binding: 3, resource: dataColormap.view }
         ]
     }));
-    assert.ok(device.createBindGroup({ layout: custom.createBindGroupLayout(device), entries: [{ binding: 0, resource: { buffer: customBuffer } }] }));
+    assert.ok(device.createBindGroup({ layout: custom.createBindGroupLayout(device), entries: custom.getBindGroupEntries() }));
 
     const sceneLayout = createSceneLayout(device, true);
     const unlitSceneLayout = createSceneLayout(device, false);
@@ -470,6 +471,7 @@ let cleanupPipeline = null;
     standardTransmission.destroy();
     data.destroy();
     custom.destroy();
+    customBuffer.destroy();
 }
 
 // 5) DataMaterial uploads data, exposes scale-source state, emits visual changes, and binds colormaps.
@@ -564,46 +566,81 @@ let cleanupPipeline = null;
     externalTexture.destroy();
 }
 
-// 7) CustomMaterial aligns uniform data, updates named uniforms, and composes custom shaders.
+// 7) CustomMaterial uses immutable explicit layouts with replaceable borrowed resources.
 {
+    const bufferA = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+    const bufferB = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
+    const bindingDescriptor = { buffer: bufferA, offset: 0, size: 16 };
+    const layoutDescriptor = { entries: [webgpuInterop.uniformBufferLayout({ binding: 2, visibility: GPUShaderStage.FRAGMENT, minBindingSize: 16 })] };
     const material = new CustomMaterial({
         fragmentShader: `
+            struct Params { tint: vec4f }
+            @group(1) @binding(2) var<uniform> params: Params;
             @fragment
-            fn fs_main(in: VertexOutput) -> @location(0) vec4f {
-                return vec4f(custom.gain + in.uv.x, custom.axis.y, custom.tint.z, 1.0);
-            }
+            fn fs_main(in: VertexOutput) -> @location(0) vec4f { return params.tint + vec4f(in.uv, 0.0, 0.0); }
         `,
-        uniforms: {
-            gain: { type: "f32", value: 0.5 },
-            axis: { type: "vec3f", value: [1, 2, 3] },
-            tint: { type: "vec4f", value: [0.2, 0.4, 0.6, 0.8] }
-        }
+        bindGroupLayout: layoutDescriptor,
+        resources: { 2: bindingDescriptor }
     });
-
-    assert.equal(material.getUniformBufferSize(), 48);
-    const uniforms = material.getUniformData();
-    numberApproxEqual(uniforms[0], 0.5);
-    arraysApproxEqual(Array.from(uniforms.slice(4, 7)), [1, 2, 3]);
-    arraysApproxEqual(Array.from(uniforms.slice(8, 12)), [0.2, 0.4, 0.6, 0.8]);
-    assert.deepEqual(material.getUniform("axis"), [1, 2, 3]);
-    material.markClean();
-    material.setUniform("gain", 0.75);
-    material.setUniform("missing", 1);
-    assert.equal(material.dirty, true);
-    numberApproxEqual(material.getUniformData()[0], 0.75);
-
     const shaderCode = material.getShaderCode();
-    assert.ok(shaderCode.includes("struct CustomUniforms"));
-    assert.ok(shaderCode.includes("gain: f32"));
-    assert.ok(shaderCode.includes("axis: vec3f"));
+    assert.equal(shaderCode.includes("CustomUniforms"), false, "Caller WGSL must not be rewritten with generated uniforms");
+    assert.ok(shaderCode.includes("@group(1) @binding(2)"));
     assert.ok(shaderCode.includes("@fragment"));
     const layoutA = material.createBindGroupLayout(device);
     const layoutB = material.createBindGroupLayout(device);
     assert.equal(layoutA, layoutB);
-
-    const uniformBuffer = createUniformBuffer(device, device.queue, material.getUniformData());
-    assert.ok(device.createBindGroup({ layout: layoutA, entries: [{ binding: 0, resource: { buffer: uniformBuffer } }] }));
+    layoutDescriptor.entries[0].binding = 9;
+    const storedDescriptor = material.getResource(2);
+    assert.notEqual(storedDescriptor, bindingDescriptor, "Mutable buffer bindings must be snapshotted at construction");
+    assert.equal(storedDescriptor.buffer, bufferA);
+    bindingDescriptor.buffer = bufferB;
+    bindingDescriptor.offset = 8;
+    bindingDescriptor.size = 8;
+    assert.deepEqual(material.getBindGroupEntries()[0].resource, { buffer: bufferA, offset: 0, size: 16 }, "Mutating the caller descriptor must not bypass setResource()");
+    const replacementDescriptor = { buffer: bufferB, offset: 0, size: 16 };
+    material.setResource(2, replacementDescriptor);
+    replacementDescriptor.buffer = bufferA;
+    replacementDescriptor.offset = 8;
+    replacementDescriptor.size = 8;
+    assert.equal(material.createBindGroupLayout(device), layoutA, "Resource replacement must preserve layout identity");
+    assert.deepEqual(material.getBindGroupEntries()[0].resource, { buffer: bufferB, offset: 0, size: 16 }, "setResource() must snapshot mutable buffer bindings");
+    assert.throws(() => material.setResource(3, bufferA), /immutable bind group layout/);
     material.destroy();
+    device.queue.writeBuffer(bufferB, 0, new Float32Array([2.5, 0, 0, 0]));
+    const readback = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+    const encoder = device.createCommandEncoder();
+    encoder.copyBufferToBuffer(bufferB, 0, readback, 0, 16);
+    device.queue.submit([encoder.finish()]);
+    await readback.mapAsync(GPUMapMode.READ);
+    numberApproxEqual(new Float32Array(readback.getMappedRange())[0], 2.5, 1e-6, "Destroying CustomMaterial must leave the underlying borrowed GPUBuffer usable");
+    readback.unmap();
+    readback.destroy();
+    bufferA.destroy();
+    bufferB.destroy();
+
+    const empty = new CustomMaterial({ fragmentShader: `@fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f { return vec4f(in.uv, 0.0, 1.0); }` });
+    assert.deepEqual(empty.getBindGroupEntries(), []);
+    assert.ok(device.createBindGroup({ layout: empty.createBindGroupLayout(device), entries: [] }));
+    empty.destroy();
+
+    const sampledTexture = device.createTexture({ size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING });
+    const sampledView = sampledTexture.createView();
+    const sampler = device.createSampler();
+    const textured = new CustomMaterial({
+        fragmentShader: `
+            @group(1) @binding(0) var customSampler: sampler;
+            @group(1) @binding(1) var customTexture: texture_2d<f32>;
+            @fragment fn fs_main(in: VertexOutput) -> @location(0) vec4f { return textureSample(customTexture, customSampler, in.uv); }
+        `,
+        bindGroupLayout: { entries: [webgpuInterop.samplerLayout({ binding: 0 }), webgpuInterop.textureLayout({ binding: 1 })] },
+        resources: { 0: sampler, 1: sampledView }
+    });
+    assert.ok(device.createBindGroup({ layout: textured.createBindGroupLayout(device), entries: textured.getBindGroupEntries() }), "CustomMaterial group 1 must accept native sampler and texture-view resources");
+    textured.destroy();
+    sampledTexture.destroy();
+
+    assert.throws(() => new CustomMaterial({ fragmentShader: "", bindGroupLayout: { entries: [webgpuInterop.uniformBufferLayout({ binding: 2 })] } }), /missing resources for bindings 2/);
+    assert.throws(() => new CustomMaterial({ fragmentShader: "", resources: { 0: bufferA } }), /not declared by the layout/);
 }
 
 // 8) Cleanup releases material-owned runtime state and invalidates released material use.

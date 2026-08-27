@@ -219,14 +219,16 @@
             };
 
             const wgsl = () => `
+            struct TerrainParams { sun: vec4f, lighting: vec4f }
+            @group(1) @binding(0) var<uniform> terrain: TerrainParams;
             @fragment
             fn fs_main(in: VertexOutput) -> @location(0) vec4f {
                 let n = normalize(in.normal);
                 let h = in.world_pos.y;
                 let slope = 1.0 - clamp(n.y, 0.0, 1.0);
-                let sun = normalize(vec3f(-0.42, 0.80, 0.43));
+                let sun = normalize(terrain.sun.xyz);
                 let diffuse = max(dot(n, sun), 0.0);
-                let ambient = 0.36 + 0.19 * clamp(n.y, 0.0, 1.0);
+                let ambient = terrain.lighting.x + terrain.lighting.y * clamp(n.y, 0.0, 1.0);
                 let forest = vec3f(0.050, 0.130, 0.055);
                 let meadow = vec3f(0.34, 0.39, 0.18);
                 let dryGrass = vec3f(0.48, 0.41, 0.22);
@@ -242,8 +244,8 @@
                 base = mix(base, dryGrass, high * 0.38);
                 base = mix(base, mix(rock, darkRock, stripe * 0.32), rockMix);
                 base = mix(base, snow, snowMix);
-                let light = ambient + diffuse * 0.74;
-                let haze = 0.05 * smoothstep(12.0, 25.0, length(in.world_pos.xz));
+                let light = ambient + diffuse * terrain.lighting.z;
+                let haze = terrain.lighting.w * smoothstep(12.0, 25.0, length(in.world_pos.xz));
                 return vec4f(base * light + vec3f(haze), 1.0);
             }`;
 
@@ -266,7 +268,12 @@
             });
             const heightfield = createHeightfield(HEIGHTFIELD_RESOLUTION, WORLD_SIZE, WORLD_SIZE);
             const terrain = createTerrain(TERRAIN_RESOLUTION, TERRAIN_RESOLUTION, heightfield);
-            const terrainMaterial = wgpu.material.custom({ fragmentShader: wgsl() });
+            const terrainParams = wgpu.compute.createUniformBuffer({ data: new Float32Array([-0.42, 0.80, 0.43, 0, 0.36, 0.19, 0.74, 0.05]) });
+            const terrainMaterial = wgpu.material.custom({
+                fragmentShader: wgsl(),
+                bindGroupLayout: { entries: [wgpu.webgpu.uniformBufferLayout({ binding: 0, visibility: GPUShaderStage.FRAGMENT, minBindingSize: 32 })] },
+                resources: { 0: terrainParams }
+            });
             scene.add(wgpu.createMesh(wgpu.geometry.custom(terrain), terrainMaterial));
             const splats = createLandSplats(SPLAT_COUNT, heightfield);
             scene.add(wgpu.createSplatField({ ...splats, colorSpace: "linear", opacityScale: 0.72, boundsMin: [-HALF, -1, -HALF], boundsMax: [HALF, 25, HALF] }));

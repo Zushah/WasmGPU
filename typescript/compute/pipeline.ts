@@ -4,99 +4,16 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { assert, isGPUBuffer, resolveGPUBuffer } from "../utils";
-import { StorageBuffer, UniformBuffer } from "./buffer";
-
-export type StorageBufferBindingLayout = {
-    binding: number;
-    readOnly?: boolean;
-    visibility?: GPUShaderStageFlags;
-    hasDynamicOffset?: boolean;
-    minBindingSize?: number;
-};
-
-export const storageBufferLayout = (opts: StorageBufferBindingLayout): GPUBindGroupLayoutEntry => {
-    return {
-        binding: opts.binding,
-        visibility: opts.visibility ?? GPUShaderStage.COMPUTE,
-        buffer: {
-            type: opts.readOnly ? "read-only-storage" : "storage",
-            hasDynamicOffset: opts.hasDynamicOffset ?? false,
-            minBindingSize: opts.minBindingSize
-        }
-    };
-};
-
-export type UniformBufferBindingLayout = {
-    binding: number;
-    visibility?: GPUShaderStageFlags;
-    hasDynamicOffset?: boolean;
-    minBindingSize?: number;
-};
-
-export const uniformBufferLayout = (opts: UniformBufferBindingLayout): GPUBindGroupLayoutEntry => {
-    return {
-        binding: opts.binding,
-        visibility: opts.visibility ?? GPUShaderStage.COMPUTE,
-        buffer: {
-            type: "uniform",
-            hasDynamicOffset: opts.hasDynamicOffset ?? false,
-            minBindingSize: opts.minBindingSize
-        }
-    };
-};
-
-export type ComputeBindGroupLayoutDescriptor = {
-    label?: string;
-    entries: GPUBindGroupLayoutEntry[];
-};
+import { assert } from "../utils";
+import { normalizeBindGroupLayout, normalizeBindGroupResources } from "../wgsl/interop";
+import type { BindGroupLayoutDescriptor, BindGroupResources } from "../wgsl/interop";
 
 export type ComputePipelineDescriptor = {
     label?: string;
     code: string;
     entryPoint?: string;
     constants?: Record<string, number>;
-    bindGroups?: ComputeBindGroupLayoutDescriptor[];
-};
-
-export type BufferResource = GPUBuffer | StorageBuffer | UniformBuffer;
-
-export type BufferBindingResource = BufferResource | { buffer: BufferResource; offset?: number; size?: number };
-
-export type ComputeBindGroupResources = Record<number, BufferBindingResource> | Array<{ binding: number; resource: BufferBindingResource }>;
-
-const resolveBufferBinding = (resource: BufferBindingResource): GPUBufferBinding => {
-    if (isGPUBuffer(resource)) return { buffer: resource };
-    if ((resource as StorageBuffer).buffer !== undefined && (resource as StorageBuffer).device !== undefined) {
-        return { buffer: resolveGPUBuffer(resource as BufferResource) };
-    }
-    const bb = resource as { buffer: BufferResource; offset?: number; size?: number };
-    return {
-        buffer: resolveGPUBuffer(bb.buffer),
-        offset: bb.offset,
-        size: bb.size
-    };
-};
-
-const resourcesToEntries = (resources: ComputeBindGroupResources): GPUBindGroupEntry[] => {
-    const entries: GPUBindGroupEntry[] = [];
-    if (Array.isArray(resources)) {
-        for (const e of resources) {
-            entries.push({
-                binding: e.binding,
-                resource: resolveBufferBinding(e.resource)
-            });
-        }
-        return entries;
-    }
-    for (const key of Object.keys(resources)) {
-        const binding = Number(key);
-        if (!Number.isFinite(binding)) continue;
-        const resource = resources[binding];
-        if (!resource) continue;
-        entries.push({ binding, resource: resolveBufferBinding(resource) });
-    }
-    return entries;
+    bindGroups?: BindGroupLayoutDescriptor[];
 };
 
 export class ComputePipeline {
@@ -116,7 +33,10 @@ export class ComputePipeline {
         this.label = desc.label ?? null;
         const module = device.createShaderModule({ code: desc.code });
         if (desc.bindGroups && desc.bindGroups.length > 0) {
-            const layouts = desc.bindGroups.map((g) => device.createBindGroupLayout({ label: g.label, entries: g.entries }));
+            const layouts = desc.bindGroups.map((group, index) => {
+                const normalized = normalizeBindGroupLayout(group, `ComputePipeline bind group ${index}`);
+                return device.createBindGroupLayout({ label: normalized.label, entries: normalized.entries });
+            });
             const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: layouts });
             this.pipeline = device.createComputePipeline({
                 label: desc.label,
@@ -151,9 +71,9 @@ export class ComputePipeline {
         return this.pipeline.getBindGroupLayout(groupIndex);
     }
 
-    createBindGroup(groupIndex: number, resources: ComputeBindGroupResources, label?: string): GPUBindGroup {
+    createBindGroup(groupIndex: number, resources: BindGroupResources, label?: string): GPUBindGroup {
         const layout = this.getBindGroupLayout(groupIndex);
-        const entries = resourcesToEntries(resources);
+        const entries = normalizeBindGroupResources(resources, `ComputePipeline bind group ${groupIndex}`);
         return this.device.createBindGroup({
             label,
             layout,

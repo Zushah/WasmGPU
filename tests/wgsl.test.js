@@ -6,6 +6,7 @@
 
 import assert from "./utils/assert.js";
 import { destroyTestDevice, setupTest } from "./utils/helpers.js";
+import { WasmGPU, webgpuInterop } from "../release/WasmGPU.js";
 
 const extractBundledShaders = (bundle) => {
     const markerPattern = /^\/\/ (wgsl\/[^\r\n]+\.wgsl)\r?$/gm;
@@ -57,7 +58,43 @@ const skipped = [];
     assert.equal(errors.length, 0, errors.join("\n"));
 }
 
-// 2) Cleanup waits for compilation work before destroying the browser GPU device.
+// 2) WebGPU interop helpers preserve native descriptor behavior and reject invalid bindings.
+{
+    assert.equal(WasmGPU.webgpu, webgpuInterop);
+    const rawEntry = { binding: 4, visibility: GPUShaderStage.COMPUTE, storageTexture: { access: "write-only", format: "rgba8unorm" } };
+    const layout = webgpuInterop.bindGroupLayout({
+        label: "interop-layout",
+        entries: [
+            webgpuInterop.uniformBufferLayout({ binding: 0, minBindingSize: 16 }),
+            webgpuInterop.storageBufferLayout({ binding: 1, readOnly: true }),
+            webgpuInterop.samplerLayout({ binding: 2 }),
+            webgpuInterop.textureLayout({ binding: 3 }),
+            rawEntry
+        ]
+    });
+    assert.equal(layout.entries[0].buffer.type, "uniform");
+    assert.equal(layout.entries[1].buffer.type, "read-only-storage");
+    assert.equal(layout.entries[2].sampler.type, "filtering");
+    assert.equal(layout.entries[3].texture.viewDimension, "2d");
+    assert.deepEqual(layout.entries[4].storageTexture, rawEntry.storageTexture, "Raw WebGPU layout entry kinds must be accepted without interop-specific wrappers");
+    assert.throws(() => webgpuInterop.bindGroupLayout({ entries: [webgpuInterop.uniformBufferLayout({ binding: 0 }), webgpuInterop.textureLayout({ binding: 0 })] }), /duplicate binding 0/);
+    assert.throws(() => webgpuInterop.storageBufferLayout({ binding: -1 }), /non-negative integer/);
+    assert.throws(() => webgpuInterop.bindGroupLayout({ entries: [{ binding: 0, visibility: GPUShaderStage.COMPUTE }] }), /exactly one/);
+
+    const nativeBuffer = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM });
+    const nativeSampler = device.createSampler();
+    const nativeTexture = device.createTexture({ size: [1, 1], format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING });
+    const nativeView = nativeTexture.createView();
+    const entries = webgpuInterop.bindGroupResources({ 0: { buffer: nativeBuffer, size: 16 }, 2: nativeSampler, 3: nativeView });
+    assert.equal(entries[0].resource.buffer, nativeBuffer);
+    assert.equal(entries[1].resource, nativeSampler);
+    assert.equal(entries[2].resource, nativeView);
+    assert.throws(() => webgpuInterop.bindGroupResources([{ binding: 0, resource: nativeBuffer }, { binding: 0, resource: nativeBuffer }]), /duplicate binding 0/);
+    nativeBuffer.destroy();
+    nativeTexture.destroy();
+}
+
+// 3) Cleanup waits for compilation work before destroying the browser GPU device.
 {
     await destroyTestDevice(device);
 }

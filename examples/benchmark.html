@@ -473,7 +473,11 @@
                 const wgpu = await WasmGPU.create(c, { powerPreference: "high-performance", antialias: false });
                 const state = wgpu.compute.createStorageBuffer({ data, copySrc: true });
                 const params = wgpu.compute.createStorageBuffer({ data: makeParams(s) });
-                const pipeline = wgpu.compute.createPipeline({ code: WGSLCompute, entryPoint: "main" });
+                const pipeline = wgpu.compute.createPipeline({
+                    code: WGSLCompute,
+                    entryPoint: "main",
+                    bindGroups: [{ entries: [wgpu.webgpu.storageBufferLayout({ binding: 0 }), wgpu.webgpu.storageBufferLayout({ binding: 1, readOnly: true })] }]
+                });
                 const bind = pipeline.createBindGroup(0, { 0: state, 1: params });
                 const workgroups = wgpu.compute.workgroups1D(s.count, WORKGROUP_SIZE);
                 const timer = createTimestampTimer(wgpu.gpu.device);

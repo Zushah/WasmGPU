@@ -31,6 +31,7 @@ import type { OverlaySystemDescriptor, AxisTriadLayerDescriptor, GridLayerDescri
 import { PythonInterop } from "../python";
 import { ScaleService } from "../scaling";
 import { driver, frameArena, initWebAssembly, mat4, mat4d, mat4f, quat, quatd, quatf, vec3, vec3d, vec3f, WasmHeapArena, webassemblyInterop } from "../wasm";
+import { webgpuInterop } from "../wgsl";
 import { Camera, PerspectiveCamera, OrthographicCamera } from "../world/camera";
 import type { PerspectiveCameraDescriptor, OrthographicCameraDescriptor } from "../world/camera";
 import { NavigationControls, OrbitControls, TrackballControls, FlyControls } from "../world/controls";
@@ -142,6 +143,14 @@ export class WasmGPU {
 
     get webassembly() {
         return webassemblyInterop;
+    }
+
+    static get webgpu() {
+        return webgpuInterop;
+    }
+
+    get webgpu() {
+        return webgpuInterop;
     }
 
     static get math() {

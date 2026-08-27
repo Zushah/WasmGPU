@@ -2,7 +2,7 @@
 
 Latest commit: Thursday, August 27, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Thursday, August 27, 2026, [**`7c22dad`**](https://www.github.com/Zushah/WasmGPU/commit/7c22dad).
+Parent commit: Thursday, August 27, 2026, [**`8676956`**](https://www.github.com/Zushah/WasmGPU/commit/8676956).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -39,7 +39,7 @@ Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zus
   - [2.5. Compute, ndarray, and scaling](#25-compute-ndarray-and-scaling)
   - [2.6. Asset loading and glTF](#26-asset-loading-and-gltf)
   - [2.7. Overlays and annotations](#27-overlays-and-annotations)
-  - [2.8. Python and WebAssembly interop](#28-python-and-webassembly-interop)
+  - [2.8. Python, WebAssembly, and WebGPU interop](#28-python-webassembly-and-webgpu-interop)
   - [2.9. Rust driver](#29-rust-driver)
   - [2.10. WGSL shaders](#210-wgsl-shaders)
   - [2.11. Examples](#211-examples)
@@ -104,8 +104,9 @@ flowchart LR
         ADEC["Accessor decoding & data conversion"]
         AIMP["Importer from asset data to scene resources"]
         AMETA["Imported nodes, metadata, variants, cameras, & lights"]
+        GINT["WebGPU interop"]
         WINT["WebAssembly interop"]
-        PY["Python interop"]
+        PYINT["Python interop"]
     end
 
     subgraph WASM["WebAssembly Driver"]
@@ -139,7 +140,7 @@ flowchart LR
     class APP,ENG,FAC darkblue;
     class LOOP,REND,EFF,SCALE,OVER,ANNO,PICK green;
     class COMP,CBUF,CPIP,CDIS,CKER,CND,CREAD,CSCR lightblue;
-    class SCN,TSTORE,MESH,PGN,CMAP,SKIN,ASTORE,ALOAD,ADEC,AIMP,AMETA,WINT,PY yellow;
+    class SCN,TSTORE,MESH,PGN,CMAP,SKIN,ASTORE,ALOAD,ADEC,AIMP,AMETA,GINT,WINT,PYINT yellow;
     class WHEAP,WFRAME,WTRANS,WMATH,WND,WNORM,WGLTF,WANIM,WBOUNDS,WCULL purple;
     class DEV,CACHE,RES,RPASS,CPASS pink;
 
@@ -151,6 +152,7 @@ flowchart LR
     ENG --> SCALE
     ENG --> OVER
     ENG --> ANNO
+    ENG --> PYINT
     FAC --> SCN
     FAC --> TSTORE
     FAC --> EFF
@@ -158,8 +160,8 @@ flowchart LR
     FAC --> PGN
     FAC --> ALOAD
     FAC --> AIMP
+    FAC --> GINT
     FAC --> WINT
-    FAC --> PY
 
     SCN --> MESH
     SCN --> PGN
@@ -203,6 +205,9 @@ flowchart LR
     COMP --> CND
     COMP --> CREAD
     COMP --> CSCR
+    CPIP --> GINT
+    MESH --> GINT
+    GINT -.-> RES
     CBUF --> RES
     CPIP --> CPASS
     CDIS --> CPASS
@@ -223,8 +228,8 @@ flowchart LR
     REND -.-> WMATH
     COMP -.-> WHEAP
     WINT -.-> CBUF
-    PY --> WHEAP
-    PY --> WFRAME
+    PYINT --> COMP
+    PYINT --> CND
     WHEAP -.-> RES
     WFRAME -.-> RES
 ```
@@ -233,7 +238,7 @@ This diagram describes the current source tree, including [unreleased work](http
 
 ### 1.2. Public API surface
 
-The public API is exported from `./typescript/index.ts`. It exports the `WasmGPU` class, the renderer, compute helpers, scaling helpers, world objects, graphics objects, glTF helpers, rendering effects, overlay and annotation types, Python interop, WebAssembly interop, and math helpers.
+The public API is exported from `./typescript/index.ts`. It exports the `WasmGPU` class, the renderer, compute helpers, scaling helpers, world objects, graphics objects, glTF helpers, rendering effects, overlay and annotation types, Python interop, WebAssembly interop, WebGPU interop, and math helpers.
 
 Applications normally enter through `WasmGPU.create(canvas, descriptor)` in `./typescript/core/engine.ts`. The runtime initializes WebAssembly, creates a WebGPU renderer, constructs the compute subsystem, and exposes factories for scenes, cameras, controls, geometry, materials, textures, meshes, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, lights, effects, glTF loading, animation, overlays, and annotations.
 
@@ -255,7 +260,7 @@ The runtime owns:
 - performance stats;
 - requestAnimationFrame loop state.
 
-It also exposes accessors from `./typescript/wasm/index.ts` for the WebAssembly driver (`driver`) and the external WebAssembly interop (`webassembly`). Python interop is available only as an instance property (`python`).
+It also exposes accessors from `./typescript/wasm/index.ts` for the WebAssembly driver (`driver`), external WebAssembly interop (`webassembly`), declarative WebGPU interop (`webgpu`), and instance-only Python interop (`python`).
 
 `WasmGPU.run(callback)` starts a browser animation loop. Each frame resets the WebAssembly frame arena, computes timing values, invokes the callback, and records frame statistics. `WasmGPU.render(scene, camera)` delegates to `Renderer.render()`. If the runtime is not inside `run()`, it resets the frame arena before rendering.
 
@@ -308,9 +313,9 @@ Graphics data is implemented under `./typescript/graphics/`.
 
 `./typescript/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, RGBA vertex colors, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It can also borrow external `WasmMemoryView` sources for mesh vertex attributes, colors, and indices, explicitly refresh them, and upload active ranges into geometry-owned GPU buffers without owning or freeing the external WebAssembly memory. It calls Rust bounds and normal-generation functions through `./typescript/wasm/index.ts`; these synchronous operations use scoped WebAssembly heap scratch that is released after results are copied into JavaScript-owned arrays. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry.
 
-`./typescript/graphics/material.ts` implements `Material`, `UnlitMaterial`, `StandardMaterial`, `DataMaterial`, and `CustomMaterial`. Materials own uniform buffers, bind groups, texture references, WebGPU state, and dirty state, while standard materials expose glTF-style physically based rendering properties. Standard material layouts and imported WGSL shaders are specialized and cached by material features and mesh variant, with resource-limit validation before layout creation.
+`./typescript/graphics/material.ts` implements `Material`, `UnlitMaterial`, `StandardMaterial`, `DataMaterial`, and `CustomMaterial`. Built-in materials own their managed uniform buffers, bind groups, texture references, WebGPU state, and dirty state, while standard materials expose glTF-style physically based rendering properties. Standard material layouts and imported WGSL shaders are specialized and cached by material features and mesh variant, with resource-limit validation before layout creation.
 
-`DataMaterial` reads f32 data or external GPU buffers, uses a `ScaleTransform`, and can feed the scaling service. It owns GPU data buffers created from CPU data; `setDataBuffer()` stores caller-provided buffer handles without marking them owned. `CustomMaterial` reads caller-provided WGSL and uniform definitions. Material changes should be checked against renderer pipeline selection, WGSL shader variants, bind group layout creation, texture upload paths, tests, and glTF import.
+`DataMaterial` reads f32 data or external GPU buffers, uses a `ScaleTransform`, and can feed the scaling service. It owns GPU data buffers created from CPU data; `setDataBuffer()` stores caller-provided buffer handles without marking them owned. `CustomMaterial` is the renderer-side caller-WGSL escape hatch. Renderer camera/model/global state remains bind group 0, while its caller-declared material resources occupy bind group 1. Its binding layout is immutable after construction, resources can be replaced without changing render-pipeline identity, and external buffers, samplers, and texture views are borrowed rather than destroyed with the material. A custom material may also use an empty group-1 layout and bind group. Custom materials remain outside built-in instancing and skinning paths. Material changes should be checked against renderer pipeline selection, WGSL shader variants, bind group layout creation, texture upload paths, tests, and glTF import.
 
 `./typescript/graphics/texture.ts` wraps image bytes, URLs, `ImageBitmap` sources, sampler descriptors, GPU textures, and mipmap generation. Texture upload is asynchronous, supports configurable browser decoding and safe cancellation, and exposes terminal upload errors while renderer paths use fallback resources. Shared URL and glTF sources reuse encoded image data, while differing linear and sRGB uses receive separate GPU textures and mip chains.
 
@@ -413,7 +418,7 @@ The main compute files are:
 - `./typescript/compute/ndarray.ts`: CPU and GPU ndarray layout, dtype, stride, offset, upload, and readback logic.
 - `./typescript/compute/blit.ts`: RGBA8 storage-buffer-to-canvas blitting.
 
-The compute subsystem reads WGSL from `./wgsl/compute/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory. `CPUndarray` owns its backing bytes plus shape and stride allocations; scalar indexing is checked locally in TypeScript, and `destroy()` releases the owned WebAssembly allocations idempotently and makes later memory access throw. `GPUndarray` destroys only buffers it owns and continues to borrow buffers supplied through `wrap()`; a shared readback ring is an optional accelerator, with direct storage-buffer readback remaining available after that ring is destroyed.
+The compute subsystem reads WGSL from `./wgsl/compute/`, shared explicit WebGPU layouts and resources from `./typescript/wgsl/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. `ComputePipeline` remains responsible for arbitrary-WGSL pipeline creation, automatic or explicit layouts, bind-group creation, and dispatch integration, as the WebGPU interop subsystem does not execute or schedule compute work. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory. `CPUndarray` owns its backing bytes plus shape and stride allocations; scalar indexing is checked locally in TypeScript, and `destroy()` releases the owned WebAssembly allocations idempotently and makes later memory access throw. `GPUndarray` destroys only buffers it owns and continues to borrow buffers supplied through `wrap()`; a shared readback ring is an optional accelerator, with direct storage-buffer readback remaining available after that ring is destroyed.
 
 WasmGPU chooses floating-point precision by execution domain rather than imposing one width globally. CPU ndarrays and WasmGPU-owned or external WebAssembly memory support both `f32` and `f64`, including Python and WebAssembly interop. A `GPUndarray<f64>` is valid storage and transfer data, as its bytes may be uploaded to a WebGPU buffer, copied, and read back without loss. However, current WebGPU/WGSL has no concrete runtime `f64` scalar type, so `f64` GPU storage does not imply native `f6`4 shader computation or rendering arithmetic. Where a shader-facing path requires `f32`, explicitly converting `f64` CPU values through the existing typed-array or ndarray construction behavior is intentional.
 
@@ -513,7 +518,7 @@ Shader directories currently map to architecture areas:
 - `./wgsl/effects/`: renderer-integrated shadow caster variants and the StandardMaterial receiver declarations and sampling function.
 - `./wgsl/graphics/`: mesh material shaders, transmission shaders, data material shaders, custom material defaults, mipmap generation, and skinned or instanced variants.
 - `./wgsl/world/`: pointcloud, glyphfield, nodelink, splatfield, latticespace, picking, private splatfield and latticespace sorting, and object-family occlusion capture shaders.
-- `./wgsl/compute/`: copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, and blit kernels.
+- `./wgsl/compute/`: copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, blitting, vector & matrix arithmetic, and LU solving & factoring kernels.
 
 WGSL changes must stay in sync with bind group layouts, vertex buffer layouts, uniform packing, material descriptors, object uniform layouts, and compute pipeline resource bindings in TypeScript.
 
@@ -682,6 +687,8 @@ Important files:
 - `./typescript/compute/index.ts`: `Compute` facade, buffer creation, pipeline creation, dispatch helpers, readback rings, ndarray factories, and blitter creation.
 - `./typescript/compute/buffer.ts`: storage and uniform buffer wrappers.
 - `./typescript/compute/pipeline.ts`: compute pipeline wrapper and bind group creation.
+- `./typescript/wgsl/index.ts`: public WebGPU interop barrel export.
+- `./typescript/wgsl/interop.ts`: shared explicit bind group layout helpers, resource types, normalization, and validation.
 - `./typescript/compute/dispatch.ts`: compute pass encoding.
 - `./typescript/compute/workgroups.ts`: workgroup normalization and size helpers.
 - `./typescript/compute/kernels.ts`: built-in compute kernels.
@@ -699,6 +706,7 @@ Common interactions:
 - `./typescript/world/pointcloud.ts`, `./typescript/world/glyphfield.ts`, `./typescript/world/nodelink.ts`, `./typescript/world/latticespace.ts`, and `./typescript/graphics/material.ts` expose scale sources.
 - `./typescript/overlay/legendLayer.ts` reads scaling and colormap state for legends.
 - WGSL kernels under `./wgsl/compute/` implement GPU work.
+- Caller-authored compute WGSL may use automatic pipeline layouts or explicit layouts and borrowed resources from `webgpuInterop`, but execution remains owned by `Compute` and `ComputePipeline`.
 
 ### 2.6. Asset loading and glTF
 
@@ -759,12 +767,13 @@ Common interactions:
 - Legends read data from graphics and world objects.
 - Controls under `./typescript/world/controls.ts` drive dirty updates during camera interaction.
 
-### 2.8. Python and WebAssembly interop
+### 2.8. Python, WebAssembly, and WebGPU interop
 
 Architectural role:
 
-- Implements Python/Pyodide interop and external WebAssembly module interop in the diagram.
-- Bridges C-contiguous Pyodide buffers to canonical CPU and GPU ndarrays, and separately wraps foreign WebAssembly memory.
+- Implements the Python/Pyodide, external WebAssembly, and WebGPU interop toolkits.
+- Bridges C-contiguous Pyodide buffers to canonical CPU and GPU ndarrays, separately wraps foreign WebAssembly memory, and adapts caller-defined WebGPU layouts and borrowed resources for the existing compute and rendering systems.
+- Interop layers describe or adapt foreign data and resources, whereas the canonical WasmGPU subsystems retain responsibility for allocation, ownership, scheduling, pipeline integration, rendering, compute dispatch, and lifetime.
 
 Important files:
 
@@ -772,11 +781,18 @@ Important files:
 - `./python/interop.py`: thin NumPy normalization and canonical ndarray conversion helper.
 - `./typescript/wasm/index.ts`: exports for the WebAssembly driver and the WebAssembly interop.
 - `./typescript/wasm/interop.ts`: external WebAssembly module wrappers, descriptor resolution, typed memory views, raw byte reads, UTF-8/DataView helpers, and shared external memory validation/count helpers used by geometry, pointcloud, glyphfield, nodelink, and splatfield upload paths.
+- `./typescript/wgsl/index.ts`: exports the WebGPU interop.
+- `./typescript/wgsl/interop.ts`: WebGPU buffer, sampler, texture-view, bind-group resource, and layout vocabulary plus normalization, validation, and common binding-layout helpers.
 
 Common interactions:
 
+- Python interop uses the existing compute device, queue, readback resources, and canonical `CPUndarray` and `GPUndarray` implementations rather than maintaining a separate ndarray or lifetime model.
 - `./typescript/compute/ndarray.ts` uses WebAssembly memory for CPU ndarray storage.
 - `./typescript/core/transform.ts`, `./typescript/graphics/geometry.ts`, `./typescript/graphics/animation.ts`, and `./typescript/gltf/accessors.ts` call Rust helpers through `./typescript/wasm/index.ts`.
+- External WebAssembly views can feed existing object and buffer upload paths without transferring ownership of the foreign memory.
+- Compute pipelines consume WebGPU interop layouts and resources for caller-authored WGSL while retaining responsibility for pipeline creation, bind groups, and dispatch.
+- `CustomMaterial` consumes WebGPU interop layouts and borrowed resources for caller-authored rendering WGSL while the renderer retains responsibility for pipeline integration and render passes.
+- WebGPU interop accepts native descriptor shapes and raw `GPUBindGroupLayoutEntry` values for less-common binding kinds, and it does not own a device or queue, reflect or rewrite WGSL, pack arbitrary caller structs, or introduce a separate rendering or compute engine.
 - `./scripts/build-rust-wasm.js` creates generated WebAssembly files consumed by `./typescript/wasm/index.ts`.
 
 ### 2.9. Rust driver
@@ -833,6 +849,7 @@ Common interactions:
 
 - `./typescript/core/renderer.ts` and the internal renderer helper modules under `./typescript/core/` import render shaders.
 - `./typescript/compute/kernels.ts` imports compute shaders.
+- `./typescript/wgsl/interop.ts` supplies shared explicit layout and resource normalization to compute pipelines and `CustomMaterial`, but it does not inspect shader source.
 - `./esbuild.config.js` minifies WGSL imports during bundling.
 
 ### 2.11. Examples
@@ -878,7 +895,7 @@ Important files:
 - `./scripts/serve-tests.js`: minimal same-origin static server for test modules, bundled JavaScript, generated WebAssembly, declarations, and WGSL assets.
 - `./scripts/merge-test-reports.js`: serves as the Playwright provenance reporter, cleans aggregate output before full runs, validates report completeness, and combines the independently generated setup, JavaScript, and example blob reports.
 - `./tests/wasm.test.js`: WebAssembly ABI, generated-binding, heap, frame-arena, and external-module interop coverage.
-- `./tests/wgsl.test.js`: checks shader-module compilation and diagnostics through the selected Playwright browser's WebGPU implementation. It requests supported optional features and skips only modules that explicitly require unavailable features. It does not construct pipelines or validate shader interfaces against TypeScript bind group, vertex, override-constant, or render-target descriptors, so focused subsystem tests cover those integration contracts.
+- `./tests/wgsl.test.js`: checks shader-module compilation and diagnostics plus WebGPU interop behavior through the selected Playwright browser's WebGPU implementation. It requests supported optional features and skips only modules that explicitly require unavailable features. It does not construct pipelines or validate shader interfaces against TypeScript bind group, vertex, override-constant, or render-target descriptors, so focused subsystem tests cover those integration contracts.
 - `./.github/workflows/test.yaml`: GitHub Actions workflow for automatically running tests on every push and pull request.
 
 The CI selection table below makes the platform decision explicit instead of treating the eighteen-entry operating-system, architecture, and browser product as uniformly useful. A row is included only when GitHub supplies the host, Playwright supplies a native browser for that architecture, WebGPU is expected to exercise WasmGPU rather than fail at browser setup, and the row adds material coverage. Chromium supplies the portable operating-system and CPU-architecture baseline, while Firefox is retained on its supported Windows and Apple Silicon targets. Linux Firefox remains outside CI while its WebGPU implementation exhibits external backend failures, Playwright's WebKit embedder does not expose WebGPU even on a host where Safari supports it, and Windows ARM64 remains outside CI because Playwright currently supplies x64 rather than native ARM64 Windows browser packages. GitHub's `windows-2025` AMD64 image is the available Windows Server 2025 surrogate for the Windows 11 rows rather than a literal Windows 11 client installation.

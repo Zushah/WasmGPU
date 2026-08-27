@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { BlendMode, CullMode, DataMaterial, Material, StandardMaterial, UnlitMaterial, getMaterialTextureForSlot } from "../graphics/material";
+import { BlendMode, CullMode, CustomMaterial, DataMaterial, Material, StandardMaterial, UnlitMaterial, getMaterialTextureForSlot } from "../graphics/material";
 import type { RendererContext } from "./context";
 import { getObjectId } from "./resources";
 
@@ -296,6 +296,14 @@ export const getMaterialBindGroupKey = (ctx: RendererContext, material: Material
 };
 
 export const ensureMaterialBindGroup = (ctx: RendererContext, material: Material): void => {
+    if (material instanceof CustomMaterial) {
+        const key = getMaterialBindGroupKey(ctx, material);
+        if (material.bindGroup && material.bindGroupKey === key) return;
+        material.bindGroup = ctx.device.createBindGroup({ layout: material.createBindGroupLayout(ctx.device), entries: material.getBindGroupEntries() });
+        material.bindGroupKey = key;
+        if (material.dirty) material.markClean();
+        return;
+    }
     if (!material.uniformBuffer) {
         material.uniformBuffer = ctx.device.createBuffer({
             size: material.getUniformBufferSize(),

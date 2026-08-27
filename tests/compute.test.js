@@ -6,7 +6,7 @@
 
 import assert from "./utils/assert.js";
 import { createApproxHelpers, createTestRandom, destroyTestDevice, setupTest } from "./utils/helpers.js";
-import { Compute, ComputePipeline, makeWorkgroupSize, makeWorkgroupCounts, workgroups1D, workgroups2D, workgroups3D, normalizeWorkgroups } from "../release/WasmGPU.js";
+import { Compute, ComputePipeline, webgpuInterop, makeWorkgroupSize, makeWorkgroupCounts, workgroups1D, workgroups2D, workgroups3D, normalizeWorkgroups } from "../release/WasmGPU.js";
 
 const { arraysApproxEqual } = createApproxHelpers(1e-5);
 
@@ -133,8 +133,13 @@ const compute = new Compute(device, device.queue);
     const params = compute.createUniformBuffer({ label: "params", data: new Float32Array([scale, bias, 0, 0]) });
     const bufA = compute.createStorageBuffer({ label: "a_affine", data: a });
     const bufOut = compute.createStorageBuffer({ label: "out_affine", byteLength: n * 4, copySrc: true });
-    const pipelineAffine = compute.createPipeline({ label: "affine", code: affineWGSL, entryPoint: "main" });
-    const bg = pipelineAffine.createBindGroup(0, { 0: params, 1: bufA, 2: bufOut });
+    const pipelineAffine = compute.createPipeline({
+        label: "affine",
+        code: affineWGSL,
+        entryPoint: "main",
+        bindGroups: [{ entries: [webgpuInterop.uniformBufferLayout({ binding: 0, minBindingSize: 16 }), webgpuInterop.storageBufferLayout({ binding: 1, readOnly: true }), webgpuInterop.storageBufferLayout({ binding: 2 })] }]
+    });
+    const bg = pipelineAffine.createBindGroup(0, { 0: params, 1: { buffer: bufA.buffer, size: n * 4 }, 2: bufOut });
     compute.dispatch1D(pipelineAffine, [bg], n, 64, "affine");
     await device.queue.onSubmittedWorkDone();
     const out = await bufOut.readAs(Float32Array);
