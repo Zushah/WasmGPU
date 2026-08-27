@@ -5,7 +5,7 @@
  */
 
 import assert from "./utils/assert.js";
-import { WasmGPU, WasmMemoryView, WasmModule, driver, frameArena, initWebAssembly, pythonInterop, wasm, webassemblyInterop } from "../release/WasmGPU.js";
+import { PythonInterop, WasmGPU, WasmMemoryView, WasmModule, driver, frameArena, initWebAssembly, wasm, webassemblyInterop } from "../release/WasmGPU.js";
 import * as generatedWasm from "../wasm/wasm.js";
 
 const encoder = new TextEncoder();
@@ -248,15 +248,16 @@ const makeFixture = () => {
     return { memory, exportsObject, ptrGlobal, lenGlobal, text };
 };
 
-// 1) Public runtime accessors expose the driver, WebAssembly interop, and Python interop surfaces.
+// 1) Public runtime accessors expose the driver and WebAssembly interop surfaces.
 {
     assert.strictEqual(WasmGPU.driver, driver, "WasmGPU.driver should expose the internal WebAssembly driver surface");
     assert.strictEqual(WasmGPU.webassembly, webassemblyInterop, "WasmGPU.webassembly should expose the external WebAssembly interop surface");
-    assert.strictEqual(WasmGPU.python, pythonInterop, "WasmGPU.python should expose the Python interop surface");
+    assert.strictEqual(WasmGPU.python, undefined, "WasmGPU must not expose static Python interop state");
     const runtime = Object.create(WasmGPU.prototype);
     assert.strictEqual(runtime.driver, driver, "wgpu.driver getter should expose the internal WebAssembly driver surface");
     assert.strictEqual(runtime.webassembly, webassemblyInterop, "wgpu.webassembly getter should expose the external WebAssembly interop surface");
-    assert.strictEqual(runtime.python, pythonInterop, "wgpu.python getter should expose the Python interop surface");
+    assert.strictEqual(runtime.python, undefined, "Python interop is installed on concrete runtime instances only");
+    assert.strictEqual(typeof PythonInterop, "function", "PythonInterop class should be exported");
     assert.strictEqual(typeof webassemblyInterop.fromInstance, "function");
     assert.strictEqual(typeof webassemblyInterop.fromExports, "function");
     assert.strictEqual(typeof webassemblyInterop.fromMemory, "function");
@@ -311,8 +312,7 @@ const makeFixture = () => {
     const globalView = moduleRef.view({
         ptr: { export: "ptr_global", kind: "global", name: "ptr-global" },
         length: { export: "len_global", kind: "global", name: "len-global" },
-        dtype: "u16",
-        name: "global-view"
+        dtype: "u16", name: "global-view"
     });
     assert.deepStrictEqual(Array.from(globalView.array()), [10, 20, 30, 40], "view() should support exported globals");
     ptrGlobal.value = 144;
@@ -412,19 +412,13 @@ const makeFixture = () => {
     assert.doesNotThrow(() => generatedWasm.wasmgpu_free_f32(0, 0));
     assert.doesNotThrow(() => generatedWasm.wasmgpu_free_u32(0, 0));
 
-    const bytePtr = generatedWasm.wasmgpu_alloc(17);
-    const f32Ptr = generatedWasm.wasmgpu_alloc_f32(5);
-    const u32Ptr = generatedWasm.wasmgpu_alloc_u32(5);
+    const bytePtr = generatedWasm.wasmgpu_alloc(17), f32Ptr = generatedWasm.wasmgpu_alloc_f32(5), u32Ptr = generatedWasm.wasmgpu_alloc_u32(5);
     assert.ok(bytePtr > 0 && f32Ptr > 0 && u32Ptr > 0, "Heap allocations must return nonzero pointers");
     assert.strictEqual(bytePtr % 16, 0, "Byte allocations must be 16-byte aligned");
     assert.strictEqual(f32Ptr % 4, 0, "f32 allocations must be naturally aligned");
     assert.strictEqual(u32Ptr % 4, 0, "u32 allocations must be naturally aligned");
 
-    const allocations = [
-        { ptr: bytePtr, bytes: 17 },
-        { ptr: f32Ptr, bytes: 5 * 4 },
-        { ptr: u32Ptr, bytes: 5 * 4 }
-    ];
+    const allocations = [{ ptr: bytePtr, bytes: 17 }, { ptr: f32Ptr, bytes: 5 * 4 }, { ptr: u32Ptr, bytes: 5 * 4 }];
     for (let i = 0; i < allocations.length; i++) {
         for (let j = i + 1; j < allocations.length; j++) {
             const a = allocations[i], b = allocations[j];
@@ -460,9 +454,7 @@ const makeFixture = () => {
         const f32 = generatedWasm.wasmgpu_alloc_f32(4096);
         const u32 = generatedWasm.wasmgpu_alloc_u32(4096);
         assert.ok(ptrs.every((ptr) => ptr > 0) && f32 > 0 && u32 > 0, "Heap churn allocations must succeed");
-        for (let i = 0; i < ptrs.length; i++) {
-            generatedWasm.u8view(ptrs[i], churnSizes[i]).fill(i + 1);
-        }
+        for (let i = 0; i < ptrs.length; i++) generatedWasm.u8view(ptrs[i], churnSizes[i]).fill(i + 1);
         generatedWasm.f32view(f32, 4096).fill(1.25);
         generatedWasm.u32view(u32, 4096).fill(0xdecafbad);
         assert.deepStrictEqual(Array.from(generatedWasm.u8view(guardPtr, 64)), new Array(64).fill(0x5a), "Allocator churn must not corrupt a live neighboring allocation");
@@ -622,22 +614,8 @@ const makeFixture = () => {
         assert.throws(() => retrySlice.free(), /injected free failure/i, "A failed heap release must be reported");
         assert.strictEqual(retrySlice.isAlive(), true, "A failed heap release must leave the slice retryable");
         assert.deepStrictEqual(Array.from(retrySlice.view()), [5, 6, 7, 8]);
-    } finally {
-        wasm.freeF32 = originalFreeF32;
-    }
+    } finally { wasm.freeF32 = originalFreeF32; }
     retrySlice.free();
-
-    const ndarrayHandle = pythonInterop.sendNdarray(new Float32Array([1, 2, 3, 4]), { shape: [2, 2] });
-    assert.deepStrictEqual(Array.from(pythonInterop.view(ndarrayHandle)), [1, 2, 3, 4]);
-    pythonInterop.free(ndarrayHandle);
-    assert.doesNotThrow(() => pythonInterop.free(ndarrayHandle), "Python ndarray heap free must remain idempotent");
-    assert.throws(() => pythonInterop.view(ndarrayHandle), /freed/i, "Freed Python ndarray handles must reject typed views");
-    assert.throws(() => pythonInterop.bytes(ndarrayHandle), /freed/i, "Freed Python ndarray handles must reject byte views");
-    assert.throws(() => pythonInterop.copyInto(ndarrayHandle, new Float32Array([5, 6, 7, 8])), /freed/i, "Freed Python ndarray handles must reject writes");
-    assert.throws(() => pythonInterop.receiveNdarray(ndarrayHandle, { copy: true }), /freed/i, "Freed Python ndarray handles must reject reads");
-    const replacementHandle = pythonInterop.sendNdarray(new Float32Array([9, 10, 11, 12]), { shape: [2, 2] });
-    assert.throws(() => pythonInterop.view(ndarrayHandle), /freed/i, "A freed handle must remain invalid after its storage becomes reusable");
-    pythonInterop.free(replacementHandle);
 
     const arena = driver.createHeapArena(256);
     const arenaSlice = arena.allocF64(2);
@@ -657,9 +635,7 @@ const makeFixture = () => {
     try {
         assert.throws(() => retryArena.destroy(), /injected arena destroy failure/i, "A failed arena release must be reported");
         assert.strictEqual(retryArenaSlice.isAlive(), true, "A failed arena release must leave its slices valid and retryable");
-    } finally {
-        wasm.freeBytes = originalFreeBytes;
-    }
+    } finally { wasm.freeBytes = originalFreeBytes; }
     retryArena.destroy();
     assert.strictEqual(retryArenaSlice.isAlive(), false);
 

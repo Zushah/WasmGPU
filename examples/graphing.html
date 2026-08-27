@@ -42,11 +42,11 @@
             const fmtVec3 = (v) => `[${fmt(v[0])}, ${fmt(v[1])}, ${fmt(v[2])}]`;
             const clamp = (x, min, max) => Math.max(min, Math.min(max, x));
             const copyFloat32FromPy = (wgpu, proxy) => {
-                const handle = wgpu.python.sendNdarray(proxy);
-                const bytes = wgpu.python.bytes(handle).slice();
-                wgpu.python.free(handle);
+                const array = wgpu.python.toCPU(proxy);
+                const values = array.data().slice();
+                array.destroy();
                 proxy.destroy();
-                return new Float32Array(bytes.buffer);
+                return values;
             };
             const copyJsonFromPy = (proxy) => {
                 const text = String(proxy);

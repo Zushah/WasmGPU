@@ -35,11 +35,11 @@
             const fmt = (n, d = 3) => Number.isFinite(n) ? n.toFixed(d) : "nan";
             const fmtVec3 = (v) => `[${fmt(v[0])}, ${fmt(v[1])}, ${fmt(v[2])}]`;
             const copyFloat32FromPy = (wgpu, proxy) => {
-                const handle = wgpu.python.sendNdarray(proxy);
-                const bytes = wgpu.python.bytes(handle).slice();
-                wgpu.python.free(handle);
+                const array = wgpu.python.toCPU(proxy);
+                const values = array.data().slice();
+                array.destroy();
                 proxy.destroy();
-                return new Float32Array(bytes.buffer);
+                return values;
             };
             const copyJsonFromPy = (proxy) => {
                 const text = String(proxy);
@@ -248,23 +248,9 @@
             scene.add(glyphField);
 
             // Create compute resources for the tracer particles
-            const tracerHandle = wgpu.python.sendNdarray(tracerSeeds4, { dtype: "f32", shape: [tracerSeeds4.length / 4, 4], allocator: "heap" });
-            const seedBuffer = wgpu.compute.createStorageBuffer({
-                label: "fluid:tracer-seeds",
-                byteLength: tracerHandle.byteLength,
-                data: wgpu.python.bytes(tracerHandle)
-            });
-            wgpu.python.free(tracerHandle);
-            const particleBuffer = wgpu.compute.createStorageBuffer({
-                label: "fluid:tracer-points",
-                byteLength: tracerSeeds4.byteLength,
-                usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX
-            });
-            const particleUniform = wgpu.compute.createUniformBuffer({
-                label: "fluid:params",
-                byteLength: 16,
-                copyDst: true
-            });
+            const seedBuffer = wgpu.compute.createStorageBuffer({ label: "fluid:tracer-seeds", data: tracerSeeds4 });
+            const particleBuffer = wgpu.compute.createStorageBuffer({ label: "fluid:tracer-points", byteLength: tracerSeeds4.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX });
+            const particleUniform = wgpu.compute.createUniformBuffer({ label: "fluid:params", byteLength: 16, copyDst: true });
 
             // WGSL code for a compute shader to advect tracer particles through the flow field
             const wgsl = `

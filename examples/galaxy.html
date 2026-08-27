@@ -71,10 +71,9 @@
             await pyodide.loadPackage("numpy");
             pyodide.runPython(py);
             const outpy = pyodide.globals.get("generate_galaxy")(points);
-            const handle = wgpu.python.sendNdarray(outpy);
-            const inBuffer = wgpu.compute.createStorageBuffer({ byteLength: handle.byteLength, data: wgpu.python.bytes(handle) });
-            const outBuffer = wgpu.compute.createStorageBuffer({ byteLength: handle.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX });
-            wgpu.python.free(handle);
+            const inArray = wgpu.python.toGPU(outpy, { label: "galaxy:python-input" });
+            const inBuffer = inArray.buffer;
+            const outBuffer = wgpu.compute.createStorageBuffer({ byteLength: inArray.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.VERTEX });
             outpy.destroy();
             scene.add(wgpu.createPointCloud({
                 pointsBuffer: outBuffer, pointCount: points,

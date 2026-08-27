@@ -29,6 +29,8 @@ import mathF32 from "./math/mat4f-mul-throughput.bench.js";
 import mathF64 from "./math/mat4d-mul-throughput.bench.js";
 import transforms from "./math/transform-set-position-update-all-throughput.bench.js";
 import wasmTransfer from "./interop/webassembly-view-copy-throughput.bench.js";
+import pythonToCPU from "./interop/python-to-cpundarray-throughput.bench.js";
+import pythonToGPU from "./interop/python-to-gpundarray-throughput.bench.js";
 import scaling from "./scaling/scale-service-percentile-stats-latency.bench.js";
 import gltf from "./gltf/accessors-read-interleaved-vec3-throughput.bench.js";
 import pointcloud from "./objects/pointcloud-set-data-upload-throughput.bench.js";
@@ -88,6 +90,8 @@ export const benchmarks = [
     scaling,
     gltf,
     wasmTransfer,
+    pythonToCPU,
+    pythonToGPU,
     renderMesh,
     renderPointCloud,
     renderGlyphField,

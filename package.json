@@ -7,11 +7,12 @@
   "main": "./release/WasmGPU.js",
   "module": "./release/WasmGPU.js",
   "files": [
-    "./CHANGELOG.md",
     "./release/",
+    "./README.md",
     "./LICENSE.md",
-    "./package.json",
-    "./README.md"
+    "./CHANGELOG.md",
+    "./python/",
+    "./package.json"
   ],
   "devDependencies": {
     "typescript": "7.0.2",

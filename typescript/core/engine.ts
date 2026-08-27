@@ -28,7 +28,7 @@ import { AnnotationToolkit } from "../overlay";
 import type { AnnotationToolkitDescriptor } from "../overlay";
 import { OverlaySystem, AxisTriadLayer, GridLayer, LegendLayer } from "../overlay";
 import type { OverlaySystemDescriptor, AxisTriadLayerDescriptor, GridLayerDescriptor, LegendLayerDescriptor } from "../overlay";
-import { pythonInterop } from "../python";
+import { PythonInterop } from "../python";
 import { ScaleService } from "../scaling";
 import { driver, frameArena, initWebAssembly, mat4, mat4d, mat4f, quat, quatd, quatf, vec3, vec3d, vec3f, WasmHeapArena, webassemblyInterop } from "../wasm";
 import { Camera, PerspectiveCamera, OrthographicCamera } from "../world/camera";
@@ -66,6 +66,7 @@ export class WasmGPU {
     private renderer: Renderer;
     readonly effects: RenderEffects;
     readonly compute: Compute;
+    readonly python: PythonInterop;
     readonly scale: ScaleService;
     private _performanceStats: PerformanceStats | null = null;
     private _isRunning: boolean = false;
@@ -78,6 +79,7 @@ export class WasmGPU {
         this.effects = renderer.effects;
         const gpu = renderer.gpu;
         this.compute = new Compute(gpu.device, gpu.queue, desc as ComputeDescriptor);
+        this.python = new PythonInterop(this.compute);
         this.scale = new ScaleService(this.compute);
     }
 
@@ -140,14 +142,6 @@ export class WasmGPU {
 
     get webassembly() {
         return webassemblyInterop;
-    }
-
-    static get python() {
-        return pythonInterop;
-    }
-
-    get python() {
-        return pythonInterop;
     }
 
     static get math() {

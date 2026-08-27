@@ -5,12 +5,9 @@
  */
 
 import { assert } from "../utils";
-import { dtypeInfo, type DType, type NumberTypedArray } from "../compute/ndarray";
-import { driver, frameArena, type WasmPtr, wasm, WasmHeapArena } from "../wasm";
+import { CPUndarray, GPUndarray, StorageBuffer, dtypeInfo, type Compute, type DType, type NumberTypedArray } from "../compute";
 
-export type PyProxyLike = {
-    getBuffer: (type?: string) => PyBufferLike;
-};
+export type PyProxyLike = { getBuffer: (type?: string) => PyBufferLike };
 
 export type PyBufferLike = {
     data: ArrayBufferView;
@@ -27,243 +24,172 @@ export type PyBufferLike = {
     release?: () => void;
 };
 
-export type PythonArraySource = ArrayBufferView | PyBufferLike | PyProxyLike;
+export type PythonArraySource = PyProxyLike | PyBufferLike;
 
-export type WasmNdarrayHandle = {
-    kind: "heap" | "frame" | "arena";
-    dtype: DType;
-    shape: number[];
-    ptr: WasmPtr;
-    length: number;
-    byteLength: number;
-    epoch?: number;
+export type PythonGPUTransferOptions = {
+    label?: string;
+    copyDst?: boolean;
+    copySrc?: boolean;
+    usage?: GPUBufferUsageFlags;
 };
 
-export type SendNdarrayOptions = {
-    dtype?: DType;
-    shape?: ReadonlyArray<number>;
-    allocator?: "heap" | "frame" | WasmHeapArena;
-};
+type ResolvedSource = { dtype: DType; shape: number[]; data: NumberTypedArray; byteLength: number };
 
-export type ReceiveNdarrayOptions = {
-    copy?: boolean;
-};
-
-export type NdarrayTransfer = {
-    dtype: DType;
-    shape: number[];
-    data: NumberTypedArray;
-};
-
-const FREED_HEAP_HANDLES = new WeakSet<WasmNdarrayHandle>();
-
-const assertHandleAlive = (handle: WasmNdarrayHandle, operation: string): void => {
-    if (FREED_HEAP_HANDLES.has(handle)) throw new Error(`pythonInterop.${operation}(): heap allocation has been freed.`);
-};
-
-const isPyProxyLike = (x: unknown): x is PyProxyLike => {
-    return (typeof x === "object") && (x !== null) && (typeof (x as any).getBuffer === "function");
-};
+const isPyProxyLike = (x: unknown): x is PyProxyLike => typeof x === "object" && x !== null && typeof (x as PyProxyLike).getBuffer === "function";
 
 const isPyBufferLike = (x: unknown): x is PyBufferLike => {
-    return (typeof x === "object") && (x !== null) && (typeof (x as any).data === "object") && Array.isArray((x as any).shape);
-};
-
-const normalizeShape = (shape: ReadonlyArray<number>): number[] => {
-    const out: number[] = new Array(shape.length);
-    for (let i = 0; i < shape.length; i++) {
-        const dim = shape[i];
-        assert(Number.isFinite(dim), `shape[${i}] must be finite`);
-        assert(Number.isInteger(dim), `shape[${i}] must be an integer`);
-        assert(dim >= 0, `shape[${i}] must be >= 0`);
-        out[i] = dim >>> 0;
-    }
-    return out;
-};
-
-const numelOfShape = (shape: ReadonlyArray<number>): number => {
-    if (shape.length === 0) return 1;
-    let n = 1;
-    for (const d of shape) {
-        const dim = d >>> 0;
-        const next = n * dim;
-        assert(Number.isSafeInteger(next), "shape is too large (numel overflow)");
-        n = next;
-    }
-    return n >>> 0;
+    const value = x as Partial<PyBufferLike> | null;
+    return typeof value === "object" && value !== null && ArrayBuffer.isView(value.data) && Array.isArray(value.shape) && Array.isArray(value.strides);
 };
 
 const dtypeOfTypedArray = (view: ArrayBufferView): DType | null => {
-    if (view instanceof Float32Array) return "f32";
-    if (view instanceof Float64Array) return "f64";
     if (view instanceof Int8Array) return "i8";
-    if (view instanceof Uint8Array) return "u8";
-    if (view instanceof Uint8ClampedArray) return "u8";
+    if (view instanceof Uint8Array && !(view instanceof Uint8ClampedArray)) return "u8";
     if (view instanceof Int16Array) return "i16";
     if (view instanceof Uint16Array) return "u16";
     if (view instanceof Int32Array) return "i32";
     if (view instanceof Uint32Array) return "u32";
+    if (view instanceof Float32Array) return "f32";
+    if (view instanceof Float64Array) return "f64";
     return null;
 };
 
-const viewAsDType = (dtype: DType, view: ArrayBufferView, offsetElements: number = 0, lengthElements?: number): NumberTypedArray => {
-    const info = dtypeInfo(dtype);
-    const ctor = info.ctor as unknown as (new (buffer: ArrayBuffer, byteOffset: number, length: number) => NumberTypedArray);
-    const bpe = info.bytesPerElement >>> 0;
-    const offEl = offsetElements >>> 0;
-    const lenEl = (lengthElements === undefined) ? (((view.byteLength >>> 0) / bpe) >>> 0) : (lengthElements >>> 0);
-    const byteOffset = ((view.byteOffset >>> 0) + (offEl * bpe)) >>> 0;
-    return new ctor(view.buffer as unknown as ArrayBuffer, byteOffset >>> 0, lenEl >>> 0);
-};
-
-const allocBytes = (byteLength: number, align: number, allocator: SendNdarrayOptions["allocator"]): { kind: WasmNdarrayHandle["kind"]; ptr: WasmPtr; epoch?: number } => {
-    const bytes = byteLength >>> 0;
-    const a0 = align >>> 0;
-    const a = (a0 === 0) ? 16 : a0;
-    if ((a & (a - 1)) !== 0) throw new Error(`allocBytes(${byteLength}, ${align}): align must be a power of two`);
-    if (allocator === "frame") {
-        const ptr = frameArena.alloc(bytes, a) >>> 0;
-        return { kind: "frame", ptr };
+const validateShape = (value: unknown): number[] => {
+    assert(Array.isArray(value), "Python buffer shape must be an array");
+    const shape = new Array<number>(value.length);
+    for (let i = 0; i < value.length; i++) {
+        const dim = value[i];
+        assert(Number.isSafeInteger(dim) && dim >= 0, `Python buffer shape[${i}] must be a non-negative safe integer`);
+        assert(dim <= 0xFFFFFFFF, `Python buffer shape[${i}] must fit in u32`);
+        shape[i] = dim;
     }
-    if (allocator && typeof allocator === "object") {
-        const arena = allocator as WasmHeapArena;
-        const epoch = arena.epoch() >>> 0;
-        const ptr = arena.alloc(bytes, a) >>> 0;
-        return { kind: "arena", ptr, epoch };
+    return shape;
+};
+
+const numelOf = (shape: ReadonlyArray<number>): number => {
+    let numel = 1;
+    for (const dim of shape) {
+        numel *= dim;
+        assert(Number.isSafeInteger(numel), "Python buffer shape product exceeds JavaScript's safe integer range");
+        if (dim === 0) return 0;
     }
-    const ptr = wasm.allocBytes(bytes) >>> 0;
-    if (!ptr && bytes !== 0) throw new Error(`wasm.allocBytes(${bytes}) failed`);
-    const heapAlign = Math.min(a, 8) >>> 0;
-    if (heapAlign !== 0 && (ptr & (heapAlign - 1)) !== 0) throw new Error(`wasm.allocBytes(${bytes}) returned ptr 0x${ptr.toString(16)} which is not ${heapAlign}-byte aligned`);
-    return { kind: "heap", ptr };
+    return numel;
 };
 
-const typedViewFromPtr = (dtype: DType, ptr: WasmPtr, length: number): NumberTypedArray => {
-    const info = dtypeInfo(dtype);
-    const ctor = info.ctor as unknown as (new (buffer: ArrayBuffer, byteOffset: number, length: number) => NumberTypedArray);
-    const buf = driver.buffer() as unknown as ArrayBuffer;
-    return new ctor(buf, ptr >>> 0, length >>> 0);
-};
-
-const bytesViewFromPtr = (ptr: WasmPtr, byteLength: number): Uint8Array => {
-    const base = driver.bytes();
-    const start = ptr >>> 0;
-    const end = (start + (byteLength >>> 0)) >>> 0;
-    return base.subarray(start, end);
-};
-
-const assertIsCContiguous = (buf: PyBufferLike): void => {
-    if (typeof buf.c_contiguous === "boolean") {
-        assert(buf.c_contiguous, "Python buffer must be C-contiguous (use numpy.ascontiguousarray(..., order=\"C\"))");
-        return;
-    }
-    const shape = normalizeShape(buf.shape ?? []);
-    const strides = Array.from(buf.strides ?? []);
-    assert(strides.length === shape.length, "Python buffer strides/shape rank mismatch");
-    if (numelOfShape(shape) === 0) return;
-    let expected = 1;
+const contiguousStridesBytes = (shape: ReadonlyArray<number>, bytesPerElement: number): number[] => {
+    const strides = new Array<number>(shape.length);
+    let stride = bytesPerElement;
     for (let i = shape.length - 1; i >= 0; i--) {
-        assert(strides[i] === expected, "Python buffer must be C-contiguous (use numpy.ascontiguousarray(..., order=\"C\"))");
-        expected *= shape[i];
+        assert(Number.isSafeInteger(stride) && stride <= 0x7FFFFFFF, "Python buffer contiguous stride exceeds the supported i32 range");
+        strides[i] = stride;
+        stride *= shape[i];
+    }
+    return strides;
+};
+
+const resolveBuffer = (buffer: PyBufferLike): ResolvedSource => {
+    assert(!(buffer.data instanceof DataView), "Python buffer DataView sources are not supported");
+    const dtype = dtypeOfTypedArray(buffer.data);
+    assert(dtype !== null, "Unsupported Python buffer dtype, expected i8, u8, i16, u16, i32, u32, f32, or f64");
+    if (buffer.format !== undefined) assert(buffer.format.slice(-1) !== "?", "Unsupported Python buffer dtype bool, cast to uint8 before importing");
+    const info = dtypeInfo(dtype);
+    const shape = validateShape(buffer.shape);
+    assert(buffer.strides.length === shape.length, "Python buffer strides/shape rank mismatch");
+    if (buffer.ndim !== undefined) assert(Number.isSafeInteger(buffer.ndim) && buffer.ndim === shape.length, "Python buffer ndim does not match shape rank");
+    if (buffer.itemsize !== undefined) assert(Number.isSafeInteger(buffer.itemsize) && buffer.itemsize === info.bytesPerElement, "Python buffer itemsize does not match its typed data");
+    assert(buffer.c_contiguous !== false, "Python buffer must be C-contiguous");
+    const numel = numelOf(shape);
+    const byteLength = numel * info.bytesPerElement;
+    assert(Number.isSafeInteger(byteLength), "Python buffer byte length exceeds JavaScript's safe integer range");
+    if (buffer.nbytes !== undefined) assert(Number.isSafeInteger(buffer.nbytes) && buffer.nbytes === byteLength, "Python buffer nbytes does not match shape and dtype");
+    let expectedStride = 1;
+    for (let i = shape.length - 1; i >= 0; i--) {
+        const stride = buffer.strides[i];
+        assert(Number.isSafeInteger(stride), `Python buffer strides[${i}] must be a safe integer`);
+        if (numel !== 0 && shape[i] > 1) assert(stride === expectedStride, "Python buffer must be C-contiguous");
+        expectedStride *= shape[i];
+        assert(Number.isSafeInteger(expectedStride), "Python buffer stride calculation overflowed");
+    }
+    const offset = buffer.offset ?? 0;
+    assert(Number.isSafeInteger(offset) && offset >= 0, "Python buffer offset must be a non-negative safe integer");
+    const byteOffset = buffer.data.byteOffset + offset * info.bytesPerElement;
+    const byteEnd = byteOffset + byteLength;
+    assert(Number.isSafeInteger(byteOffset) && Number.isSafeInteger(byteEnd), "Python buffer range arithmetic overflowed");
+    assert(byteOffset >= buffer.data.byteOffset && byteEnd <= buffer.data.byteOffset + buffer.data.byteLength, "Python buffer offset/range is outside its typed data view");
+    assert((byteOffset % info.bytesPerElement) === 0, "Python buffer offset is not aligned for its dtype");
+    const ctor = dtypeInfo(dtype).ctor;
+    const data = new ctor(buffer.data.buffer, byteOffset, numel) as NumberTypedArray;
+    return { dtype, shape, data, byteLength };
+};
+
+const withResolvedSource = <T>(src: PythonArraySource, operation: (resolved: ResolvedSource) => T): T => {
+    const acquired = isPyProxyLike(src);
+    const buffer = acquired ? src.getBuffer() : src;
+    let operationError: unknown;
+    try {
+        assert(isPyBufferLike(buffer), "Expected a Pyodide proxy with getBuffer() or a PyBufferLike object");
+        return operation(resolveBuffer(buffer));
+    } catch (error) {
+        operationError = error;
+        throw error;
+    } finally {
+        if (acquired && typeof (buffer as Partial<PyBufferLike> | null)?.release === "function") {
+            try { (buffer as PyBufferLike).release!(); }
+            catch (releaseError) { if (operationError === undefined) throw releaseError; }
+        }
     }
 };
 
-const resolveSource = (src: PythonArraySource, options: SendNdarrayOptions): { dtype: DType; shape: number[]; data: NumberTypedArray; release?: () => void } => {
-    if (isPyProxyLike(src)) {
-        const pybuf = src.getBuffer();
-        const resolved = resolveSource(pybuf, options);
-        const release = (typeof pybuf.release === "function") ? () => pybuf.release?.() : undefined;
-        return { ...resolved, release };
-    }
-    if (isPyBufferLike(src)) {
-        assertIsCContiguous(src);
-        assert(ArrayBuffer.isView(src.data), "Python buffer .data must be an ArrayBufferView");
-        assert(typeof (src.data as any).subarray === "function", "Python buffer .data must be a TypedArray (DataView is not supported)");
-        const inferred = dtypeOfTypedArray(src.data);
-        assert(inferred !== null, "Unsupported Python buffer dtype (expected a numeric TypedArray)");
-        const dtype = options.dtype ?? inferred;
-        assert(dtype === inferred, `dtype mismatch: expected ${dtype}, got ${inferred}`);
-        const srcShape = normalizeShape(src.shape);
-        const shape = normalizeShape(options.shape ?? srcShape);
-        const numel = numelOfShape(shape);
-        const offset = (src.offset ?? 0) >>> 0;
-        const data = viewAsDType(dtype, src.data, offset, numel);
-        assert((data.length >>> 0) === (numel >>> 0), "Python buffer view length mismatch");
-        if (options.shape) assert(normalizeShape(options.shape).length === srcShape.length && normalizeShape(options.shape).every((d, i) => d === srcShape[i]), "shape mismatch");
-        return { dtype, shape, data, release: (typeof src.release === "function") ? () => src.release?.() : undefined };
-    }
-    assert(ArrayBuffer.isView(src), "Expected a TypedArray / ArrayBufferView or a PyProxy supporting getBuffer()");
-    const inferred = dtypeOfTypedArray(src);
-    assert(inferred !== null, "Unsupported TypedArray dtype");
-    const dtype = options.dtype ?? inferred;
-    assert(dtype === inferred, `dtype mismatch: expected ${dtype}, got ${inferred}`);
-    assert(options.shape, "shape is required when sending a plain TypedArray (no Python buffer metadata available)");
-    const shape = normalizeShape(options.shape);
-    const numel = numelOfShape(shape);
-    assert((src.byteLength >>> 0) >= (numel * dtypeInfo(dtype).bytesPerElement), "source TypedArray is too small for the provided shape");
-    const data = viewAsDType(dtype, src, 0, numel);
-    assert((data.length >>> 0) === (numel >>> 0), "source TypedArray length mismatch");
-    return { dtype, shape, data };
+const sameShape = (a: ReadonlyArray<number>, b: ReadonlyArray<number>): boolean => a.length === b.length && a.every((dim, i) => dim === b[i]);
+
+const gpuWriteSource = (data: NumberTypedArray): BufferSource => {
+    if ((data.byteOffset & 3) === 0) return data as unknown as BufferSource;
+    const copy = new Uint8Array(data.byteLength);
+    copy.set(new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
+    return copy;
 };
 
-export const pythonInterop = {
-    sendNdarray: (src: PythonArraySource, options: SendNdarrayOptions = {}): WasmNdarrayHandle => {
-        const resolved = resolveSource(src, options);
-        const { dtype, shape, data } = resolved;
-        const info = dtypeInfo(dtype);
-        const numel = numelOfShape(shape);
-        const byteLength = (numel * info.bytesPerElement) >>> 0;
-        const alloc = allocBytes(byteLength, 16, options.allocator);
-        const dst = typedViewFromPtr(dtype, alloc.ptr, numel);
-        dst.set(data);
-        try { resolved.release?.(); } catch { /* ignore */ }
-        const handle: WasmNdarrayHandle = {
-            kind: alloc.kind,
-            dtype,
-            shape,
-            ptr: alloc.ptr >>> 0,
-            length: numel >>> 0,
-            byteLength: byteLength >>> 0
-        };
-        if (alloc.epoch !== undefined) handle.epoch = alloc.epoch >>> 0;
-        return handle;
-    },
+export class PythonInterop {
+    private readonly compute: Compute;
 
-    view: (handle: WasmNdarrayHandle): NumberTypedArray => {
-        assertHandleAlive(handle, "view");
-        return typedViewFromPtr(handle.dtype, handle.ptr, handle.length);
-    },
-
-    bytes: (handle: WasmNdarrayHandle): Uint8Array => {
-        assertHandleAlive(handle, "bytes");
-        return bytesViewFromPtr(handle.ptr, handle.byteLength);
-    },
-
-    copyInto: (handle: WasmNdarrayHandle, src: PythonArraySource, options: Omit<SendNdarrayOptions, "allocator" | "shape"> = {}): void => {
-        assertHandleAlive(handle, "copyInto");
-        const resolved = resolveSource(src, { ...options, dtype: handle.dtype, shape: handle.shape });
-        const { data } = resolved;
-        assert((data.length >>> 0) === (handle.length >>> 0), "copyInto: source length mismatch");
-        const dst = typedViewFromPtr(handle.dtype, handle.ptr, handle.length);
-        dst.set(data);
-        try { resolved.release?.(); } catch { /* ignore */ }
-    },
-
-    receiveNdarray: (handle: WasmNdarrayHandle, options: ReceiveNdarrayOptions = {}): NdarrayTransfer => {
-        assertHandleAlive(handle, "receiveNdarray");
-        const view = typedViewFromPtr(handle.dtype, handle.ptr, handle.length);
-        if (!options.copy) return { dtype: handle.dtype, shape: Array.from(handle.shape), data: view };
-        const info = dtypeInfo(handle.dtype);
-        const ctor = info.ctor as unknown as (new (length: number) => NumberTypedArray);
-        const out = new ctor(handle.length >>> 0);
-        out.set(view);
-        return { dtype: handle.dtype, shape: Array.from(handle.shape), data: out };
-    },
-
-    free: (handle: WasmNdarrayHandle): void => {
-        if (handle.kind !== "heap") throw new Error(`pythonInterop.free(): cannot free a ${handle.kind} allocation. Use reset() for arena-like allocators (frameArena.reset() / WasmHeapArena.reset()).`);
-        if (FREED_HEAP_HANDLES.has(handle)) return;
-        wasm.freeBytes(handle.ptr >>> 0, handle.byteLength >>> 0);
-        FREED_HEAP_HANDLES.add(handle);
+    constructor(compute: Compute) {
+        this.compute = compute;
     }
-};
+
+    toCPU(src: PythonArraySource): CPUndarray {
+        return withResolvedSource(src, ({ dtype, shape, data }) => {
+            const dst = CPUndarray.empty(dtype, { shape });
+            try { dst.data().set(data); return dst; }
+            catch (error) { dst.destroy(); throw error; }
+        });
+    }
+
+    toGPU(src: PythonArraySource, options: PythonGPUTransferOptions = {}): GPUndarray {
+        return withResolvedSource(src, ({ dtype, shape, data, byteLength }) => {
+            let buffer: StorageBuffer | null = null;
+            try {
+                buffer = new StorageBuffer(this.compute.device, this.compute.queue, {
+                    label: options.label,
+                    data: data as unknown as BufferSource,
+                    copyDst: options.copyDst ?? true,
+                    copySrc: options.copySrc ?? true,
+                    usage: options.usage
+                });
+                return new GPUndarray(dtype, shape, contiguousStridesBytes(shape, dtypeInfo(dtype).bytesPerElement), 0, byteLength, buffer, 0, true, this.compute.readback);
+            } catch (error) { buffer?.destroy(); throw error; }
+        });
+    }
+
+    copyInto(dst: CPUndarray | GPUndarray, src: PythonArraySource): void {
+        withResolvedSource(src, ({ dtype, shape, data, byteLength }) => {
+            assert(dst instanceof CPUndarray || dst instanceof GPUndarray, "PythonInterop.copyInto() destination must be a CPUndarray or GPUndarray");
+            assert(dst.dtype === dtype, `PythonInterop.copyInto() dtype mismatch: destination is ${dst.dtype}, source is ${dtype}`);
+            assert(sameShape(dst.shape, shape), `PythonInterop.copyInto() shape mismatch: destination is [${dst.shape}], source is [${shape}]`);
+            assert(dst.isContiguousC, "PythonInterop.copyInto() destination must be C-contiguous");
+            assert(dst.byteLength === byteLength, "PythonInterop.copyInto() byte length mismatch");
+            if (dst instanceof CPUndarray) { dst.data().set(data); return; }
+            assert((dst.buffer.usage & GPUBufferUsage.COPY_DST) !== 0, "PythonInterop.copyInto() GPU destination requires COPY_DST usage");
+            dst.buffer.write(gpuWriteSource(data), dst.baseOffsetBytes, 0, byteLength);
+        });
+    }
+}

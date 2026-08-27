@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Tuesday, August 25, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Thursday, August 27, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Tuesday, August 25, 2026, [**`48167f4`**](https://www.github.com/Zushah/WasmGPU/commit/48167f4).
+Parent commit: Tuesday, August 25, 2026, [**`d8c0f9a`**](https://www.github.com/Zushah/WasmGPU/commit/d8c0f9a).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -243,18 +243,19 @@ Before changing exported names, constructor descriptors, or factory return value
 
 ### 1.3. Runtime creation and frame loop
 
-Runtime creation starts in `./typescript/core/engine.ts`. `WasmGPU.create()` calls `initWebAssembly()` from `./typescript/wasm/index.ts`, then calls `Renderer.create()` from `./typescript/core/renderer.ts`. It then creates `Compute`, `ScaleService`, and `PerformanceStats` instances.
+Runtime creation starts in `./typescript/core/engine.ts`. `WasmGPU.create()` calls `initWebAssembly()` from `./typescript/wasm/index.ts`, then calls `Renderer.create()` from `./typescript/core/renderer.ts`. It then creates instance-bound `Compute`, `PythonInterop`, `ScaleService`, and `PerformanceStats` services.
 
 The runtime owns:
 
 - the active renderer;
 - the compute subsystem;
+- the Python interop toolkit;
 - the effects facade;
 - the scaling service;
 - performance stats;
 - requestAnimationFrame loop state.
 
-It also exposes accessors from `./typescript/wasm/index.ts` for the WebAssembly driver (`driver`) and the external WebAssembly interop (`webassembly`), alongside the Python interop (`python`) accessors from `./typescript/python/index.ts`.
+It also exposes accessors from `./typescript/wasm/index.ts` for the WebAssembly driver (`driver`) and the external WebAssembly interop (`webassembly`). Python interop is available only as an instance property (`python`).
 
 `WasmGPU.run(callback)` starts a browser animation loop. Each frame resets the WebAssembly frame arena, computes timing values, invokes the callback, and records frame statistics. `WasmGPU.render(scene, camera)` delegates to `Renderer.render()`. If the runtime is not inside `run()`, it resets the frame arena before rendering.
 
@@ -470,13 +471,13 @@ Animation changes should be checked against glTF import, mesh morph handling, sk
 
 ### 1.18. Python interop
 
-Python interop is implemented in `./typescript/python/index.ts` and `./python/interop.py`. The TypeScript side exposes `pythonInterop`, which can copy typed-array or Pyodide buffer data into WebAssembly memory and return ndarray handles that include pointer, dtype, shape, strides, offset, byte length, and ownership metadata.
+Python interop is implemented in `./typescript/python/index.ts` and `./python/interop.py`. Every `WasmGPU` instance owns a `PythonInterop` service bound to its existing compute device, queue, and readback resources. The TypeScript boundary accepts only Pyodide proxies or resolved Pyodide-like numeric buffers in the engine's eight supported dtypes, and requires C-contiguous layouts. Ordinary JavaScript typed arrays use the existing compute APIs instead.
 
-`sendNdarray()` accepts JavaScript typed arrays, array-like values, or Pyodide buffer-like proxies. Python buffers must currently be C-contiguous. The function can allocate memory through the WebAssembly heap, frame arena, or a supplied `WasmHeapArena`.
+`toCPU()` performs one bulk copy from the Pyodide buffer into a caller-owned canonical `CPUndarray`. `toGPU()` directly uploads the Pyodide buffer into the storage resource owned by a canonical `GPUndarray`. Both results use the normal canonical `destroy()` semantics. `copyInto()` strictly matches dtype and shape, requires a C-contiguous canonical destination, and updates its existing CPU allocation or `COPY_DST`-capable GPU buffer without reallocating it.
 
-`receiveNdarray()` reads a handle back into JavaScript memory. `view()`, `bytes()`, and `copyInto()` expose lower-level views and copies. Freeing a heap ndarray handle is idempotent, and later memory access through that handle is rejected. The Python helper file mirrors this lifetime state for Python callers.
+When `PythonInterop` obtains a buffer by calling `getBuffer()`, it releases that buffer exactly once on success or failure. A resolved `PyBufferLike` passed directly by the caller is borrowed and is never released by `PythonInterop`. Source offsets are validated and locally accommodated for WebGPU alignment without changing the storage-buffer subsystem's alignment contract.
 
-Interop changes should preserve allocator ownership, frame arena lifetime checks, dtype mapping, stride handling, and error messages for unsupported layouts.
+The Python helper binds to one concrete `WasmGPU` instance. It normalizes ordinary NumPy inputs and non-contiguous views to C-contiguous storage according to the explicit `never`, `if_needed`, or `always` copy policy and NumPy casting policy. It returns the real JavaScript ndarray proxies, copies CPU results into independent NumPy arrays, and implements GPU conversion through canonical readback with destruction of only the temporary CPU ndarray. Python interop has no independent pointer, allocator, ndarray wrapper, or lifetime model.
 
 ### 1.19. WebAssembly driver
 
@@ -536,7 +537,7 @@ These invariants are visible in the current code:
 - WebAssembly must be initialized before code calls Rust-backed functions or reads `wasm` exports.
 - Frame arena memory is valid only for the current frame arena epoch.
 - `WasmHeapArena` slices are invalid after the arena is reset or destroyed.
-- Python interop heap ndarray handles reject memory access after their idempotent free operation.
+- Python imports return canonical ndarrays, and acquired Pyodide buffers are released exactly once and directly supplied buffers remain borrowed.
 - Destroyed `CPUndarray` objects reject WebAssembly pointer and data access, and repeated destruction is harmless.
 - Disposed animation clips, skins, and skin instances reject operations that would consume their released WebAssembly allocations.
 - Mesh shadow flags default to true but have no render effect until a directional light is explicitly enabled through `effects.shadows`, as `castShadow` controls independent depth-pass membership and `receiveShadow` controls only standard material receiver variants.
@@ -763,12 +764,12 @@ Common interactions:
 Architectural role:
 
 - Implements Python/Pyodide interop and external WebAssembly module interop in the diagram.
-- Bridges JavaScript typed arrays, Pyodide buffers, foreign WebAssembly memory, and ndarray handles.
+- Bridges C-contiguous Pyodide buffers to canonical CPU and GPU ndarrays, and separately wraps foreign WebAssembly memory.
 
 Important files:
 
-- `./typescript/python/index.ts`: TypeScript interop API for sending and receiving ndarrays, viewing handles, copying data, and freeing owned memory.
-- `./python/interop.py`: Python-side helper classes for handles, arenas, and array wrappers.
+- `./typescript/python/index.ts`: instance-bound validation and transfer API producing and updating canonical ndarrays.
+- `./python/interop.py`: thin NumPy normalization and canonical ndarray conversion helper.
 - `./typescript/wasm/index.ts`: exports for the WebAssembly driver and the WebAssembly interop.
 - `./typescript/wasm/interop.ts`: external WebAssembly module wrappers, descriptor resolution, typed memory views, raw byte reads, UTF-8/DataView helpers, and shared external memory validation/count helpers used by geometry, pointcloud, glyphfield, nodelink, and splatfield upload paths.
 
@@ -1071,7 +1072,7 @@ Reason explicitly about data ownership and lifetime:
 - WebAssembly frame arena slices expire on reset.
 - WebAssembly heap slices remain valid until explicitly freed; their storage may be reused immediately afterward, while the grown WebAssembly memory pages remain allocated to the instance.
 - `WasmHeapArena` slices expire when the arena resets or is destroyed, and destroying the arena releases its backing heap allocation for reuse.
-- Python interop heap ndarray handles and `WasmGPUArray` wrappers reject memory access after free; repeated frees of the same handle object are harmless.
+- Python interop owns no separate memory handles, as returned `CPUndarray` and `GPUndarray` objects follow their canonical destruction and readback rules.
 - `CPUndarray`, animation, skin, renderer culling, geometry scratch, and glTF import paths release the WebAssembly allocations they own; borrowed external WebAssembly views are never freed by those consumers.
 - The active global transform store and frame arena retain their current backing storage for the WebAssembly module lifetime, while superseded transform capacity and scoped scratch blocks are reclaimed.
 - GPU buffers need correct usage flags for writes, copies, storage binding, vertex binding, index binding, uniform binding, or readback.
