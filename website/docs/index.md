@@ -18,7 +18,7 @@ WebGPU × WebAssembly rendering and computing engine for scientific workloads in
 ## Install
 
 ```bash
-npm install @zushah/wasmgpu
+npm install @zushah/wasmgpu@0.9.0
 ```
 
 ```html
@@ -27,180 +27,17 @@ npm install @zushah/wasmgpu
 
 ## Quick Links
 
-- [GitHub repository](https://www.github.com/Zushah/WasmGPU)
-- [Examples gallery](../examples/index.html)
-- [Main website](../index.html)
+- [Main Website](../)
+- [Examples Gallery](../examples/)
+- [Architecture Guide](./architecture/)
+- [Performance Benchmarks](../performance/)
+- [GitHub Repository](https://github.com/Zushah/WasmGPU)
 
-## Architecture Diagram
+## Architecture
 
-The diagram below reflects the implemented architecture of WasmGPU v0.9.0.
+For an in-depth explanation of WasmGPU's software architecture, visit the [architecture guide](./architecture/index.md).
 
-Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
-
-Click [here](https://mermaid.live/view#pako:eNqVWFtz4rgS_isqb9U8KSliSEKYqq0yGDJUwqWAbGp2cx6EEeCNb0eSk7BT89-3W74ES3D2bF4Gf261uvvrm-eHE6Qb7vScbZS-B3smFHlcvIiXhMCfzNc7wbI98ebjP16ceb6OwgAfXpz_VDL4583n8PpJckG8LAMZpsI0MYSG03sQemYyvp8_kbfW5d1lyxAZeQMQGbFApeIAt4stC3iPyIAnnJKAxVww-DdNlEgjScmOpzFX4kBJzBQXIYsoUfxD5QLEYy73lGRpmKggSvMNiEeHbL8NeQS_E_A6CpNXSmQWMVWi8EuFAZcZ3AtP4W6vKGFSckXCOEsFPiVhrN2jJH3jImIHxJJUlSBcx0WaHXnGkw3-tIL6DHHAiPA1BmSY7MKEGwF5nM0wsiMBrpMobajFv8Vw6sP7BVzBBRfG2-XAexzC62XAwNUdAX7ewDtDavbbcAFCs8IZssW73lPxanI8nc5AzKtdJSpNo9dQGXLz8eABcyUMXvHOXIVRqA6G0GA2Qb8GaZzlimNI5EEqHpti_acRiPXz7RZSS3CZ5iLgQHbCdpa3g_l4ri_OkFhepUlkC_rjJQj6IdCsgj1BZ3cizTMCmZAktvyDDtADFwmPJGTFWjBheaSJmF5swpgnEsLDIsKEgIDGmGlkmwqw8Il8IUh2zOPUVrEYeqjEk4ck2Is0SXMJTrPNmgWvREA0zQPLwULTK7Qf6yJMGdDyf2Sf7608pH39Jw8UmOUzxcgEbbWyaKov4VZ2rpar2QITbCVYIsHDmEioXA41QJapd9rLyXD5DY5MoDrJe6j2_1DEqcj24DkFCyUkVGJHYX6P9s3_VZ1_aVS6GdaJVyRnBB6xLLOvXD6MdUxKg8BfqVgCmbmBIJp1UwXpqHJ0lEy5x5lm_zFlUMs6X3bRakTcy1bZgU4p94fYMb0APJFwYsOhm6NFX7Q01gCUtbSbsTfWBTjWTQ2vE2l8dA3UdtF166KTpoLJUOdPqWGjAy2x6yqGGih5Y8BlomTVuKUOO7ZUU9fzeLoqGqEHFsTr6HCii2qqvyPTB7WHGP6LPustJ4Z6X4RvVp0_fxtq4r9xlhEWRWkxxjQVGUYROlSiiDpk4O7J3H4eLSAudcNmgidMH1dYIOE_nV4tvOmyUU4ZeMh2p6bp88Rb6TpiSoQfEG2OQxND_N8cyyhBy6Gg9hynVWCF_Gy7CmGUfBQpJEH1hl-k2y3khbLL4Hk6W0yqWk6wWCKoZmigJw2-f1xhM9dJzcyExfJkQnKiW3JZ8EkOeQMLx9ksfvam44kurXImE8niLCqs_xM7AoYA4vM_zOrPnqY-Rr2f5slGwmU4k06KDp4eHzW5uVR5TII8ippBOZeBxaDvi_QdV6TFmZLyh7-B1D2eAMIgNDisNaE8t3qUN_g2bEw7FuxReA38FcNMI9a-sKznqazbrK5MHTlAzRNzb7msVwygB0pI6pyGzATLUAuma4bJrqqnOJRIl8T9S6oLSGPku6Q1xyDo8oVFzw7zoLyxWg6OrnwtRvD5iAcRCPt8C01MvK6jnJNtGEW9XzrD27vRiEJCp6-890ur7_a71ePFe7hR-56bfdAAWz68vrm6bvtfLaU7wXlSanRdv33rf2r0bvz24LzGTvvqyrM16nZ4ZOfV7aBhZ-t62G2d1-q6nXbb1nrg0LzeS5WjUd9td2uVd17Hb51Xee25g1bLVpnlArKjVNm_6npHVsKZkXdzVqU7vLq5Hp5QCVO5tvF66B3b6A5v3LMKOz7Q4361eMfPEApfGRQ-I-oEaN6rF2qKWzPVyzHF5Zfiaktxby0YNo7grkpxE6W4YVLcHimuhBRWPqp3NoqL2CeXxnnYn2ixKVHcfSjsKxRXDIpbBC3WA6qnP8VxTnE0Uz1eKQ5GOv9eEmro1eOKFiOHFrOD6qlAoblT3ZupbrpUt0ladjqq21hJqKESOhDVnQVCtKS69KkuR01WI-IQa3Jx8St-1VUQ_NQQhN-EMOwmhiyYGMbaxDRRJoi8mRjSWGGYAsXhqQkVXJgoUmNiwJQJaZ4scPxpdYUhdZa-78cRBNOsmyvs6GZ8fcJukDiBYkpZSrXNhaGQXzUKvy3r8bcZtxpr6KwF4UYL1NlboZjr1vkaPPJUE12kAby10VK0eoE5ZSVSDRZ1UcEoomHIcAvTGW-hUAE2hrVgodg5LPAogDXW5KqGdUHaaFGuNd_YniwbsAwsvqAMChYa19Xwsbk1WJ6v6ZmVTGLfs0HogzYIfdEGHz7L9BP8pOsTwz5qo9BXaxAsMYlBQ0qLjoKClpxAH8pQNdEqB479RFusq7DFW9djazxKq-pFQTS5uEQedWduVrPGsUGfgA3ascxP4EX16hfY4pv1r2Hs-Q0vi0v9ZqJdnikVjeMwaXKiYZw7FYxtroCPIwgj68KUrLDGZVqiOH8U10KmATvU2cHHiNNTIufUge-CmOGj8wOPvDj4nQPLbg9-4uR_cV6Sn3AmY8nvaRpXx2Av3u2d3pZFEp7yDD5UuR8yWNI_RfSeO4BvAeX0rrUGp_fD-XB6V1330m133NbNXbvdvXNd6hycXqdz2WnfXrdaN-1O17277f6kzl_6ytZl9xYU8E0IH2aT4j9Z9f-1_vwbrm9vLg) to interactively view the diagram if it doesn't properly appear below.
-
-```mermaid
-flowchart LR
-    subgraph API["Public API"]
-        APP["User Application"]
-        ENG["WasmGPU v0.9.0"]
-        FAC["Factory surface: scene, camera, controls, geometry, material, texture, mesh, pointcloud, glyphfield, nodelink, splatfield, latticespace, light, asset import, animation, overlay, annotation, interop"]
-    end
-
-    subgraph WGPU["WebGPU Engine"]
-        LOOP["Frame loop"]
-        REND["Renderer"]
-        SCALE["Scaling service"]
-        OVER["Overlay framework"]
-        ANNO["Annotation toolkit"]
-        PICK["Picking utility"]
-        COMP["Compute subsystem"]
-        CBUF["Buffer resource manager"]
-        CPIP["Pipeline controller"]
-        CDIS["Dispatch workgroup planner"]
-        CKER["Kernels library"]
-        CND["N-dimensional array model for CPU & GPU memory"]
-        CREAD["Asynchronous readback ring"]
-        CSCR["Scratch buffer pool"]
-    end
-
-    subgraph DATA["Object & Data Model"]
-        SCN["Scene"]
-        TSTORE["Transform store in SoA memory"]
-        MESH["Mesh with geometry, material, texture, morphing, & skinning"]
-        PGN["Pointcloud, glyphfield, nodelink, splatfield, & latticespace"]
-        CMAP["Colormapping"]
-        SKIN["Skinning instance data"]
-        ASTORE["Annotation store"]
-        ALOAD["Loader for glTF 2.0 asset data"]
-        ADEC["Accessor decoding & data conversion"]
-        AIMP["Importer from asset data to scene resources"]
-        AMETA["Imported nodes, metadata, variants, cameras, & lights"]
-        WINT["WebAssembly interop"]
-        PY["Python interop"]
-    end
-
-    subgraph WASM["WebAssembly Driver"]
-        WHEAP["Heap allocation for persistent typed memory"]
-        WFRAME["Frame arena for transient typed memory"]
-        WTRANS["Transform propagation"]
-        WMATH["Matrix, vector, & quaternion mathematics"]
-        WND["N-dimensional array indexing & stride-offsetting"]
-        WNORM["Mesh normal generation"]
-        WGLTF["glTF accessor decoding, sparse patching, & numeric conversion"]
-        WANIM["Animation sampling & joint matrix generation"]
-        WBOUNDS["Bounds computation"]
-        WCULL["Frustum culling"]
-    end
-
-    subgraph GPU["Browser Resources"]
-        DEV["Graphics device & queue"]
-        CACHE["Pipeline cache & bindgroup cache"]
-        RES["Buffers, textures, & samplers"]
-        RPASS["Render passes for opaques, transparents, transmissions, post-processing, & user interaction"]
-        CPASS["Compute passes for kernels"]
-    end
-
-    classDef darkblue fill:#4E79FF,stroke:#0B2B8F,stroke-width:2px,color:#06153D;
-    classDef green fill:#22D37D,stroke:#0A6D3C,stroke-width:2px,color:#04311A;
-    classDef lightblue fill:#17C9FF,stroke:#005E80,stroke-width:2px,color:#022433;
-    classDef yellow fill:#FFB238,stroke:#9A4D00,stroke-width:2px,color:#5A2C00;
-    classDef purple fill:#B18AFF,stroke:#5A2FA6,stroke-width:2px,color:#2E165E;
-    classDef pink fill:#FF5EA8,stroke:#9A2E62,stroke-width:2px,color:#4D1532;
-
-    class APP,ENG,FAC darkblue;
-    class LOOP,REND,SCALE,OVER,ANNO,PICK green;
-    class COMP,CBUF,CPIP,CDIS,CKER,CND,CREAD,CSCR lightblue;
-    class SCN,TSTORE,MESH,PGN,CMAP,SKIN,ASTORE,ALOAD,ADEC,AIMP,AMETA,WINT,PY yellow;
-    class WHEAP,WFRAME,WTRANS,WMATH,WND,WNORM,WGLTF,WANIM,WBOUNDS,WCULL purple;
-    class DEV,CACHE,RES,RPASS,CPASS pink;
-
-    APP --> ENG
-    ENG --> FAC
-    ENG --> LOOP
-    ENG --> REND
-    ENG --> COMP
-    ENG --> SCALE
-    ENG --> OVER
-    ENG --> ANNO
-    FAC --> SCN
-    FAC --> TSTORE
-    FAC --> MESH
-    FAC --> PGN
-    FAC --> ALOAD
-    FAC --> AIMP
-    FAC --> WINT
-    FAC --> PY
-
-    SCN --> MESH
-    SCN --> PGN
-    MESH --> TSTORE
-    PGN --> TSTORE
-    SKIN --> MESH
-    ALOAD --> ADEC
-    ADEC --> AIMP
-    AIMP --> SCN
-    AIMP --> MESH
-    AIMP --> SKIN
-    AIMP --> AMETA
-    CMAP --> MESH
-    CMAP --> PGN
-    SCALE --> CMAP
-    SCALE --> PGN
-
-    LOOP --> REND
-    LOOP --> WFRAME
-    REND --> DEV
-    REND --> CACHE
-    REND --> RES
-    REND --> RPASS
-    REND --> PICK
-    REND --> SCN
-    REND --> TSTORE
-    REND --> WCULL
-    REND --> WBOUNDS
-    PICK --> RPASS
-    OVER --> SCN
-    ANNO --> ASTORE
-    ANNO --> PICK
-    ANNO --> SCN
-
-    COMP --> CBUF
-    COMP --> CPIP
-    COMP --> CDIS
-    COMP --> CKER
-    COMP --> CND
-    COMP --> CREAD
-    COMP --> CSCR
-    CBUF --> RES
-    CPIP --> CPASS
-    CDIS --> CPASS
-    CKER --> CPASS
-    CND --> CBUF
-    CREAD --> RES
-    CSCR --> RES
-    CPASS --> DEV
-
-    TSTORE -.-> WTRANS
-    MESH -.-> WNORM
-    MESH -.-> WBOUNDS
-    PGN -.-> WBOUNDS
-    ADEC -.-> WGLTF
-    SKIN -.-> WANIM
-    CND -.-> WND
-    REND -.-> WFRAME
-    REND -.-> WMATH
-    COMP -.-> WHEAP
-    WINT -.-> CBUF
-    PY --> WHEAP
-    PY --> WFRAME
-    WHEAP -.-> RES
-    WFRAME -.-> RES
-```
-
-## Architecture Video
-
-The video below was AI-generated by [Google NotebookLM](https://notebooklm.google/) based on the [WasmGPU codebase](https://www.github.com/Zushah/WasmGPU/tree/main/src) and was double-checked by the [developer](https://www.github.com/Zushah).
+The video below gives a high-level conceptual overview of the architecture:
 
 <video controls><source src="./assets/videos/architecture.mp4" type="video/mp4"></video>
 
@@ -208,7 +45,7 @@ The video below was AI-generated by [Google NotebookLM](https://notebooklm.googl
 
 The two tables below reflect the fundamental requirements (as of July 27, 2026) for properly running the latest release of WasmGPU. They have been fact-checked against official online sources from the respective publishers of the web browsers, operating systems, runtimes, and hardware, but they are not a claim that WasmGPU has been tested on all combinations of them.
 
-Browser and driver support naturally changes over time. Therefore, if an entry in the two tables below is inaccurate or misleading, please [open an issue](https://www.github.com/Zushah/WasmGPU/issues) with as much relevant information as possible, including the web browser, operating system, runtime, hardware devices and drivers, and a minimal reproduction.
+Browser and driver support naturally changes over time. Therefore, if an entry in the two tables below is inaccurate or misleading, please [open an issue](https://github.com/Zushah/WasmGPU/issues) with as much relevant information as possible, including the web browser, operating system, runtime, hardware devices and drivers, and a minimal reproduction.
 
 ### Browser and System Requirements
 
@@ -238,7 +75,7 @@ Browser and driver support naturally changes over time. Therefore, if an entry i
 
 ## Getting Started
 
-Check out the examples [here](../examples/index.html).
+Check out the examples [here](../examples/).
 
 Here's a super basic example to render a cube:
 ```js

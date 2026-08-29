@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 -->
-<html>
+<html lang="en">
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -14,49 +14,106 @@
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-        <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
         <link rel="stylesheet" href="./style.css">
     </head>
     <body data-theme="dark">
-        <div class="ambient ambient-a"></div>
-        <div class="ambient ambient-b"></div>
+        <div id="wave-container" aria-hidden="true">
+            <canvas id="wave-canvas"></canvas>
+            <div id="wave-fallback" class="wave-fallback-img"></div>
+        </div>
         <header class="site-header">
-            <nav class="navbar container">
-                <a class="brand" href="./index.html" aria-label="WasmGPU home">
-                    <img class="brand-logo" data-theme-logo="true" src="./assets/favicon.png" alt="WasmGPU" data-dark-logo="./assets/favicon.png" data-light-logo="./assets/favicon.png">
+            <nav class="navbar container" aria-label="Global navigation">
+                <a class="nav-brand" href="./index.html" aria-label="WasmGPU home">
+                    <img class="brand-logo" src="./assets/favicon.png" alt="WasmGPU">
+                    <span class="brand-name">WasmGPU</span>
                 </a>
-                <div class="nav-actions">
-                    <a class="nav-link" href="https://www.github.com/Zushah/WasmGPU" target="_blank" rel="noreferrer">GitHub</a>
-                    <a class="nav-link" href="./docs/">Documentation</a>
-                    <a class="nav-link" href="./examples/">Examples</a>
+                <div class="nav-menu">
+                    <a class="nav-link" href="./docs/"><span class="material-symbols-outlined nav-icon">menu_book</span>Documentation</a>
+                    <a class="nav-link" href="./examples/"><span class="material-symbols-outlined nav-icon">code</span>Examples</a>
+                    <a class="nav-link" href="./performance/"><span class="material-symbols-outlined nav-icon">speed</span>Performance</a>
+                    <a class="nav-link" href="./docs/architecture/"><span class="material-symbols-outlined nav-icon">view_in_ar</span>Architecture</a>
+                    <a class="nav-link" href="https://github.com/Zushah/WasmGPU" target="_blank" rel="noreferrer"><svg class="nav-icon simple-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>GitHub</a>
                     <button id="theme-toggle" class="icon-btn" type="button" aria-label="Switch theme">
-                        <span class="material-icons-outlined" id="theme-toggle-icon">light_mode</span>
+                        <span class="material-symbols-outlined" id="theme-toggle-icon">light_mode</span>
                     </button>
                 </div>
             </nav>
         </header>
         <main class="container">
-            <section class="hero reveal">
-                <img class="hero-logo" data-theme-logo="true" src="./assets/logo-darkmode.png" alt="WasmGPU logo" data-dark-logo="./assets/logo-darkmode.png" data-light-logo="./assets/logo-lightmode.png"><br>
-                <p class="eyebrow"><b>WebGPU × WebAssembly</b></p>
-                <h1>Rendering and computing engine for scientific workloads in the browser.</h1>
-                <p class="hero-copy">WasmGPU combines a TypeScript WebGPU engine with a Rust WebAssembly driver to support high-throughput rendering and computing workflows in a single browser runtime.</p>
+            <div class="hero-stage">
+            <section class="hero reveal" aria-labelledby="hero-headline">
+                <p class="hero-eyebrow" data-text="WebGPU × WebAssembly">WebGPU &times; WebAssembly</p>
+                <h1 id="hero-headline" class="hero-headline">Rendering and Computing Engine for Scientific Workloads in the Browser.</h1>
                 <div class="hero-actions">
-                    <a class="btn btn-secondary" href="./examples/"><span class="material-icons-outlined">play_circle</span>Run demos</a>
-                    <a class="btn btn-primary" href="./docs/"><span class="material-icons-outlined">rocket_launch</span>Get started</a>
-                    <a class="btn btn-secondary" href="https://www.github.com/Zushah/WasmGPU" target="_blank" rel="noreferrer"><span class="material-icons-outlined">star_border</span>Star code</a>
+                    <a class="btn btn-primary" href="./docs/">
+                        <span class="material-symbols-outlined btn-icon">rocket_launch</span>
+                        Get Started
+                    </a>
+                    <a class="btn btn-secondary" href="./examples/">
+                        <span class="material-symbols-outlined btn-icon">play_arrow</span>
+                        Run Demos
+                    </a>
+                    <a class="btn btn-secondary" href="https://github.com/Zushah/WasmGPU" target="_blank" rel="noreferrer">
+                        <span class="material-symbols-outlined btn-icon">star</span>
+                        Star Code
+                    </a>
                 </div>
-                <p class="license-note">Available under the <a href="https://www.mozilla.org/en-US/MPL/2.0/" target="_blank" rel="noreferrer">Mozilla Public License 2.0</a>.</p>
             </section>
-            <section class="release reveal">
-                <div class="section-head">
-                    <p class="eyebrow">Latest release</p>
-                    <h2>v0.9.0 <span class="release-date">Released Monday, July 27, 2026</span></h2>
+            <section class="hero-panels reveal" aria-label="Engine showcase panels">
+                <a class="panel-card" href="#latest-release">
+                    <div class="panel-header">
+                        <span class="panel-title">Latest Release</span>
+                    </div>
+                    <div class="panel-img-wrap">
+                        <img src="./assets/images/website-visual-latestrelease-darkmode.png" data-theme-img data-dark-src="./assets/images/website-visual-latestrelease-darkmode.png" data-light-src="./assets/images/website-visual-latestrelease-lightmode.png" alt="Latest Release" class="panel-img">
+                    </div>
+                </a>
+                <a class="panel-card" href="#rich-rendering">
+                    <div class="panel-header">
+                        <span class="panel-title">Rich Rendering</span>
+                    </div>
+                    <div class="panel-img-wrap">
+                        <img src="./assets/images/website-visual-richrendering-darkmode.png" data-theme-img data-dark-src="./assets/images/website-visual-richrendering-darkmode.png" data-light-src="./assets/images/website-visual-richrendering-lightmode.png" alt="Rich Rendering" class="panel-img">
+                    </div>
+                </a>
+                <a class="panel-card" href="#scientific-computing">
+                    <div class="panel-header">
+                        <span class="panel-title">Scientific Computing</span>
+                    </div>
+                    <div class="panel-img-wrap">
+                        <img src="./assets/images/website-visual-scientificcomputing-darkmode.png" data-theme-img data-dark-src="./assets/images/website-visual-scientificcomputing-darkmode.png" data-light-src="./assets/images/website-visual-scientificcomputing-lightmode.png" alt="Scientific Computing" class="panel-img">
+                    </div>
+                </a>
+                <a class="panel-card" href="#data-oriented-runtime">
+                    <div class="panel-header">
+                        <span class="panel-title">Data-Oriented Runtime</span>
+                    </div>
+                    <div class="panel-img-wrap">
+                        <img src="./assets/images/website-visual-dataorientedruntime-darkmode.png" data-theme-img data-dark-src="./assets/images/website-visual-dataorientedruntime-darkmode.png" data-light-src="./assets/images/website-visual-dataorientedruntime-lightmode.png" alt="Data-Oriented Runtime" class="panel-img">
+                    </div>
+                </a>
+                <a class="panel-card" href="#flexible-interoperability">
+                    <div class="panel-header">
+                        <span class="panel-title">Flexible Interoperability</span>
+                    </div>
+                    <div class="panel-img-wrap">
+                        <img src="./assets/images/website-visual-flexibleinteroperability-darkmode.png" data-theme-img data-dark-src="./assets/images/website-visual-flexibleinteroperability-darkmode.png" data-light-src="./assets/images/website-visual-flexibleinteroperability-lightmode.png" alt="Flexible Interoperability" class="panel-img">
+                    </div>
+                </a>
+            </section>
+            </div>
+            <section id="latest-release" class="release-section reveal" aria-labelledby="release-title">
+                <div class="release-header-block">
+                    <h2 id="release-title" class="section-title">Latest Release</h2>
+                    <div class="release-badge-pill">
+                        <span class="release-version">v0.9.0</span>
+                        <span class="release-date">Monday, July 27, 2026</span>
+                    </div>
                 </div>
                 <div class="release-grid">
-                    <article class="panel release-panel">
-                        <h3>Highlights</h3>
-                        <ul class="release-highlights">
+                    <div class="highlights-block">
+                        <ul class="highlights-list">
                             <li>Added the Gaussian splatfield scientific visualization primitive with support for glTF assets.</li>
                             <li>Added the 2D/3D latticespace scientific visualization primitive.</li>
                             <li>Added direct WebAssembly memory uploads across geometric and scientific visualization primitives.</li>
@@ -64,117 +121,165 @@
                             <li>Fixed WebAssembly memory with reclaimed allocations and deterministic resource lifetimes.</li>
                             <li>Added automated cross-platform, Rust, and WGSL testing.</li>
                         </ul>
-                    </article>
-                    <div class="release-badges">
-                        <a id="manual-download-link" class="release-chip" href="./WasmGPU.min.js" download="WasmGPU.min.js" aria-label="Manual installation download">
-                            <span class="material-icons-outlined">download</span>
-                            <span><strong>Manual installation</strong><small>Download WasmGPU.min.js</small></span>
+                    </div>
+                    <div class="actions-list">
+                        <a class="action-row" href="./WasmGPU.min.js" download="WasmGPU.min.js" id="manual-download-link">
+                            <span class="material-symbols-outlined action-icon">download</span>
+                            <div class="action-details">
+                                <span class="action-title">Manual installation</span>
+                                <span class="action-desc">Download WasmGPU.min.js</span>
+                            </div>
                         </a>
-                        <a class="release-chip" href="https://raw.githubusercontent.com/Zushah/WasmGPU/v0.9.0/dist/WasmGPU.js" target="_blank" rel="noreferrer" aria-label="Minified JavaScript bundle size">
-                            <span class="material-icons-outlined">data_object</span>
-                            <span><strong>JavaScript bundle</strong><small>30.38k lines of code packaged into 1.105mb</small></span>
+                        <a class="action-row" href="https://raw.githubusercontent.com/Zushah/WasmGPU/v0.9.0/dist/WasmGPU.js" target="_blank">
+                            <span class="material-symbols-outlined action-icon">code</span>
+                            <div class="action-details">
+                                <span class="action-title">JavaScript bundle</span>
+                                <span class="action-desc">30.38k lines of code packaged into 1.105mb</span>
+                            </div>
                         </a>
-                        <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0" target="_blank" rel="noreferrer" aria-label="Release notes">
-                            <span class="material-icons-outlined">article</span>
-                            <span><strong>Release notes</strong><small>Full details of the recent updates</small></span>
+                        <a class="action-row" href="https://github.com/Zushah/WasmGPU/releases/tag/v0.9.0" target="_blank" rel="noreferrer">
+                            <span class="material-symbols-outlined action-icon">article</span>
+                            <div class="action-details">
+                                <span class="action-title">Release notes</span>
+                                <span class="action-desc">Full details of the recent updates</span>
+                            </div>
                         </a>
-                        <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/compare/v0.8.0...v0.9.0" target="_blank" rel="noreferrer" aria-label="Compare changes">
-                            <span class="material-icons-outlined">insights</span>
-                            <span><strong>Compare changes</strong><small>65.96k additions and 36.95k deletions across 310 files</small></span>
+                        <a class="action-row" href="https://github.com/Zushah/WasmGPU/compare/v0.8.0...v0.9.0" target="_blank" rel="noreferrer">
+                            <span class="material-symbols-outlined action-icon">show_chart</span>
+                            <div class="action-details">
+                                <span class="action-title">Compare changes</span>
+                                <span class="action-desc">69.42k additions and 36.95k deletions across 474 files</span>
+                            </div>
                         </a>
-                        <a class="release-chip" href="https://www.github.com/Zushah/WasmGPU/issues" target="_blank" rel="noreferrer" aria-label="Give feedback">
-                            <span class="material-icons-outlined">bug_report</span>
-                            <span><strong>Give feedback</strong><small>Report bugs or request features</small></span>
+                        <a class="action-row" href="https://github.com/Zushah/WasmGPU/issues" target="_blank" rel="noreferrer">
+                            <span class="material-symbols-outlined action-icon">pest_control</span>
+                            <div class="action-details">
+                                <span class="action-title">Give feedback</span>
+                                <span class="action-desc">Report bugs or request features</span>
+                            </div>
                         </a>
+                    </div>
+                    <div class="package-card" aria-label="npm installation">
+                        <div class="package-header">
+                            <span class="material-symbols-outlined package-icon">terminal</span>
+                            <span class="package-title">npm package</span>
+                        </div>
+                        <pre class="code-block"><code id="npm-cmd">npm install @zushah/wasmgpu@0.9.0</code></pre>
+                        <button class="action-btn copy-btn" data-copy-target="npm-cmd" type="button"><span class="material-symbols-outlined">content_copy</span>Copy command</button>
+                    </div>
+                    <div class="package-card" aria-label="CDN script tag installation">
+                        <div class="package-header">
+                            <span class="material-symbols-outlined package-icon">cloud</span>
+                            <span class="package-title">CDN bundle</span>
+                        </div>
+                        <pre class="code-block"><code id="cdn-url">https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.iife.min.js</code></pre>
+                        <button class="action-btn copy-btn" data-copy-target="cdn-url" type="button"><span class="material-symbols-outlined">link</span>Copy link</button>
                     </div>
                 </div>
             </section>
-            <section class="install reveal" id="install">
-                <div class="section-head">
-                    <p class="eyebrow">Install</p>
-                    <h2>Get started with your project</h2>
-                </div>
-                <div class="install-grid">
-                    <article class="panel">
-                        <header>
-                            <span class="material-icons-outlined">terminal</span>
-                            <h3>npm package</h3>
-                        </header>
-                        <pre id="install-npm"><code>npm install @zushah/wasmgpu<br>&nbsp;</code></pre>
-                        <button class="copy-btn" type="button" data-copy-target="install-npm">
-                            <span class="material-icons-outlined">content_copy</span>
-                            Copy command
-                        </button>
-                    </article>
-                    <article class="panel">
-                        <header>
-                            <span class="material-icons-outlined">cloud_download</span>
-                            <h3>CDN bundle</h3>
-                        </header>
-                        <pre id="install-cdn"><code>https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.iife.min.js</code></pre>
-                        <button class="copy-btn" type="button" data-copy-target="install-cdn">
-                            <span class="material-icons-outlined">content_copy</span>
-                            Copy link
-                        </button>
-                    </article>
+            <section id="rich-rendering" class="feature-section reveal" aria-labelledby="rich-rendering-title">
+                <h2 id="rich-rendering-title" class="section-title">Rich Rendering</h2>
+                <div class="feature-content">
+                    <div class="feature-terms">
+                        <a class="floating-label label-3" href="./docs/objects/wasmgpu-createpointcloud/">Pointclouds</a>
+                        <a class="floating-label label-1" href="./docs/objects/wasmgpu-texture-create2d/">Textures</a>
+                        <a class="floating-label label-4" href="./docs/objects/mesh-castshadow/">Shadows</a>
+                        <a class="floating-label label-2" href="./docs/objects/wasmgpu-createglyphfield/">Glyphfields</a>
+                        <a class="floating-label label-5" href="./docs/objects/wasmgpu-colormap-fromstops/">Colormaps</a>
+                        <a class="floating-label label-3" href="./docs/objects/wasmgpu-animation-createskin/">Skinning</a>
+                        <a class="floating-label label-4" href="./docs/objects/wasmgpu-createnodelink/">Nodelinks</a>
+                        <a class="floating-label label-2" href="./docs/objects/wasmgpu-material-data/">Data Materials</a>
+                        <a class="floating-label label-1" href="./docs/objects/wasmgpu-animation-createclip/">Morphing</a>
+                        <a class="floating-label label-5" href="./docs/objects/wasmgpu-createsplatfield/">Splatfields</a>
+                        <a class="floating-label label-3" href="./docs/objects/wasmgpu-material-custom/">Custom Shaders</a>
+                        <a class="floating-label label-2" href="./docs/render/wasmgpu-create/">Antialiasing</a>
+                        <a class="floating-label label-1" href="./docs/objects/wasmgpu-createlatticespace/">Latticespaces</a>
+                        <a class="floating-label label-4" href="./docs/world/wasmgpu-createlight-directional/">Lighting</a>
+                        <a class="floating-label label-5" href="./docs/objects/wasmgpu-gltf-import/">glTF Assets</a>
+                    </div>
+                    <div class="feature-copy">
+                        <p>WasmGPU renders conventional meshes alongside pointclouds, glyphfields, nodelinks, splatfields, and latticespaces, as well as mathematical primitives for cartesian and parametric curves and surfaces. Its material system includes unlit, standard, custom, and data materials, supported by textures, mipmaps, colormaps, scaling, lighting, and shadowing. The renderer handles opaque, transmissive, and transparent passes, GPU depth sorting, instanced draw reuse, SMAA antialiasing, and ID-buffer picking. glTF 2.0 assets can be imported with support for over a dozen extensions. Texture loading includes browser decoding, cancellation, fallbacks, and generated mip chains.</p>
+                    </div>
                 </div>
             </section>
-            <section class="overview">
-                <div class="section-head reveal">
-                    <p class="eyebrow">Overview</p>
-                    <h2>Built for high-performance applications</h2>
+            <section id="scientific-computing" class="feature-section reveal" aria-labelledby="scientific-computing-title">
+                <h2 id="scientific-computing-title" class="section-title">Scientific Computing</h2>
+                <div class="feature-content">
+                    <div class="feature-terms">
+                        <a class="floating-label label-2" href="./docs/math/wasmgpu-math-mat4-mul/">Matrix Multiply</a>
+                        <a class="floating-label label-5" href="./docs/compute/wasmgpu-compute-kernels-reducef32/">Reductions</a>
+                        <a class="floating-label label-1" href="./docs/compute/wasmgpu-compute-kernels-radixsortkeysu32/">Radix Sort</a>
+                        <a class="floating-label label-4" href="./docs/compute/wasmgpu-compute-kernels-scanexclusiveu32/">Prefix Scans</a>
+                        <a class="floating-label label-3" href="./docs/compute/wasmgpu-compute-kernels-histogramf32/">Histograms</a>
+                        <a class="floating-label label-2" href="./docs/compute/wasmgpu-compute-kernels-compactf32/">Compaction</a>
+                        <a class="floating-label label-5" href="./docs/compute/wasmgpu-compute-kernels-sumf32/">Kernels Library</a>
+                        <a class="floating-label label-1" href="./docs/compute/wasmgpu-compute-kernels-lufactorf32batched/">LU Factoring</a>
+                        <a class="floating-label label-4" href="./docs/compute/wasmgpu-compute-kernels-lufactorcomplex64batched/">64-bit Complex</a>
+                        <a class="floating-label label-3" href="./docs/compute/wasmgpu-compute-ndarray-ndim/">Ndarrays</a>
+                        <a class="floating-label label-2" href="./docs/compute/wasmgpu-compute-cpundarray-stridesptr/">Strided Views</a>
+                        <a class="floating-label label-5" href="./docs/compute/wasmgpu-compute-dispatchbatch/">Batch Dispatch</a>
+                        <a class="floating-label label-1" href="./docs/compute/wasmgpu-compute-gpundarray-readbacktocpu/">Async Readback</a>
+                        <a class="floating-label label-4" href="./docs/compute/wasmgpu-compute-kernels-remapscalef32/">Data Scaling</a>
+                        <a class="floating-label label-3" href="./docs/compute/wasmgpu-compute-blitrgba8buffertocanvas/">Canvas Blitting</a>
+                    </div>
+                    <div class="feature-copy">
+                        <p>WasmGPU exposes storage and uniform buffers, arbitrary WGSL compute pipelines, validated one-, two-, and three-dimensional workgroup dispatch, and multi-kernel command batches. Its built-in kernels library covers vector arithmetic, copying, reductions, argument reductions, prefix scans, histograms, compaction, radix sorting, matrix multiplication, LU factoring and solving, and data-scaling operations. CPU and GPU ndarrays retain shape, stride, offset, layout, and numeric-type metadata, while pooled scratch buffers, reusable asynchronous readback slots, upload paths, and an RGBA canvas blitter support complete browser-side compute workflows.</p>
+                    </div>
                 </div>
-                <div class="overview-grid">
-                    <article class="panel reveal" style="--delay: 0ms;">
-                        <span class="material-icons-outlined">view_in_ar</span>
-                        <h3>WebGPU engine</h3>
-                        <p>Rendering paths are designed for modern pipeline management, batching, and scene throughput.</p>
-                    </article>
-                    <article class="panel reveal" style="--delay: 40ms;">
-                        <span class="material-icons-outlined">memory</span>
-                        <h3>WebAssembly driver</h3>
-                        <p>Hot paths for transforms, culling, and layout-sensitive logic execute in a memory-safe manner with Rust.</p>
-                    </article>
-                    <article class="panel reveal" style="--delay: 80ms;">
-                        <span class="material-icons-outlined">science</span>
-                        <h3>Scientific compute</h3>
-                        <p>Compute APIs include ndarray abstractions, reusable kernels library, and async readback support.</p>
-                    </article>
-                    <article class="panel reveal" style="--delay: 120ms;">
-                        <span class="material-icons-outlined">account_tree</span>
-                        <h3>Rich rendering</h3>
-                        <p>Render APIs include pointclouds, glyphfields, nodelinks, splatfields, latticespaces, and far more.</p>
-                    </article>
-                    <article class="panel reveal" style="--delay: 160ms;">
-                        <span class="material-icons-outlined">source</span>
-                        <h3>TypeScript and Rust</h3>
-                        <p>Double-brained architecture for a seamless combination of convenience and performance.</p>
-                    </article>
-                    <article class="panel reveal" style="--delay: 200ms;">
-                        <span class="material-icons-outlined">terminal</span>
-                        <h3>Python interoperability</h3>
-                        <p>Pyodide integration enables scientific programming to be enveloped within the browser.</p>
-                    </article>
-                    <article class="panel reveal" style="--delay: 240ms;">
-                        <span class="material-icons-outlined">bolt</span>
-                        <h3>SIMD128 vectorization</h3>
-                        <p>Performance-critical operations are optimized using SIMD128 instructions for higher throughput.</p>
-                    </article>
-                    <article class="panel reveal" style="--delay: 280ms;">
-                        <span class="material-icons-outlined">image</span>
-                        <h3>glTF 2.0</h3>
-                        <p>Built-in support for importing glTF 2.0 assets with over a dozen supported extensions.</p>
-                    </article>
-                    <article class="panel reveal" style="--delay: 320ms;">
-                        <span class="material-icons-outlined">api</span>
-                        <h3>Streamlined ergonomics</h3>
-                        <p>Develop powerful projects in a simple style without losing focus on boilerplate and baggage.</p>
-                    </article>
+            </section>
+            <section id="data-oriented-runtime" class="feature-section reveal" aria-labelledby="data-oriented-runtime-title">
+                <h2 id="data-oriented-runtime-title" class="section-title">Data-Oriented Runtime</h2>
+                <div class="feature-content">
+                    <div class="feature-terms">
+                        <a class="floating-label label-4" href="./docs/objects/glyphfield-setwasmsoa/">SoA Layouts</a>
+                        <a class="floating-label label-2" href="./docs/interop/wasmgpu-webassembly-frommemory/">Linear Memory</a>
+                        <a class="floating-label label-5" href="./docs/math/wasmgpu-math-vec3-add/">SIMD128</a>
+                        <a class="floating-label label-1" href="./docs/interop/wasmgpu-framearena/">Frame Arenas</a>
+                        <a class="floating-label label-3" href="./docs/interop/wasmgpu-createheaparena/">Arena Allocator</a>
+                        <a class="floating-label label-4" href="./docs/render/wasmgpu-createtransform-worldmatrixptr/">Transforms</a>
+                        <a class="floating-label label-2" href="./docs/objects/material-dirty/">Dirty Tracking</a>
+                        <a class="floating-label label-5" href="./docs/interop/wasmgpu-framearena-reset/">Free Lists</a>
+                        <a class="floating-label label-1" href="./docs/compute/wasmgpu-compute-createstoragebuffer/">Buffer Pools</a>
+                        <a class="floating-label label-3" href="./docs/compute/wasmgpu-compute-createpipeline/">Pipeline Caches</a>
+                        <a class="floating-label label-4" href="./docs/render/wasmgpu-render/">Draw Batching</a>
+                        <a class="floating-label label-2" href="./docs/objects/skin-createinstance/">Instance Reuse</a>
+                        <a class="floating-label label-5" href="./docs/compute/wasmgpu-compute-cpundarray-empty/">Scratch Pools</a>
+                        <a class="floating-label label-1" href="./docs/compute/wasmgpu-compute-createreadbackring/">Readback Rings</a>
+                        <a class="floating-label label-3" href="./docs/render/wasmgpu-destroy/">Lifetimes</a>
+                    </div>
+                    <div class="feature-copy">
+                        <p>WasmGPU divides orchestration between a TypeScript WebGPU engine and a Rust WebAssembly driver. Transforms live in structure-of-arrays blocks in linear memory, where dirty hierarchy updates, matrix composition, bounds evaluation, normal generation, animation matrices, and frustum culling run in batches with SIMD acceleration where available. A resettable frame arena supplies transient staging data, while reclaimable heap arenas support longer-lived allocations. On the browser side, growable buffers, scratch pools, readback rings, pipeline caches, packed uniform records, instanced draw batches, explicit borrowed-buffer ownership, and deterministic destruction keep hot paths predictable.</p>
+                    </div>
+                </div>
+            </section>
+            <section id="flexible-interoperability" class="feature-section reveal" aria-labelledby="flexible-interoperability-title">
+                <h2 id="flexible-interoperability-title" class="section-title">Flexible Interoperability</h2>
+                <div class="feature-content">
+                    <div class="feature-terms">
+                        <a class="floating-label label-5" href="./docs/render/wasmgpu-run/">TypeScript</a>
+                        <a class="floating-label label-3" href="./docs/render/wasmgpu-isrunning/">JavaScript</a>
+                        <a class="floating-label label-1" href="./docs/interop/wasmgpu-driver/">Rust</a>
+                        <a class="floating-label label-4" href="./docs/interop/wasmgpu-python/">Python</a>
+                        <a class="floating-label label-2" href="./docs/interop/wasmgpu-python-receivendarray/">Pyodide</a>
+                        <a class="floating-label label-5" href="./docs/interop/wasmgpu-python-sendndarray/">NumPy</a>
+                        <a class="floating-label label-3" href="./docs/interop/wasmgpu-webassembly-frominstance/">WebAssembly</a>
+                        <a class="floating-label label-1" href="./docs/render/wasmgpu-gpu/">WebGPU</a>
+                        <a class="floating-label label-4" href="./docs/compute/wasmgpu-compute-computepipeline-getbindgrouplayout/">Pipelines</a>
+                        <a class="floating-label label-2" href="./docs/compute/wasmgpu-compute-cpundarray-fromarray/">Typed Arrays</a>
+                        <a class="floating-label label-5" href="./docs/interop/wasmgpu-python-view/">Memory Views</a>
+                        <a class="floating-label label-3" href="./docs/objects/pointcloud-setpointsbuffer/">External Buffers</a>
+                        <a class="floating-label label-1" href="./docs/objects/custommaterial-getshadercode/">Custom Shaders</a>
+                        <a class="floating-label label-4" href="./docs/render/wasmgpu-create/">ESM Modules</a>
+                        <a class="floating-label label-2" href="./docs/render/wasmgpu-create/">CDN Bundles</a>
+                    </div>
+                    <div class="feature-copy">
+                        <p>WasmGPU ships both an npm package and a CDN bundle for easy integration with modern JavaScript projects. Its WebAssembly interop layer resolves exported functions, globals, pointers, lengths, UTF-8 data, typed memory views, and changing memory buffers without taking ownership of external modules. Python interop accepts Pyodide proxies and NumPy-compatible arrays, validates shapes, strides, contiguity, and numeric types, and transfers data through CPU or GPU ndarrays. WebGPU helpers normalize layouts and binding resources, while external buffers, borrowed memory sources, custom WGSL materials, and compute pipelines provide lower-level integration paths.</p>
+                    </div>
                 </div>
             </section>
         </main>
         <footer class="site-footer container">
-            <p>Copyright &copy; <span id="year"></span> <a href="https://www.github.com/Zushah" target="_blank" rel="noreferrer">Zushah</a>.</p>
+            <p>WasmGPU <a href="#latest-release" class="footer-link">v0.9.0</a>. Copyright &copy; <span id="year">2026</span> <a href="https://github.com/Zushah" class="footer-link" target="_blank" rel="noreferrer">Zushah</a>. Available under the <a href="https://www.mozilla.org/MPL/2.0/" class="footer-link" target="_blank" rel="noreferrer">MPL-2.0</a>.</p>
         </footer>
         <script src="./script.js"></script>
     </body>

@@ -1,0 +1,134 @@
+<!DOCTYPE html>
+<!--
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+-->
+<html lang="en">
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>WasmGPU | Performance</title>
+        <meta name="description" content="Tracked performance benchmark report and metrics for WasmGPU.">
+        <link rel="icon" type="image/png" href="../assets/favicon.png">
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
+        <link rel="stylesheet" href="./style.css">
+    </head>
+    <body data-theme="dark">
+        <header class="site-header">
+            <nav class="navbar container" aria-label="Global navigation">
+                <a class="nav-brand" href="../index.html" aria-label="WasmGPU home">
+                    <img class="brand-logo" src="../assets/favicon.png" alt="WasmGPU">
+                    <span class="brand-name">WasmGPU</span>
+                </a>
+                <div class="nav-menu">
+                    <a class="nav-link" href="../docs/"><span class="material-symbols-outlined nav-icon">menu_book</span>Documentation</a>
+                    <a class="nav-link" href="../examples/"><span class="material-symbols-outlined nav-icon">code</span>Examples</a>
+                    <a class="nav-link nav-link-active" href="./index.html"><span class="material-symbols-outlined nav-icon">speed</span>Performance</a>
+                    <a class="nav-link" href="../docs/architecture/"><span class="material-symbols-outlined nav-icon">view_in_ar</span>Architecture</a>
+                    <a class="nav-link" href="https://github.com/Zushah/WasmGPU" target="_blank" rel="noreferrer"><svg class="nav-icon simple-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>GitHub</a>
+                    <button id="theme-toggle" class="icon-btn" type="button" aria-label="Switch theme">
+                        <span class="material-symbols-outlined" id="theme-toggle-icon">light_mode</span>
+                    </button>
+                </div>
+            </nav>
+        </header>
+        <main class="container">
+            <section class="hero reveal">
+                <h1 class="page-title">Performance</h1>
+                <p class="hero-headline">Latest Benchmark Results.</p>
+                <p class="hero-copy">Official report from August 27, 2026.</p>
+            </section>
+            <section class="env-section reveal">
+                <div class="env-card">
+                    <div class="env-header">
+                        <span class="material-symbols-outlined env-icon">tune</span>
+                        <h2>Benchmark Environment</h2>
+                        <span class="env-mode">Mode: full</span>
+                    </div>
+                    <div class="env-grid">
+                        <div class="env-item">
+                            <span class="env-label">Operating System</span>
+                            <span class="env-val">Windows 11</span>
+                        </div>
+                        <div class="env-item">
+                            <span class="env-label">Environment</span>
+                            <span class="env-val">Ubuntu 24.04 (WSL2 6.6.87.2)</span>
+                        </div>
+                        <div class="env-item">
+                            <span class="env-label">CPU</span>
+                            <span class="env-val">Intel Core i5-14400F</span>
+                        </div>
+                        <div class="env-item">
+                            <span class="env-label">GPU</span>
+                            <span class="env-val">Nvidia GeForce RTX 4060</span>
+                        </div>
+                        <div class="env-item">
+                            <span class="env-label">RAM</span>
+                            <span class="env-val">32 GiB DDR5</span>
+                        </div>
+                        <div class="env-item">
+                            <span class="env-label">Browser</span>
+                            <span class="env-val">Chromium 151.0.7922.175</span>
+                        </div>
+                        <div class="env-item">
+                            <span class="env-label">JavaScript Runtime</span>
+                            <span class="env-val">Node.js 24.18.0</span>
+                        </div>
+                        <div class="env-item">
+                            <span class="env-label">Benchmark Timestamp</span>
+                            <span class="env-val">2026-08-27 18:41:37 UTC</span>
+                        </div>
+                    </div>
+                </div>
+            </section>
+            <section class="benchmark-dashboard reveal">
+                <div class="category-tabs" role="tablist" aria-label="Benchmark Subsystem Categories">
+                    <button class="cat-btn cat-btn-active" data-subsystem="all" type="button">All Families</button>
+                    <button class="cat-btn" data-subsystem="compute" type="button">Compute</button>
+                    <button class="cat-btn" data-subsystem="render" type="button">Render</button>
+                    <button class="cat-btn" data-subsystem="objects" type="button">Objects</button>
+                    <button class="cat-btn" data-subsystem="math" type="button">Math</button>
+                    <button class="cat-btn" data-subsystem="interop" type="button">Interop</button>
+                    <button class="cat-btn" data-subsystem="scaling" type="button">Scaling</button>
+                    <button class="cat-btn" data-subsystem="gltf" type="button">glTF</button>
+                    <button class="cat-btn" data-subsystem="interact" type="button">Interact</button>
+                </div>
+                <div id="benchmark-charts-container" class="charts-container"><!-- Populated dynamically by script.js --></div>
+                <div class="data-table-section reveal">
+                    <div class="table-header-block">
+                        <div class="table-title-group">
+                            <span class="material-symbols-outlined table-icon">table_chart</span>
+                            <h2 id="benchmark-table-title">Complete Benchmark Data Table</h2>
+                        </div>
+                    </div>
+                    <div class="table-scroll-wrapper">
+                        <table class="bench-table">
+                            <thead>
+                                <tr>
+                                    <th>Benchmark Name</th>
+                                    <th>Workload Size</th>
+                                    <th>Median</th>
+                                    <th>Mean</th>
+                                    <th>p95</th>
+                                    <th>Unit</th>
+                                </tr>
+                            </thead>
+                            <tbody id="bench-table-body">
+                                <tr><td colspan="6" class="benchmark-load-cell">Loading benchmark results from GitHub...</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+        <footer class="site-footer container">
+            <p>WasmGPU <a href="../index.html#latest-release" class="footer-link">v0.9.0</a>. Copyright &copy; <span id="year">2026</span> <a href="https://github.com/Zushah" class="footer-link" target="_blank" rel="noreferrer">Zushah</a>. Available under the <a href="https://www.mozilla.org/MPL/2.0/" class="footer-link" target="_blank" rel="noreferrer">MPL-2.0</a>.</p>
+        </footer>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1"></script>
+        <script src="./script.js"></script>
+    </body>
+</html>

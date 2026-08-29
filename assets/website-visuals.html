@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<!--
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+-->
+<html>
+    <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <title>WasmGPU | Website Visuals</title>
+        <link rel="icon" type="image/png" href="./favicon.png">
+        <link rel="preconnect" href="https://fonts.googleapis.com">
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap" rel="stylesheet">
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            html, body { width: 100%; height: 100%; overflow: hidden; font-family: "Montserrat", sans-serif; }
+            body[data-theme="dark"] { background: #000000; color: #ffffff; }
+            body[data-theme="light"] { background: #ffffff; color: #000000; }
+            #viewport { position: relative; width: 100vw; height: 100vh; display: flex; align-items: center; justify-content: center; }
+            canvas { display: block; width: 100%; height: 100%; background: transparent; }
+            #overlay-container { position: absolute; inset: 0; pointer-events: none; display: flex; align-items: center; justify-content: center; }
+            .version-badge { font-size: clamp(6.5rem, 14vw, 10rem); font-weight: 800; letter-spacing: -0.03em; user-select: none; transform: translateY(-9rem); }
+            body[data-theme="dark"] .version-badge { color: #ffffff; text-shadow: none; }
+            body[data-theme="light"] .version-badge { color: #000000; text-shadow: none; }
+            #controls { position: fixed; top: 0.25rem; right: 0.25rem; display: flex; flex-direction: column; gap: 0.4rem; background: rgba(32, 32, 32, 0.85); padding: 0.5rem 1rem; border-radius: 999px; border: 1px solid rgba(132, 114, 243, 0.3); z-index: 100; }
+            body.hide-ui #controls { display: none !important; }
+            select { width: 8.5rem; max-width: 8.5rem; background: #000000; color: #ffffff; border: 1px solid rgba(132, 114, 243, 0.5); border-radius: 999px; padding: 0.35rem 0.85rem; font-family: inherit; font-size: 0.85rem; font-weight: 600; cursor: pointer; overflow: hidden; white-space: nowrap; }
+        </style>
+    </head>
+    <body data-theme="dark">
+        <div id="viewport">
+            <canvas id="gpu-canvas"></canvas>
+            <div id="overlay-container"></div>
+        </div>
+        <div id="controls">
+            <select id="scene-select">
+                <option value="latest-release">Latest Release</option>
+                <option value="rich-rendering">Rich Rendering</option>
+                <option value="scientific-computing">Scientific Computing</option>
+                <option value="data-oriented-runtime">Data-Oriented Runtime</option>
+                <option value="flexible-interoperability">Flexible Interoperability</option>
+                <option value="wave">Wave</option>
+            </select>
+            <select id="theme-select">
+                <option value="darkmode">Dark Mode</option>
+                <option value="lightmode">Light Mode</option>
+            </select>
+        </div>
+        <script type="module">
+            import { WasmGPU } from "../release/WasmGPU.min.js";
+
+            const params = new URLSearchParams(window.location.search);
+            const initialScene = params.get("scene") || "latest-release";
+            const initialTheme = params.get("theme") === "lightmode" ? "lightmode" : "darkmode";
+            const isCapture = params.has("capture");
+            if (isCapture) document.body.classList.add("hide-ui");
+            const sceneSelect = document.getElementById("scene-select");
+            const themeSelect = document.getElementById("theme-select");
+            sceneSelect.value = initialScene;
+            themeSelect.value = initialTheme;
+
+            const C = {
+                brand1: [0 / 255, 90 / 255, 156 / 255, 1.0],
+                brand2: [51 / 255, 85 / 255, 198 / 255, 1.0],
+                brand3: [101 / 255, 79 / 255, 240 / 255, 1.0],
+                brand4: [132 / 255, 114 / 255, 243 / 255, 1.0],
+                brand5: [155 / 255, 141 / 255, 245 / 255, 1.0],
+                black:  [0.0, 0.0, 0.0, 1.0],
+                white:  [1.0, 1.0, 1.0, 1.0],
+                charcoal: [32 / 255, 32 / 255, 32 / 255, 1.0],
+                invCharcoal: [223 / 255, 223 / 255, 223 / 255, 1.0]
+            };
+            const colormapStopsDark = [C.brand1, C.brand2, C.brand3, C.brand4, C.brand5];
+            const colormapStopsLight = [C.brand1, C.brand2, C.brand3, C.brand4, C.brand5];
+            const waveStopsDark = [[0.0, 0.0, 0.0, 0.0], [0.0, 0.0, 0.0, 0.0], C.brand1, C.brand2, C.brand3, C.brand4, C.brand5];
+            const waveStopsLight = [[C.brand1[0], C.brand1[1], C.brand1[2], 0.0], [C.brand1[0], C.brand1[1], C.brand1[2], 0.0], C.brand1, C.brand2, C.brand3, C.brand4, C.brand5];
+            const canvas = document.getElementById("gpu-canvas");
+            const overlayContainer = document.getElementById("overlay-container");
+            let currentTheme = initialTheme;
+            let currentScene = initialScene;
+            let wgpu = null;
+            let activeScene = null;
+            let activeCamera = null;
+            const initEngine = async () => { wgpu = await WasmGPU.create(canvas, { powerPreference: "high-performance", antialias: true }); };
+            const setupTheme = (theme) => { currentTheme = theme; document.body.setAttribute("data-theme", theme === "lightmode" ? "light" : "dark"); };
+            const createRNG = (seed = 42) => { let s = seed; return () => { s = (s * 16807) % 2147483647; return (s - 1) / 2147483646; }; };
+
+            const addSurroundingPoints = (scene, rng, lightmode, radiusMin = 1.8, radiusMax = 4.2, count = 64, intensity = 1.0) => {
+                const groups = [
+                    { count: Math.round(count * 0.70), core: 22.0 * intensity, halo: 66.0 * intensity },
+                    { count: Math.round(count * 0.22), core: 42.0 * intensity, halo: 124.0 * intensity },
+                    { count: Math.max(3, Math.round(count * 0.08)), core: 68.0 * intensity, halo: 198.0 * intensity }
+                ];
+                for (const group of groups) {
+                    const dustData = new Float32Array(group.count * 4);
+                    const dustColors = new Float32Array(group.count * 4);
+                    const dustPalette = lightmode ? [C.brand1, C.brand1, C.brand2, C.brand2, C.brand3, C.brand3, C.brand4, C.brand5] : colormapStopsDark;
+                    for (let i = 0; i < group.count; i++) {
+                        const u = rng() * Math.PI * 2;
+                        const v = Math.asin(rng() * 2 - 1);
+                        const safeMax = Math.min(radiusMax, 3.2);
+                        const rad = radiusMin + rng() * (safeMax - radiusMin);
+                        dustData[i * 4 + 0] = Math.cos(v) * Math.cos(u) * rad * 0.72;
+                        dustData[i * 4 + 1] = Math.sin(v) * rad * 0.64;
+                        dustData[i * 4 + 2] = Math.cos(v) * Math.sin(u) * rad * 0.62;
+                        dustData[i * 4 + 3] = rng();
+                        const color = dustPalette[Math.min(dustPalette.length - 1, Math.floor(rng() * dustPalette.length))];
+                        dustColors.set(color, i * 4);
+                    }
+                    for (const pass of [{ size: group.halo, softness: 0.96, opacity: lightmode ? 0.52 : 1.0, glow: true }, { size: group.core, softness: 0.26, opacity: 1.0, glow: false }]) {
+                        const passColors = dustColors;
+                        const pointSize = pass.size * (lightmode ? (pass.glow ? 1 / 6 : 2.5) : 1.0);
+                        const dust = wgpu.createPointCloud({
+                            data: dustData, colors: passColors, pointCount: group.count,
+                            blendMode: lightmode ? "transparent" : "additive",
+                            basePointSize: pointSize, sizeAttenuation: 1.05,
+                            minPointSize: Math.max(1.5, pointSize * 0.35), maxPointSize: pointSize * 1.8,
+                            softness: pass.softness, opacity: pass.opacity, colorMode: "rgba",
+                            scaleTransform: { componentCount: 4, componentIndex: 3, stride: 4, offset: 0, mode: "linear", domainMin: 0, domainMax: 1 }
+                        });
+                        scene.add(dust);
+                    }
+                }
+            };
+
+            const latestRelease = (lightmode) => {
+                overlayContainer.innerHTML = "";
+                const badge = document.createElement("div");
+                badge.className = "version-badge";
+                badge.textContent = " 0 . 9 . 0 ";
+                overlayContainer.appendChild(badge);
+                const bgColor = lightmode ? [1.0, 1.0, 1.0] : [0.0, 0.0, 0.0];
+                const scene = wgpu.createScene(bgColor);
+                const camera = wgpu.createCamera.perspective({ fov: 44, near: 0.1, far: 100 });
+                camera.transform.setPosition(0, 0, 5);
+                camera.lookAt(0, 0.0, 0);
+                const s = 0.9;
+                const nodePositions = new Float32Array([-s, -s, -s, 1, s, -s, -s, 1, s, -s,  s, 1, -s, -s,  s, 1, -s,  s, -s, 1, s,  s, -s, 1, s,  s,  s, 1, -s,  s,  s, 1]);
+                const nodeColors = new Float32Array([...C.brand1, ...C.brand2, ...C.brand2, ...C.brand1, ...C.brand4, ...C.brand5, ...C.brand5, ...C.brand4]);
+                const edges = new Uint32Array([0, 1,  1, 2,  2, 3,  3, 0, 4, 5,  5, 6,  6, 7,  7, 4, 0, 4,  1, 5,  2, 6,  3, 7]);
+                const edgeColors = new Float32Array([...C.brand1, ...C.brand2, ...C.brand2, ...C.brand1, ...C.brand4, ...C.brand5, ...C.brand5, ...C.brand4, ...C.brand3, ...C.brand3, ...C.brand3, ...C.brand3]);
+                const cube = wgpu.createNodeLink({
+                    nodeCount: 8, nodePositions, nodePositionsStride: 4, nodeColors,
+                    edgeCount: 12, edges, edgeColors,
+                    nodeGeometryMode: "spheres", edgeGeometryMode: "cylinders",
+                    nodeColorMode: "rgba", edgeColorMode: "rgba",
+                    nodeSize: 0.055, edgeSize: 0.072
+                });
+                cube.transform.rotateX(Math.PI / 4);
+                // cube.transform.rotateY(Math.PI / 4);
+                cube.transform.rotateZ(Math.PI / 4);
+                scene.add(cube);
+                const rng = createRNG(101);
+                addSurroundingPoints(scene, rng, lightmode, 1.3, 3.6, 78, 1.35);
+                return { scene, camera };
+            };
+
+            const richRendering = (lightmode) => {
+                overlayContainer.innerHTML = "";
+                const bgColor = lightmode ? [1.0, 1.0, 1.0] : [0.0, 0.0, 0.0];
+                const scene = wgpu.createScene(bgColor);
+                const camera = wgpu.createCamera.perspective({ fov: 46, near: 0.1, far: 100 });
+                camera.transform.setPosition(0, 1.35, 4.8);
+                camera.lookAt(0, -0.05, 0);
+                const R = 1.15;
+                const r = 0.48;
+                const majorSegs = 28;
+                const minorSegs = 12;
+                const totalNodes = majorSegs * minorSegs;
+                const nodePositions = new Float32Array(totalNodes * 4);
+                const nodeColors = new Float32Array(totalNodes * 4);
+                let nodeIdx = 0;
+                for (let i = 0; i < majorSegs; i++) {
+                    const phi = (i / majorSegs) * Math.PI * 2;
+                    for (let j = 0; j < minorSegs; j++) {
+                        const theta = (j / minorSegs) * Math.PI * 2;
+                        const x = (R + r * Math.cos(theta)) * Math.cos(phi);
+                        const y = r * Math.sin(theta);
+                        const z = (R + r * Math.cos(theta)) * Math.sin(phi);
+                        nodePositions[nodeIdx * 4 + 0] = x;
+                        nodePositions[nodeIdx * 4 + 1] = y;
+                        nodePositions[nodeIdx * 4 + 2] = z;
+                        nodePositions[nodeIdx * 4 + 3] = 1.0;
+                        const t = (Math.cos(phi) * 0.5 + Math.sin(theta) * 0.5 + 1.0) / 2.0;
+                        const colIdx = Math.min(4, Math.max(0, Math.floor(t * 4.99)));
+                        const col = colormapStopsDark[colIdx];
+                        nodeColors[nodeIdx * 4 + 0] = col[0];
+                        nodeColors[nodeIdx * 4 + 1] = col[1];
+                        nodeColors[nodeIdx * 4 + 2] = col[2];
+                        nodeColors[nodeIdx * 4 + 3] = lightmode ? 0.95 : 1.0;
+                        nodeIdx++;
+                    }
+                }
+                const totalEdges = majorSegs * minorSegs * 2;
+                const edges = new Uint32Array(totalEdges * 2);
+                const edgeColors = new Float32Array(totalEdges * 4);
+                let edgeIdx = 0;
+                for (let i = 0; i < majorSegs; i++) {
+                    const nextI = (i + 1) % majorSegs;
+                    for (let j = 0; j < minorSegs; j++) {
+                        const nextJ = (j + 1) % minorSegs;
+                        const curr = i * minorSegs + j;
+                        const right = nextI * minorSegs + j;
+                        const up = i * minorSegs + nextJ;
+                        edges[edgeIdx * 2 + 0] = curr;
+                        edges[edgeIdx * 2 + 1] = right;
+                        edgeColors.set(nodeColors.subarray(curr * 4, curr * 4 + 4), edgeIdx * 4);
+                        edgeIdx++;
+                        edges[edgeIdx * 2 + 0] = curr;
+                        edges[edgeIdx * 2 + 1] = up;
+                        edgeColors.set(nodeColors.subarray(curr * 4, curr * 4 + 4), edgeIdx * 4);
+                        edgeIdx++;
+                    }
+                }
+                const torus = wgpu.createNodeLink({
+                    nodeCount: totalNodes, nodePositions, nodePositionsStride: 4, nodeColors,
+                    edgeCount: totalEdges, edges, edgeColors,
+                    nodeGeometryMode: "spheres", edgeGeometryMode: "cylinders",
+                    nodeColorMode: "rgba", edgeColorMode: "rgba",
+                    nodeSize: 0.022, edgeSize: lightmode ? 0.030 : 0.024,
+                    opacity: 1.0
+                });
+                torus.transform.rotateX(0.76);
+                torus.transform.rotateZ(0.35);
+                scene.add(torus);
+                const rng = createRNG(202);
+                addSurroundingPoints(scene, rng, lightmode, 1.9, 4.0, 54);
+                return { scene, camera };
+            };
+
+            const scientificComputing = (lightmode) => {
+                overlayContainer.innerHTML = "";
+                const bgColor = lightmode ? [1.0, 1.0, 1.0] : [0.0, 0.0, 0.0];
+                const scene = wgpu.createScene(bgColor);
+                const camera = wgpu.createCamera.perspective({ fov: 46, near: 0.1, far: 100 });
+                camera.transform.setPosition(0, 0.25, 5.1);
+                camera.lookAt(0, 0, 0);
+                const pointCount = 2400;
+                const pointData = new Float32Array(pointCount * 4);
+                const rng = createRNG(777);
+                let spareGaussian = null;
+                const gaussian = () => {
+                    if (spareGaussian !== null) { const value = spareGaussian; spareGaussian = null; return value; }
+                    const u = Math.max(1e-6, rng());
+                    const v = rng();
+                    const mag = Math.sqrt(-2 * Math.log(u));
+                    spareGaussian = mag * Math.sin(Math.PI * 2 * v);
+                    return mag * Math.cos(Math.PI * 2 * v);
+                };
+                const billows = [
+                    { x: -1.05, y: -0.18, z:  0.08, sx: 0.48, sy: 0.26, sz: 0.30, angle:  0.18 },
+                    { x: -0.52, y:  0.38, z: -0.12, sx: 0.58, sy: 0.34, sz: 0.35, angle:  0.72 },
+                    { x:  0.02, y:  0.04, z:  0.12, sx: 0.66, sy: 0.30, sz: 0.40, angle: -0.20 },
+                    { x:  0.65, y: -0.36, z: -0.06, sx: 0.54, sy: 0.25, sz: 0.32, angle: -0.62 },
+                    { x:  1.08, y:  0.18, z:  0.03, sx: 0.38, sy: 0.20, sz: 0.25, angle:  0.42 },
+                    { x:  0.34, y:  0.72, z: -0.18, sx: 0.34, sy: 0.18, sz: 0.24, angle:  1.00 }
+                ];
+                const sampleBlobPoint = () => {
+                    const mode = rng();
+                    let x, y, z;
+                    let angle;
+                    let density;
+                    if (mode < 0.58) {
+                        const lobe = billows[Math.min(billows.length - 1, Math.floor(rng() * billows.length))];
+                        const gx = Math.max(-2.7, Math.min(2.7, gaussian()));
+                        const gy = Math.max(-2.7, Math.min(2.7, gaussian()));
+                        const gz = Math.max(-2.7, Math.min(2.7, gaussian()));
+                        const lx = gx * lobe.sx;
+                        const ly = gy * lobe.sy;
+                        const ca = Math.cos(lobe.angle);
+                        const sa = Math.sin(lobe.angle);
+                        x = lobe.x + lx * ca - ly * sa;
+                        y = lobe.y + lx * sa + ly * ca;
+                        z = lobe.z + gz * lobe.sz;
+                        angle = lobe.angle;
+                        density = Math.exp(-0.18 * (gx * gx + gy * gy + gz * gz));
+                    } else if (mode < 0.90) {
+                        const t = rng() * 2 - 1;
+                        const width = 0.09 + 0.16 * (1 - Math.abs(t));
+                        x = 1.72 * t + gaussian() * 0.11;
+                        y = 0.48 * Math.sin(t * 3.1) - 0.12 * t + gaussian() * width;
+                        z = 0.16 * Math.cos(t * 4.2) + gaussian() * width * 0.85;
+                        angle = Math.atan2(1.36 * Math.cos(t * 3.1) - 0.12, 1.72);
+                        density = 0.45 + 0.5 * (1 - Math.abs(t));
+                    } else {
+                        const upper = rng() > 0.42;
+                        const t = rng();
+                        x = (upper ? -0.72 : 0.78) + t * (upper ? -0.88 : 0.72) + gaussian() * 0.12;
+                        y = (upper ? 0.72 : -0.82) + Math.sin(t * Math.PI) * (upper ? 0.32 : -0.18) + gaussian() * 0.10;
+                        z = gaussian() * 0.14;
+                        angle = upper ? 2.75 : -0.25;
+                        density = 0.32 + 0.35 * (1 - t);
+                    }
+                    const scalar = Math.max(0, Math.min(1, 0.5 + x * 0.18 + y * 0.12 + (rng() - 0.5) * 0.22));
+                    return { x, y, z, scalar, shell: 1 - density, angle };
+                };
+                for (let i = 0; i < pointCount; i++) {
+                    const { x, y, z, scalar } = sampleBlobPoint();
+                    pointData[i * 4 + 0] = x;
+                    pointData[i * 4 + 1] = y;
+                    pointData[i * 4 + 2] = z;
+                    pointData[i * 4 + 3] = scalar;
+                }
+                const nebulaCore = wgpu.createPointCloud({
+                    data: pointData, pointCount,
+                    blendMode: lightmode ? "transparent" : "additive",
+                    basePointSize: lightmode ? 55.0 : 22.0, sizeAttenuation: 1.1,
+                    minPointSize: lightmode ? 25.0 : 10.0, maxPointSize: lightmode ? 120.0 : 48.0,
+                    softness: 0.34, opacity: 0.90,
+                    colormap: "custom", colormapStops: lightmode ? colormapStopsLight : colormapStopsDark,
+                    scaleTransform: { componentCount: 4, componentIndex: 3, stride: 4, offset: 0, mode: "linear", domainMin: 0, domainMax: 1 }
+                });
+                scene.add(nebulaCore);
+                const nebulaHalo = wgpu.createPointCloud({
+                    data: pointData, pointCount,
+                    blendMode: lightmode ? "transparent" : "additive",
+                    basePointSize: lightmode ? 70.0 / 6 : 70.0, sizeAttenuation: 1.15,
+                    minPointSize: lightmode ? 22.0 / 6 : 22.0, maxPointSize: lightmode ? 124.0 / 6 : 124.0,
+                    softness: 0.94, opacity: 0.26,
+                    colormap: "custom", colormapStops: lightmode ? colormapStopsLight : colormapStopsDark,
+                    scaleTransform: { componentCount: 4, componentIndex: 3, stride: 4, offset: 0, mode: "linear", domainMin: 0, domainMax: 1 }
+                });
+                scene.add(nebulaHalo);
+                const splatCount = 560;
+                const splatPositions = new Float32Array(splatCount * 3);
+                const splatRotations = new Float32Array(splatCount * 4);
+                const splatScales = new Float32Array(splatCount * 3);
+                const splatOpacities = new Float32Array(splatCount);
+                const splatColors = new Float32Array(splatCount * 4);
+                for (let i = 0; i < splatCount; i++) {
+                    const { x, y, z, scalar, shell, angle } = sampleBlobPoint();
+                    const p3 = i * 3;
+                    const p4 = i * 4;
+                    splatPositions[p3 + 0] = x;
+                    splatPositions[p3 + 1] = y;
+                    splatPositions[p3 + 2] = z;
+                    splatRotations[p4 + 0] = 0;
+                    splatRotations[p4 + 1] = 0;
+                    splatRotations[p4 + 2] = Math.sin(angle * 0.5);
+                    splatRotations[p4 + 3] = Math.cos(angle * 0.5);
+                    const scale = 0.11 + 0.22 * (1 - shell) + 0.10 * rng();
+                    splatScales[p3 + 0] = scale * (1.45 + 0.75 * rng());
+                    splatScales[p3 + 1] = scale * (0.52 + 0.34 * rng());
+                    splatScales[p3 + 2] = scale * (0.58 + 0.38 * rng());
+                    splatOpacities[i] = 0.06 + (1 - shell) * 0.105;
+                    const color = (lightmode ? colormapStopsLight : colormapStopsDark)[Math.min(4, Math.floor(scalar * 5))];
+                    splatColors[p4 + 0] = color[0];
+                    splatColors[p4 + 1] = color[1];
+                    splatColors[p4 + 2] = color[2];
+                    splatColors[p4 + 3] = 1.0;
+                }
+                scene.add(wgpu.createSplatField({
+                    positions: splatPositions, rotations: splatRotations, scales: splatScales,
+                    opacities: splatOpacities, colors: splatColors, colorSpace: "linear", opacityScale: 0.95,
+                    boundsMin: [-2.2, -2.2, -2.2], boundsMax: [2.2, 2.2, 2.2]
+                }));
+                addSurroundingPoints(scene, rng, lightmode, 2.0, 4.2, 58);
+                return { scene, camera };
+            };
+
+            const dataOrientedRuntime = (lightmode) => {
+                overlayContainer.innerHTML = "";
+                const bgColor = lightmode ? [1.0, 1.0, 1.0] : [0.0, 0.0, 0.0];
+                const scene = wgpu.createScene(bgColor);
+                const camera = wgpu.createCamera.perspective({ fov: 44, near: 0.1, far: 100 });
+                camera.transform.setPosition(3.0, 2.30, 5.45);
+                camera.lookAt(0, -0.1, 0);
+                const layers = 5;
+                const pointsPerLayer = 36;
+                const layerHeight = 0.54;
+                const totalNodes = layers * pointsPerLayer;
+                const nodePositions = new Float32Array(totalNodes * 4);
+                const nodeColors = new Float32Array(totalNodes * 4);
+                const layerPointData = new Float32Array(totalNodes * 4);
+                const layerPointColors = new Float32Array(totalNodes * 4);
+                const layerPointGlowColors = new Float32Array(totalNodes * 4);
+                const weightedLogoColors = [C.brand1, C.brand1, C.brand2, C.brand2, C.brand3, C.brand3, C.brand4, C.brand5];
+                const rng = createRNG(888);
+                let nIdx = 0;
+                const planeWidth = 2.65;
+                for (let l = 0; l < layers; l++) {
+                    const y = (l - (layers - 1) / 2) * layerHeight;
+                    const plane = wgpu.createMesh(wgpu.geometry.rectangle(planeWidth, planeWidth, "xz", true), wgpu.material.unlit({ color: C.invCharcoal }));
+                    plane.transform.setPosition(0, y, 0);
+                    scene.add(plane);
+                    const pointSpan = planeWidth * 0.76;
+                    const pointHalf = pointSpan / 2;
+                    for (let r = 0; r < 6; r++) {
+                        const z = (r / 5) * pointSpan - pointHalf;
+                        for (let c = 0; c < 6; c++) {
+                            const x = (c / 5) * pointSpan - pointHalf;
+                            const col = weightedLogoColors[Math.floor(rng() * weightedLogoColors.length)];
+                            nodePositions[nIdx * 4 + 0] = x;
+                            nodePositions[nIdx * 4 + 1] = y + 0.025;
+                            nodePositions[nIdx * 4 + 2] = z;
+                            nodePositions[nIdx * 4 + 3] = 1.0;
+                            layerPointData[nIdx * 4 + 0] = x;
+                            layerPointData[nIdx * 4 + 1] = y + 0.032;
+                            layerPointData[nIdx * 4 + 2] = z;
+                            layerPointData[nIdx * 4 + 3] = 1.0;
+                            nodeColors[nIdx * 4 + 0] = col[0];
+                            nodeColors[nIdx * 4 + 1] = col[1];
+                            nodeColors[nIdx * 4 + 2] = col[2];
+                            nodeColors[nIdx * 4 + 3] = lightmode ? 0.95 : 1.0;
+                            layerPointColors.set(col, nIdx * 4);
+                            layerPointGlowColors.set(col, nIdx * 4);
+                            nIdx++;
+                        }
+                    }
+                }
+                const edgeList = [];
+                const edgeColorList = [];
+                const connectionPoints = [[11, 23, 29, 31, 33, 34], [5, 17, 35, 30, 32, 34], [11, 23, 29, 30, 32, 33], [5, 17, 35, 31, 32, 34]];
+                for (let l = 0; l < layers - 1; l++) {
+                    const base = l * pointsPerLayer;
+                    const nextBase = (l + 1) * pointsPerLayer;
+                    for (const p of connectionPoints[l]) {
+                        edgeList.push(base + p, nextBase + p);
+                        edgeColorList.push(...C.invCharcoal);
+                    }
+                }
+                const totalEdges = edgeList.length / 2;
+                const edges = new Uint32Array(edgeList);
+                const edgeColors = new Float32Array(edgeColorList);
+                const dataGraph = wgpu.createNodeLink({
+                    nodeCount: totalNodes, nodePositions, nodePositionsStride: 4, nodeColors,
+                    edgeCount: totalEdges, edges, edgeColors,
+                    nodeGeometryMode: "spheres", edgeGeometryMode: "cylinders",
+                    nodeColorMode: "rgba", edgeColorMode: "rgba",
+                    nodeSize: 0.008, edgeSize: lightmode ? 0.12 : 0.10
+                });
+                scene.add(dataGraph);
+                const pointOptions = {
+                    data: layerPointData, pointCount: totalNodes,
+                    blendMode: "transparent",
+                    sizeAttenuation: 1.08,
+                    colorMode: "rgba",
+                    scaleTransform: { componentCount: 4, componentIndex: 3, stride: 4, offset: 0, mode: "linear", domainMin: 0, domainMax: 1 }
+                };
+                scene.add(wgpu.createPointCloud({
+                    ...pointOptions, colors: layerPointColors,
+                    basePointSize: lightmode ? 125.0 : 152.0,
+                    minPointSize: lightmode ? 70.0 : 56.0, maxPointSize: lightmode ? 160.0 : 288.0,
+                    softness: 0.10, opacity: 1.0
+                }));
+                scene.add(wgpu.createPointCloud({
+                    ...pointOptions, colors: layerPointGlowColors,
+                    basePointSize: lightmode ? 19.0 : 364.0,
+                    minPointSize: lightmode ? 12.665 : 176.0, maxPointSize: lightmode ? 42.335 : 504.0,
+                    softness: 0.95, opacity: 0.42
+                }));
+                addSurroundingPoints(scene, rng, lightmode, 2.95, 4.1, 52);
+                return { scene, camera };
+            };
+
+            const flexibleInteroperability = (lightmode) => {
+                overlayContainer.innerHTML = "";
+                const bgColor = lightmode ? [1.0, 1.0, 1.0] : [0.0, 0.0, 0.0];
+                const scene = wgpu.createScene(bgColor);
+                const camera = wgpu.createCamera.perspective({ fov: 44, near: 0.1, far: 100 });
+                camera.transform.setPosition(0.9, 0.8, 5.7);
+                camera.lookAt(0, 0, 0);
+                const graphNodes = [
+                    { pos: [-1.55,  0.85, -1.00], col: C.brand1, size: 0.12 },
+                    { pos: [-0.30,  0.15,  0.95], col: C.brand2, size: 0.34 },
+                    { pos: [ 1.35,  0.70, -0.75], col: C.brand3, size: 0.17 },
+                    { pos: [ 0.10, -1.20, -1.10], col: C.brand4, size: 0.28 },
+                    { pos: [-1.70, -0.65,  0.75], col: C.brand1, size: 0.10 },
+                    { pos: [-0.90,  1.45,  0.55], col: C.brand2, size: 0.23 },
+                    { pos: [ 0.65,  1.50,  1.10], col: C.brand4, size: 0.14 },
+                    { pos: [ 1.70, -0.55,  0.90], col: C.brand5, size: 0.37 },
+                    { pos: [ 0.65, -0.35,  0.10], col: C.brand4, size: 0.11 },
+                    { pos: [ 1.70,  1.40,  0.20], col: C.brand5, size: 0.25 },
+                    { pos: [-0.85, -1.45, -0.20], col: C.brand3, size: 0.15 }
+                ];
+                const totalNodes = graphNodes.length;
+                const nodePositions = new Float32Array(totalNodes * 4);
+                const nodeColors = new Float32Array(totalNodes * 4);
+                const addWireSphere = (node) => {
+                    const latSegments = 6;
+                    const lonSegments = 8;
+                    const wireNodeCount = (latSegments + 1) * lonSegments;
+                    const wirePositions = new Float32Array(wireNodeCount * 4);
+                    const wireColors = new Float32Array(wireNodeCount * 4);
+                    let wireNode = 0;
+                    for (let lat = 0; lat <= latSegments; lat++) {
+                        const theta = (lat / latSegments) * Math.PI;
+                        const ringRadius = Math.sin(theta) * node.size;
+                        const y = Math.cos(theta) * node.size;
+                        for (let lon = 0; lon < lonSegments; lon++) {
+                            const phi = (lon / lonSegments) * Math.PI * 2;
+                            wirePositions[wireNode * 4 + 0] = Math.cos(phi) * ringRadius;
+                            wirePositions[wireNode * 4 + 1] = y;
+                            wirePositions[wireNode * 4 + 2] = Math.sin(phi) * ringRadius;
+                            wirePositions[wireNode * 4 + 3] = 1.0;
+                            wireColors.set(node.col, wireNode * 4);
+                            wireNode++;
+                        }
+                    }
+                    const wireEdges = [];
+                    const wireEdgeColors = [];
+                    for (let lat = 0; lat <= latSegments; lat++) {
+                        for (let lon = 0; lon < lonSegments; lon++) {
+                            const current = lat * lonSegments + lon;
+                            if (lat > 0 && lat < latSegments) {
+                                wireEdges.push(current, lat * lonSegments + ((lon + 1) % lonSegments));
+                                wireEdgeColors.push(...node.col);
+                            }
+                            if (lat < latSegments) {
+                                wireEdges.push(current, (lat + 1) * lonSegments + lon);
+                                wireEdgeColors.push(...node.col);
+                            }
+                        }
+                    }
+                    const sphereWire = wgpu.createNodeLink({
+                        nodeCount: wireNodeCount, nodePositions: wirePositions, nodePositionsStride: 4, nodeColors: wireColors,
+                        edgeCount: wireEdges.length / 2, edges: new Uint32Array(wireEdges), edgeColors: new Float32Array(wireEdgeColors),
+                        nodeGeometryMode: "spheres", edgeGeometryMode: "cylinders",
+                        nodeColorMode: "rgba", edgeColorMode: "rgba",
+                        nodeSize: 0.002, edgeSize: Math.max(0.006, node.size * 0.045)
+                    });
+                    sphereWire.transform.setPosition(node.pos[0], node.pos[1], node.pos[2]);
+                    scene.add(sphereWire);
+                };
+                for (let i = 0; i < totalNodes; i++) {
+                    const n = graphNodes[i];
+                    nodePositions[i * 4 + 0] = n.pos[0];
+                    nodePositions[i * 4 + 1] = n.pos[1];
+                    nodePositions[i * 4 + 2] = n.pos[2];
+                    nodePositions[i * 4 + 3] = 1.0;
+                    nodeColors[i * 4 + 0] = n.col[0];
+                    nodeColors[i * 4 + 1] = n.col[1];
+                    nodeColors[i * 4 + 2] = n.col[2];
+                    nodeColors[i * 4 + 3] = lightmode ? 0.95 : 1.0;
+                    addWireSphere(n);
+                }
+                const graphEdges = [[0, 1], [1, 2], [2, 9], [9, 7], [7, 8], [8, 3], [3, 10], [10, 4], [4, 6], [6, 5], [5, 0], [1, 5], [2, 3], [0, 4], [6, 9], [7, 10]];
+                const totalEdges = graphEdges.length;
+                const edges = new Uint32Array(totalEdges * 2);
+                const edgeColors = new Float32Array(totalEdges * 4);
+                for (let e = 0; e < totalEdges; e++) {
+                    const [n1, n2] = graphEdges[e];
+                    edges[e * 2 + 0] = n1;
+                    edges[e * 2 + 1] = n2;
+                    const col = graphNodes[n1].col;
+                    edgeColors.set(col, e * 4);
+                }
+                const netGraph = wgpu.createNodeLink({
+                    nodeCount: totalNodes, nodePositions, nodePositionsStride: 4, nodeColors,
+                    edgeCount: totalEdges, edges, edgeColors,
+                    nodeGeometryMode: "spheres", edgeGeometryMode: "cylinders",
+                    nodeColorMode: "rgba", edgeColorMode: "rgba",
+                    nodeSize: 0.003, edgeSize: lightmode ? 0.038 : 0.032
+                });
+                scene.add(netGraph);
+                const rng = createRNG(999);
+                addSurroundingPoints(scene, rng, lightmode, 2.75, 4.3, 56);
+                return { scene, camera };
+            };
+
+            const pointcloudWaveBackground = (lightmode) => {
+                overlayContainer.innerHTML = "";
+                const bgColor = lightmode ? [1.0, 1.0, 1.0] : [0.0, 0.0, 0.0];
+                const scene = wgpu.createScene(bgColor);
+                const camera = wgpu.createCamera.perspective({ fov: 48, near: 0.1, far: 100 });
+                camera.transform.setPosition(0, 3.4, 7.8);
+                camera.lookAt(0, -0.4, -0.5);
+                const gridX = 124;
+                const gridZ = 124;
+                const pointCount = gridX * gridZ;
+                const pointData = new Float32Array(pointCount * 4);
+                const pointDistances = new Float32Array(pointCount);
+                const pointColorIndices = new Uint8Array(pointCount);
+                const sizeX = 24.0;
+                const sizeZ = 24.0;
+                const stepX = sizeX / (gridX - 1);
+                const stepZ = sizeZ / (gridZ - 1);
+                const halfX = sizeX / 2;
+                const halfZ = sizeZ / 2;
+                const rng = createRNG(555);
+                const weightedColorIndices = [0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 4];
+                let pIdx = 0;
+                for (let zIdx = 0; zIdx < gridZ; zIdx++) {
+                    const baseZ = -halfZ + zIdx * stepZ;
+                    for (let xIdx = 0; xIdx < gridX; xIdx++) {
+                        const baseX = -halfX + xIdx * stepX;
+                        const jitterX = (rng() - 0.5) * stepX * 0.9;
+                        const jitterZ = (rng() - 0.5) * stepZ * 0.9;
+                        const x = baseX + jitterX;
+                        const z = baseZ + jitterZ;
+                        const w1 = Math.sin(0.42 * x + 1.2) * Math.cos(0.32 * z + 0.4) * 0.7;
+                        const w2 = Math.sin(0.64 * (x * 0.7 + z * 0.65)) * 0.44;
+                        const w3 = Math.cos(1.05 * x - 0.5 * z) * 0.28;
+                        const y = w1 + w2 + w3 - 0.38;
+                        const dist = Math.hypot(x - 0, y - 3.4, z - 7.8);
+                        const colorIndex = weightedColorIndices[Math.floor(rng() * weightedColorIndices.length)];
+                        pointData[pIdx * 4 + 0] = x;
+                        pointData[pIdx * 4 + 1] = y;
+                        pointData[pIdx * 4 + 2] = z;
+                        pointData[pIdx * 4 + 3] = colorIndex / 4.0;
+                        pointDistances[pIdx] = dist;
+                        pointColorIndices[pIdx] = colorIndex;
+                        pIdx++;
+                    }
+                }
+                const bandCount = 16;
+                const minDistance = Math.min(...pointDistances);
+                const maxDistance = Math.max(...pointDistances);
+                const bandIndices = Array.from({ length: bandCount }, () => []);
+                for (let i = 0; i < pointCount; i++) {
+                    const depth = Math.max(0, Math.min(1, (maxDistance - pointDistances[i]) / (maxDistance - minDistance)));
+                    bandIndices[Math.round(depth * (bandCount - 1))].push(i);
+                }
+                const scaleTransform = { componentCount: 4, componentIndex: 3, stride: 4, offset: 0, mode: "linear", domainMin: 0, domainMax: 1 };
+                bandIndices.forEach((indices, bandIndex) => {
+                    if (!indices.length) return;
+                    const depth = bandIndex / (bandCount - 1);
+                    const bandData = new Float32Array(indices.length * 4);
+                    const coreColors = new Float32Array(indices.length * 4);
+                    const haloColors = new Float32Array(indices.length * 4);
+                    indices.forEach((sourceIndex, targetIndex) => {
+                        bandData.set(pointData.subarray(sourceIndex * 4, sourceIndex * 4 + 4), targetIndex * 4);
+                        const colorIndex = pointColorIndices[sourceIndex];
+                        const coreColor = (lightmode ? colormapStopsLight : colormapStopsDark)[colorIndex];
+                        const haloColor = (lightmode ? colormapStopsLight : colormapStopsDark)[colorIndex];
+                        coreColors.set([coreColor[0], coreColor[1], coreColor[2], depth], targetIndex * 4);
+                        haloColors.set([haloColor[0], haloColor[1], haloColor[2], depth], targetIndex * 4);
+                    });
+                    const common = {
+                        data: bandData, pointCount: indices.length,
+                        blendMode: lightmode ? "transparent" : "additive",
+                        sizeAttenuation: 0, minPointSize: 0,
+                        colorMode: "rgba", scaleTransform
+                    };
+                    scene.add(wgpu.createPointCloud({
+                        ...common, colors: coreColors,
+                        basePointSize: (lightmode ? 22.5 : 9.0) * depth, maxPointSize: (lightmode ? 22.5 : 9.0) * depth,
+                        softness: 0.36, opacity: 1.0
+                    }));
+                    scene.add(wgpu.createPointCloud({
+                        ...common, colors: haloColors,
+                        basePointSize: (lightmode ? 12.0 : 24.0) * depth, maxPointSize: (lightmode ? 12.0 : 24.0) * depth,
+                        softness: 0.9, opacity: 0.56
+                    }));
+                });
+                return { scene, camera };
+            };
+
+            const scenes = {
+                "latest-release": latestRelease,
+                "rich-rendering": richRendering,
+                "scientific-computing": scientificComputing,
+                "data-oriented-runtime": dataOrientedRuntime,
+                "flexible-interoperability": flexibleInteroperability,
+                "wave": pointcloudWaveBackground
+            };
+            const renderCurrent = () => {
+                if (!wgpu) return;
+                const lightmode = currentTheme === "lightmode";
+                setupTheme(currentTheme);
+                const builder = scenes[currentScene] || latestRelease;
+                const { scene, camera } = builder(lightmode);
+                activeScene = scene;
+                activeCamera = camera;
+                wgpu.render(activeScene, activeCamera);
+                window.__WASMGPU_INSTANCE__ = wgpu;
+                window.__WASMGPU_SCENE__ = activeScene;
+                window.__WASMGPU_CAMERA__ = activeCamera;
+                window.__WASMGPU_SCENE_READY__ = true;
+            };
+            const init = async () => {
+                await initEngine();
+                renderCurrent();
+                sceneSelect.addEventListener("change", (e) => { currentScene = e.target.value; renderCurrent(); });
+                themeSelect.addEventListener("change", (e) => { currentTheme = e.target.value; renderCurrent(); });
+            };
+
+            init();
+        </script>
+    </body>
+</html>

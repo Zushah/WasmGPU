@@ -13,9 +13,11 @@ WEBSITE_DIR = ROOT_DIR / "website"
 BUILD_DIR = WEBSITE_DIR / "build"
 HOME_SOURCE_DIR = WEBSITE_DIR / "home"
 EXAMPLES_PAGE_SOURCE_DIR = WEBSITE_DIR / "examples"
+PERFORMANCE_PAGE_SOURCE_DIR = WEBSITE_DIR / "performance"
 ASSETS_SOURCE_DIR = ROOT_DIR / "assets"
 EXAMPLES_SOURCE_DIR = ROOT_DIR / "examples"
 EXAMPLES_BUILD_DIR = BUILD_DIR / "examples"
+PERFORMANCE_BUILD_DIR = BUILD_DIR / "performance"
 MKDOCS_CONFIG_PATH = ROOT_DIR / "mkdocs.yaml"
 DOCS_ASSETS_BUILD_DIR = BUILD_DIR / "docs" / "assets"
 RELEASE_MINIFIED_SOURCE = ROOT_DIR / "release" / "WasmGPU.min.js"
@@ -24,6 +26,7 @@ LOCAL_IIFE_SCRIPT = '<script src="../release/WasmGPU.iife.min.js"></script>'
 CDN_IIFE_SCRIPT = '<script src="https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.iife.min.js"></script>'
 LOCAL_ESM_IMPORT = 'import { WasmGPU } from "../release/WasmGPU.min.js";'
 CDN_ESM_IMPORT = 'import { WasmGPU } from "https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.min.js";'
+EXCLUDED_ASSETS_PATTERNS = ["website-visuals.html"]
 
 def ensure_required_paths() -> None:
     required_paths = [
@@ -31,6 +34,9 @@ def ensure_required_paths() -> None:
         EXAMPLES_PAGE_SOURCE_DIR / "index.html",
         EXAMPLES_PAGE_SOURCE_DIR / "style.css",
         EXAMPLES_PAGE_SOURCE_DIR / "script.js",
+        PERFORMANCE_PAGE_SOURCE_DIR / "index.html",
+        PERFORMANCE_PAGE_SOURCE_DIR / "style.css",
+        PERFORMANCE_PAGE_SOURCE_DIR / "script.js",
         ASSETS_SOURCE_DIR,
         EXAMPLES_SOURCE_DIR,
         MKDOCS_CONFIG_PATH,
@@ -54,10 +60,14 @@ def copy_homepage_files() -> None:
             shutil.copy2(item, destination)
 
 def copy_assets() -> None:
-    shutil.copytree(ASSETS_SOURCE_DIR, BUILD_DIR / "assets", dirs_exist_ok=True)
+    shutil.copytree(ASSETS_SOURCE_DIR, BUILD_DIR / "assets", ignore=shutil.ignore_patterns(*EXCLUDED_ASSETS_PATTERNS), dirs_exist_ok=True)
 
 def copy_release_bundle() -> None:
     shutil.copy2(RELEASE_MINIFIED_SOURCE, RELEASE_MINIFIED_BUILD)
+    for fname in ["WasmGPU.iife.min.js", "wasm.js", "wasm.wasm"]:
+        src = ROOT_DIR / "release" / fname
+        if src.exists():
+            shutil.copy2(src, BUILD_DIR / fname)
 
 def copy_examples() -> None:
     EXAMPLES_BUILD_DIR.mkdir(parents=True, exist_ok=True)
@@ -69,6 +79,12 @@ def copy_examples() -> None:
         shutil.copy2(source_file, destination)
         rewrite_example_import_paths(destination)
 
+def copy_performance() -> None:
+    PERFORMANCE_BUILD_DIR.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(PERFORMANCE_PAGE_SOURCE_DIR / "index.html", PERFORMANCE_BUILD_DIR / "index.html")
+    shutil.copy2(PERFORMANCE_PAGE_SOURCE_DIR / "style.css", PERFORMANCE_BUILD_DIR / "style.css")
+    shutil.copy2(PERFORMANCE_PAGE_SOURCE_DIR / "script.js", PERFORMANCE_BUILD_DIR / "script.js")
+
 def rewrite_example_import_paths(file_path: Path) -> None:
     content = file_path.read_text(encoding="utf-8")
     content = content.replace(LOCAL_IIFE_SCRIPT, CDN_IIFE_SCRIPT)
@@ -76,14 +92,10 @@ def rewrite_example_import_paths(file_path: Path) -> None:
     file_path.write_text(content, encoding="utf-8")
 
 def build_docs() -> None:
-    subprocess.run(
-        [sys.executable, "-m", "mkdocs", "build", "-f", str(MKDOCS_CONFIG_PATH)],
-        check=True,
-        cwd=ROOT_DIR
-    )
+    subprocess.run([sys.executable, "-m", "mkdocs", "build", "-f", str(MKDOCS_CONFIG_PATH)], check=True, cwd=ROOT_DIR)
 
 def copy_docs_assets() -> None:
-    shutil.copytree(ASSETS_SOURCE_DIR, DOCS_ASSETS_BUILD_DIR, dirs_exist_ok=True)
+    shutil.copytree(ASSETS_SOURCE_DIR, DOCS_ASSETS_BUILD_DIR, ignore=shutil.ignore_patterns(*EXCLUDED_ASSETS_PATTERNS), dirs_exist_ok=True)
 
 def main() -> int:
     ensure_required_paths()
@@ -92,6 +104,7 @@ def main() -> int:
     copy_assets()
     copy_release_bundle()
     copy_examples()
+    copy_performance()
     build_docs()
     copy_docs_assets()
     print(f"Website build complete at: {BUILD_DIR}")

@@ -1,10 +1,10 @@
 # WasmGPU Architecture
 
-Latest commit: Thursday, August 27, 2026, [**`current`**](https://www.github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Saturday, August 29, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Thursday, August 27, 2026, [**`f6f33a7`**](https://www.github.com/Zushah/WasmGPU/commit/f6f33a7).
+Parent commit: Thursday, August 27, 2026, [**`6b40a27`**](https://github.com/Zushah/WasmGPU/commit/6b40a27).
 
-Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
+Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
 ## Contents
 
@@ -234,7 +234,7 @@ flowchart LR
     WFRAME -.-> RES
 ```
 
-This diagram describes the current source tree, including [unreleased work](https://www.github.com/Zushah/WasmGPU/compare/v0.9.0...main) after [v0.9.0](https://www.github.com/Zushah/WasmGPU/releases/tag/v0.9.0). Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
+This diagram describes the current source tree, including [unreleased work](https://github.com/Zushah/WasmGPU/compare/v0.9.0...main) after [v0.9.0](https://github.com/Zushah/WasmGPU/releases/tag/v0.9.0). Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
 
 ### 1.2. Public API surface
 
@@ -966,16 +966,17 @@ Important files and directories:
 - `./CONTRIBUTING.md`: shorter contributor guide for questions, issues, feature requests, and code contributions.
 - `./website/docs/`: MkDocs documentation source.
 - `./website/home/`: homepage source copied to the website root during generation.
-- `./website/examples/`: examples-index source copied beside the generated example pages.
+- `./website/examples/`: examples page source copied beside the generated example pages.
+- `./website/performance/`: performance page source with benchmark data and charts fetched dynamically based on the latest benchmark report in the GitHub repository.
 - `./website/build/`: generated website output.
 - `./mkdocs.yaml`: MkDocs configuration for documentation pages.
-- `./scripts/build_website.py`: website build script. It copies website files, assets, examples, and `./release/WasmGPU.min.js`, rewrites the copied examples from local `./release/` imports to the pinned v0.9.0 CDN `./dist/` URLs, and runs MkDocs.
+- `./scripts/build_website.py`: website build script. It copies website files, assets, examples, performance, and `./release/WasmGPU.min.js`, rewrites the copied examples from local `./release/` imports to the pinned `./release/` URLs, and runs MkDocs.
 - `./.agents/skills/maintain-docs/`: OpenAI Codex skill for auditing, writing, maintaining, and verifying Markdown documentation under `./website/docs/`.
 - `./.github/workflows/deploy-website.yaml`: GitHub Pages workflow for website changes.
 
 `./scripts/build_website.py` writes generated website output under `./website/build/`. That directory is not present in the codebase unless the website build has been run locally.
 
-`./website/docs/`, `./website/home/`, `./website/examples/`, `./README.md`, and `./CHANGELOG.md` are release-facing sources. They are often updated significantly during release work, not for every source change.
+`./website/docs/`, `./website/home/`, `./website/examples/`, `./website/performance/`, `./README.md`, and `./CHANGELOG.md` are release-facing sources. They are often updated significantly during release work, not for every source change.
 
 The `maintain-docs` skill exists to keep the large Markdown reference aligned with the current public API without replacing source inspection or human review. Invoke `$maintain-docs` in `release` mode for a versioned documentation delta, `maintain` mode for a focused documentation change, or `verify` mode for a read-only accuracy and integrity pass. Release mode writes an audit ledger under the gitignored `./.cache/` directory, stops for approval before editing, normalizes all files under `./website/docs/` to LF line endings during approved implementation, writes in source-backed subsystem batches, and performs final coverage and link validation. The skill does not update this file or run the website build.
 
@@ -1209,4 +1210,4 @@ When updating this file:
 - describe current behavior, not only released behavior;
 - remove claims that are not visible from source, tests, documentation, build configuration, or git history.
 
-This file (and more broadly, WasmGPU) is available under the [Mozilla Public License 2.0](https://www.github.com/Zushah/WasmGPU/blob/main/LICENSE.md).
+This file (and more broadly, WasmGPU) is available under the [Mozilla Public License 2.0](https://github.com/Zushah/WasmGPU/blob/main/LICENSE.md).

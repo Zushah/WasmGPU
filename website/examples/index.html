@@ -4,7 +4,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
 -->
-<html>
+<html lang="en">
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -14,135 +14,135 @@
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
         <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-        <link href="https://fonts.googleapis.com/icon?family=Material+Icons+Outlined" rel="stylesheet">
+        <link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
         <link rel="stylesheet" href="./style.css">
     </head>
     <body data-theme="dark">
-        <div class="ambient ambient-a"></div>
-        <div class="ambient ambient-b"></div>
         <header class="site-header">
-            <nav class="navbar container">
-                <a class="brand" href="../index.html" aria-label="WasmGPU home">
-                    <img class="brand-logo" data-theme-logo="true" src="../assets/favicon.png" alt="WasmGPU" data-dark-logo="../assets/favicon.png" data-light-logo="../assets/favicon.png">
+            <nav class="navbar container" aria-label="Global navigation">
+                <a class="nav-brand" href="../index.html" aria-label="WasmGPU home">
+                    <img class="brand-logo" src="../assets/favicon.png" alt="WasmGPU">
+                    <span class="brand-name">WasmGPU</span>
                 </a>
-                <div class="nav-actions">
-                    <a class="nav-link" href="https://www.github.com/Zushah/WasmGPU" target="_blank" rel="noreferrer">GitHub</a>
-                    <a class="nav-link" href="../docs/">Documentation</a>
-                    <a class="nav-link" href="./index.html">Examples</a>
+                <div class="nav-menu">
+                    <a class="nav-link" href="../docs/"><span class="material-symbols-outlined nav-icon">menu_book</span>Documentation</a>
+                    <a class="nav-link nav-link-active" href="./index.html"><span class="material-symbols-outlined nav-icon">code</span>Examples</a>
+                    <a class="nav-link" href="../performance/"><span class="material-symbols-outlined nav-icon">speed</span>Performance</a>
+                    <a class="nav-link" href="../docs/architecture/"><span class="material-symbols-outlined nav-icon">view_in_ar</span>Architecture</a>
+                    <a class="nav-link" href="https://github.com/Zushah/WasmGPU" target="_blank" rel="noreferrer"><svg class="nav-icon simple-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61-.546-1.387-1.333-1.756-1.333-1.756-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>GitHub</a>
                     <button id="theme-toggle" class="icon-btn" type="button" aria-label="Switch theme">
-                        <span class="material-icons-outlined" id="theme-toggle-icon">light_mode</span>
+                        <span class="material-symbols-outlined" id="theme-toggle-icon">light_mode</span>
                     </button>
                 </div>
             </nav>
         </header>
         <main class="container">
             <section class="hero reveal">
-                <p class="eyebrow">Examples</p>
-                <h1>Focused demos across rendering and computing workflows.</h1>
+                <h1 class="page-title">Examples</h1>
+                <p class="hero-headline">Focused Demos Across Rendering and Computing Workloads.</p>
                 <p class="hero-copy">These examples are intentionally small and task-specific, so each page can be used as a practical starting point for your own scene or pipeline.</p>
-                <p class="license-note">Available under the <a href="https://www.mozilla.org/en-US/MPL/2.0/" target="_blank" rel="noreferrer">Mozilla Public License 2.0</a>.</p>
             </section>
-            <section class="grid" aria-label="WasmGPU demos">
+            <section class="grid" aria-label="WasmGPU runnable demos">
                 <a class="card reveal" style="--delay: 0ms;" href="./benchmark.html" target="_blank">
-                    <span class="material-icons-outlined">speed</span>
+                    <span class="material-symbols-outlined card-icon">speed</span>
                     <h2>Benchmark</h2>
                     <p>Performance comparison for both rendering and computing.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> benchmark.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> benchmark.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 30ms;" href="./esm.html" target="_blank">
-                    <span class="material-icons-outlined">integration_instructions</span>
+                    <span class="material-symbols-outlined card-icon">integration_instructions</span>
                     <h2>ESM</h2>
                     <p>Module-first setup for modern browser applications.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> esm.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> esm.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 60ms;" href="./iife.html" target="_blank">
-                    <span class="material-icons-outlined">cloud</span>
+                    <span class="material-symbols-outlined card-icon">cloud</span>
                     <h2>IIFE</h2>
                     <p>Script-tag integration path for lightweight prototypes.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> iife.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> iife.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 90ms;" href="./gltf.html" target="_blank">
-                    <span class="material-icons-outlined">view_in_ar</span>
+                    <span class="material-symbols-outlined card-icon">view_in_ar</span>
                     <h2>glTF</h2>
                     <p>Asset import flow for glTF 2.0 assets and animations.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> gltf.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> gltf.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 120ms;" href="./controls.html" target="_blank">
-                    <span class="material-icons-outlined">gamepad</span>
+                    <span class="material-symbols-outlined card-icon">gamepad</span>
                     <h2>Controls</h2>
                     <p>Camera controls and navigation functionalities for 3D scenes.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> controls.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> controls.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 150ms;" href="./picking.html" target="_blank">
-                    <span class="material-icons-outlined">track_changes</span>
+                    <span class="material-symbols-outlined card-icon">track_changes</span>
                     <h2>Picking</h2>
                     <p>Picking, probing, and selecting objects with hit and region queries.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> picking.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> picking.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 180ms;" href="./scaling.html" target="_blank">
-                    <span class="material-icons-outlined">fit_screen</span>
+                    <span class="material-symbols-outlined card-icon">fit_screen</span>
                     <h2>Scaling</h2>
                     <p>Scaling and colormapping services for scientific primitives.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> scaling.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> scaling.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 210ms;" href="./overlay.html" target="_blank">
-                    <span class="material-icons-outlined">layers</span>
+                    <span class="material-symbols-outlined card-icon">layers</span>
                     <h2>Overlay</h2>
                     <p>Overlay layers and annotation toolkit enabling interactive data.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> overlay.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> overlay.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 240ms;" href="./mandelbulb.html" target="_blank">
-                    <span class="material-icons-outlined">memory</span>
+                    <span class="material-symbols-outlined card-icon">memory</span>
                     <h2>Mandelbulb</h2>
                     <p>Rendering the Mandelbulb fractal with a compute shader.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> mandelbulb.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> mandelbulb.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 270ms;" href="./galaxy.html" target="_blank">
-                    <span class="material-icons-outlined">auto_awesome</span>
+                    <span class="material-symbols-outlined card-icon">auto_awesome</span>
                     <h2>Galaxy</h2>
                     <p>Realistic galaxy simulation using WGSL compute and Python interop.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> galaxy.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> galaxy.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 300ms;" href="./fluid.html" target="_blank">
-                    <span class="material-icons-outlined">water_drop</span>
+                    <span class="material-symbols-outlined card-icon">water_drop</span>
                     <h2>Fluid</h2>
                     <p>Fluid dynamics model with both a pointcloud and a glyphfield.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> fluid.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> fluid.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 330ms;" href="./graphing.html" target="_blank">
-                    <span class="material-icons-outlined">line_axis</span>
+                    <span class="material-symbols-outlined card-icon">line_axis</span>
                     <h2>Graphing</h2>
-                    <p>3D graphing calculator with mathemtical primitives and scientific colormaps.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> graphing.html</span>
+                    <p>3D graphing calculator with mathematical primitives and scientific colormaps.</p>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> graphing.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 360ms;" href="./protein.html" target="_blank">
-                    <span class="material-icons-outlined">scatter_plot</span>
+                    <span class="material-symbols-outlined card-icon">scatter_plot</span>
                     <h2>Protein</h2>
                     <p>Interactive protein (hemoglobin) structure visualization from the Protein Data Bank.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> protein.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> protein.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 390ms;" href="./terrain.html" target="_blank">
-                    <span class="material-icons-outlined">terrain</span>
+                    <span class="material-symbols-outlined card-icon">terrain</span>
                     <h2>Terrain</h2>
                     <p>Procedurally-generated terrain with first-person airplane-like navigation.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> terrain.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> terrain.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 420ms;" href="./lego.html" target="_blank">
-                    <span class="material-icons-outlined">widgets</span>
+                    <span class="material-symbols-outlined card-icon">widgets</span>
                     <h2>Lego</h2>
                     <p>Gaussian splatfield asset for a small but detailed Lego model.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> lego.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> lego.html</span>
                 </a>
                 <a class="card reveal" style="--delay: 450ms;" href="./quantum.html" target="_blank">
-                    <span class="material-icons-outlined">blur_on</span>
+                    <span class="material-symbols-outlined card-icon">blur_on</span>
                     <h2>Quantum</h2>
                     <p>Volumetric visualization and detailed probing of quantum orbitals.</p>
-                    <span class="badge"><span class="material-icons-outlined">open_in_new</span> quantum.html</span>
+                    <span class="badge"><span class="material-symbols-outlined badge-icon">open_in_new</span> quantum.html</span>
                 </a>
             </section>
         </main>
         <footer class="site-footer container">
-            <p>Copyright &copy; <span id="year"></span> <a href="https://www.github.com/Zushah" target="_blank" rel="noreferrer">Zushah</a>.</p>
+            <p>WasmGPU <a href="../index.html#latest-release" class="footer-link">v0.9.0</a>. Copyright &copy; <span id="year">2026</span> <a href="https://github.com/Zushah" class="footer-link" target="_blank" rel="noreferrer">Zushah</a>. Available under the <a href="https://www.mozilla.org/MPL/2.0/" class="footer-link" target="_blank" rel="noreferrer">MPL-2.0</a>.</p>
         </footer>
         <script src="./script.js"></script>
     </body>
