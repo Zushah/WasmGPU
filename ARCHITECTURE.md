@@ -2,7 +2,7 @@
 
 Latest commit: Saturday, August 29, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Thursday, August 27, 2026, [**`6b40a27`**](https://github.com/Zushah/WasmGPU/commit/6b40a27).
+Parent commit: Saturday, August 29, 2026, [**`32b58fd`**](https://github.com/Zushah/WasmGPU/commit/32b58fd).
 
 Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
 
@@ -978,7 +978,7 @@ Important files and directories:
 
 `./website/docs/`, `./website/home/`, `./website/examples/`, `./website/performance/`, `./README.md`, and `./CHANGELOG.md` are release-facing sources. They are often updated significantly during release work, not for every source change.
 
-The `maintain-docs` skill exists to keep the large Markdown reference aligned with the current public API without replacing source inspection or human review. Invoke `$maintain-docs` in `release` mode for a versioned documentation delta, `maintain` mode for a focused documentation change, or `verify` mode for a read-only accuracy and integrity pass. Release mode writes an audit ledger under the gitignored `./.cache/` directory, stops for approval before editing, normalizes all files under `./website/docs/` to LF line endings during approved implementation, writes in source-backed subsystem batches, and performs final coverage and link validation. The skill does not update this file or run the website build.
+The `$maintain-docs` skill exists to keep the large Markdown reference aligned with the current public API without replacing source inspection or human review. Invoke `$maintain-docs` in `release` mode for a versioned documentation delta, `maintain` mode for a focused documentation change, or `verify` mode for a read-only accuracy and integrity pass. Release mode writes an audit ledger under the gitignored `./.cache/` directory, stops for approval before editing, normalizes all files under `./website/docs/` to LF line endings during approved implementation, writes in source-backed subsystem batches, and performs final coverage and link validation. The skill does not update this file or run the website build.
 
 ### 2.15. Build, generated, and release files
 
@@ -998,9 +998,12 @@ Important files and directories:
 - `./scripts/build-rust-wasm.js`: Rust-to-WebAssembly build script. It invokes Cargo, generates `.wasm`, `.wat`, JavaScript loader, and declaration output, and can run WebAssembly optimization tooling.
 - `./wasm/`: generated WebAssembly loader, binary, text format, and declarations.
 - `./release/`: bundled ESM and IIFE JavaScript files plus WebAssembly copies.
+- `./.agents/skills/prepare-release/`: OpenAI Codex skill for auditing, preparing, and verifying versioned WasmGPU releases after engine source is finalized.
 - `./rust/target/`: local Rust build output when present. This is build output rather than source.
 
 `./wasm/` and `./release/` are checked-in release artifacts. Development builds can modify them, and `npm run restore` restores them via Git.
+
+The `$prepare-release` skill exists to coordinate versioned release housekeeping around engine source that the human considers finalized. Invoke `$prepare-release` in `audit` mode to inspect the release delta, write a compact audit and GitHub release-note candidate under the gitignored `./.cache/` directory, and stop for approval; `prepare` mode to update package and Cargo versions, `./CHANGELOG.md`, `./README.md`, release-facing website state, release metadata in this file, and contextual release URLs before rebuilding and preparing the checked-in release artifacts; or `verify` mode for a read-only release-readiness pass. The skill treats engine source defects as release blockers, does not perform Markdown documentation maintenance, does not run benchmarks, and does not commit, tag, push, publish, or create a GitHub release.
 
 Cargo commands invoked from the repository root or `./rust/` inherit the repository Cargo policy and rustup toolchain selection. Package and release-profile settings remain in `./rust/Cargo.toml`, while dynamic WebAssembly SIMD, shared-memory, memory-limit, and post-processing variants remain owned by `./scripts/build-rust-wasm.js`.
 
@@ -1119,11 +1122,17 @@ Do not update `./README.md`, `./CHANGELOG.md`, `./website/`, `./release/`, or `.
 
 Use the OpenAI Codex `$maintain-docs` skill for work under `./website/docs/`. Its `release` mode requires an audit and approval checkpoint before documentation changes, its `maintain` mode keeps focused updates narrowly scoped, and its `verify` mode checks source accuracy and documentation integrity without editing by default. The skill keeps release audit ledgers under `./.cache/` and reserves repository-wide LF normalization of the documentation tree for approved release implementation.
 
+Use the OpenAI Codex `$prepare-release` skill for versioned release preparation after engine source is finalized. Its `audit` mode requires a release-delta audit and approval checkpoint before tracked release files change, its `prepare` mode updates contextual version metadata and release-facing sources, rebuilds and prepares the checked-in release artifacts, computes final release metrics, and runs release validation, and its `verify` mode checks an already-prepared release worktree without rebuilding or editing by default. The skill keeps its audit and GitHub release-note candidate under `./.cache/`, treats engine-source defects as release blockers rather than repairing them, and leaves Markdown documentation maintenance to a separately human-invoked `$maintain-docs` workflow. The two skills are independent and do not invoke or depend on one another.
+
 ### 3.9. Generated files and release artifacts
 
 `npm run build:rs` updates generated WebAssembly files under `./wasm/`. `npm run build:js` updates bundles under `./release/`. `npm run build` runs the Rust, TypeScript, and bundle steps.
 
 During non-release development, generated changes under `./wasm/` and `./release/` may be local build output. Use `npm run restore` to restore those directories from Git when generated output is not part of the intended change. Changes to `./wasm/` and `./release/` should normally only be part of a release commit.
+
+During an approved `$prepare-release` `prepare` run, `npm run build` regenerates the finalized `./wasm/` and `./release/` artifacts. After that final build, prepend the target release banner and one empty line to `./release/WasmGPU.js`, `./release/WasmGPU.min.js`, `./release/WasmGPU.iife.min.js`, and `./release/wasm.js`. Do not prepend text to the binary `./release/wasm.wasm` or manually release-edit files under `./wasm/`. Do not run `npm run build` again after adding the banners. `$prepare-release` `verify` mode therefore does not run `npm run build`.
+
+The release preparation workflow derives the homepage JavaScript line count from the final bannered `./release/WasmGPU.js` and the displayed minified bundle size from the final bannered `./release/WasmGPU.min.js`. It derives release additions, deletions, and changed-file count from the baseline release to the complete intended current workspace, then rechecks those values after writing them into `./website/home/index.html`. `npm run website` is used as a build-process check only, as visual website approval remains manual. Release preparation does not run benchmarks.
 
 Website generation uses `npm run website`, which runs `./scripts/build_website.py`. That script reads `./release/WasmGPU.min.js`, copies assets and examples, rewrites the copied examples from their local `./release/` imports to the pinned v0.9.0 CDN `./dist/` URLs, and writes output under `./website/build/`. The repository examples therefore exercise the current local bundles, while the generated website examples continue to exercise the documented v0.9.0 release.
 
