@@ -4,7 +4,8 @@
 WasmGPU.compute.dispatchBatch encodes multiple compute dispatches into one command buffer and optionally submits it.
 Use this when a workload has several sequential compute stages.
 A single batch can reduce queue-submit overhead and improve trace readability.
-Validation mode checks every command before encoding.
+Every workgroup tuple is validated before the compute pass begins, so an invalid later command does not leave a partially encoded batch. Validation mode additionally checks device limits.
+Commands with a zero workgroup dimension are skipped.
 
 ## Syntax
 ```ts

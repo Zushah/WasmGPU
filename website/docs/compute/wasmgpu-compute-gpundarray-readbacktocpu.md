@@ -5,6 +5,7 @@ WasmGPU.compute.GPUndarray.readbackToCPU copies GPU ndarray contents into a new 
 The underlying storage buffer must support readback (`copySrc: true`).
 Layout and dtype metadata are preserved in the returned CPU array.
 Use this to inspect or post-process compute results on the CPU.
+Arrays created through the instance compute context use its shared `ReadbackRing` while it is available; otherwise the method falls back to a direct storage-buffer read. The returned CPU ndarray owns its copy, and failed reads destroy the partially allocated destination.
 
 ## Syntax
 ```ts

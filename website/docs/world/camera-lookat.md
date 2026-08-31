@@ -44,3 +44,4 @@ wgpu.render(scene, camera);
 - [Camera.position](./camera-position.md)
 - [Camera.up](./camera-up.md)
 - [Camera.viewMatrix](./camera-viewmatrix.md)
+- [Camera.setWorldPosition](./camera-setworldposition.md)

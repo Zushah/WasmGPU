@@ -107,19 +107,19 @@
                 <div class="release-header-block">
                     <h2 id="release-title" class="section-title">Latest Release</h2>
                     <div class="release-badge-pill">
-                        <span class="release-version">v0.9.0</span>
-                        <span class="release-date">Monday, July 27, 2026</span>
+                        <span class="release-version">v0.10.0</span>
+                        <span class="release-date">Monday, August 31, 2026</span>
                     </div>
                 </div>
                 <div class="release-grid">
                     <div class="highlights-block">
                         <ul class="highlights-list">
-                            <li>Added the Gaussian splatfield scientific visualization primitive with support for glTF assets.</li>
-                            <li>Added the 2D/3D latticespace scientific visualization primitive.</li>
-                            <li>Added direct WebAssembly memory uploads across geometric and scientific visualization primitives.</li>
-                            <li>Added fly camera controls for first-person navigation.</li>
-                            <li>Fixed WebAssembly memory with reclaimed allocations and deterministic resource lifetimes.</li>
-                            <li>Added automated cross-platform, Rust, and WGSL testing.</li>
+                            <li>Added 64-bit WebAssembly math, typed vector and matrix kernels, and richer Python and WebGPU interop.</li>
+                            <li>Added configurable directional shadow mapping for standard materials.</li>
+                            <li>Fixed glTF loading, transactional import, geometry decoding, and runtime semantics.</li>
+                            <li>Added configurable axis triads, annotated grids, and adaptive legends.</li>
+                            <li>Changed compute and renderer hot paths for greater runtime performance.</li>
+                            <li>Fixed Rust ABI math safety, vector and quaternion formatting, and orbit controls at camera poles.</li>
                         </ul>
                     </div>
                     <div class="actions-list">
@@ -130,25 +130,25 @@
                                 <span class="action-desc">Download WasmGPU.min.js</span>
                             </div>
                         </a>
-                        <a class="action-row" href="https://raw.githubusercontent.com/Zushah/WasmGPU/v0.9.0/dist/WasmGPU.js" target="_blank">
+                        <a class="action-row" href="https://raw.githubusercontent.com/Zushah/WasmGPU/v0.10.0/release/WasmGPU.js" target="_blank">
                             <span class="material-symbols-outlined action-icon">code</span>
                             <div class="action-details">
                                 <span class="action-title">JavaScript bundle</span>
-                                <span class="action-desc">30.38k lines of code packaged into 1.105mb</span>
+                                <span class="action-desc">34.14k lines of code packaged into 1.259mb</span>
                             </div>
                         </a>
-                        <a class="action-row" href="https://github.com/Zushah/WasmGPU/releases/tag/v0.9.0" target="_blank" rel="noreferrer">
+                        <a class="action-row" href="https://github.com/Zushah/WasmGPU/releases/tag/v0.10.0" target="_blank" rel="noreferrer">
                             <span class="material-symbols-outlined action-icon">article</span>
                             <div class="action-details">
                                 <span class="action-title">Release notes</span>
                                 <span class="action-desc">Full details of the recent updates</span>
                             </div>
                         </a>
-                        <a class="action-row" href="https://github.com/Zushah/WasmGPU/compare/v0.8.0...v0.9.0" target="_blank" rel="noreferrer">
+                        <a class="action-row" href="https://github.com/Zushah/WasmGPU/compare/v0.9.0...v0.10.0" target="_blank" rel="noreferrer">
                             <span class="material-symbols-outlined action-icon">show_chart</span>
                             <div class="action-details">
                                 <span class="action-title">Compare changes</span>
-                                <span class="action-desc">69.42k additions and 36.95k deletions across 474 files</span>
+                                <span class="action-desc">77.41k additions and 41.33k deletions across 2239 files</span>
                             </div>
                         </a>
                         <a class="action-row" href="https://github.com/Zushah/WasmGPU/issues" target="_blank" rel="noreferrer">
@@ -164,7 +164,7 @@
                             <span class="material-symbols-outlined package-icon">terminal</span>
                             <span class="package-title">npm package</span>
                         </div>
-                        <pre class="code-block"><code id="npm-cmd">npm install @zushah/wasmgpu@0.9.0</code></pre>
+                        <pre class="code-block"><code id="npm-cmd">npm install @zushah/wasmgpu@0.10.0</code></pre>
                         <button class="action-btn copy-btn" data-copy-target="npm-cmd" type="button"><span class="material-symbols-outlined">content_copy</span>Copy command</button>
                     </div>
                     <div class="package-card" aria-label="CDN script tag installation">
@@ -172,7 +172,7 @@
                             <span class="material-symbols-outlined package-icon">cloud</span>
                             <span class="package-title">CDN bundle</span>
                         </div>
-                        <pre class="code-block"><code id="cdn-url">https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.9.0/dist/WasmGPU.iife.min.js</code></pre>
+                        <pre class="code-block"><code id="cdn-url">https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.10.0/release/WasmGPU.iife.min.js</code></pre>
                         <button class="action-btn copy-btn" data-copy-target="cdn-url" type="button"><span class="material-symbols-outlined">link</span>Copy link</button>
                     </div>
                 </div>
@@ -279,7 +279,7 @@
             </section>
         </main>
         <footer class="site-footer container">
-            <p>WasmGPU <a href="#latest-release" class="footer-link">v0.9.0</a>. Copyright &copy; <span id="year">2026</span> <a href="https://github.com/Zushah" class="footer-link" target="_blank" rel="noreferrer">Zushah</a>. Available under the <a href="https://www.mozilla.org/MPL/2.0/" class="footer-link" target="_blank" rel="noreferrer">MPL-2.0</a>.</p>
+            <p>WasmGPU <a href="#latest-release" class="footer-link">v0.10.0</a>. Copyright &copy; <span id="year">2026</span> <a href="https://github.com/Zushah" class="footer-link" target="_blank" rel="noreferrer">Zushah</a>. Available under the <a href="https://www.mozilla.org/MPL/2.0/" class="footer-link" target="_blank" rel="noreferrer">MPL-2.0</a>.</p>
         </footer>
         <script src="./script.js"></script>
     </body>

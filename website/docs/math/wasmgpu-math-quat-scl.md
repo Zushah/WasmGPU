@@ -9,6 +9,14 @@ WasmGPU.math.quat.scl(q: number[], scalar: number): number[]
 const result = wgpu.math.quat.scl(q, scalar);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.quatf.scl(out: WasmPtr, q: WasmPtr, scalar: number): void
+WasmGPU.math.quatd.scl(out: WasmPtr, q: WasmPtr, scalar: number): void
+```
+
+These forms use caller-owned pointers to 4-element quaternion blocks in WasmGPU driver memory: binary32 for `quatf` and binary64 for `quatd`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

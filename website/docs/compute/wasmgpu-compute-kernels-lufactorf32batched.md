@@ -74,7 +74,7 @@ console.log(Array.from(await wgpu.compute.readback.readU32(ipiv, 0, n)));
 
 ## See Also
 - [WasmGPU.compute.kernels.luSolveF32Batched](./wasmgpu-compute-kernels-lusolvef32batched.md)
-- [WasmGPU.compute.kernels.luFactorComplex64Batched](./wasmgpu-compute-kernels-lufactorcomplex64batched.md)
+- [WasmGPU.compute.kernels.luFactorC64Batched](./wasmgpu-compute-kernels-lufactorc64batched.md)
 - [WasmGPU.compute.createStorageBuffer](./wasmgpu-compute-createstoragebuffer.md)
 - [WasmGPU.compute.readback.readU32](./wasmgpu-compute-readback-readu32.md)
 - [WasmGPU.compute.workgroups1D](./wasmgpu-compute-workgroups1d.md)

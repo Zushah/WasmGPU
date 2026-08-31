@@ -30,7 +30,7 @@ type GltfDocument = {
 
     images?: ArrayBuffer[];
 
-    baseUrl: string;
+    resourceBaseUrl: string;
 
 };
 ```
@@ -41,7 +41,7 @@ type GltfDocument = {
 | `json` | `GltfRoot` | Yes | Parsed glTF JSON root object. |
 | `buffers` | `ArrayBuffer[]` | Yes | Typed numeric/binary data consumed by this operation. |
 | `images` | `ArrayBuffer[]` | No | Typed numeric/binary data consumed by this operation. |
-| `baseUrl` | `string` | Yes | Base URL used to resolve relative glTF asset URIs. |
+| `resourceBaseUrl` | `string` | Yes | Directory URL used to resolve relative glTF buffer and image URIs. |
 
 ### AccessorView
 

@@ -9,6 +9,14 @@ WasmGPU.math.vec3.refract(v1: number[], v2: number[], refractiveIndex: number): 
 const result = wgpu.math.vec3.refract(v1, v2, refractiveIndex);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.vec3f.refract(out: WasmPtr, a: WasmPtr, b: WasmPtr, refractiveIndex: number): void
+WasmGPU.math.vec3d.refract(out: WasmPtr, a: WasmPtr, b: WasmPtr, refractiveIndex: number): void
+```
+
+These forms use caller-owned pointers to 3-element vector blocks in WasmGPU driver memory: binary32 for `vec3f` and binary64 for `vec3d`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

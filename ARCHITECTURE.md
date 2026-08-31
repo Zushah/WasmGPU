@@ -1,10 +1,10 @@
 # WasmGPU Architecture
 
-Latest commit: Saturday, August 29, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Mondday, August 31, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Saturday, August 29, 2026, [**`32b58fd`**](https://github.com/Zushah/WasmGPU/commit/32b58fd).
+Parent commit: Saturday, August 29, 2026, [**`294e81a`**](https://github.com/Zushah/WasmGPU/commit/294e81a).
 
-Latest release: Monday, July 27, 2026, [**`v0.9.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.9.0).
+Latest release: Monday, August 31, 2026, [**`v0.10.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.10.0).
 
 ## Contents
 
@@ -234,7 +234,7 @@ flowchart LR
     WFRAME -.-> RES
 ```
 
-This diagram describes the current source tree, including [unreleased work](https://github.com/Zushah/WasmGPU/compare/v0.9.0...main) after [v0.9.0](https://github.com/Zushah/WasmGPU/releases/tag/v0.9.0). Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
+This diagram describes the current source tree, including [unreleased work](https://github.com/Zushah/WasmGPU/compare/v0.10.0...main) after [v0.10.0](https://github.com/Zushah/WasmGPU/releases/tag/v0.10.0). Solid arrows indicate creation, ownership, stored references, or call direction. Dashed arrows indicate data movement through WebAssembly memory or WebGPU resources.
 
 ### 1.2. Public API surface
 
@@ -961,7 +961,7 @@ Architectural role:
 
 Important files and directories:
 
-- `./README.md`: release-facing project overview. It currently describes v0.9.0.
+- `./README.md`: release-facing project overview. It currently describes v0.10.0.
 - `./CHANGELOG.md`: release notes through the latest documented release.
 - `./CONTRIBUTING.md`: shorter contributor guide for questions, issues, feature requests, and code contributions.
 - `./website/docs/`: MkDocs documentation source.
@@ -994,7 +994,7 @@ Important files and directories:
 - `./package.json`: npm scripts and package metadata.
 - `./rust/Cargo.toml`: Rust crate metadata and release profile.
 - `./tsconfig.json`: TypeScript compiler settings.
-- `./esbuild.config.js`: bundle configuration, WGSL loader, minification, and copy steps from `./wasm/` to `./release/`.
+- `./esbuild.config.js`: bundle configuration, release banner metadata, WGSL loader, minification, and copy steps from `./wasm/` to `./release/`.
 - `./scripts/build-rust-wasm.js`: Rust-to-WebAssembly build script. It invokes Cargo, generates `.wasm`, `.wat`, JavaScript loader, and declaration output, and can run WebAssembly optimization tooling.
 - `./wasm/`: generated WebAssembly loader, binary, text format, and declarations.
 - `./release/`: bundled ESM and IIFE JavaScript files plus WebAssembly copies.
@@ -1130,11 +1130,11 @@ Use the OpenAI Codex `$prepare-release` skill for versioned release preparation 
 
 During non-release development, generated changes under `./wasm/` and `./release/` may be local build output. Use `npm run restore` to restore those directories from Git when generated output is not part of the intended change. Changes to `./wasm/` and `./release/` should normally only be part of a release commit.
 
-During an approved `$prepare-release` `prepare` run, `npm run build` regenerates the finalized `./wasm/` and `./release/` artifacts. After that final build, prepend the target release banner and one empty line to `./release/WasmGPU.js`, `./release/WasmGPU.min.js`, `./release/WasmGPU.iife.min.js`, and `./release/wasm.js`. Do not prepend text to the binary `./release/wasm.wasm` or manually release-edit files under `./wasm/`. Do not run `npm run build` again after adding the banners. `$prepare-release` `verify` mode therefore does not run `npm run build`.
+During an approved `$prepare-release` `prepare` run, update the target release version and date in the `releaseBanner` literal in `./esbuild.config.js` before running `npm run build`. The JavaScript build automatically emits that banner followed by one empty line at the start of `./release/WasmGPU.js`, `./release/WasmGPU.min.js`, `./release/WasmGPU.iife.min.js`, and `./release/wasm.js`. Note that the binary `./release/wasm.wasm` should remain unbannered. Do not manually edit generated files under `./release/` or `./wasm/`. `$prepare-release` `verify` mode does not run `npm run build` because verification must preserve the prepared artifacts.
 
 The release preparation workflow derives the homepage JavaScript line count from the final bannered `./release/WasmGPU.js` and the displayed minified bundle size from the final bannered `./release/WasmGPU.min.js`. It derives release additions, deletions, and changed-file count from the baseline release to the complete intended current workspace, then rechecks those values after writing them into `./website/home/index.html`. `npm run website` is used as a build-process check only, as visual website approval remains manual. Release preparation does not run benchmarks.
 
-Website generation uses `npm run website`, which runs `./scripts/build_website.py`. That script reads `./release/WasmGPU.min.js`, copies assets and examples, rewrites the copied examples from their local `./release/` imports to the pinned v0.9.0 CDN `./dist/` URLs, and writes output under `./website/build/`. The repository examples therefore exercise the current local bundles, while the generated website examples continue to exercise the documented v0.9.0 release.
+Website generation uses `npm run website`, which runs `./scripts/build_website.py`. That script reads `./release/WasmGPU.min.js`, copies assets and examples, rewrites the copied examples from their local `./release/` imports to the pinned v0.10.0 CDN `./release/` URLs, and writes output under `./website/build/`. The repository examples therefore exercise the current local bundles, while the generated website examples continue to exercise the documented v0.10.0 release.
 
 ### 3.10. Validation commands
 
@@ -1189,7 +1189,7 @@ Recent history mostly follows Conventional Commits:
 - common types: `feat`, `fix`, `test`, `docs`, `chore`, `refactor`, and `perf`;
 - scopes are file or folder names without extensions, such as `renderer`, `gltf`, `material`, `nodelink`, `examples`, or `rust`;
 - subjects are usually lowercase, concise, and have no final period;
-- release commits use a pattern like `chore(release): v0.9.0`.
+- release commits use a pattern like `chore(release): v0.10.0`.
 
 Examples from repository history include:
 
@@ -1199,11 +1199,12 @@ Examples from repository history include:
 - `fix(gltf): stabilize variants, skins, geometry, & morph rendering`
 - `fix(wasm): add deterministic resource lifetimes`
 - `test(material): cover defaults, uniforms, shaders, data, colormaps, & cleanup`
-- `bench(harness): create`
+- `bench(suite): cover compute kernels, data transfer, render objects, culling, & effects`
 - `docs(examples): update terrain with fly controls`
 - `feat(rust): reclaim freed WebAssembly heap allocations`
+- `feat(effects): add directional shadow mapping`
 - `chore(build): bump Rust from v1.93.0-2021 to v1.97.1-2024`
-- `chore(release): v0.9.0`
+- `chore(release): v0.10.0`
 
 Use a commit body when the subject cannot explain the change, especially for API behavior, memory ownership, generated artifacts, release work, or changes that touch multiple subsystems.
 

@@ -23,7 +23,7 @@ const result = await wgpu.gltf.load(source, options);
 
 ```ts
 type LoadGltfOptions = {
-    baseUrl?: string;
+    resourceBaseUrl?: string;
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     loadImages?: boolean;
     onWarning?: (message: string) => void;
@@ -33,7 +33,7 @@ type LoadGltfOptions = {
 #### LoadGltfOptions Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `baseUrl` | `string` | No | Base URL for external buffers and images. For URL sources, the loader defaults this to the source file's directory. For in-memory `ArrayBuffer` sources, pass this when the asset still references external URIs. |
+| `resourceBaseUrl` | `string` | No | Base URL for external buffers and images. The loader normalizes an explicit value as a directory. For URL sources without an override, it preserves the final response URL so redirects resolve resources correctly. |
 | `fetch` | `(input: RequestInfo \| URL, init?: RequestInit) => Promise<Response>` | No | Custom fetch implementation for URL loading. |
 | `loadImages` | `boolean` | No | When true, image payloads are also resolved into `doc.images`. Leave it false if you only want JSON and buffers up front. |
 | `onWarning` | `(message: string) => void` | No | Callback for recoverable load warnings. |
@@ -45,7 +45,7 @@ type GltfDocument = {
     json: GltfRoot;
     buffers: ArrayBuffer[];
     images?: ArrayBuffer[];
-    baseUrl: string;
+    resourceBaseUrl: string;
 };
 ```
 
@@ -55,7 +55,7 @@ type GltfDocument = {
 | `json` | `GltfRoot` | Yes | Parsed glTF JSON root. |
 | `buffers` | `ArrayBuffer[]` | Yes | Resolved binary buffers, including the BIN chunk from a GLB when present. |
 | `images` | `ArrayBuffer[]` | No | Resolved image payloads when `loadImages` is enabled. |
-| `baseUrl` | `string` | Yes | Base URL used to resolve relative asset references during import. |
+| `resourceBaseUrl` | `string` | Yes | Base URL used to resolve relative asset references during import. |
 
 For string sources, `.glb` files are parsed as GLB and other paths are treated as glTF JSON. For `ArrayBuffer` sources, WasmGPU auto-detects GLB by magic number and otherwise treats the bytes as UTF-8 JSON text.
 
@@ -82,3 +82,5 @@ console.log(doc.json.asset.version, doc.buffers.length, doc.images?.length ?? 0)
 - [WasmGPU.gltf.readAccessorAsFloat32](./wasmgpu-gltf-readaccessorasfloat32.md)
 - [WasmGPU.gltf.readAccessorAsUint16](./wasmgpu-gltf-readaccessorasuint16.md)
 - [WasmGPU.gltf.readIndicesAsUint32](./wasmgpu-gltf-readindicesasuint32.md)
+- [resolveUri](./gltf-resolveuri.md)
+- [decodeDataUri](./gltf-decodedatauri.md)

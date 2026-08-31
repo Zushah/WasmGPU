@@ -18,7 +18,7 @@ const result = texture.getView(device, queue, colorSpace, fallbackView);
 | `fallbackView` | `GPUTextureView` | Yes | Fallback texture view returned while asynchronous upload is pending. |
 
 ## Returns
-`GPUTextureView` - Result produced by this API call as `GPUTextureView`.
+`GPUTextureView` - Uploaded texture view, or `fallbackView` while upload is pending or after a terminal upload error.
 
 ## Type Details
 ### TextureColorSpace
@@ -49,3 +49,4 @@ console.log(result);
 - [Texture2D.revision](./texture2d-revision.md)
 - [Texture2D.uploaded](./texture2d-uploaded.md)
 - [Texture2D.width](./texture2d-width.md)
+- [Texture2D.uploadError](./texture2d-uploaderror.md)

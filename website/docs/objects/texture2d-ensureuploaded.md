@@ -1,7 +1,7 @@
 # Texture2D.ensureUploaded
 
 ## Summary
-Texture2D.ensureUploaded operates on a Texture2D runtime object to update state, query data, or manage lifecycle.
+Texture2D.ensureUploaded starts the lazy asynchronous decode and GPU upload once. The call returns immediately; materials use fallback resources until upload completes.
 
 ## Syntax
 ```ts
@@ -14,10 +14,10 @@ texture.ensureUploaded(device, queue, colorSpace);
 | --- | --- | --- | --- |
 | `device` | `GPUDevice` | Yes | GPUDevice used to allocate pipelines, buffers, layouts, or textures. |
 | `queue` | `GPUQueue` | Yes | GPUQueue used for data uploads and command submissions. |
-| `colorSpace` | `TextureColorSpace = "linear"` | Yes | Color-space mode used by this conversion or lookup. |
+| `colorSpace` | `TextureColorSpace` | No | Upload interpretation; default `"linear"`. The first upload request fixes the texture's mipmap color space. |
 
 ## Returns
-`void` - No return value. The call applies side effects to runtime state and/or GPU resources.
+`void` - No return value. A terminal asynchronous failure is exposed through `uploadError` and thrown by later upload/view requests.
 
 ## Type Details
 ### TextureColorSpace
@@ -47,3 +47,4 @@ console.log("updated");
 - [Texture2D.revision](./texture2d-revision.md)
 - [Texture2D.uploaded](./texture2d-uploaded.md)
 - [Texture2D.width](./texture2d-width.md)
+- [Texture2D.uploadError](./texture2d-uploaderror.md)

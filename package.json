@@ -1,6 +1,6 @@
 {
   "name": "@zushah/wasmgpu",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "author": "Zushah",
   "license": "MPL-2.0",
   "description": "WebGPU × WebAssembly rendering and computing engine for scientific workloads in the browser.",

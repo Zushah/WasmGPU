@@ -48,6 +48,11 @@ type GridLayerDescriptor = {
     lineWidthMinorPx?: number;
     lineWidthMajorPx?: number;
     font?: string;
+    tickFormatter?: (value: number, axis: GridAxis) => string;
+    uAxis?: GridAxisMetadata;
+    vAxis?: GridAxisMetadata;
+    className?: string;
+    style?: GridStyle;
 };
 ```
 
@@ -70,6 +75,19 @@ overlay.addLayer(grid);
 ```
 
 ## See Also
+- [GridLayer.setPlane](./gridlayer-setplane.md)
+- [GridLayer.setOrigin](./gridlayer-setorigin.md)
+- [GridLayer.setExtentMode](./gridlayer-setextentmode.md)
+- [GridLayer.setFixedExtent](./gridlayer-setfixedextent.md)
+- [GridLayer.setSpacing](./gridlayer-setspacing.md)
+- [GridLayer.setColors](./gridlayer-setcolors.md)
+- [GridLayer.setLineWidths](./gridlayer-setlinewidths.md)
+- [GridLayer.setFont](./gridlayer-setfont.md)
+- [GridLayer.setTickFormatter](./gridlayer-settickformatter.md)
+- [GridLayer.setAxisMetadata](./gridlayer-setaxismetadata.md)
+- [GridLayer.setLabelSides](./gridlayer-setlabelsides.md)
+- [GridLayer.setClassName](./gridlayer-setclassname.md)
+- [GridLayer.setStyle](./gridlayer-setstyle.md)
 - [WasmGPU.createOverlay.system](./wasmgpu-createoverlay-system.md)
 - [WasmGPU.createOverlay.axisTriad](./wasmgpu-createoverlay-axistriad.md)
 - [GridLayer.update](./gridlayer-update.md)

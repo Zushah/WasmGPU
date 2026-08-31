@@ -9,6 +9,14 @@ WasmGPU.math.quat.toRotation(q: number[], v: number[]): number[]
 const result = wgpu.math.quat.toRotation(q, v);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.quatf.toRotation(outVec3: WasmPtr, q: WasmPtr, v3: WasmPtr): void
+WasmGPU.math.quatd.toRotation(outVec3: WasmPtr, q: WasmPtr, v3: WasmPtr): void
+```
+
+These forms use caller-owned pointers to 4-element quaternion blocks in WasmGPU driver memory: binary32 for `quatf` and binary64 for `quatd`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

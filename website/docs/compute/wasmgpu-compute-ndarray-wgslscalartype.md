@@ -2,7 +2,7 @@
 
 ## Summary
 WasmGPU.compute.ndarray.wgslScalarType reports the WGSL scalar type mapping for the ndarray dtype.
-Supported mappings include `"i32"`, `"u32"`, `"f32"`, and `"f64"`; unsupported byte/half-width dtypes return `null`.
+Supported mappings are `"i32"`, `"u32"`, and `"f32"`. The `f64` dtype is available for CPU/Wasm math but is not WGSL-bindable and returns `null`, as do byte and half-width dtypes.
 Use this when generating shader code dynamically based on ndarray dtype.
 This is a dtype-level property and does not depend on shape or strides.
 
@@ -16,7 +16,7 @@ const scalarType = ndarray.wgslScalarType;
 This API does not take parameters.
 
 ## Returns
-`"i32" | "u32" | "f32" | "f64" | null` - WGSL scalar type for this ndarray dtype.
+`"i32" | "u32" | "f32" | null` - WGSL scalar type for this ndarray dtype.
 
 ## Example
 ```js

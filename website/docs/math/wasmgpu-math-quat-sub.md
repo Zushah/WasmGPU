@@ -9,6 +9,14 @@ WasmGPU.math.quat.sub(q1: number[], q2: number[]): number[]
 const result = wgpu.math.quat.sub(q1, q2);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.quatf.sub(out: WasmPtr, a: WasmPtr, b: WasmPtr): void
+WasmGPU.math.quatd.sub(out: WasmPtr, a: WasmPtr, b: WasmPtr): void
+```
+
+These forms use caller-owned pointers to 4-element quaternion blocks in WasmGPU driver memory: binary32 for `quatf` and binary64 for `quatd`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

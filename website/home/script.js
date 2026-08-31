@@ -35,15 +35,15 @@
     };
     const updateWaveTheme = (selectedTheme) => {
         if (!wgpu || !waveScene) return;
-        const isLight = selectedTheme === "light";
-        waveScene.background = isLight ? [1.0, 1.0, 1.0] : [0.0, 0.0, 0.0];
+        const lightmode = selectedTheme === "light";
+        waveScene.background = lightmode ? [1.0, 1.0, 1.0] : [0.0, 0.0, 0.0];
         for (const band of waveDepthBands) {
-            band.core.blendMode = isLight ? "transparent" : "additive";
-            band.core.basePointSize = (isLight ? 22.5 : 9.0) * band.depth;
-            band.core.maxPointSize = (isLight ? 22.5 : 9.0) * band.depth;
-            band.halo.blendMode = isLight ? "transparent" : "additive";
-            band.halo.basePointSize = (isLight ? 12.0 : 24.0) * band.depth;
-            band.halo.maxPointSize = (isLight ? 12.0 : 24.0) * band.depth;
+            band.core.blendMode = "transparent";
+            band.core.basePointSize = 9.0 * band.depth;
+            band.core.maxPointSize = 9.0 * band.depth;
+            band.halo.blendMode = "transparent";
+            band.halo.basePointSize = 24.0 * band.depth;
+            band.halo.maxPointSize = 24.0 * band.depth;
         }
     };
     const applyTheme = (theme) => {
@@ -134,7 +134,6 @@
                     pInit++;
                 }
             }
-            const isLight = currentTheme === "light";
             const bandCount = 16;
             const minDistance = Math.min(...initialDistances);
             const maxDistance = Math.max(...initialDistances);
@@ -172,12 +171,12 @@
                 const common = {
                     pointsBuffer, colorsBuffer, pointCount: indices.length,
                     boundsMin: [-halfX, -3.0, -halfZ], boundsMax: [halfX, 3.0, halfZ],
-                    blendMode: isLight ? "transparent" : "additive",
+                    blendMode: "transparent",
                     sizeAttenuation: 0, colorMode: "rgba", scaleTransform,
                     keepCPUData: false
                 };
-                const core = wgpu.createPointCloud({ ...common, basePointSize: (isLight ? 22.5 : 9.0) * depth, minPointSize: 0, maxPointSize: (isLight ? 22.5 : 9.0) * depth, softness: 0.36, opacity: 1.0 });
-                const halo = wgpu.createPointCloud({ ...common, basePointSize: (isLight ? 12.0 : 24.0) * depth, minPointSize: 0, maxPointSize: (isLight ? 12.0 : 24.0) * depth, softness: 0.9, opacity: 0.56 });
+                const core = wgpu.createPointCloud({ ...common, basePointSize: 9.0 * depth, minPointSize: 0, maxPointSize: 9.0 * depth, softness: 0.36, opacity: 1.0 });
+                const halo = wgpu.createPointCloud({ ...common, basePointSize: 24.0 * depth, minPointSize: 0, maxPointSize: 24.0 * depth, softness: 0.9, opacity: 0.56 });
                 waveScene.add(core);
                 waveScene.add(halo);
                 return { data, coefficients, pointsBuffer, colorsBuffer, core, halo, depth };

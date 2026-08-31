@@ -8,14 +8,14 @@ Optional storage-buffer descriptor fields control GPU usage flags and labels.
 
 ## Syntax
 ```ts
-WasmGPU.compute.CPUndarray.uploadToGPU(ctx: { device: GPUDevice; queue: GPUQueue }, desc?: Omit<StorageBufferDescriptor, "byteLength" | "data">): GPUndarray
+WasmGPU.compute.CPUndarray.uploadToGPU(ctx: { device: GPUDevice; queue: GPUQueue; readback?: ReadbackRing }, desc?: Omit<StorageBufferDescriptor, "byteLength" | "data">): GPUndarray
 const gpuArray = cpuArray.uploadToGPU(wgpu.gpu, desc);
 ```
 
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `ctx` | `{ device: GPUDevice; queue: GPUQueue }` | Yes | GPU device/queue context used to allocate and upload the storage buffer. |
+| `ctx` | `{ device: GPUDevice; queue: GPUQueue; readback?: ReadbackRing }` | Yes | GPU context used to upload the buffer. Supplying the compute service propagates its shared readback ring to the result. |
 | `desc` | `Omit<StorageBufferDescriptor, "byteLength" \| "data">` | No | Optional storage-buffer flags (`label`, `copySrc`, `copyDst`, `usage`). |
 
 ## Returns

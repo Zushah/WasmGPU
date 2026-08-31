@@ -35,7 +35,6 @@ console.log(result);
 
 ## See Also
 - [CustomMaterial.getShaderCode](./custommaterial-getshadercode.md)
-- [CustomMaterial.getUniform](./custommaterial-getuniform.md)
 - [CustomMaterial.getUniformBufferSize](./custommaterial-getuniformbuffersize.md)
 - [CustomMaterial.getUniformData](./custommaterial-getuniformdata.md)
-- [CustomMaterial.setUniform](./custommaterial-setuniform.md)
+- [CustomMaterial.getBindGroupEntries](./custommaterial-getbindgroupentries.md)

@@ -16,7 +16,7 @@ const result = await wgpu.gltf.import(doc, options);
 | `options` | `ImportGltfOptions` | No | Optional controls for scene selection, destination scene ownership, normal generation, camera/light import, and warning handling. |
 
 ## Returns
-`Promise<GltfImportResult>` - Promise that resolves to the imported scene resources and metadata.
+`Promise<GltfImportResult>` - Promise that resolves to the imported scene resources and metadata. Import is transactional: if validation or resource creation fails, resources created by that attempt are rolled back before the promise rejects.
 
 ## Type Details
 ### ImportGltfOptions
@@ -74,8 +74,8 @@ type GltfImportResult = {
 | `skins` | `ImportedSkin[]` | Yes | Imported skin definitions and their runtime `Skin` objects. |
 | `animations` | `ImportedAnimation[]` | Yes | Imported animation descriptions. `clip` is `null` when the importer could not build a runtime clip for that entry. |
 | `clips` | `AnimationClip[]` | Yes | Convenience list of the non-null runtime clips from `animations`. |
-| `metadata` | `GltfImportMetadata` | Yes | Preserved glTF provenance, extension support states, XMP packets, and material-variant controls. |
-| `destroy` | `() => void` | Yes | Deterministically disposes imported animation clips and skin runtimes and releases meshes, splat fields, cameras, textures, and imported transforms. If the import added objects to a scene, `destroy()` also removes them. |
+| `metadata` | `GltfImportMetadata` | Yes | Preserved glTF provenance, extension assessments (`supported`, `partial`, `deferred`, or `unsupported`), XMP packets, and material-variant controls. |
+| `destroy` | `() => void` | Yes | Deterministically disposes imported animation clips and skin runtimes and releases meshes, splat fields, cameras, textures, and imported transforms. If the import added objects to a scene, `destroy()` also removes them. The cleanup is idempotent. |
 
 ### GltfImportedNode
 

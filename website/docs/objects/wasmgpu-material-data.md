@@ -56,6 +56,8 @@ type DataMaterialDescriptor = MaterialDescriptor & {
 ```ts
 type MaterialDescriptor = {
 
+    label?: string;
+
     blendMode?: BlendMode;
 
     cullMode?: CullMode;
@@ -70,6 +72,7 @@ type MaterialDescriptor = {
 #### MaterialDescriptor Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
+| `label` | `string` | No | Debug label propagated to material GPU resources. |
 | `blendMode` | `BlendMode` | No | Blend mode controlling fragment compositing behavior. |
 | `cullMode` | `CullMode` | No | Face-culling mode used during rasterization. |
 | `depthWrite` | `boolean` | No | Boolean flag that toggles `depthWrite` behavior. |

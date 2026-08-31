@@ -1,7 +1,7 @@
 # PerspectiveCamera.updateAspect
 
 ## Summary
-PerspectiveCamera.updateAspect updates aspect ratio directly from viewport width and height. This is the preferred resize path when canvas dimensions change. The method marks projection dirty and returns the same camera for chaining.
+PerspectiveCamera.updateAspect updates aspect ratio directly from viewport width and height. Use it for manual resize handling after setting `autoAspect` to `false`. The method marks projection dirty and returns the same camera for chaining.
 
 ## Syntax
 ```ts
@@ -37,5 +37,6 @@ window.addEventListener("resize", () => {
 
 ## See Also
 - [PerspectiveCamera.aspect](./perspectivecamera-aspect.md)
+- [PerspectiveCamera.autoAspect](./perspectivecamera-autoaspect.md)
 - [PerspectiveCamera.getProjectionMatrix](./perspectivecamera-getprojectionmatrix.md)
 - [OrthographicCamera.updateFromCanvas](./orthographiccamera-updatefromcanvas.md)

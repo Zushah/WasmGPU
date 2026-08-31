@@ -12,7 +12,7 @@ SplatField.getUniformBufferSize(): number
 
 ## Returns
 
-`number` - `16` bytes in v0.9.0.
+`number` - `16` bytes.
 
 ## See Also
 

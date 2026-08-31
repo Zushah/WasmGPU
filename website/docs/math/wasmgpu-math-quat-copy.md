@@ -9,6 +9,14 @@ WasmGPU.math.quat.copy(q: number[]): number[]
 const result = wgpu.math.quat.copy(q);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.quatf.copy(out: WasmPtr, q: WasmPtr): void
+WasmGPU.math.quatd.copy(out: WasmPtr, q: WasmPtr): void
+```
+
+These forms use caller-owned pointers to 4-element quaternion blocks in WasmGPU driver memory: binary32 for `quatf` and binary64 for `quatd`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

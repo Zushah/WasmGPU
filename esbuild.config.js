@@ -6,6 +6,18 @@
 
 import esbuild from "esbuild";
 import fs from "node:fs";
+
+const releaseBanner = `/*!
+ * WasmGPU v0.10.0
+ * Released on Monday, August 31, 2026
+ * WebGPU × WebAssembly rendering and computing engine for scientific workloads in the browser
+ * Copyright (c) Zushah and contributors
+ * SPDX-License-Identifier: MPL-2.0
+ * Source: https://github.com/Zushah/WasmGPU
+ * Website: https://zushah.github.io/WasmGPU
+ */
+`;
+
 const wgslMinify = {
   name: "wgsl-minify",
   setup(build) {
@@ -28,7 +40,8 @@ const common = {
   loader: { ".wasm": "file" },
   plugins: [wgslMinify],
   assetNames: "[name]",
-  logLevel: "info"
+  logLevel: "info",
+  banner: { js: releaseBanner }
 };
 try {
   await esbuild.build({
@@ -70,7 +83,8 @@ try {
     }
   });
   fs.copyFileSync("./wasm/wasm.wasm", "./release/wasm.wasm");
-  fs.copyFileSync("./wasm/wasm.js", "./release/wasm.js");
+  const wasmJavaScript = fs.readFileSync("./wasm/wasm.js", "utf8");
+  fs.writeFileSync("./release/wasm.js", `${releaseBanner}\n${wasmJavaScript}`);
 } catch (e) {
   process.exit(1);
 }

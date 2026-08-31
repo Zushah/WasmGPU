@@ -9,6 +9,14 @@ WasmGPU.math.quat.init(a: number, b: number, c: number, d: number): number[]
 const result = wgpu.math.quat.init(a, b, c, d);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.quatf.init(out: WasmPtr, x: number, y: number, z: number, w: number): void
+WasmGPU.math.quatd.init(out: WasmPtr, x: number, y: number, z: number, w: number): void
+```
+
+These forms use caller-owned pointers to 4-element quaternion blocks in WasmGPU driver memory: binary32 for `quatf` and binary64 for `quatd`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

@@ -1,19 +1,19 @@
 # Mesh.castShadow
 
 ## Summary
-Mesh.castShadow reads the current `castShadow` value from this Mesh instance. Use it to inspect runtime state without mutating resources.
+Mesh.castShadow controls whether this mesh is drawn into enabled directional-light shadow maps. It defaults to `true`; setting it does not enable shadows by itself.
 
 ## Syntax
 ```ts
 Mesh.castShadow: boolean
-const value = mesh.castShadow;
+mesh.castShadow = false;
 ```
 
 ## Parameters
 This API does not take parameters.
 
 ## Returns
-`boolean` - Boolean result indicating whether the queried condition is satisfied.
+`boolean` - Whether the mesh participates as a shadow caster when `WasmGPU.effects.shadows` enables a directional light.
 
 ## Type Details
 ```ts
@@ -41,6 +41,7 @@ console.log(value);
 - [Mesh.getLocalBounds](./mesh-getlocalbounds.md)
 - [Mesh.getWorldBounds](./mesh-getworldbounds.md)
 - [Mesh.receiveShadow](./mesh-receiveshadow.md)
+- [ShadowSystem.enable](../render/shadowsystem-enable.md)
 - [Mesh.removeChild](./mesh-removechild.md)
 - [Mesh.setParent](./mesh-setparent.md)
 - [Mesh.visible](./mesh-visible.md)

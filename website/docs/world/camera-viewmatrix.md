@@ -37,3 +37,5 @@ console.log(view.length, view);
 - [Camera.viewProjectionMatrix](./camera-viewprojectionmatrix.md)
 - [PerspectiveCamera.getProjectionMatrix](./perspectivecamera-getprojectionmatrix.md)
 - [OrthographicCamera.getProjectionMatrix](./orthographiccamera-getprojectionmatrix.md)
+- [Camera.writeViewMatrixToArray](./camera-writeviewmatrixtoarray.md)
+- [Camera.writeViewMatrixTo](./camera-writeviewmatrixto.md)

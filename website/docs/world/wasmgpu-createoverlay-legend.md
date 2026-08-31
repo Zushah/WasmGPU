@@ -72,6 +72,11 @@ type LegendLayerDescriptor = {
     strictParity?: boolean;
     font?: string;
     formatValue?: (value: number) => string;
+    orientation?: "vertical" | "horizontal";
+    subtitle?: string;
+    units?: string;
+    className?: string;
+    style?: LegendStyle;
 };
 ```
 
@@ -93,6 +98,15 @@ overlay.addLayer(legend);
 ```
 
 ## See Also
+- [LegendLayer.setOrientation](./legendlayer-setorientation.md)
+- [LegendLayer.setTitle](./legendlayer-settitle.md)
+- [LegendLayer.setSubtitle](./legendlayer-setsubtitle.md)
+- [LegendLayer.setUnits](./legendlayer-setunits.md)
+- [LegendLayer.setAnchor](./legendlayer-setanchor.md)
+- [LegendLayer.setGradientSize](./legendlayer-setgradientsize.md)
+- [LegendLayer.setTickPresentation](./legendlayer-settickpresentation.md)
+- [LegendLayer.setClassName](./legendlayer-setclassname.md)
+- [LegendLayer.setStyle](./legendlayer-setstyle.md)
 - [WasmGPU.createOverlay.system](./wasmgpu-createoverlay-system.md)
 - [LegendLayer.setSource](./legendlayer-setsource.md)
 - [LegendLayer.update](./legendlayer-update.md)

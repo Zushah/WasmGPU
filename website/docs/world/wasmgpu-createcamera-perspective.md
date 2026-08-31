@@ -1,7 +1,7 @@
 # WasmGPU.createCamera.perspective
 
 ## Summary
-WasmGPU.createCamera.perspective creates a `PerspectiveCamera` for standard 3D rendering with depth foreshortening. Set `fov`, `near`, and `far` explicitly for stable scientific views and predictable depth precision. Update aspect on resize to keep projection undistorted.
+WasmGPU.createCamera.perspective creates a `PerspectiveCamera` for standard 3D rendering with depth foreshortening. By default, rendering keeps its aspect ratio synchronized with the canvas; set `autoAspect: false` to preserve an explicit aspect.
 
 ## Syntax
 ```ts
@@ -21,9 +21,10 @@ const camera = wgpu.createCamera.perspective(options);
 ### PerspectiveCameraOptions
 
 ```ts
-type PerspectiveCameraOptions = {
+type PerspectiveCameraDescriptor = {
     fov?: number;
     aspect?: number;
+    autoAspect?: boolean;
     near?: number;
     far?: number;
 };
@@ -34,6 +35,7 @@ type PerspectiveCameraOptions = {
 | --- | --- | --- | --- |
 | `fov` | `number` | No | Vertical field of view in degrees; default `60`. |
 | `aspect` | `number` | No | Width/height aspect ratio; default `16 / 9`. |
+| `autoAspect` | `boolean` | No | Whether rendering synchronizes `aspect` to the canvas; default `true`. |
 | `near` | `number` | No | Near clipping plane distance; default `0.1`. |
 | `far` | `number` | No | Far clipping plane distance; default `1000`. |
 
@@ -45,6 +47,7 @@ const wgpu = await WasmGPU.create(canvas);
 const camera = wgpu.createCamera.perspective({
     fov: 55,
     aspect: canvas.clientWidth / canvas.clientHeight,
+    autoAspect: false,
     near: 0.05,
     far: 2000
 });
@@ -55,5 +58,6 @@ camera.lookAt(0, 0, 0);
 ## See Also
 - [WasmGPU.createCamera.orthographic](./wasmgpu-createcamera-orthographic.md)
 - [PerspectiveCamera.updateAspect](./perspectivecamera-updateaspect.md)
+- [PerspectiveCamera.autoAspect](./perspectivecamera-autoaspect.md)
 - [PerspectiveCamera.getProjectionMatrix](./perspectivecamera-getprojectionmatrix.md)
 - [Camera.lookAt](./camera-lookat.md)

@@ -9,6 +9,14 @@ WasmGPU.math.mat4.identity(): number[]
 const result = wgpu.math.mat4.identity();
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.mat4f.identity(out: WasmPtr): void
+WasmGPU.math.mat4d.identity(out: WasmPtr): void
+```
+
+These forms use caller-owned pointers to 16-element matrix blocks in WasmGPU driver memory: binary32 for `mat4f` and binary64 for `mat4d`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 This function does not take parameters.
 

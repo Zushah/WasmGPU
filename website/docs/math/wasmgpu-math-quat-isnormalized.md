@@ -9,6 +9,14 @@ WasmGPU.math.quat.isNormalized(q: number[]): boolean
 const result = wgpu.math.quat.isNormalized(q);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.quatf.isNormalized(q: WasmPtr): boolean
+WasmGPU.math.quatd.isNormalized(q: WasmPtr): boolean
+```
+
+These forms use caller-owned pointers to 4-element quaternion blocks in WasmGPU driver memory: binary32 for `quatf` and binary64 for `quatd`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

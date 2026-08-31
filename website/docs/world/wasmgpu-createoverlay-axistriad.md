@@ -58,6 +58,12 @@ type AxisTriadLayerDescriptor = {
     colors?: [string, string, string];
     labelOffsetPx?: number;
     font?: string;
+    directions?: AxisTriadDirections;
+    negativeLabels?: [string, string, string];
+    arrowSizePx?: number;
+    originSizePx?: number;
+    className?: string;
+    style?: AxisTriadStyle;
 };
 ```
 
@@ -77,6 +83,18 @@ overlay.addLayer(axisTriad);
 ```
 
 ## See Also
+- [AxisTriadLayer.setAnchor](./axistriadlayer-setanchor.md)
+- [AxisTriadLayer.setDirections](./axistriadlayer-setdirections.md)
+- [AxisTriadLayer.setLabels](./axistriadlayer-setlabels.md)
+- [AxisTriadLayer.setColors](./axistriadlayer-setcolors.md)
+- [AxisTriadLayer.setLengthWorld](./axistriadlayer-setlengthworld.md)
+- [AxisTriadLayer.setSizePx](./axistriadlayer-setsizepx.md)
+- [AxisTriadLayer.setLineWidth](./axistriadlayer-setlinewidth.md)
+- [AxisTriadLayer.setArrowSize](./axistriadlayer-setarrowsize.md)
+- [AxisTriadLayer.setOriginSize](./axistriadlayer-setoriginsize.md)
+- [AxisTriadLayer.setLabelAppearance](./axistriadlayer-setlabelappearance.md)
+- [AxisTriadLayer.setClassName](./axistriadlayer-setclassname.md)
+- [AxisTriadLayer.setStyle](./axistriadlayer-setstyle.md)
 - [WasmGPU.createOverlay.system](./wasmgpu-createoverlay-system.md)
 - [WasmGPU.createOverlay.grid](./wasmgpu-createoverlay-grid.md)
 - [AxisTriadLayer.update](./axistriadlayer-update.md)

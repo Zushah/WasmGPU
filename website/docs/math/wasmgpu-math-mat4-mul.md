@@ -9,6 +9,16 @@ WasmGPU.math.mat4.mul(matr1: number[], matr2ORvect: number[]): number[]
 const result = wgpu.math.mat4.mul(matr1, matr2ORvect);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.mat4f.mul(out: WasmPtr, a: WasmPtr, b: WasmPtr): void
+WasmGPU.math.mat4d.mul(out: WasmPtr, a: WasmPtr, b: WasmPtr): void
+WasmGPU.math.mat4f.mulVec4(outVec4: WasmPtr, m: WasmPtr, v4: WasmPtr): void
+WasmGPU.math.mat4d.mulVec4(outVec4: WasmPtr, m: WasmPtr, v4: WasmPtr): void
+```
+
+These forms use caller-owned pointers to 16-element matrix blocks in WasmGPU driver memory: binary32 for `mat4f` and binary64 for `mat4d`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

@@ -9,6 +9,16 @@ WasmGPU.math.mat4.init(m0: number, m1: number, m2: number, m3: number, m4: numbe
 const result = wgpu.math.mat4.init(m0, m1, m2, m3, m4, m5, m6, m7, m8, m9, m10, m11, m12, m13, m14, m15);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.mat4f.init(out: WasmPtr, m0: number, m1: number, m2: number, m3: number, m4: number, m5: number, m6: number, m7: number, m8: number, m9: number, m10: number, m11: number, m12: number, m13: number, m14: number, m15: number): void
+WasmGPU.math.mat4d.init(out: WasmPtr, m0: number, m1: number, m2: number, m3: number, m4: number, m5: number, m6: number, m7: number, m8: number, m9: number, m10: number, m11: number, m12: number, m13: number, m14: number, m15: number): void
+WasmGPU.math.mat4f.decomposeTRS(outTrs: WasmPtr, m: WasmPtr): void
+WasmGPU.math.mat4d.decomposeTRS(outTrs: WasmPtr, m: WasmPtr): void
+```
+
+These forms use caller-owned pointers to 16-element matrix blocks in WasmGPU driver memory: binary32 for `mat4f` and binary64 for `mat4d`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

@@ -84,7 +84,7 @@ console.log(Array.from(x));
 
 ## See Also
 - [WasmGPU.compute.kernels.luFactorF32Batched](./wasmgpu-compute-kernels-lufactorf32batched.md)
-- [WasmGPU.compute.kernels.luSolveComplex64Batched](./wasmgpu-compute-kernels-lusolvecomplex64batched.md)
+- [WasmGPU.compute.kernels.luSolveC64Batched](./wasmgpu-compute-kernels-lusolvec64batched.md)
 - [WasmGPU.compute.createStorageBuffer](./wasmgpu-compute-createstoragebuffer.md)
 - [WasmGPU.compute.readback.readF32](./wasmgpu-compute-readback-readf32.md)
 - [WasmGPU.compute.dispatch1D](./wasmgpu-compute-dispatch1d.md)

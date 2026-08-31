@@ -2,7 +2,7 @@
 
 ## Summary
 WasmGPU.destroy tears down the engine and releases runtime resources.
-It stops the frame loop, destroys active PerformanceStats, clears scaling caches, destroys compute resources, and disposes the renderer.
+It stops the frame loop, destroys active PerformanceStats, clears scaling caches, destroys compute resources, and disposes renderer resources including directional shadows.
 Call this when the canvas/engine is no longer needed.
 
 ## Syntax
@@ -31,3 +31,4 @@ wgpu.destroy();
 - [WasmGPU.stop](./wasmgpu-stop.md)
 - [WasmGPU.destroyPerformanceStats](./wasmgpu-destroyperformancestats.md)
 - [WasmGPU.create](./wasmgpu-create.md)
+- [WasmGPU.effects](./wasmgpu-effects.md)

@@ -25,6 +25,7 @@ type Texture2DDescriptor = {
     source: TextureSource;
     mipmaps?: boolean;
     sampler?: TextureSamplerOptions;
+    imageDecode?: TextureImageDecodeOptions;
 };
 ```
 
@@ -34,6 +35,18 @@ type Texture2DDescriptor = {
 | `source` | `TextureSource` | Yes | Image source. Use URL loading, raw bytes with an optional MIME type, or a prebuilt `ImageBitmap`. |
 | `mipmaps` | `boolean` | No | Whether the texture should generate mipmaps after upload. The default is `true`. |
 | `sampler` | `TextureSamplerOptions` | No | Sampler state used when materials sample the texture. |
+| `imageDecode` | `TextureImageDecodeOptions` | No | Browser image-decoding controls for URL and byte sources. |
+
+### TextureImageDecodeOptions
+
+```ts
+type TextureImageDecodeOptions = {
+    colorSpaceConversion?: "default" | "none";
+    fallbackWithoutOptions?: boolean;
+};
+```
+
+`colorSpaceConversion` overrides the automatic choice (`"default"` for sRGB uploads and `"none"` for linear uploads). `fallbackWithoutOptions` defaults to `true`; set it to `false` when unsupported or rejected bitmap options must become a terminal upload error.
 
 ### TextureSource
 
@@ -98,3 +111,4 @@ const result = wgpu.texture.create2D({
 - [WasmGPU.material.unlit](./wasmgpu-material-unlit.md)
 - [WasmGPU.gltf.load](./wasmgpu-gltf-load.md)
 - [WasmGPU.gltf.import](./wasmgpu-gltf-import.md)
+- [Texture2D.uploadError](./texture2d-uploaderror.md)

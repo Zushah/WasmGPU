@@ -3,8 +3,10 @@
 ## Summary
 WasmGPU.compute.encodeDispatchBatch records multiple dispatch commands in one compute pass.
 This is useful for multi-step compute workflows where one encoder should contain all stages.
-It can validate each command's workgroup counts before encoding.
+It validates all workgroup tuples before beginning the pass and can additionally check them against device limits. Commands with a zero dimension are skipped.
 Use this when you want fewer pass transitions and fewer queue submissions.
+
+Kernel helpers that require native encoder operations such as `clearBuffer()` may impose additional external-encoder restrictions; consult the specific kernel page.
 
 ## Syntax
 ```ts

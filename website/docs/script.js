@@ -20,7 +20,7 @@
             const rootLink = getRelativeRoot();
             footer = document.createElement("footer");
             footer.className = FOOTER_CLASS;
-            footer.innerHTML = `<p>WasmGPU <a href="${rootLink}#latest-release" class="footer-link">v0.9.0</a>. Copyright &copy; <span id="docs-year">2026</span> <a href="https://github.com/Zushah" class="footer-link" target="_blank" rel="noreferrer">Zushah</a>. Available under the <a href="https://www.mozilla.org/MPL/2.0/" class="footer-link" target="_blank" rel="noreferrer">MPL-2.0</a>.</p>`;
+            footer.innerHTML = `<p>WasmGPU <a href="${rootLink}#latest-release" class="footer-link">v0.10.0</a>. Copyright &copy; <span id="docs-year">2026</span> <a href="https://github.com/Zushah" class="footer-link" target="_blank" rel="noreferrer">Zushah</a>. Available under the <a href="https://www.mozilla.org/MPL/2.0/" class="footer-link" target="_blank" rel="noreferrer">MPL-2.0</a>.</p>`;
             content.appendChild(footer);
         }
         const yearNode = footer.querySelector("#docs-year");

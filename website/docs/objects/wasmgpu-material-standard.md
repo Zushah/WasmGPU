@@ -73,6 +73,7 @@ type StandardMaterialDescriptor = MaterialDescriptor & {
 
 ```ts
 type MaterialDescriptor = {
+    label?: string;
     blendMode?: BlendMode;
     cullMode?: CullMode;
     depthWrite?: boolean;
@@ -84,6 +85,7 @@ type MaterialDescriptor = {
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `blendMode` | `BlendMode` | No | Render blend mode override. Leave this unset to keep the standard opaque-versus-transparent default from `opacity`. |
+| `label` | `string` | No | Optional diagnostic label retained by the material. |
 | `cullMode` | `CullMode` | No | Face-culling mode. |
 | `depthWrite` | `boolean` | No | Whether the material writes to depth. |
 | `depthTest` | `boolean` | No | Whether the material tests against depth. |
@@ -260,6 +262,8 @@ const result = wgpu.material.standard({
 ```
 
 ## See Also
+- [StandardMaterial.getLayoutPlan](./standardmaterial-getlayoutplan.md)
+- [Material.label](./material-label.md)
 - [WasmGPU.material.unlit](./wasmgpu-material-unlit.md)
 - [WasmGPU.material.data](./wasmgpu-material-data.md)
 - [WasmGPU.material.custom](./wasmgpu-material-custom.md)

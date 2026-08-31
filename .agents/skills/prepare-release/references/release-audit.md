@@ -43,7 +43,7 @@ Perform all of these passes:
 1. **History and diff:** inspect commit subjects, changed paths, renames, deletions, and focused diffs between baseline and target. Include staged and unstaged worktree changes when they are part of the release candidate.
 2. **Public surface:** inspect `./typescript/index.ts`, `./typescript/core/engine.ts`, and relevant public descriptors, result shapes, classes, factories, and members when release claims depend on them.
 3. **Behavior:** inspect owning source, callers, WGSL or Rust when relevant, tests, examples, defaults, errors, ownership, lifetime, and limitations.
-4. **Release metadata:** inspect package/Cargo versions, changelog history, README badges and release metadata, website release state and footers, CDN pins, architecture release metadata, and generated-output conventions.
+4. **Release metadata:** inspect package/Cargo versions, the release-banner metadata in `./esbuild.config.js`, changelog history, README badges, release metadata, both platform-compatibility tables and their review date, website release state and footers, CDN pins, architecture release metadata, and generated-output conventions. Check compatibility claims against current first-party browser, platform, standards, and hardware-vendor sources.
 5. **Reference migration:** search old version strings, old tags, release URLs, CDN URLs, and historical output paths. Decide whether each match is stale release-facing state, intentional history, documentation-owned content, or uncertainty.
 
 Do not assume a previous release's file list or path layout is still correct. Extend the audit from the current architecture, source tree, and build configuration.
@@ -88,14 +88,14 @@ Check only applicable items, but make an explicit decision for each:
 - package and npm lockfile version;
 - Rust crate and Cargo lockfile version;
 - changelog version, date, ordinal, overview, compare link, and highlights;
-- `./README.md` release badge, tagged artifact links, minified-size metadata, About bullets, and architecture-diagram version labels;
+- `./README.md` release badge, tagged artifact links, minified-size metadata, About bullets, platform-compatibility tables and review date, and architecture-diagram version labels;
 - `./scripts/build_website.py` target-version CDN pins and artifact paths;
 - homepage version, release date, shortened highlights, bundle link, release link, compare link, npm command, CDN URL, bundle metrics, and footer;
 - examples/performance/docs-script footer version chrome;
 - architecture latest-release metadata and unreleased baseline;
 - generated `./wasm/` outputs;
 - generated `./release/` outputs;
-- release banners on the four textual distributable artifacts;
+- release-banner version and date in `./esbuild.config.js` and the automatically generated banners on the four textual distributable artifacts;
 - stale old-version or old-path matches in release-prep scope.
 
 Do not assume this list names every future release-facing surface.

@@ -43,6 +43,7 @@ type UnlitMaterialDescriptor = MaterialDescriptor & {
 
 ```ts
 type MaterialDescriptor = {
+    label?: string;
     blendMode?: BlendMode;
     cullMode?: CullMode;
     depthWrite?: boolean;
@@ -53,6 +54,7 @@ type MaterialDescriptor = {
 #### MaterialDescriptor Fields
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
+| `label` | `string` | No | Debug label propagated to material GPU resources. |
 | `blendMode` | `BlendMode` | No | Render blend mode override. |
 | `cullMode` | `CullMode` | No | Face-culling mode. |
 | `depthWrite` | `boolean` | No | Whether the material writes to depth. |

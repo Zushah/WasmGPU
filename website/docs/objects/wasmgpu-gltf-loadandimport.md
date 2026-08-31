@@ -44,7 +44,7 @@ type LoadAndImportOptions = {
 
 ```ts
 type LoadGltfOptions = {
-    baseUrl?: string;
+    resourceBaseUrl?: string;
     fetch?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
     loadImages?: boolean;
     onWarning?: (message: string) => void;
@@ -118,4 +118,5 @@ if (clip) {
 - [WasmGPU.gltf.readAccessor](./wasmgpu-gltf-readaccessor.md)
 - [WasmGPU.gltf.readAccessorAsFloat32](./wasmgpu-gltf-readaccessorasfloat32.md)
 - [WasmGPU.gltf.readAccessorAsUint16](./wasmgpu-gltf-readaccessorasuint16.md)
+- [resolveUri](./gltf-resolveuri.md)
 - [WasmGPU.gltf.readIndicesAsUint32](./wasmgpu-gltf-readindicesasuint32.md)

@@ -9,6 +9,14 @@ WasmGPU.math.mat4.scl(matr: number[], scalar: number): number[]
 const result = wgpu.math.mat4.scl(matr, scalar);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.mat4f.scl(out: WasmPtr, m: WasmPtr, scalar: number): void
+WasmGPU.math.mat4d.scl(out: WasmPtr, m: WasmPtr, scalar: number): void
+```
+
+These forms use caller-owned pointers to 16-element matrix blocks in WasmGPU driver memory: binary32 for `mat4f` and binary64 for `mat4d`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

@@ -9,6 +9,14 @@ WasmGPU.math.mat4.lookAt(eye: number[], center: number[], up: number[]): number[
 const result = wgpu.math.mat4.lookAt(eye, center, up);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.mat4f.lookAt(out: WasmPtr, eye3: WasmPtr, center3: WasmPtr, up3: WasmPtr): void
+WasmGPU.math.mat4d.lookAt(out: WasmPtr, eye3: WasmPtr, center3: WasmPtr, up3: WasmPtr): void
+```
+
+These forms use caller-owned pointers to 16-element matrix blocks in WasmGPU driver memory: binary32 for `mat4f` and binary64 for `mat4d`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

@@ -3,12 +3,12 @@
 ## Summary
 WasmGPU.compute.ComputePipeline.createBindGroup creates a bind group from high-level buffer resources.
 It accepts map-style resources (`{ 0: resourceA }`) or explicit entry arrays.
-Resources can be raw `GPUBuffer`, `StorageBuffer`, `UniformBuffer`, or ranged `{ buffer, offset, size }` objects.
+Resources can be raw `GPUBuffer`, `StorageBuffer`, `UniformBuffer`, ranged `{ buffer, offset, size }` objects, samplers, texture views, or external textures.
 Use this helper to simplify binding WasmGPU-managed buffers.
 
 ## Syntax
 ```ts
-WasmGPU.compute.ComputePipeline.createBindGroup(groupIndex: number, resources: ComputeBindGroupResources, label?: string): GPUBindGroup
+WasmGPU.compute.ComputePipeline.createBindGroup(groupIndex: number, resources: BindGroupResources, label?: string): GPUBindGroup
 const bindGroup = pipeline.createBindGroup(groupIndex, resources, label);
 ```
 
@@ -16,7 +16,7 @@ const bindGroup = pipeline.createBindGroup(groupIndex, resources, label);
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
 | `groupIndex` | `number` | Yes | Zero-based bind-group index to create. |
-| `resources` | `ComputeBindGroupResources` | Yes | Binding resources keyed by binding index or listed as binding/resource pairs. |
+| `resources` | `BindGroupResources` | Yes | Binding resources keyed by binding index or listed as binding/resource pairs. |
 | `label` | `string` | No | Optional bind-group label for debugging tools. |
 
 ## Returns
@@ -26,13 +26,16 @@ const bindGroup = pipeline.createBindGroup(groupIndex, resources, label);
 ```ts
 type BufferResource = GPUBuffer | StorageBuffer | UniformBuffer;
 
-type BufferBindingResource =
+type BindingResource =
     | BufferResource
-    | { buffer: BufferResource; offset?: number; size?: number };
+    | { buffer: BufferResource; offset?: number; size?: number }
+    | GPUSampler
+    | GPUTextureView
+    | GPUExternalTexture;
 
-type ComputeBindGroupResources =
-    | Record<number, BufferBindingResource>
-    | Array<{ binding: number; resource: BufferBindingResource }>;
+type BindGroupResources =
+    | Record<number, BindingResource>
+    | ReadonlyArray<{ binding: number; resource: BindingResource }>;
 ```
 
 ## Example
@@ -62,3 +65,4 @@ console.log(bindGroup);
 - [WasmGPU.compute.createStorageBuffer](./wasmgpu-compute-createstoragebuffer.md)
 - [WasmGPU.compute.createUniformBuffer](./wasmgpu-compute-createuniformbuffer.md)
 - [WasmGPU.compute.dispatch](./wasmgpu-compute-dispatch.md)
+- [WasmGPU.webgpu.bindGroupResources](../interop/wasmgpu-webgpu-bindgroupresources.md)

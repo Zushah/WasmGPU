@@ -96,7 +96,7 @@
                 for (const group of groups) {
                     const dustData = new Float32Array(group.count * 4);
                     const dustColors = new Float32Array(group.count * 4);
-                    const dustPalette = lightmode ? [C.brand1, C.brand1, C.brand2, C.brand2, C.brand3, C.brand3, C.brand4, C.brand5] : colormapStopsDark;
+                    const dustPalette = lightmode ? colormapStopsLight : colormapStopsDark;
                     for (let i = 0; i < group.count; i++) {
                         const u = rng() * Math.PI * 2;
                         const v = Math.asin(rng() * 2 - 1);
@@ -109,12 +109,12 @@
                         const color = dustPalette[Math.min(dustPalette.length - 1, Math.floor(rng() * dustPalette.length))];
                         dustColors.set(color, i * 4);
                     }
-                    for (const pass of [{ size: group.halo, softness: 0.96, opacity: lightmode ? 0.52 : 1.0, glow: true }, { size: group.core, softness: 0.26, opacity: 1.0, glow: false }]) {
+                    for (const pass of [{ size: group.halo, softness: 0.96, opacity: 1.0, glow: true }, { size: group.core, softness: 0.26, opacity: 1.0, glow: false }]) {
                         const passColors = dustColors;
-                        const pointSize = pass.size * (lightmode ? (pass.glow ? 1 / 6 : 2.5) : 1.0);
+                        const pointSize = pass.size;
                         const dust = wgpu.createPointCloud({
                             data: dustData, colors: passColors, pointCount: group.count,
-                            blendMode: lightmode ? "transparent" : "additive",
+                            blendMode: "transparent",
                             basePointSize: pointSize, sizeAttenuation: 1.05,
                             minPointSize: Math.max(1.5, pointSize * 0.35), maxPointSize: pointSize * 1.8,
                             softness: pass.softness, opacity: pass.opacity, colorMode: "rgba",
@@ -129,7 +129,7 @@
                 overlayContainer.innerHTML = "";
                 const badge = document.createElement("div");
                 badge.className = "version-badge";
-                badge.textContent = " 0 . 9 . 0 ";
+                badge.textContent = " 0 . 1 0 . 0 ";
                 overlayContainer.appendChild(badge);
                 const bgColor = lightmode ? [1.0, 1.0, 1.0] : [0.0, 0.0, 0.0];
                 const scene = wgpu.createScene(bgColor);
@@ -189,7 +189,7 @@
                         nodeColors[nodeIdx * 4 + 0] = col[0];
                         nodeColors[nodeIdx * 4 + 1] = col[1];
                         nodeColors[nodeIdx * 4 + 2] = col[2];
-                        nodeColors[nodeIdx * 4 + 3] = lightmode ? 0.95 : 1.0;
+                        nodeColors[nodeIdx * 4 + 3] = 1.0;
                         nodeIdx++;
                     }
                 }
@@ -219,7 +219,7 @@
                     edgeCount: totalEdges, edges, edgeColors,
                     nodeGeometryMode: "spheres", edgeGeometryMode: "cylinders",
                     nodeColorMode: "rgba", edgeColorMode: "rgba",
-                    nodeSize: 0.022, edgeSize: lightmode ? 0.030 : 0.024,
+                    nodeSize: 0.022, edgeSize: 0.024,
                     opacity: 1.0
                 });
                 torus.transform.rotateX(0.76);
@@ -305,9 +305,9 @@
                 }
                 const nebulaCore = wgpu.createPointCloud({
                     data: pointData, pointCount,
-                    blendMode: lightmode ? "transparent" : "additive",
-                    basePointSize: lightmode ? 55.0 : 22.0, sizeAttenuation: 1.1,
-                    minPointSize: lightmode ? 25.0 : 10.0, maxPointSize: lightmode ? 120.0 : 48.0,
+                    blendMode: "transparent",
+                    basePointSize: 22.0, sizeAttenuation: 1.1,
+                    minPointSize: 10.0, maxPointSize: 48.0,
                     softness: 0.34, opacity: 0.90,
                     colormap: "custom", colormapStops: lightmode ? colormapStopsLight : colormapStopsDark,
                     scaleTransform: { componentCount: 4, componentIndex: 3, stride: 4, offset: 0, mode: "linear", domainMin: 0, domainMax: 1 }
@@ -315,9 +315,9 @@
                 scene.add(nebulaCore);
                 const nebulaHalo = wgpu.createPointCloud({
                     data: pointData, pointCount,
-                    blendMode: lightmode ? "transparent" : "additive",
-                    basePointSize: lightmode ? 70.0 / 6 : 70.0, sizeAttenuation: 1.15,
-                    minPointSize: lightmode ? 22.0 / 6 : 22.0, maxPointSize: lightmode ? 124.0 / 6 : 124.0,
+                    blendMode: "transparent",
+                    basePointSize: 70.0, sizeAttenuation: 1.15,
+                    minPointSize: 22.0, maxPointSize: 124.0,
                     softness: 0.94, opacity: 0.26,
                     colormap: "custom", colormapStops: lightmode ? colormapStopsLight : colormapStopsDark,
                     scaleTransform: { componentCount: 4, componentIndex: 3, stride: 4, offset: 0, mode: "linear", domainMin: 0, domainMax: 1 }
@@ -382,7 +382,7 @@
                 const planeWidth = 2.65;
                 for (let l = 0; l < layers; l++) {
                     const y = (l - (layers - 1) / 2) * layerHeight;
-                    const plane = wgpu.createMesh(wgpu.geometry.rectangle(planeWidth, planeWidth, "xz", true), wgpu.material.unlit({ color: C.invCharcoal }));
+                    const plane = wgpu.createMesh(wgpu.geometry.rectangle(planeWidth, planeWidth, "xz", true), wgpu.material.unlit({ color: lightmode ? C.invCharcoal : C.black }));
                     plane.transform.setPosition(0, y, 0);
                     scene.add(plane);
                     const pointSpan = planeWidth * 0.76;
@@ -403,7 +403,7 @@
                             nodeColors[nIdx * 4 + 0] = col[0];
                             nodeColors[nIdx * 4 + 1] = col[1];
                             nodeColors[nIdx * 4 + 2] = col[2];
-                            nodeColors[nIdx * 4 + 3] = lightmode ? 0.95 : 1.0;
+                            nodeColors[nIdx * 4 + 3] = 1.0;
                             layerPointColors.set(col, nIdx * 4);
                             layerPointGlowColors.set(col, nIdx * 4);
                             nIdx++;
@@ -418,7 +418,7 @@
                     const nextBase = (l + 1) * pointsPerLayer;
                     for (const p of connectionPoints[l]) {
                         edgeList.push(base + p, nextBase + p);
-                        edgeColorList.push(...C.invCharcoal);
+                        edgeColorList.push(...(lightmode ? C.white : C.white));
                     }
                 }
                 const totalEdges = edgeList.length / 2;
@@ -429,7 +429,7 @@
                     edgeCount: totalEdges, edges, edgeColors,
                     nodeGeometryMode: "spheres", edgeGeometryMode: "cylinders",
                     nodeColorMode: "rgba", edgeColorMode: "rgba",
-                    nodeSize: 0.008, edgeSize: lightmode ? 0.12 : 0.10
+                    nodeSize: 0.008, edgeSize: 0.10
                 });
                 scene.add(dataGraph);
                 const pointOptions = {
@@ -441,14 +441,14 @@
                 };
                 scene.add(wgpu.createPointCloud({
                     ...pointOptions, colors: layerPointColors,
-                    basePointSize: lightmode ? 125.0 : 152.0,
-                    minPointSize: lightmode ? 70.0 : 56.0, maxPointSize: lightmode ? 160.0 : 288.0,
+                    basePointSize: 152.0,
+                    minPointSize: 56.0, maxPointSize: 288.0,
                     softness: 0.10, opacity: 1.0
                 }));
                 scene.add(wgpu.createPointCloud({
                     ...pointOptions, colors: layerPointGlowColors,
-                    basePointSize: lightmode ? 19.0 : 364.0,
-                    minPointSize: lightmode ? 12.665 : 176.0, maxPointSize: lightmode ? 42.335 : 504.0,
+                    basePointSize: 364.0,
+                    minPointSize: 176.0, maxPointSize: 504.0,
                     softness: 0.95, opacity: 0.42
                 }));
                 addSurroundingPoints(scene, rng, lightmode, 2.95, 4.1, 52);
@@ -533,7 +533,7 @@
                     nodeColors[i * 4 + 0] = n.col[0];
                     nodeColors[i * 4 + 1] = n.col[1];
                     nodeColors[i * 4 + 2] = n.col[2];
-                    nodeColors[i * 4 + 3] = lightmode ? 0.95 : 1.0;
+                    nodeColors[i * 4 + 3] = 1.0;
                     addWireSphere(n);
                 }
                 const graphEdges = [[0, 1], [1, 2], [2, 9], [9, 7], [7, 8], [8, 3], [3, 10], [10, 4], [4, 6], [6, 5], [5, 0], [1, 5], [2, 3], [0, 4], [6, 9], [7, 10]];
@@ -552,7 +552,7 @@
                     edgeCount: totalEdges, edges, edgeColors,
                     nodeGeometryMode: "spheres", edgeGeometryMode: "cylinders",
                     nodeColorMode: "rgba", edgeColorMode: "rgba",
-                    nodeSize: 0.003, edgeSize: lightmode ? 0.038 : 0.032
+                    nodeSize: 0.003, edgeSize: 0.032
                 });
                 scene.add(netGraph);
                 const rng = createRNG(999);
@@ -630,18 +630,18 @@
                     });
                     const common = {
                         data: bandData, pointCount: indices.length,
-                        blendMode: lightmode ? "transparent" : "additive",
+                        blendMode: "transparent",
                         sizeAttenuation: 0, minPointSize: 0,
                         colorMode: "rgba", scaleTransform
                     };
                     scene.add(wgpu.createPointCloud({
                         ...common, colors: coreColors,
-                        basePointSize: (lightmode ? 22.5 : 9.0) * depth, maxPointSize: (lightmode ? 22.5 : 9.0) * depth,
+                        basePointSize: 9.0 * depth, maxPointSize: 9.0 * depth,
                         softness: 0.36, opacity: 1.0
                     }));
                     scene.add(wgpu.createPointCloud({
                         ...common, colors: haloColors,
-                        basePointSize: (lightmode ? 12.0 : 24.0) * depth, maxPointSize: (lightmode ? 12.0 : 24.0) * depth,
+                        basePointSize: 24.0 * depth, maxPointSize: 24.0 * depth,
                         softness: 0.9, opacity: 0.56
                     }));
                 });

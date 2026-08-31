@@ -35,7 +35,7 @@ If the mode is omitted, infer it from the request and state the choice. Ask only
 6. Never commit, tag, push, publish to npm, create a GitHub release, or otherwise publish the release.
 7. Never run `npm run bench`. Do not run `npm run dev` or `npm run restore` during release preparation.
 8. Never use blind repository-wide version replacement. Update release references by surrounding context and preserve intentional historical references.
-9. In `prepare` mode, run `npm run build` exactly where the release workflow calls for it. After release banners are added, do not run `npm run build` again.
+9. In `prepare` mode, update the release-banner metadata before running `npm run build` exactly where the release workflow calls for it. The build automatically banners the textual release artifacts.
 10. In `verify` mode, do not run `npm run build`; it would overwrite the prepared textual release artifacts.
 11. Leave `./release/wasm.wasm` as a valid binary. Never prepend a text banner to it.
 12. Preserve the repository's current formatting, terminology, release-note voice, and file structure unless release preparation itself requires a contextual path update.
@@ -48,7 +48,7 @@ Before writing:
 2. Inspect release history, commit subjects, changed paths, renames, deletions, and focused diffs between baseline and target. If the checked-out worktree contains additional release changes, inspect staged and unstaged diffs too.
 3. Inspect `./typescript/index.ts`, public factories in `./typescript/core/engine.ts`, and relevant subsystem source when needed to support release claims.
 4. Inspect focused tests and representative examples for important user-visible additions, fixes, removals, and changes.
-5. Inspect current package/cargo metadata, build configuration, generated artifact paths, `./README.md` release state, changelog style, website release panels, version numbers, and current version references.
+5. Inspect current package/cargo metadata, build configuration, generated artifact paths, `./README.md` release state and platform-compatibility tables, changelog style, website release panels, version numbers, and current version references. Fact-check compatibility claims against current first-party browser, platform, standards, and hardware-vendor sources rather than relying on aggregators.
 6. Prefer current source when release-facing prose describes an older release. Mark uncertainty instead of inventing behavior.
 
 ## Run audit mode
@@ -110,19 +110,34 @@ The committed `CHANGELOG.md` entry must use the same release themes but omit SHA
 
    Do not disturb dependency versions.
 
-2. Add the new release entry to `./CHANGELOG.md`. Preserve the established changelog structure, release ordinal when it can be confidently derived, release date style, compare link, thematic ordering, and mandatory `Added` / `Fixed` / `Removed` / `Changed` prefixes. Keep SHA annotations out of the committed changelog.
+2. Update the `releaseBanner` literal in `./esbuild.config.js` with the target version and intended release date. Preserve the rest of this exact banner content:
 
-3. Update `./README.md`:
+   ```text
+   /*!
+    * WasmGPU v<target-version>
+    * Released on <weekday-name>, <month-name> <month-day-number>, <year-number>
+    * WebGPU × WebAssembly rendering and computing engine for scientific workloads in the browser
+    * Copyright (c) Zushah and contributors
+    * SPDX-License-Identifier: MPL-2.0
+    * Source: https://github.com/Zushah/WasmGPU
+    * Website: https://zushah.github.io/WasmGPU
+    */
+   ```
+
+3. Add the new release entry to `./CHANGELOG.md`. Preserve the established changelog structure, release ordinal when it can be confidently derived, release date style, compare link, thematic ordering, and mandatory `Added` / `Fixed` / `Removed` / `Changed` prefixes. Keep SHA annotations out of the committed changelog.
+
+4. Update `./README.md`:
    - latest-release badge, links, tagged artifact paths, and release-size metadata;
    - release-version labels in the architecture section and diagram;
    - the encoded Mermaid link when its diagram content changes;
-   - small, integrated refinements to the existing `## About` bullets under `WebGPU engine in TypeScript` and `WebAssembly driver in Rust`.
+   - small, integrated refinements to the existing `## About` bullets under `WebGPU engine in TypeScript` and `WebAssembly driver in Rust`;
+   - both `## Platform Compatibility` tables, fact-checked against current first-party sources, and their `as of` date.
 
-   Keep `About` an overview of WasmGPU as a whole. Prefer adding or refactoring small relevant phrases over removing existing capabilities. Do not rewrite it as release notes.
+   Keep `About` an overview of WasmGPU as a whole. Prefer adding or refactoring small relevant phrases over removing existing capabilities. Do not rewrite it as release notes. In the compatibility tables, preserve supported rows and wording; make only source-backed, row-level corrections needed at the intended release date.
 
-4. Update `./scripts/build_website.py` release-specific CDN imports. Derive tagged artifact paths from the current build/output layout rather than preserving historical paths blindly. For the current tree, new release URLs should use `release/` rather than the old `dist/` layout.
+5. Update `./scripts/build_website.py` release-specific CDN imports. Derive tagged artifact paths from the current build/output layout rather than preserving historical paths blindly. For the current tree, new release URLs should use `release/` rather than the old `dist/` layout.
 
-5. Update `./website/home/index.html` without redesigning the panel:
+6. Update `./website/home/index.html` without redesigning the panel:
    - target version and full release date;
    - shortened changelog-derived release highlights;
    - tagged JavaScript bundle link;
@@ -134,14 +149,14 @@ The committed `CHANGELOG.md` entry must use the same release themes but omit SHA
 
    Defer final bundle-size, line-count, and workspace-diff numbers until after the build and final tracked edits.
 
-6. Update only contextual release chrome in:
+7. Update only contextual release chrome in:
    - `./website/examples/index.html`
    - `./website/performance/index.html`
    - `./website/docs/script.js`
 
    Do not rewrite example descriptions, benchmark report data, benchmark dates, documentation prose, or benchmark claims.
 
-7. Update only release-state metadata in `./ARCHITECTURE.md`, such as:
+8. Update only release-state metadata in `./ARCHITECTURE.md`, such as:
    - latest release and release date;
    - unreleased comparison baseline;
    - statements about which release README/website metadata reflects;
@@ -151,7 +166,7 @@ The committed `CHANGELOG.md` entry must use the same release themes but omit SHA
 
    Do not use release preparation to catch up substantive architecture prose.
 
-8. Search for old versions, tags, release URLs, CDN URLs, historical output paths, and "latest release" labels. Update stale release-facing references in this skill's scope. Classify remaining matches as intentional history, documentation-owned content, or uncertainty.
+9. Search for old versions, tags, release URLs, CDN URLs, historical output paths, and "latest release" labels. Update stale release-facing references in this skill's scope. Classify remaining matches as intentional history, documentation-owned content, or uncertainty.
 
 ### Build and prepare artifacts
 
@@ -174,32 +189,15 @@ The committed `CHANGELOG.md` entry must use the same release themes but omit SHA
    - `./release/wasm.js`
    - `./release/wasm.wasm`
 
-4. After the final build, prepend this exact banner, followed by exactly one empty line, to the four textual release artifacts:
-
-   ```text
-   /*!
-    * WasmGPU v<target-version>
-    * Released on <weekday-name>, <month-name> <month-day-number>, <year-number>
-    * WebGPU × WebAssembly rendering and computing engine for scientific workloads in the browser
-    * Copyright (c) Zushah and contributors
-    * SPDX-License-Identifier: MPL-2.0
-    * Source: https://github.com/Zushah/WasmGPU
-    * Website: https://zushah.github.io/WasmGPU
-    */
-
-   ```
-
-   Apply it to:
+4. `npm run build:js`, invoked by the full build, automatically prepends the configured `releaseBanner` followed by exactly one empty line to:
    - `./release/WasmGPU.js`
    - `./release/WasmGPU.min.js`
    - `./release/WasmGPU.iife.min.js`
    - `./release/wasm.js`
 
-   If a leading WasmGPU release banner already exists, replace it rather than stacking another banner.
+   Do not manually prepend or edit these generated artifacts. Verify the automatic banner after the build.
 
-5. Do not add a banner to `./release/wasm.wasm` or to files under `./wasm/`.
-
-6. Do not run `npm run build` again after adding the banners.
+5. The build must not add a banner to `./release/wasm.wasm` or to files under `./wasm/`.
 
 ### Validate the candidate release
 
@@ -247,7 +245,7 @@ The committed `CHANGELOG.md` entry must use the same release themes but omit SHA
 
 1. Keep the pass read-only unless the user explicitly asks to prepare fixes in a separate `prepare` run.
 2. Re-read the release cache files when available and establish the baseline, target, version, and intended date.
-3. Verify package/Cargo version consistency, changelog structure and style, README release state, homepage release state, website footers, CDN pins, and architecture release metadata.
+3. Verify package/Cargo version consistency, changelog structure and style, README release state, README platform-compatibility tables and review date against current first-party sources, homepage release state, website footers, CDN pins, and architecture release metadata.
 4. Verify all expected generated files exist.
 5. Verify the exact target banner and one empty line at the start of:
    - `./release/WasmGPU.js`
@@ -275,6 +273,7 @@ For the current repository, expect release preparation to touch some or all of:
 
 - `./package.json`
 - `./package-lock.json`
+- `./esbuild.config.js`
 - `./rust/Cargo.toml`
 - `./rust/Cargo.lock`
 - `./CHANGELOG.md`

@@ -59,6 +59,8 @@ overlay.update({ force: true });
 ```
 
 ## See Also
+- [OverlaySystem.isLayerEnabled](./overlaysystem-islayerenabled.md)
+- [OverlaySystem.setLayerEnabled](./overlaysystem-setlayerenabled.md)
 - [WasmGPU.createOverlay.axisTriad](./wasmgpu-createoverlay-axistriad.md)
 - [WasmGPU.createOverlay.grid](./wasmgpu-createoverlay-grid.md)
 - [WasmGPU.createOverlay.legend](./wasmgpu-createoverlay-legend.md)

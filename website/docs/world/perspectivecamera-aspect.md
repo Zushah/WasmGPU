@@ -1,7 +1,7 @@
 # PerspectiveCamera.aspect
 
 ## Summary
-PerspectiveCamera.aspect gets or sets the width/height projection ratio used for perspective matrix generation. Keep this synchronized with canvas dimensions to avoid stretching. Set directly or use `updateAspect(width, height)`.
+PerspectiveCamera.aspect gets or sets the width/height projection ratio used for perspective matrix generation. With the default `autoAspect: true`, rendering synchronizes it to the canvas; disable auto aspect before managing this value yourself.
 
 ## Syntax
 ```ts
@@ -33,5 +33,6 @@ console.log(camera.aspect);
 
 ## See Also
 - [PerspectiveCamera.updateAspect](./perspectivecamera-updateaspect.md)
+- [PerspectiveCamera.autoAspect](./perspectivecamera-autoaspect.md)
 - [PerspectiveCamera.fov](./perspectivecamera-fov.md)
 - [PerspectiveCamera.getProjectionMatrix](./perspectivecamera-getprojectionmatrix.md)

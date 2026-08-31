@@ -1,7 +1,7 @@
 # Texture2D.destroy
 
 ## Summary
-Texture2D.destroy releases GPU resources and clears owned runtime state for this Texture2D. Call it when the object is no longer needed.
+Texture2D.destroy releases GPU resources, clears any recorded upload error, and invalidates pending asynchronous upload work. Call it when the object is no longer needed.
 
 ## Syntax
 ```ts
@@ -38,3 +38,4 @@ console.log("updated");
 - [Texture2D.revision](./texture2d-revision.md)
 - [Texture2D.uploaded](./texture2d-uploaded.md)
 - [Texture2D.width](./texture2d-width.md)
+- [Texture2D.uploadError](./texture2d-uploaderror.md)

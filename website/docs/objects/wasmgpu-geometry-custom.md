@@ -80,6 +80,9 @@ result.destroy();
 ```
 
 ## See Also
+- [Geometry.morphBaseRevision](./geometry-morphbaserevision.md)
+- [Geometry.getMorphBaseChannel](./geometry-getmorphbasechannel.md)
+- [Geometry.getMorphIndices](./geometry-getmorphindices.md)
 - [Geometry.setWasmAttributes](./geometry-setwasmattributes.md)
 - [Geometry.refreshFromWasm](./geometry-refreshfromwasm.md)
 - [Geometry.upload](./geometry-upload.md)

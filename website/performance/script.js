@@ -13,7 +13,7 @@
     const tableBody = document.getElementById("bench-table-body");
     const catButtons = document.querySelectorAll(".cat-btn");
     const tableTitle = document.getElementById("benchmark-table-title");
-    const BENCHMARK_COMMIT_SHA = "6b40a277d09d632e5654db3ac9abb413cc9d3a0d";
+    const BENCHMARK_COMMIT_SHA = "32b58fde6ac68dd3b40fe73ecd95ca3215c947ef";
     const GITHUB_REPOSITORY = "Zushah/WasmGPU";
     const GITHUB_API_ROOT = `https://api.github.com/repos/${GITHUB_REPOSITORY}`;
     const BENCHMARK_SOURCE_ROOT = `https://github.com/${GITHUB_REPOSITORY}/blob/${BENCHMARK_COMMIT_SHA}/benchmarks/`;

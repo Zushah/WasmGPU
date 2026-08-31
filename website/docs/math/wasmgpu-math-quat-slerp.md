@@ -9,6 +9,14 @@ WasmGPU.math.quat.slerp(q1: number[], q2: number[], t: number): number[]
 const result = wgpu.math.quat.slerp(q1, q2, t);
 ```
 
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.quatf.slerp(out: WasmPtr, a: WasmPtr, b: WasmPtr, t: number): void
+WasmGPU.math.quatd.slerp(out: WasmPtr, a: WasmPtr, b: WasmPtr, t: number): void
+```
+
+These forms use caller-owned pointers to 4-element quaternion blocks in WasmGPU driver memory: binary32 for `quatf` and binary64 for `quatd`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |

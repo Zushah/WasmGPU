@@ -1,19 +1,19 @@
 # Mesh.receiveShadow
 
 ## Summary
-Mesh.receiveShadow reads the current `receiveShadow` value from this Mesh instance. Use it to inspect runtime state without mutating resources.
+Mesh.receiveShadow controls whether this mesh's supported standard-material render path samples enabled directional shadow maps. It defaults to `true`; setting it does not enable shadows by itself.
 
 ## Syntax
 ```ts
 Mesh.receiveShadow: boolean
-const value = mesh.receiveShadow;
+mesh.receiveShadow = false;
 ```
 
 ## Parameters
 This API does not take parameters.
 
 ## Returns
-`boolean` - Boolean result indicating whether the queried condition is satisfied.
+`boolean` - Whether the mesh receives supported directional shadows.
 
 ## Type Details
 ```ts
@@ -35,6 +35,7 @@ console.log(value);
 ## See Also
 - [Mesh.addChild](./mesh-addchild.md)
 - [Mesh.castShadow](./mesh-castshadow.md)
+- [ShadowSystem.enable](../render/shadowsystem-enable.md)
 - [Mesh.clone](./mesh-clone.md)
 - [Mesh.cloneWithMaterial](./mesh-clonewithmaterial.md)
 - [Mesh.destroy](./mesh-destroy.md)

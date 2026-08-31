@@ -28,13 +28,13 @@ type ComputePipelineDescriptor = {
     code: string;
     entryPoint?: string;
     constants?: Record<string, number>;
-    bindGroups?: ComputeBindGroupLayoutDescriptor[];
+    bindGroups?: BindGroupLayoutDescriptor[];
 };
 ```
 
-### ComputeBindGroupLayoutDescriptor
+### BindGroupLayoutDescriptor
 ```ts
-type ComputeBindGroupLayoutDescriptor = {
+type BindGroupLayoutDescriptor = {
     label?: string;
     entries: GPUBindGroupLayoutEntry[];
 };
@@ -67,3 +67,4 @@ console.log(pipeline);
 - [WasmGPU.compute.encodeDispatch](./wasmgpu-compute-encodedispatch.md)
 - [WasmGPU.compute.ComputePipeline.createBindGroup](./wasmgpu-compute-computepipeline-createbindgroup.md)
 - [WasmGPU.compute.ComputePipeline.getBindGroupLayout](./wasmgpu-compute-computepipeline-getbindgrouplayout.md)
+- [WasmGPU.webgpu.bindGroupLayout](../interop/wasmgpu-webgpu-bindgrouplayout.md)
