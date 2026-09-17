@@ -68,9 +68,15 @@ if (browserName === "chromium") {
             "--use-vulkan=native"
         );
         launchOptions.env = { ...process.env, VK_DRIVER_FILES: lavapipeICD, LIBGL_ALWAYS_SOFTWARE: "1" };
-    } else args.push(
-        "--use-webgpu-adapter=swiftshader"
-    );
+    } else {
+        args.push(
+            "--use-webgpu-adapter=swiftshader"
+        );
+        if (process.platform === "darwin" && process.arch === "x64") args.push(
+            "--use-gl=angle",
+            "--use-angle=swiftshader"
+        );
+    }
     launchOptions.args = args;
 } else if (browserName === "firefox") {
     launchOptions.firefoxUserPrefs = {
