@@ -2,7 +2,7 @@
 
 Latest commit: Friday, September 18, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Thursday, September 17, 2026, [**`66e7068`**](https://github.com/Zushah/WasmGPU/commit/66e7068).
+Parent commit: Friday, September 18, 2026, [**`c30335d`**](https://github.com/Zushah/WasmGPU/commit/c30335d).
 
 Latest release: Monday, August 31, 2026, [**`v0.10.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.10.0).
 
@@ -976,7 +976,7 @@ Important files and directories:
 - `./mkdocs.yaml`: MkDocs configuration for documentation pages.
 - `./scripts/build_website.py`: website build script. It copies website files, assets, examples, performance, and `./release/WasmGPU.min.js`, rewrites the copied examples from local `./release/` imports to the pinned `./release/` URLs, and runs MkDocs.
 - `./.agents/skills/maintain-docs/`: OpenAI Codex skill for auditing, writing, maintaining, and verifying Markdown documentation under `./website/docs/`.
-- `./.github/workflows/deploy-website.yaml`: GitHub Pages workflow for website changes.
+- `./.github/workflows/website.yaml`: GitHub Pages workflow for website deployment.
 
 `./scripts/build_website.py` writes generated website output under `./website/build/`. That directory is not present in the codebase unless the website build has been run locally.
 
