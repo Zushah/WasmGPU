@@ -1,7 +1,7 @@
-# Material.label
+# material#label
 
 ## Summary
-Material.label is the optional diagnostic label supplied when a material is created.
+material#label is the optional diagnostic label supplied when a material is created.
 
 ## Syntax
 ```ts
@@ -32,6 +32,6 @@ console.log(material.label); // polished aluminum
 The label is read-only after construction. It does not affect rendering or pipeline identity.
 
 ## See Also
-- [WasmGPU.material.standard](./wasmgpu-material-standard.md)
-- [WasmGPU.material.custom](./wasmgpu-material-custom.md)
-- [Material.destroy](./material-destroy.md)
+- [material.standard](./material-standard.md)
+- [material.custom](./material-custom.md)
+- [material#destroy](./material-destroy.md)

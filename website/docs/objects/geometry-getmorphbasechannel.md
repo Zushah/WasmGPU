@@ -1,7 +1,7 @@
-# Geometry.getMorphBaseChannel
+# geometry#getMorphBaseChannel
 
 ## Summary
-Geometry.getMorphBaseChannel returns active base positions, normals, or RGBA colors for morph processing. Wasm-backed channels are refreshed and copied before return.
+geometry#getMorphBaseChannel returns active base positions, normals, or RGBA colors for morph processing. Wasm-backed channels are refreshed and copied before return.
 
 ## Syntax
 ```ts
@@ -34,5 +34,5 @@ console.log(basePositions.length, baseNormals.length); // 9 9
 Positions are required. Missing normals and colors return generated fallback arrays. CPU-backed results may be active subarray views; do not assume ownership of their backing buffer.
 
 ## See Also
-- [Geometry.morphBaseRevision](./geometry-morphbaserevision.md)
-- [Geometry.getMorphIndices](./geometry-getmorphindices.md)
+- [geometry#morphBaseRevision](./geometry-morphbaserevision.md)
+- [geometry#getMorphIndices](./geometry-getmorphindices.md)

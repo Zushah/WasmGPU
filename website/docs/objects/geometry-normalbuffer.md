@@ -1,7 +1,7 @@
-# Geometry.normalBuffer
+# geometry#normalBuffer
 
 ## Summary
-Geometry.normalBuffer reads the current `normalBuffer` value from this Geometry instance. Use it to inspect runtime state without mutating resources.
+geometry#normalBuffer returns the geometry-owned GPU vertex buffer containing packed `float32x3` normals. Access throws before `upload(device)` has created the buffer and after final release; geometry without supplied normals uploads default normal data.
 
 ## Syntax
 ```ts
@@ -9,37 +9,10 @@ Geometry.normalBuffer: GPUBuffer
 const value = geometry.normalBuffer;
 ```
 
-## Parameters
-This API does not take parameters.
-
 ## Returns
-`GPUBuffer` - Current accessor value exposed by the runtime object.
-
-## Type Details
-```ts
-// No additional descriptor expansion is required for this signature.
-```
-
-## Example
-```js
-const canvas = document.querySelector("canvas");
-const wgpu = await WasmGPU.create(canvas);
-
-const geometry = wgpu.geometry.sphere(1, 24, 16);
-const value = geometry.normalBuffer;
-console.log(value);
-```
+The geometry-owned packed-normal buffer.
 
 ## See Also
-- [Geometry.boundsCenter](./geometry-boundscenter.md)
-- [Geometry.boundsMax](./geometry-boundsmax.md)
-- [Geometry.boundsMin](./geometry-boundsmin.md)
-- [Geometry.boundsRadius](./geometry-boundsradius.md)
-- [Geometry.destroy](./geometry-destroy.md)
-- [Geometry.indexBuffer](./geometry-indexbuffer.md)
-- [Geometry.isIndexed](./geometry-isindexed.md)
-- [Geometry.isSkinned](./geometry-isskinned.md)
-- [Geometry.isSkinned8](./geometry-isskinned8.md)
-- [Geometry.joints1Buffer](./geometry-joints1buffer.md)
-- [Geometry.jointsBuffer](./geometry-jointsbuffer.md)
-- [Geometry.positionBuffer](./geometry-positionbuffer.md)
+- [geometry#destroy](./geometry-destroy.md)
+- [geometry#positionBuffer](./geometry-positionbuffer.md)
+- [geometry#upload](./geometry-upload.md)

@@ -1,6 +1,6 @@
 # Interaction
 
-The interaction subsystems contain controls, selection, picking, annotation tools, and scene helpers.
+The interaction subsystems contain controls, selection, picking, annotation tools, and data-scaling utilities.
 
 ## In This Section
 
@@ -12,10 +12,16 @@ The interaction subsystems contain controls, selection, picking, annotation tool
 
 ## Suggested Starting Points
 
-- [WasmGPU.createControls.orbit](./wasmgpu-createcontrols-orbit.md)
-- [WasmGPU.createControls.trackball](./wasmgpu-createcontrols-trackball.md)
-- [WasmGPU.createControls.fly](./wasmgpu-createcontrols-fly.md)
+- [WasmGPU.createControls](./wasmgpu-createcontrols.md)
+- [WasmGPU.createAnnotation](./wasmgpu-createannotation.md)
+- [WasmGPU.scale](./wasmgpu-scale.md)
+- [createControls.orbit](./createcontrols-orbit.md)
+- [createControls.trackball](./createcontrols-trackball.md)
+- [createControls.fly](./createcontrols-fly.md)
 - [WasmGPU.pick](./wasmgpu-pick.md)
-- [WasmGPU.createAnnotation.toolkit](./wasmgpu-createannotation-toolkit.md)
+- [WasmGPU.pickRect](./wasmgpu-pickrect.md)
+- [WasmGPU.createSelectionStore](./wasmgpu-createselectionstore.md)
+- [createAnnotation.toolkit](./createannotation-toolkit.md)
+- [scale.requestStats](./scale-requeststats.md)
 
 Use the sidebar to explore all interaction APIs.

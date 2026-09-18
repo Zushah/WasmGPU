@@ -15,7 +15,7 @@ const result = wgpu.createNodeLink(descriptor);
 | `descriptor` | `NodeLinkDescriptor` | Yes | Descriptor object used to configure node data, edge data, color/scale state, bounds, and render behavior. |
 
 ## Returns
-`NodeLink` - NodeLink runtime object configured for graph-style node and edge rendering.
+`NodeLink` - Graph object using the supplied node/edge sources, ownership rules, bounds, and visual settings.
 
 ## Type Details
 ### NodeLinkDescriptor
@@ -84,7 +84,7 @@ type NodeLinkDescriptor = {
 };
 ```
 
-External node and edge GPU buffers are borrowed by default. `ownBuffers: true` transfers their destruction responsibility to the nodelink. Setter-level `ownBuffer: true` can transfer an individual replacement buffer.
+External node and edge GPU buffers are borrowed by default. `ownBuffers: true` transfers their destruction responsibility to the nodelink. Setter-level `ownBuffer: true` can transfer an individual replacement buffer. CPU/Wasm inputs upload lazily; external buffers are used directly.
 
 #### Node Data Fields
 | Name | Type | Required | Description |
@@ -196,7 +196,9 @@ type ScaleTransformDescriptor = {
 };
 ```
 
-You can mix CPU arrays and external buffers across categories. The two count fields only become mandatory when the runtime cannot infer counts from CPU arrays.
+You can mix source families across independent node and edge channels, but supply at most one CPU array, WebAssembly view, or external GPU buffer for each channel. Competing sources for one channel are unsupported. Counts derive from CPU/WebAssembly primary position or connectivity sources when omitted and are required when the corresponding primary source is an external buffer.
+
+Wasm node positions/colors/radii use four floats per node, node scalars use one; Wasm edges use two `u32` values per edge, edge scalars one float, and edge colors four. The node and edge capacity hints are measured in records. Defaults are point nodes, line edges, scalar Viridis nodes, solid gray edges, opaque/depth-writing rendering, node size `1`, edge size `0.06`, and unlit shading.
 
 Picking distinguishes nodes from edges through `attributes.component` and `attributes.componentIndex`. Node scalar/color and edge scalar/color/endpoints/edge positions depend on retained CPU-side records, so `keepCPUData: true` is the most practical setup when you need rich pick payloads.
 
@@ -244,25 +246,25 @@ const graph = wgpu.createNodeLink({
 ```
 
 ## See Also
-- [NodeLink.setNodeData](./nodelink-setnodedata.md)
-- [NodeLink.setEdgeData](./nodelink-setedgedata.md)
-- [NodeLink.refreshFromWasm](./nodelink-refreshfromwasm.md)
-- [NodeLink.count](./nodelink-count.md)
-- [NodeLink.geometryMode](./nodelink-geometrymode.md)
-- [NodeLink.colorMode](./nodelink-colormode.md)
-- [NodeLink.scaleTransform](./nodelink-scaletransform.md)
-- [NodeLink.setNodeData](./nodelink-setnodedata.md)
-- [NodeLink.setEdgeData](./nodelink-setedgedata.md)
-- [NodeLink.getRecord](./nodelink-getrecord.md)
-- [NodeLink.upload](./nodelink-upload.md)
-- [NodeLink.getBounds](./nodelink-getbounds.md)
-- [Scene.add](../world/scene-add.md)
-- [Scene.remove](../world/scene-remove.md)
-- [Scene.getBounds](../world/scene-getbounds.md)
+- [createNodeLink#setNodeData](./createnodelink-setnodedata.md)
+- [createNodeLink#setEdgeData](./createnodelink-setedgedata.md)
+- [createNodeLink#refreshFromWasm](./createnodelink-refreshfromwasm.md)
+- [createNodeLink#count](./createnodelink-count.md)
+- [createNodeLink#geometryMode](./createnodelink-geometrymode.md)
+- [createNodeLink#colorMode](./createnodelink-colormode.md)
+- [createNodeLink#scaleTransform](./createnodelink-scaletransform.md)
+- [createNodeLink#setNodeData](./createnodelink-setnodedata.md)
+- [createNodeLink#setEdgeData](./createnodelink-setedgedata.md)
+- [createNodeLink#getRecord](./createnodelink-getrecord.md)
+- [createNodeLink#upload](./createnodelink-upload.md)
+- [createNodeLink#getBounds](./createnodelink-getbounds.md)
+- [createScene#add](../world/createscene-add.md)
+- [createScene#remove](../world/createscene-remove.md)
+- [createScene#getBounds](../world/createscene-getbounds.md)
 - [WasmGPU.pick](../interact/wasmgpu-pick.md)
 - [WasmGPU.pickRect](../interact/wasmgpu-pickrect.md)
 - [WasmGPU.pickLasso](../interact/wasmgpu-picklasso.md)
 - [WasmGPU.createPointCloud](./wasmgpu-createpointcloud.md)
 - [WasmGPU.createGlyphField](./wasmgpu-createglyphfield.md)
-- [WasmGPU.colormap.fromStops](./wasmgpu-colormap-fromstops.md)
-- [WasmGPU.createOverlay.legend](../world/wasmgpu-createoverlay-legend.md)
+- [colormap.fromStops](./colormap-fromstops.md)
+- [createOverlay.legend](../world/createoverlay-legend.md)

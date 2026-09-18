@@ -2,7 +2,7 @@
 
 ## Summary
 WasmGPU.pickLasso performs polygon-region picking using a lasso path in canvas space.
-The lasso is rasterized to a bounded query region, then sampled against the pick buffers.
+Fewer than three canvas-space points produce an empty selection. The asynchronous result contains deduplicated element hits, sampled bounds, pixel count, and whether the requested hit limit truncated the selection.
 Use it for free-form selection where a rectangle is too coarse.
 
 ## Syntax
@@ -70,5 +70,5 @@ wgpu.run((dt) => {
 - [WasmGPU.pick](./wasmgpu-pick.md)
 - [WasmGPU.pickRect](./wasmgpu-pickrect.md)
 - [WasmGPU.createNodeLink](../objects/wasmgpu-createnodelink.md)
-- [WasmGPU.createSelectionStore().toggle](./wasmgpu-createselectionstore-toggle.md)
-- [WasmGPU.createAnnotation.toolkit().ingestSelectionHit](./wasmgpu-annotationtoolkit-ingestselectionhit.md)
+- [createSelectionStore#toggle](./createselectionstore-toggle.md)
+- [createAnnotation.toolkit#ingestSelectionHit](./createannotation-toolkit-ingestselectionhit.md)

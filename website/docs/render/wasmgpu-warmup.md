@@ -3,7 +3,7 @@
 ## Summary
 WasmGPU.warmup prebuilds render resources for a specific scene and camera before the first visible frame.
 Use it after assembling your initial scene when you want to reduce first-frame or first-interaction hitching from lazy pipeline, bind-group, or buffer setup.
-The current implementation is render-only. Compute warmup is not implemented.
+Warmup covers render resources only; compute resources are not included.
 
 ## Syntax
 ```ts
@@ -17,7 +17,7 @@ await wgpu.warmup(options);
 | `options` | `WasmGPUWarmupDescriptor` | No | Render warmup options, including the scene/camera pair to prebuild against. |
 
 ## Returns
-`Promise<void>` - Resolves when the requested warmup work finishes.
+`Promise<void>` - Resolves after synchronous render-resource preparation has run. It does not wait for general GPU queue completion.
 
 ## Type Details
 ```ts
@@ -39,7 +39,7 @@ type WasmGPUWarmupDescriptor = {
 
 ## Notes
 - When render warmup is enabled, both `scene` and `camera` are required.
-- Warmup resizes internal render targets, updates transforms and uniforms, builds the current draw lists, and pre-creates render-side resources for visible meshes, point clouds, glyph fields, nodelinks, splatfields, and latticespaces.
+- Warmup prepares the current canvas size, transforms, uniforms, visible draw lists, and render resources for meshes and scientific objects.
 - Warmup also creates directional-shadow render resources and can prepare the transmission resource path when the scene contains transmissive `StandardMaterial` content.
 - Warmup does not apply previous-frame occlusion filtering. It prepares resources without using the render-only occlusion path.
 - Warmup does not present a visible frame to the swapchain, and it does not advertise any compute-side preparation.
@@ -73,5 +73,5 @@ wgpu.run(() => {
 - [WasmGPU.run](./wasmgpu-run.md)
 - [WasmGPU.cullingStats](./wasmgpu-cullingstats.md)
 - [WasmGPU.createScene](../world/wasmgpu-createscene.md)
-- [WasmGPU.createCamera.perspective](../world/wasmgpu-createcamera-perspective.md)
-- [RenderEffects.shadows](./rendereffects-shadows.md)
+- [createCamera.perspective](../world/createcamera-perspective.md)
+- [effects.shadows](./effects-shadows.md)

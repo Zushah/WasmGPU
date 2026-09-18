@@ -1,0 +1,49 @@
+# math.quat.mul
+
+## Summary
+math.quat.mul composes two quaternions through quaternion multiplication. Use it to combine successive rotations into a single quaternion.
+
+## Syntax
+```ts
+WasmGPU.math.quat.mul(q1: number[], q2: number[]): number[]
+const result = wgpu.math.quat.mul(q1, q2);
+```
+
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.quatf.mul(out: WasmPtr, a: WasmPtr, b: WasmPtr): void
+WasmGPU.math.quatd.mul(out: WasmPtr, a: WasmPtr, b: WasmPtr): void
+```
+
+These forms use caller-owned pointers to 4-element quaternion blocks in WasmGPU driver memory: binary32 for `quatf` and binary64 for `quatd`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
+## Parameters
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `q1` | `number[]` | Yes | First quaternion input as `[x, y, z, w]`. |
+| `q2` | `number[]` | Yes | Second quaternion input as `[x, y, z, w]`. |
+
+## Returns
+`number[]` - New quaternion as `[x, y, z, w]`.
+
+## Type Details
+```ts
+type Quat = number[]; // expected length: 4 ([x, y, z, w])
+```
+
+## Example
+```js
+const canvas = document.querySelector("canvas");
+const wgpu = await WasmGPU.create(canvas);
+
+const q1 = [0, 0, 0, 1];
+const q2 = [0, Math.sin(Math.PI / 4), 0, Math.cos(Math.PI / 4)];
+const result = wgpu.math.quat.mul(q1, q2);
+console.log(result);
+```
+
+## See Also
+- [WasmGPU.math](./wasmgpu-math.md)
+- [math.quat.init](./math-quat-init.md)
+- [math.quat.normalize](./math-quat-normalize.md)
+- [math.quat.slerp](./math-quat-slerp.md)

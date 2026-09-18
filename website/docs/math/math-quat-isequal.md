@@ -1,0 +1,49 @@
+# math.quat.isEqual
+
+## Summary
+math.quat.isEqual checks all four components with exact floating-point equality. It does not apply an epsilon tolerance or treat `q` and `-q` as equal rotations.
+
+## Syntax
+```ts
+WasmGPU.math.quat.isEqual(q1: number[], q2: number[]): boolean
+const result = wgpu.math.quat.isEqual(q1, q2);
+```
+
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.quatf.isEqual(a: WasmPtr, b: WasmPtr): boolean
+WasmGPU.math.quatd.isEqual(a: WasmPtr, b: WasmPtr): boolean
+```
+
+These forms use caller-owned pointers to 4-element quaternion blocks in WasmGPU driver memory: binary32 for `quatf` and binary64 for `quatd`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
+## Parameters
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `q1` | `number[]` | Yes | First quaternion input as `[x, y, z, w]`. |
+| `q2` | `number[]` | Yes | Second quaternion input as `[x, y, z, w]`. |
+
+## Returns
+`boolean` - Boolean flag indicating whether the tested condition is satisfied.
+
+## Type Details
+```ts
+type Quat = number[]; // expected length: 4 ([x, y, z, w])
+```
+
+## Example
+```js
+const canvas = document.querySelector("canvas");
+const wgpu = await WasmGPU.create(canvas);
+
+const q1 = [0, 0, 0, 1];
+const q2 = [0, Math.sin(Math.PI / 4), 0, Math.cos(Math.PI / 4)];
+const result = wgpu.math.quat.isEqual(q1, q2);
+console.log(result);
+```
+
+## See Also
+- [WasmGPU.math](./wasmgpu-math.md)
+- [math.quat.init](./math-quat-init.md)
+- [math.quat.mul](./math-quat-mul.md)
+- [math.quat.normalize](./math-quat-normalize.md)

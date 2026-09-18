@@ -66,7 +66,7 @@ CPU `positions` and `scales` use three floats per splat, `rotations` use four, a
 
 CPU arrays, external GPU buffers, and WebAssembly views are three mutually exclusive source families. Within the CPU family, all supplied array counts must agree; omitted positions, rotations, scales, opacities, and colors default to zero centers, identity rotations, unit scales, full opacity, and white. `colorSpace` defaults to `"linear"`, `opacityScale` to `1`, `visible` to `true`, and CPU snapshots are dropped after upload unless `keepCPUData` is enabled.
 
-External GPU buffers require `centerOpacityBuffer`, `rotationBuffer`, `scaleBuffer`, and `splatCount`. They are borrowed unless `ownBuffers: true` transfers destruction responsibility. Packed center/opacity, rotation, scale, and direct-color buffers use one `vec4<f32>` per splat. When neither direct color nor SH data is provided, the object creates an internal white color buffer. `shBuffer` stores flat RGB triples for all coefficients of the selected degree and requires `shDegree`.
+External GPU buffers require `centerOpacityBuffer`, `rotationBuffer`, `scaleBuffer`, and `splatCount`. `splatCount` must be a non-negative signed 32-bit integer. The buffers are borrowed unless `ownBuffers: true` transfers destruction responsibility. Packed center/opacity, rotation, scale, and direct-color buffers use one `vec4<f32>` per splat. When neither direct color nor SH data is provided, splats use opaque white. `shBuffer` stores flat RGB triples for all coefficients of the selected degree and requires `shDegree`.
 
 WebAssembly construction likewise requires center/opacity, rotation, and scale sources; source memory remains borrowed. See the dedicated WebAssembly page for refresh and capacity rules. Explicit box bounds require both `boundsMin` and `boundsMax`; sphere bounds use `boundsCenter` and `boundsRadius`.
 
@@ -87,18 +87,18 @@ scene.add(splats);
 
 ## Member Reference
 
-- Identity and layout: [transform](./splatfield-transform.md), [name](./splatfield-name.md), [visible](./splatfield-visible.md), [splatCount](./splatfield-splatcount.md), [ndShape](./splatfield-ndshape.md), [mapLinearIndexToNd](./splatfield-maplinearindextond.md)
-- Color: [colorSpace](./splatfield-colorspace.md), [opacityScale](./splatfield-opacityscale.md), [usesSphericalHarmonics](./splatfield-usessphericalharmonics.md), [shDegree](./splatfield-shdegree.md), [externalColorBufferSrgb](./splatfield-externalcolorbuffersrgb.md)
-- Bounds: [boundsMin](./splatfield-boundsmin.md), [boundsMax](./splatfield-boundsmax.md), [boundsCenter](./splatfield-boundscenter.md), [boundsRadius](./splatfield-boundsradius.md), [computeBoundsFromCPUData](./splatfield-computeboundsfromcpudata.md), [getLocalBounds](./splatfield-getlocalbounds.md), [getWorldBounds](./splatfield-getworldbounds.md), [getBounds](./splatfield-getbounds.md)
-- Records and lifetime: [getSplatRecord](./splatfield-getsplatrecord.md), [getSphericalHarmonicsRecord](./splatfield-getsphericalharmonicsrecord.md), [dropCPUData](./splatfield-dropcpudata.md), [destroy](./splatfield-destroy.md)
-- GPU integration: [centerOpacityBuffer](./splatfield-centeropacitybuffer.md), [rotationBuffer](./splatfield-rotationbuffer.md), [scaleBuffer](./splatfield-scalebuffer.md), [colorBuffer](./splatfield-colorbuffer.md), [shBuffer](./splatfield-shbuffer.md), [uniformBuffer](./splatfield-uniformbuffer.md), [bindGroup](./splatfield-bindgroup.md), [bindGroupKey](./splatfield-bindgroupkey.md), [upload](./splatfield-upload.md), [getUniformBufferSize](./splatfield-getuniformbuffersize.md), [getUniformData](./splatfield-getuniformdata.md), [dirtyUniforms](./splatfield-dirtyuniforms.md), [markUniformsClean](./splatfield-markuniformsclean.md)
-- WebAssembly sources: [setWasmCenterOpacity](./splatfield-setwasmcenteropacity.md), [setWasmRotation](./splatfield-setwasmrotation.md), [setWasmScale](./splatfield-setwasmscale.md), [setWasmColor](./splatfield-setwasmcolor.md), [setWasmSphericalHarmonics](./splatfield-setwasmsphericalharmonics.md), [setWasmPackedData](./splatfield-setwasmpackeddata.md), [refreshFromWasm](./splatfield-refreshfromwasm.md), [clearWasmSources](./splatfield-clearwasmsources.md)
+- Identity and layout: [transform](./createsplatfield-transform.md), [name](./createsplatfield-name.md), [visible](./createsplatfield-visible.md), [splatCount](./createsplatfield-splatcount.md), [ndShape](./createsplatfield-ndshape.md), [mapLinearIndexToNd](./createsplatfield-maplinearindextond.md)
+- Color: [colorSpace](./createsplatfield-colorspace.md), [opacityScale](./createsplatfield-opacityscale.md), [usesSphericalHarmonics](./createsplatfield-usessphericalharmonics.md), [shDegree](./createsplatfield-shdegree.md), [externalColorBufferSrgb](./createsplatfield-externalcolorbuffersrgb.md)
+- Bounds: [boundsMin](./createsplatfield-boundsmin.md), [boundsMax](./createsplatfield-boundsmax.md), [boundsCenter](./createsplatfield-boundscenter.md), [boundsRadius](./createsplatfield-boundsradius.md), [computeBoundsFromCPUData](./createsplatfield-computeboundsfromcpudata.md), [getLocalBounds](./createsplatfield-getlocalbounds.md), [getWorldBounds](./createsplatfield-getworldbounds.md), [getBounds](./createsplatfield-getbounds.md)
+- Records and lifetime: [getSplatRecord](./createsplatfield-getsplatrecord.md), [getSphericalHarmonicsRecord](./createsplatfield-getsphericalharmonicsrecord.md), [dropCPUData](./createsplatfield-dropcpudata.md), [destroy](./createsplatfield-destroy.md)
+- GPU integration: [centerOpacityBuffer](./createsplatfield-centeropacitybuffer.md), [rotationBuffer](./createsplatfield-rotationbuffer.md), [scaleBuffer](./createsplatfield-scalebuffer.md), [colorBuffer](./createsplatfield-colorbuffer.md), [shBuffer](./createsplatfield-shbuffer.md), [uniformBuffer](./createsplatfield-uniformbuffer.md), [bindGroup](./createsplatfield-bindgroup.md), [bindGroupKey](./createsplatfield-bindgroupkey.md), [upload](./createsplatfield-upload.md), [getUniformBufferSize](./createsplatfield-getuniformbuffersize.md), [getUniformData](./createsplatfield-getuniformdata.md), [dirtyUniforms](./createsplatfield-dirtyuniforms.md), [markUniformsClean](./createsplatfield-markuniformsclean.md)
+- WebAssembly sources: [setWasmCenterOpacity](./createsplatfield-setwasmcenteropacity.md), [setWasmRotation](./createsplatfield-setwasmrotation.md), [setWasmScale](./createsplatfield-setwasmscale.md), [setWasmColor](./createsplatfield-setwasmcolor.md), [setWasmSphericalHarmonics](./createsplatfield-setwasmsphericalharmonics.md), [setWasmPackedData](./createsplatfield-setwasmpackeddata.md), [refreshFromWasm](./createsplatfield-refreshfromwasm.md), [clearWasmSources](./createsplatfield-clearwasmsources.md)
 
 ## See Also
 
-- [SplatField.splatCount](./splatfield-splatcount.md)
-- [SplatField.getSplatRecord](./splatfield-getsplatrecord.md)
-- [SplatField.setWasmPackedData](./splatfield-setwasmpackeddata.md)
-- [SplatField.upload](./splatfield-upload.md)
-- [SplatField.destroy](./splatfield-destroy.md)
-- [WasmGPU.gltf.import](./wasmgpu-gltf-import.md)
+- [createSplatField#splatCount](./createsplatfield-splatcount.md)
+- [createSplatField#getSplatRecord](./createsplatfield-getsplatrecord.md)
+- [createSplatField#setWasmPackedData](./createsplatfield-setwasmpackeddata.md)
+- [createSplatField#upload](./createsplatfield-upload.md)
+- [createSplatField#destroy](./createsplatfield-destroy.md)
+- [gltf.import](./gltf-import.md)

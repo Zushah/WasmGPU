@@ -1,7 +1,7 @@
-# Colormap.sampleCPU
+# colormap#sampleCPU
 
 ## Summary
-Colormap.sampleCPU operates on a Colormap runtime object to update state, query data, or manage lifecycle.
+colormap#sampleCPU samples the retained linear RGBA8 lookup table using the colormap's `nearest` or `linear` filter. The sampling helpers clamp the coordinate to the lookup-table endpoints. The method throws when `canSampleCPU` is `false`.
 
 ## Syntax
 ```ts
@@ -15,7 +15,7 @@ const result = colormap.sampleCPU(t);
 | `t` | `number` | Yes | Normalized sample coordinate, usually in `[0, 1]`. |
 
 ## Returns
-`Color4` - Result produced by this API call as `Color4`.
+`Color4` - Linear RGBA channels normalized to `[0, 1]`.
 
 ## Type Details
 ### Color4
@@ -36,9 +36,9 @@ console.log(result);
 ```
 
 ## See Also
-- [Colormap.canSampleCPU](./colormap-cansamplecpu.md)
-- [Colormap.filter](./colormap-filter.md)
-- [Colormap.getGPUResources](./colormap-getgpuresources.md)
-- [Colormap.getRGBA8LinearLUT](./colormap-getrgba8linearlut.md)
-- [Colormap.toUniformStops](./colormap-touniformstops.md)
-- [Colormap.width](./colormap-width.md)
+- [colormap#canSampleCPU](./colormap-cansamplecpu.md)
+- [colormap#filter](./colormap-filter.md)
+- [colormap#getGPUResources](./colormap-getgpuresources.md)
+- [colormap#getRGBA8LinearLUT](./colormap-getrgba8linearlut.md)
+- [colormap#toUniformStops](./colormap-touniformstops.md)
+- [colormap#width](./colormap-width.md)

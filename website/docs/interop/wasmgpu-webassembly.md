@@ -33,9 +33,9 @@ type WasmModuleOptions = {
 ```
 
 #### Factory Methods
-- [`WasmGPU.webassembly.fromInstance(instance, options?)`](./wasmgpu-webassembly-frominstance.md) wraps a `WebAssembly.Instance` or any object with an `exports` field.
-- [`WasmGPU.webassembly.fromExports(exportsObject, options?)`](./wasmgpu-webassembly-fromexports.md) wraps an exports object directly.
-- [`WasmGPU.webassembly.fromMemory(memory, options?)`](./wasmgpu-webassembly-frommemory.md) wraps a standalone `WebAssembly.Memory` when you only need memory access.
+- [`WasmGPU.webassembly.fromInstance(instance, options?)`](./webassembly-frominstance.md) wraps a `WebAssembly.Instance` or any object with an `exports` field.
+- [`WasmGPU.webassembly.fromExports(exportsObject, options?)`](./webassembly-fromexports.md) wraps an exports object directly.
+- [`WasmGPU.webassembly.fromMemory(memory, options?)`](./webassembly-frommemory.md) wraps a standalone `WebAssembly.Memory` when you only need memory access.
 
 #### WasmModule
 `WasmModule` resolves pointers and lengths against a foreign module and creates typed memory views.
@@ -98,10 +98,11 @@ type WasmMemoryView<T extends ArrayBufferView = ArrayBufferView> = {
 - `array()`, `bytes()`, and `dataView()` are live views over external memory, not copies.
 - `copy()` returns an owned JavaScript typed-array copy of the current range.
 - `copyInto(target)` writes the current contents into a caller-provided typed array.
-- Call `refresh()` when an exported pointer or length may have changed, or when the foreign memory may have grown and cached views need to be recreated.
+- Call `refresh()` when an exported pointer, length, dtype, byte offset, or selected memory may have changed. Memory growth alone does not require it: `array()`, `bytes()`, and `dataView()` detect a replacement `memory.buffer` and rebuild their cached views automatically.
 
 ## Notes
 - `view(...)`, `readBytes(...)`, `readUtf8(...)`, and `dataView(...)` bounds-check the requested range.
+- Unlike `WasmMemoryView`, the raw views returned directly by `readBytes(...)` and `dataView(...)` do not self-refresh after memory growth; call the method again to obtain a view over the new buffer.
 - Typed views are alignment-checked against the requested dtype.
 - `readUtf8(ptr, length, options?)` is useful when a foreign module exposes UTF-8 strings through pointer/length exports.
 - External WebAssembly interop is separate from [WasmGPU.python](./wasmgpu-python.md). Python helpers move ndarray-like data into WasmGPU-managed memory; `WasmGPU.webassembly` reads directly from a foreign module's memory.
@@ -120,15 +121,15 @@ console.log(copy);
 ```
 
 ## See Also
-- [Geometry.setWasmAttributes](../objects/geometry-setwasmattributes.md)
-- [PointCloud.setData](../objects/pointcloud-setdata.md)
-- [GlyphField.setWasmPositions](../objects/glyphfield-setwasmpositions.md)
-- [NodeLink.setNodeData](../objects/nodelink-setnodedata.md)
-- [SplatField.setWasmPackedData](../objects/splatfield-setwasmpackeddata.md)
-- [LatticeSpace.setData](../objects/latticespace-setdata.md)
-- [WasmGPU.webassembly.fromInstance](./wasmgpu-webassembly-frominstance.md)
-- [WasmGPU.webassembly.fromExports](./wasmgpu-webassembly-fromexports.md)
-- [WasmGPU.webassembly.fromMemory](./wasmgpu-webassembly-frommemory.md)
+- [geometry#setWasmAttributes](../objects/geometry-setwasmattributes.md)
+- [createPointCloud#setData](../objects/createpointcloud-setdata.md)
+- [createGlyphField#setWasmPositions](../objects/createglyphfield-setwasmpositions.md)
+- [createNodeLink#setNodeData](../objects/createnodelink-setnodedata.md)
+- [createSplatField#setWasmPackedData](../objects/createsplatfield-setwasmpackeddata.md)
+- [createLatticeSpace#setData](../objects/createlatticespace-setdata.md)
+- [webassembly.fromInstance](./webassembly-frominstance.md)
+- [webassembly.fromExports](./webassembly-fromexports.md)
+- [webassembly.fromMemory](./webassembly-frommemory.md)
 - [WasmGPU.driver](./wasmgpu-driver.md)
 - [WasmGPU.frameArena](./wasmgpu-framearena.md)
 - [WasmGPU.python](./wasmgpu-python.md)

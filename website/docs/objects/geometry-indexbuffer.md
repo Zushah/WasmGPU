@@ -1,7 +1,7 @@
-# Geometry.indexBuffer
+# geometry#indexBuffer
 
 ## Summary
-Geometry.indexBuffer reads the current `indexBuffer` value from this Geometry instance. Use it to inspect runtime state without mutating resources.
+geometry#indexBuffer returns the geometry-owned `uint32` index buffer after upload, or `null` for non-indexed geometry and before indices have been uploaded. Do not destroy the returned buffer independently of the geometry.
 
 ## Syntax
 ```ts
@@ -9,37 +9,10 @@ Geometry.indexBuffer: GPUBuffer | null
 const value = geometry.indexBuffer;
 ```
 
-## Parameters
-This API does not take parameters.
-
 ## Returns
-`GPUBuffer | null` - Current accessor value exposed by the runtime object.
-
-## Type Details
-```ts
-// No additional descriptor expansion is required for this signature.
-```
-
-## Example
-```js
-const canvas = document.querySelector("canvas");
-const wgpu = await WasmGPU.create(canvas);
-
-const geometry = wgpu.geometry.sphere(1, 24, 16);
-const value = geometry.indexBuffer;
-console.log(value);
-```
+The geometry-owned index buffer, or `null` when unavailable.
 
 ## See Also
-- [Geometry.boundsCenter](./geometry-boundscenter.md)
-- [Geometry.boundsMax](./geometry-boundsmax.md)
-- [Geometry.boundsMin](./geometry-boundsmin.md)
-- [Geometry.boundsRadius](./geometry-boundsradius.md)
-- [Geometry.destroy](./geometry-destroy.md)
-- [Geometry.isIndexed](./geometry-isindexed.md)
-- [Geometry.isSkinned](./geometry-isskinned.md)
-- [Geometry.isSkinned8](./geometry-isskinned8.md)
-- [Geometry.joints1Buffer](./geometry-joints1buffer.md)
-- [Geometry.jointsBuffer](./geometry-jointsbuffer.md)
-- [Geometry.normalBuffer](./geometry-normalbuffer.md)
-- [Geometry.positionBuffer](./geometry-positionbuffer.md)
+- [geometry#destroy](./geometry-destroy.md)
+- [geometry#isIndexed](./geometry-isindexed.md)
+- [geometry#upload](./geometry-upload.md)

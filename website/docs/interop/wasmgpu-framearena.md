@@ -9,8 +9,6 @@ Use it for scratch pointers whose lifetime should end with the current frame or 
 ```ts
 WasmGPU.frameArena: FrameArena
 const frameArena = wgpu.frameArena;
-
-import { frameArena } from "wasmgpu";
 ```
 
 ## Parameters
@@ -26,6 +24,7 @@ type FrameArena = {
     reset(): void;
     alloc(bytes: number, align?: number): number;
     allocF32(len: number): number;
+    allocF64(len: number): number;
     epoch(): number;
     usedBytes(): number;
     capBytes(): number;
@@ -33,8 +32,8 @@ type FrameArena = {
 ```
 
 ## Notes
-- `alloc()` and `allocF32()` return raw Wasm pointers. Use `wgpu.driver.view(...)` to read or write those regions.
-- If you want epoch-checked typed slices instead of raw pointers, use `wgpu.driver.frame.allocF32()`, `allocU32()`, `allocI32()`, or `allocU8()`.
+- `alloc()`, `allocF32()`, and `allocF64()` return raw Wasm pointers. Use `wgpu.driver.view(...)` to read or write those regions.
+- If you want epoch-checked typed slices instead of raw pointers, use `wgpu.driver.frame.allocF32()`, `allocF64()`, `allocU32()`, `allocI32()`, or `allocU8()`.
 - Do not retain frame-arena pointers, typed-array views, or frame `WasmSlice` objects across `frameArena.reset()`, across frames inside `WasmGPU.run()`, or across standalone `WasmGPU.render()` calls.
 
 ## Example
@@ -52,7 +51,7 @@ wgpu.frameArena.reset();
 
 ## See Also
 - [WasmGPU.driver](./wasmgpu-driver.md)
-- [WasmGPU.frameArena.init](./wasmgpu-framearena-init.md)
-- [WasmGPU.frameArena.alloc](./wasmgpu-framearena-alloc.md)
-- [WasmGPU.frameArena.reset](./wasmgpu-framearena-reset.md)
+- [frameArena.init](./framearena-init.md)
+- [frameArena.alloc](./framearena-alloc.md)
+- [frameArena.reset](./framearena-reset.md)
 - [WasmGPU.createHeapArena](./wasmgpu-createheaparena.md)

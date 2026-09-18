@@ -1,8 +1,9 @@
-# Geometry.setWasmWeights
+# geometry#setWasmWeights
 
 ## Summary
 
-`Geometry.setWasmWeights()` borrows the first packed four-float skin-weight set.
+`geometry#setWasmWeights()` borrows the first packed four-float skin-weight set.
+A non-null source is refreshed immediately with the other attached vertex channels; after later producer writes or memory growth, call `refreshWasmVertices()` before `upload()`. Passing `null` detaches this channel.
 
 ## Syntax
 
@@ -12,5 +13,5 @@ Geometry.setWasmWeights(source: WasmMemoryView<Float32Array> | null, options?: G
 
 ## See Also
 
-- [Geometry.weightsBuffer](./geometry-weightsbuffer.md)
-- [Geometry.setWasmJoints](./geometry-setwasmjoints.md)
+- [geometry#weightsBuffer](./geometry-weightsbuffer.md)
+- [geometry#setWasmJoints](./geometry-setwasmjoints.md)

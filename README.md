@@ -308,10 +308,10 @@ Using the IIFE bundle instead of the ESM bundle is exactly the same as above, ex
 
 To get started with the comprehensive [documentation](https://zushah.github.io/WasmGPU/docs/), consider visiting the pages for these fundamentals first:
 - [`WasmGPU.create`](https://zushah.github.io/WasmGPU/docs/render/wasmgpu-create/)
-- [`WasmGPU.compute.createPipeline`](https://zushah.github.io/WasmGPU/docs/compute/wasmgpu-compute-createpipeline/)
+- [`WasmGPU.compute.createPipeline`](https://zushah.github.io/WasmGPU/docs/compute/compute-createpipeline/)
 - [`WasmGPU.createMesh`](https://zushah.github.io/WasmGPU/docs/objects/wasmgpu-createmesh/)
-- [`WasmGPU.createCamera.perspective`](https://zushah.github.io/WasmGPU/docs/world/wasmgpu-createcamera-perspective/)
-- [`WasmGPU.createControls.orbit`](https://zushah.github.io/WasmGPU/docs/interact/wasmgpu-createcontrols-orbit/)
+- [`WasmGPU.createCamera.perspective`](https://zushah.github.io/WasmGPU/docs/world/createcamera-perspective/)
+- [`WasmGPU.createControls.orbit`](https://zushah.github.io/WasmGPU/docs/interact/createcontrols-orbit/)
 - [`WasmGPU.webassembly`](https://zushah.github.io/WasmGPU/docs/interop/wasmgpu-webassembly/)
 - [`WasmGPU.python`](https://zushah.github.io/WasmGPU/docs/interop/wasmgpu-python/)
 - [`WasmGPU.math`](https://zushah.github.io/WasmGPU/docs/math/wasmgpu-math/)

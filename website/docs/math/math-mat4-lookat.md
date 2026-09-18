@@ -1,0 +1,54 @@
+# math.mat4.lookAt
+
+## Summary
+math.mat4.lookAt builds a right-handed view matrix from eye, target, and up vectors. Use it to construct camera transforms for scene rendering.
+
+## Syntax
+```ts
+WasmGPU.math.mat4.lookAt(eye: number[], center: number[], up: number[]): number[]
+const result = wgpu.math.mat4.lookAt(eye, center, up);
+```
+
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.mat4f.lookAt(out: WasmPtr, eye3: WasmPtr, center3: WasmPtr, up3: WasmPtr): void
+WasmGPU.math.mat4d.lookAt(out: WasmPtr, eye3: WasmPtr, center3: WasmPtr, up3: WasmPtr): void
+```
+
+These forms use caller-owned pointers to 16-element matrix blocks in WasmGPU driver memory: binary32 for `mat4f` and binary64 for `mat4d`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
+## Parameters
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `eye` | `number[]` | Yes | Camera position `[x, y, z]` with finite components. |
+| `center` | `number[]` | Yes | Target point `[x, y, z]` with finite components, distinct from `eye`. |
+| `up` | `number[]` | Yes | Finite, nonzero up direction that is not parallel to `center - eye`; typically `[0, 1, 0]`. |
+
+Each vector must contain at least three components. The non-degenerate requirements above are necessary for a finite view matrix.
+
+## Returns
+`number[]` - New 4x4 matrix as a 16-number column-major array.
+
+## Type Details
+```ts
+type Mat4 = number[]; // expected length: 16 (4x4, column-major)
+type Vec3 = number[]; // expected length: 3 ([x, y, z])
+```
+
+## Example
+```js
+const canvas = document.querySelector("canvas");
+const wgpu = await WasmGPU.create(canvas);
+
+const eye = [3, 2, 6];
+const center = [0, 0, 0];
+const up = [0, 1, 0];
+const result = wgpu.math.mat4.lookAt(eye, center, up);
+console.log(result);
+```
+
+## See Also
+- [WasmGPU.math](./wasmgpu-math.md)
+- [math.mat4.identity](./math-mat4-identity.md)
+- [math.mat4.mul](./math-mat4-mul.md)
+- [math.mat4.invert](./math-mat4-invert.md)

@@ -1,8 +1,9 @@
-# Geometry.setWasmNormals
+# geometry#setWasmNormals
 
 ## Summary
 
-`Geometry.setWasmNormals()` borrows packed three-float normal records from WebAssembly memory.
+`geometry#setWasmNormals()` borrows packed three-float normal records from WebAssembly memory.
+A non-null source is refreshed immediately with the other attached vertex channels; after later producer writes or memory growth, call `refreshWasmVertices()` before `upload()`. Passing `null` detaches this channel.
 
 ## Syntax
 
@@ -16,5 +17,5 @@ Options can identify whether normals are authored. Passing `null` detaches this 
 
 ## See Also
 
-- [Geometry.normalBuffer](./geometry-normalbuffer.md)
-- [Geometry.refreshWasmVertices](./geometry-refreshwasmvertices.md)
+- [geometry#normalBuffer](./geometry-normalbuffer.md)
+- [geometry#refreshWasmVertices](./geometry-refreshwasmvertices.md)

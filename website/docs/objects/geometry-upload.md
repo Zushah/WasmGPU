@@ -1,50 +1,43 @@
-# Geometry.upload
+# geometry#upload
 
 ## Summary
-Geometry.upload refreshes attached Wasm views and uploads pending CPU or Wasm data into geometry-owned GPU buffers. Borrowed Wasm allocations are never freed by the geometry.
+
+`geometry#upload()` transfers pending CPU or WebAssembly-backed geometry data into geometry-owned WebGPU buffers.
+It transfers only dirty channels on the current device and recreates GPU resources when the device changes. Refresh borrowed Wasm sources after producer writes so their updated active ranges are marked for upload.
 
 ## Syntax
+
 ```ts
 Geometry.upload(device: GPUDevice): void
-geometry.upload(device);
 ```
 
 ## Parameters
+
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `device` | `GPUDevice` | Yes | GPUDevice used to allocate pipelines, buffers, layouts, or textures. |
+| `device` | `GPUDevice` | Yes | Device that owns the resulting vertex and index buffers. |
 
-## Returns
-`void` - No return value. The call applies side effects to runtime state and/or GPU resources.
+## Behavior
 
-## Type Details
-```ts
-// No additional descriptor expansion is required for this signature.
-```
+Only dirty channels are transferred when the device is unchanged. Passing a different device recreates the geometry's GPU resources for that device. Active WebAssembly views are refreshed and validated immediately before their dirty ranges are copied.
+
+CPU arrays supplied to the geometry are copied into owned GPU buffers. WebAssembly views remain borrowed: uploading never frees or takes ownership of their allocations. Capacity hints supplied by the WebAssembly setters can reserve reusable GPU space without changing `vertexCount` or `indexCount`.
+
+After a WebAssembly producer changes active counts, retained CPU data, or bounds-relevant positions, call the appropriate refresh method before `upload()`. Producer writes within an unchanged active range still require a refresh so the channel is marked dirty.
 
 ## Example
-```js
-const canvas = document.querySelector("canvas");
-const wgpu = await WasmGPU.create(canvas);
 
-const geometry = wgpu.geometry.sphere(1, 24, 16);
-const device = wgpu.gpu.device;
-geometry.upload(device);
+```js
+geometry.refreshFromWasm({ vertexCount, indexCount, recomputeBounds: true });
+geometry.upload(wgpu.gpu.device);
+
 console.log(geometry.positionBuffer, geometry.indexBuffer);
-geometry.destroy();
 ```
 
 ## See Also
-- [Geometry.boundsCenter](./geometry-boundscenter.md)
-- [Geometry.boundsMax](./geometry-boundsmax.md)
-- [Geometry.boundsMin](./geometry-boundsmin.md)
-- [Geometry.boundsRadius](./geometry-boundsradius.md)
-- [Geometry.destroy](./geometry-destroy.md)
-- [Geometry.indexBuffer](./geometry-indexbuffer.md)
-- [Geometry.isIndexed](./geometry-isindexed.md)
-- [Geometry.isSkinned](./geometry-isskinned.md)
-- [Geometry.isSkinned8](./geometry-isskinned8.md)
-- [Geometry.joints1Buffer](./geometry-joints1buffer.md)
-- [Geometry.jointsBuffer](./geometry-jointsbuffer.md)
-- [Geometry.normalBuffer](./geometry-normalbuffer.md)
-- [Geometry.refreshFromWasm](./geometry-refreshfromwasm.md)
+
+- [geometry#setWasmAttributes](./geometry-setwasmattributes.md)
+- [geometry#refreshFromWasm](./geometry-refreshfromwasm.md)
+- [geometry#positionBuffer](./geometry-positionbuffer.md)
+- [geometry#indexBuffer](./geometry-indexbuffer.md)
+- [geometry#destroy](./geometry-destroy.md)

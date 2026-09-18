@@ -1,8 +1,9 @@
-# Geometry.setWasmWeights1
+# geometry#setWasmWeights1
 
 ## Summary
 
-`Geometry.setWasmWeights1()` borrows the optional second packed four-float weight set used for eight-influence skinning.
+`geometry#setWasmWeights1()` borrows the optional second packed four-float weight set used for eight-influence skinning.
+A non-null source is refreshed immediately with the other attached vertex channels; after later producer writes or memory growth, call `refreshWasmVertices()` before `upload()`. Passing `null` detaches this channel.
 
 ## Syntax
 
@@ -12,5 +13,5 @@ Geometry.setWasmWeights1(source: WasmMemoryView<Float32Array> | null, options?: 
 
 ## See Also
 
-- [Geometry.weights1Buffer](./geometry-weights1buffer.md)
-- [Geometry.setWasmJoints1](./geometry-setwasmjoints1.md)
+- [geometry#weights1Buffer](./geometry-weights1buffer.md)
+- [geometry#setWasmJoints1](./geometry-setwasmjoints1.md)

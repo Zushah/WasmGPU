@@ -290,10 +290,10 @@ wgpu.run((dt, time) => {
 Suggested starting points:
 
 - [WasmGPU.create](./render/wasmgpu-create.md)
-- [WasmGPU.compute.createPipeline](./compute/wasmgpu-compute-createpipeline.md)
+- [compute.createPipeline](./compute/compute-createpipeline.md)
 - [WasmGPU.createMesh](./objects/wasmgpu-createmesh.md)
-- [WasmGPU.createCamera.perspective](./world/wasmgpu-createcamera-perspective.md)
-- [WasmGPU.createControls.orbit](./interact/wasmgpu-createcontrols-orbit.md)
+- [createCamera.perspective](./world/createcamera-perspective.md)
+- [createControls.orbit](./interact/createcontrols-orbit.md)
 - [WasmGPU.webassembly](./interop/wasmgpu-webassembly.md)
 - [WasmGPU.python](./interop/wasmgpu-python.md)
 - [WasmGPU.math](./math/wasmgpu-math.md)

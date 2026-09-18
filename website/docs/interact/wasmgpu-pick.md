@@ -14,7 +14,7 @@ const hit = await wgpu.pick(scene, camera, x, y, opts);
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `scene` | `Scene` | Yes | Scene to query against; only currently rendered pickable objects can be hit. |
+| `scene` | `Scene` | Yes | Scene to query; visible supported objects are prepared for a dedicated pick pass, so a prior `render()` call is not required. |
 | `camera` | `Camera` | Yes | Camera used to project the pick ray into the scene. |
 | `x` | `number` | Yes | Canvas-space X coordinate in CSS pixels. |
 | `y` | `number` | Yes | Canvas-space Y coordinate in CSS pixels. |
@@ -103,4 +103,4 @@ canvas.addEventListener("click", async (event) => {
 - [WasmGPU.createNodeLink](../objects/wasmgpu-createnodelink.md)
 - [WasmGPU.createSplatField](../objects/wasmgpu-createsplatfield.md)
 - [WasmGPU.createLatticeSpace](../objects/wasmgpu-createlatticespace.md)
-- [WasmGPU.createAnnotation.toolkit](./wasmgpu-createannotation-toolkit.md)
+- [createAnnotation.toolkit](./createannotation-toolkit.md)

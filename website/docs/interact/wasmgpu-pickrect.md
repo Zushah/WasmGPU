@@ -2,8 +2,8 @@
 
 ## Summary
 WasmGPU.pickRect performs rectangular region picking using two canvas-space corners.
-It returns deduplicated element hits across the sampled pixels in that region.
-Use it for box selection tools, brushing, and batched selection updates.
+The asynchronous result contains deduplicated element hits, sampled bounds, pixel count, and whether the requested hit limit truncated the selection.
+Use it for box selection, brushing, and batched selection updates.
 
 ## Syntax
 ```ts
@@ -71,5 +71,5 @@ wgpu.run((dt) => {
 - [WasmGPU.pick](./wasmgpu-pick.md)
 - [WasmGPU.pickLasso](./wasmgpu-picklasso.md)
 - [WasmGPU.createNodeLink](../objects/wasmgpu-createnodelink.md)
-- [WasmGPU.createSelectionStore().replace](./wasmgpu-createselectionstore-replace.md)
-- [WasmGPU.createSelectionStore().apply](./wasmgpu-createselectionstore-apply.md)
+- [createSelectionStore#replace](./createselectionstore-replace.md)
+- [createSelectionStore#apply](./createselectionstore-apply.md)

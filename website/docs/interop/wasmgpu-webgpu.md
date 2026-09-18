@@ -36,10 +36,10 @@ const layout = WasmGPU.webgpu.bindGroupLayout({
 ```
 
 ## See Also
-- [WasmGPU.webgpu.storageBufferLayout](./wasmgpu-webgpu-storagebufferlayout.md)
-- [WasmGPU.webgpu.uniformBufferLayout](./wasmgpu-webgpu-uniformbufferlayout.md)
-- [WasmGPU.webgpu.samplerLayout](./wasmgpu-webgpu-samplerlayout.md)
-- [WasmGPU.webgpu.textureLayout](./wasmgpu-webgpu-texturelayout.md)
-- [WasmGPU.webgpu.bindGroupLayout](./wasmgpu-webgpu-bindgrouplayout.md)
-- [WasmGPU.webgpu.bindingResource](./wasmgpu-webgpu-bindingresource.md)
-- [WasmGPU.webgpu.bindGroupResources](./wasmgpu-webgpu-bindgroupresources.md)
+- [webgpu.storageBufferLayout](./webgpu-storagebufferlayout.md)
+- [webgpu.uniformBufferLayout](./webgpu-uniformbufferlayout.md)
+- [webgpu.samplerLayout](./webgpu-samplerlayout.md)
+- [webgpu.textureLayout](./webgpu-texturelayout.md)
+- [webgpu.bindGroupLayout](./webgpu-bindgrouplayout.md)
+- [webgpu.bindingResource](./webgpu-bindingresource.md)
+- [webgpu.bindGroupResources](./webgpu-bindgroupresources.md)

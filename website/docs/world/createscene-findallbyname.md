@@ -1,0 +1,39 @@
+# createScene#findAllByName
+
+## Summary
+createScene#findAllByName returns all meshes whose `name` exactly matches the given string. It is mesh-specific; other renderable families have their own lookup methods. The returned array may be empty.
+
+## Syntax
+```ts
+Scene.findAllByName(name: string): Mesh[]
+const meshes = scene.findAllByName(name);
+```
+
+## Parameters
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `name` | `string` | Yes | Exact mesh name to match. |
+
+## Returns
+`Mesh[]` - Array of matching meshes (possibly empty).
+
+## Example
+```js
+const canvas = document.querySelector("canvas");
+const wgpu = await WasmGPU.create(canvas);
+
+const scene = wgpu.createScene();
+for (let i = 0; i < 3; i++) {
+    const m = wgpu.createMesh(wgpu.geometry.box(1, 1, 1), wgpu.material.unlit({ color: [0.8, 0.6, 0.2] }));
+    m.name = "cell";
+    scene.add(m);
+}
+console.log(scene.findAllByName("cell").length);
+```
+
+## See Also
+- [createScene#findByName](./createscene-findbyname.md)
+- [createScene#traverse](./createscene-traverse.md)
+- [createScene#meshes](./createscene-meshes.md)
+- [createScene#splatFields and splat-field lookup](./createscene-splatfields.md)
+- [createScene#latticeSpaces and lattice-space lookup](./createscene-latticespaces.md)

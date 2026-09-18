@@ -1,8 +1,9 @@
-# Geometry.setWasmUvs
+# geometry#setWasmUvs
 
 ## Summary
 
-`Geometry.setWasmUvs()` borrows packed two-float primary UV records from WebAssembly memory.
+`geometry#setWasmUvs()` borrows packed two-float primary UV records from WebAssembly memory.
+A non-null source is refreshed immediately with the other attached vertex channels; after later producer writes or memory growth, call `refreshWasmVertices()` before `upload()`. Passing `null` detaches this channel.
 
 ## Syntax
 
@@ -12,5 +13,5 @@ Geometry.setWasmUvs(source: WasmMemoryView<Float32Array> | null, options?: Geome
 
 ## See Also
 
-- [Geometry.uvBuffer](./geometry-uvbuffer.md)
-- [Geometry.refreshWasmVertices](./geometry-refreshwasmvertices.md)
+- [geometry#uvBuffer](./geometry-uvbuffer.md)
+- [geometry#refreshWasmVertices](./geometry-refreshwasmvertices.md)

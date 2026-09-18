@@ -1,0 +1,50 @@
+# math.quat.dist
+
+## Summary
+math.quat.dist computes Euclidean distance between two quaternions in four-component `[x, y, z, w]` space.
+It is a component-space distance, not an angular distance; equivalent rotations represented by `q` and `-q` are therefore not treated as identical.
+
+## Syntax
+```ts
+WasmGPU.math.quat.dist(q1: number[], q2: number[]): number
+const result = wgpu.math.quat.dist(q1, q2);
+```
+
+## Precision-Specific Wasm Forms
+```ts
+WasmGPU.math.quatf.dist(a: WasmPtr, b: WasmPtr): number
+WasmGPU.math.quatd.dist(a: WasmPtr, b: WasmPtr): number
+```
+
+These forms use caller-owned pointers to 4-element quaternion blocks in WasmGPU driver memory: binary32 for `quatf` and binary64 for `quatd`. Methods with an output pointer write that block instead of allocating a JavaScript array. See [WasmGPU.math](./wasmgpu-math.md) for allocation, views, aliasing, and release requirements.
+
+## Parameters
+| Name | Type | Required | Description |
+| --- | --- | --- | --- |
+| `q1` | `number[]` | Yes | First quaternion input as `[x, y, z, w]`. |
+| `q2` | `number[]` | Yes | Second quaternion input as `[x, y, z, w]`. |
+
+## Returns
+`number` - Euclidean distance between the two inputs.
+
+## Type Details
+```ts
+type Quat = number[]; // expected length: 4 ([x, y, z, w])
+```
+
+## Example
+```js
+const canvas = document.querySelector("canvas");
+const wgpu = await WasmGPU.create(canvas);
+
+const q1 = [0, 0, 0, 1];
+const q2 = [0, Math.sin(Math.PI / 4), 0, Math.cos(Math.PI / 4)];
+const result = wgpu.math.quat.dist(q1, q2);
+console.log(result);
+```
+
+## See Also
+- [WasmGPU.math](./wasmgpu-math.md)
+- [math.quat.init](./math-quat-init.md)
+- [math.quat.mul](./math-quat-mul.md)
+- [math.quat.normalize](./math-quat-normalize.md)

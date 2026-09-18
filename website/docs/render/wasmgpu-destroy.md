@@ -4,6 +4,7 @@
 WasmGPU.destroy tears down the engine and releases runtime resources.
 It stops the frame loop, destroys active PerformanceStats, clears scaling caches, destroys compute resources, and disposes renderer resources including directional shadows.
 Call this when the canvas/engine is no longer needed.
+Scenes and objects created by the engine are caller-owned; destroy them separately before destroying the engine.
 
 ## Syntax
 ```ts
@@ -22,8 +23,9 @@ This API does not take parameters.
 const canvas = document.querySelector("canvas");
 const wgpu = await WasmGPU.create(canvas);
 const scene = wgpu.createScene([0.03, 0.03, 0.05]);
-const camera = wgpu.createCamera.perspective({ fov: Math.PI / 3, aspect: canvas.width / Math.max(1, canvas.height), near: 0.1, far: 1000 });
+const camera = wgpu.createCamera.perspective({ fov: 60, aspect: canvas.width / Math.max(1, canvas.height), near: 0.1, far: 1000 });
 wgpu.render(scene, camera);
+scene.destroy();
 wgpu.destroy();
 ```
 

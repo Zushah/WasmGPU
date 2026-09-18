@@ -1,7 +1,7 @@
-# Geometry.getMorphIndices
+# geometry#getMorphIndices
 
 ## Summary
-Geometry.getMorphIndices returns the active index sequence used to expand indexed morph data, or `null` for non-indexed geometry.
+geometry#getMorphIndices returns the active index sequence used to expand indexed morph data, or `null` for non-indexed geometry.
 
 ## Syntax
 ```ts
@@ -32,5 +32,5 @@ console.log(indices ? Array.from(indices) : "non-indexed");
 Wasm-backed indices are refreshed and copied. CPU-backed results may be an active subarray view.
 
 ## See Also
-- [Geometry.morphBaseRevision](./geometry-morphbaserevision.md)
-- [Geometry.getMorphBaseChannel](./geometry-getmorphbasechannel.md)
+- [geometry#morphBaseRevision](./geometry-morphbaserevision.md)
+- [geometry#getMorphBaseChannel](./geometry-getmorphbasechannel.md)

@@ -12,7 +12,7 @@ const scene = wgpu.createScene(background);
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `background` | `Color` | No | Normalized RGB clear color applied when rendering this scene. |
+| `background` | `Color` | No | Three finite RGB clear-color components in `[0, 1]`; default `[0, 0, 0]`. |
 
 ## Returns
 `Scene` - Scene instance with object/light collections and traversal/query helpers.
@@ -43,11 +43,12 @@ wgpu.render(scene, camera);
 ```
 
 ## See Also
-- [WasmGPU.createCamera.perspective](./wasmgpu-createcamera-perspective.md)
-- [WasmGPU.createCamera.orthographic](./wasmgpu-createcamera-orthographic.md)
-- [Scene.add](./scene-add.md)
-- [Scene.nodeLinks](./scene-nodelinks.md)
-- [Scene splat-field APIs](./scene-splatfields.md)
-- [Scene lattice-space APIs](./scene-latticespaces.md)
-- [Scene.addLight](./scene-addlight.md)
-- [Scene.getBounds](./scene-getbounds.md)
+- [createScene#MAX_LIGHTS](./createscene-max_lights.md)
+- [createCamera.perspective](./createcamera-perspective.md)
+- [createCamera.orthographic](./createcamera-orthographic.md)
+- [createScene#add](./createscene-add.md)
+- [createScene#nodeLinks](./createscene-nodelinks.md)
+- [Scene splat-field APIs](./createscene-splatfields.md)
+- [Scene lattice-space APIs](./createscene-latticespaces.md)
+- [createScene#addLight](./createscene-addlight.md)
+- [createScene#getBounds](./createscene-getbounds.md)

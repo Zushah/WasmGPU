@@ -20,7 +20,7 @@ The render subsystem covers core engine lifecycle, runtime configuration, warmup
 - [WasmGPU.run](./wasmgpu-run.md)
 - [WasmGPU.cullingStats](./wasmgpu-cullingstats.md)
 - [WasmGPU.effects](./wasmgpu-effects.md)
-- [RenderEffects.shadows](./rendereffects-shadows.md)
+- [effects.shadows](./effects-shadows.md)
 - [WasmGPU.createTransform](./wasmgpu-createtransform.md)
 
 Use the sidebar to browse the full API list in this section.

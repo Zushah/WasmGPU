@@ -9,8 +9,6 @@ This surface is separate from `WasmGPU.webassembly`, which wraps foreign WebAsse
 ```ts
 WasmGPU.driver: WebAssemblyDriver
 const driver = wgpu.driver;
-
-import { driver } from "wasmgpu";
 ```
 
 ## Parameters
@@ -32,12 +30,14 @@ type WebAssemblyDriver = {
     viewFromHandle(buffer: ArrayBufferLike, handle: WasmSliceHandle): ArrayBufferView;
     heap: {
         allocF32(len: number): WasmSlice<Float32Array>;
+        allocF64(len: number): WasmSlice<Float64Array>;
         allocU32(len: number): WasmSlice<Uint32Array>;
         allocI32(len: number): WasmSlice<Int32Array>;
         allocU8(len: number, align?: number): WasmSlice<Uint8Array>;
     };
     frame: {
         allocF32(len: number): WasmSlice<Float32Array>;
+        allocF64(len: number): WasmSlice<Float64Array>;
         allocU32(len: number): WasmSlice<Uint32Array>;
         allocI32(len: number): WasmSlice<Int32Array>;
         allocU8(len: number, align?: number): WasmSlice<Uint8Array>;
@@ -55,13 +55,14 @@ type WebAssemblyDriver = {
 - `createHeapArena()` creates the same `WasmHeapArena` returned by [WasmGPU.createHeapArena](./wasmgpu-createheaparena.md).
 - `heap.alloc*()` returns heap-owned `WasmSlice` objects that stay valid until freed.
 - `frame.alloc*()` returns frame-scoped `WasmSlice` objects that become invalid after the frame arena resets.
+- For `allocU8(len, align)`, supply a positive power-of-two alignment.
 
 #### WasmSlice
 `WasmSlice` is the typed allocation wrapper returned by `driver.heap.alloc*()`, `driver.frame.alloc*()`, and `WasmHeapArena.alloc*()`.
 
 ```ts
 type WasmSliceKind = "heap" | "frame" | "arena";
-type WasmSliceDType = "f32" | "u32" | "i32" | "u8";
+type WasmSliceDType = "f32" | "f64" | "u32" | "i32" | "u8";
 
 type WasmSliceHandle = {
     kind: WasmSliceKind;
@@ -89,8 +90,8 @@ type WasmSlice<T extends ArrayBufferView> = {
 
 #### WasmSlice Notes
 - `kind` reports whether the slice came from the global heap allocator (`"heap"`), the global frame allocator (`"frame"`), or a custom `WasmHeapArena` (`"arena"`).
-- `dtype` is one of `f32`, `u32`, `i32`, or `u8`.
-- `buffer()` and `view()` return live access to the current internal driver memory.
+- `dtype` is one of `f32`, `f64`, `u32`, `i32`, or `u8`.
+- `buffer()` returns the current WasmGPU memory buffer. Each `view()` call returns a typed view over the current buffer, including after memory growth.
 - `write()` copies source data into the slice and can zero-fill the unused tail when needed.
 - `handle()` serializes the slice pointer, element layout, and epoch metadata for later reconstruction.
 - `free()` is only valid for heap-owned slices. It returns the allocation to the Wasm heap, is idempotent, and makes `buffer()`, `view()`, `write()`, and `handle()` reject later access. Frame and arena slices are invalidated by reset-driven lifetime changes instead.
@@ -98,8 +99,9 @@ type WasmSlice<T extends ArrayBufferView> = {
 ## Notes
 - `WasmGPU.create()` initializes the built-in WebAssembly driver automatically. If you use the module-level `driver` export before creating a `WasmGPU` instance, initialize WebAssembly first.
 - `driver.view()` and `driver.bytes()` always operate on WasmGPU's internal Rust/WebAssembly memory. Use [WasmGPU.webassembly](./wasmgpu-webassembly.md) for foreign `WebAssembly.Memory` objects.
+- `driver.bytes()` follows WasmGPU memory growth automatically. A typed array returned by `driver.view()` or `driver.viewOn()` does not; reacquire it after growth. Calling `WasmSlice.view()` again returns a view over the current buffer.
 - `driver.frame.alloc*()` slices track the frame-arena epoch. After `frameArena.reset()`, the next `WasmGPU.run()` tick, or a standalone `WasmGPU.render()` call that resets the frame arena, old frame slices fail `isAlive()` and `assertAlive()`.
-- `driver.viewFromHandle(driver.buffer(), handle)` can reconstruct a typed view from a serialized `WasmSlice.handle()` when you already have the matching memory buffer.
+- `driver.viewFromHandle(driver.buffer(), handle)` can reconstruct a typed view from a serialized `WasmSlice.handle()`. The buffer must be the current buffer from the same driver, and the originating slice or arena epoch must still be alive.
 
 ## Example
 ```js

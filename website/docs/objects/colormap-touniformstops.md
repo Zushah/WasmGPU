@@ -1,7 +1,7 @@
-# Colormap.toUniformStops
+# colormap#toUniformStops
 
 ## Summary
-Colormap.toUniformStops operates on a Colormap runtime object to update state, query data, or manage lifecycle.
+colormap#toUniformStops produces evenly spaced nearest lookup-table samples for compact uniform arrays. The requested count is floored and clamped to `2..8`; output defaults to linear space and can be converted to sRGB. GPU-only colormaps return a two-stop black-to-white fallback.
 
 ## Syntax
 ```ts
@@ -12,8 +12,8 @@ const result = colormap.toUniformStops(maxStops, colorSpace);
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `maxStops` | `number = 8` | Yes | Maximum stop count for uniform-friendly color arrays. |
-| `colorSpace` | `"srgb" \| "linear" = "linear"` | Yes | Color-space mode used by this conversion or lookup. |
+| `maxStops` | `number` | No | Requested stop count; default `8`, floored and clamped to `2..8`. |
+| `colorSpace` | `"srgb" \| "linear"` | No | Output RGB color space; default `"linear"`. Alpha is unchanged. |
 
 ## Returns
 `Color4[]` - Result produced by this API call as `Color4[]`.
@@ -38,9 +38,9 @@ console.log(result);
 ```
 
 ## See Also
-- [Colormap.canSampleCPU](./colormap-cansamplecpu.md)
-- [Colormap.filter](./colormap-filter.md)
-- [Colormap.getGPUResources](./colormap-getgpuresources.md)
-- [Colormap.getRGBA8LinearLUT](./colormap-getrgba8linearlut.md)
-- [Colormap.sampleCPU](./colormap-samplecpu.md)
-- [Colormap.width](./colormap-width.md)
+- [colormap#canSampleCPU](./colormap-cansamplecpu.md)
+- [colormap#filter](./colormap-filter.md)
+- [colormap#getGPUResources](./colormap-getgpuresources.md)
+- [colormap#getRGBA8LinearLUT](./colormap-getrgba8linearlut.md)
+- [colormap#sampleCPU](./colormap-samplecpu.md)
+- [colormap#width](./colormap-width.md)

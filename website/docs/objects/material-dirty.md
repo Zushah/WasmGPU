@@ -1,7 +1,7 @@
-# Material.dirty
+# material#dirty
 
 ## Summary
-Material.dirty reads the current `dirty` value from this Material instance. Use it to inspect runtime state without mutating resources.
+material#dirty reports whether material uniform or binding state needs renderer refresh. Property setters mark relevant state dirty; `markClean()` clears the flag after synchronization. It does not by itself report asynchronous texture-upload completion.
 
 ## Syntax
 ```ts
@@ -15,11 +15,6 @@ This API does not take parameters.
 ## Returns
 `boolean` - Boolean result indicating whether the queried condition is satisfied.
 
-## Type Details
-```ts
-// No additional descriptor expansion is required for this signature.
-```
-
 ## Example
 ```js
 const canvas = document.querySelector("canvas");
@@ -31,5 +26,5 @@ console.log(value);
 ```
 
 ## See Also
-- [Material.destroy](./material-destroy.md)
-- [Material.markClean](./material-markclean.md)
+- [material#destroy](./material-destroy.md)
+- [material#markClean](./material-markclean.md)

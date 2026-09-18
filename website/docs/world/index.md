@@ -1,6 +1,6 @@
 # World
 
-The world subsystem contains scene-level APIs: cameras, lights, overlays, and scene traversal utilities for meshes, pointclouds, glyphfields, nodelinks, splatfields, and latticespaces.
+The world subsystem contains scene-level APIs: cameras, lights, overlays, and scene traversal utilities for Mesh, PointCloud, GlyphField, NodeLink, SplatField, and LatticeSpace objects.
 
 ## In This Section
 
@@ -12,12 +12,15 @@ The world subsystem contains scene-level APIs: cameras, lights, overlays, and sc
 
 ## Suggested Starting Points
 
+- [WasmGPU.createCamera](./wasmgpu-createcamera.md)
+- [WasmGPU.createLight](./wasmgpu-createlight.md)
+- [WasmGPU.createOverlay](./wasmgpu-createoverlay.md)
 - [WasmGPU.createScene](./wasmgpu-createscene.md)
-- [WasmGPU.createCamera.perspective](./wasmgpu-createcamera-perspective.md)
-- [PerspectiveCamera.autoAspect](./perspectivecamera-autoaspect.md)
-- [Camera.setWorldPosition](./camera-setworldposition.md)
-- [WasmGPU.createLight.directional](./wasmgpu-createlight-directional.md)
-- [WasmGPU.createLight.spot](./wasmgpu-createlight-spot.md)
-- [WasmGPU.createOverlay.system](./wasmgpu-createoverlay-system.md)
+- [createCamera.perspective](./createcamera-perspective.md)
+- [createCamera.perspective#autoAspect](./createcamera-perspective-autoaspect.md)
+- [createCamera#setWorldPosition](./createcamera-setworldposition.md)
+- [createLight.directional](./createlight-directional.md)
+- [createLight.spot](./createlight-spot.md)
+- [createOverlay.system](./createoverlay-system.md)
 
 Use the sidebar to browse all world-related APIs.

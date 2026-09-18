@@ -1,8 +1,9 @@
-# Geometry.setWasmJoints1
+# geometry#setWasmJoints1
 
 ## Summary
 
-`Geometry.setWasmJoints1()` borrows the optional second packed four-`u16` joint-index set used for eight-influence skinning.
+`geometry#setWasmJoints1()` borrows the optional second packed four-`u16` joint-index set used for eight-influence skinning.
+A non-null source is refreshed immediately with the other attached vertex channels; after later producer writes or memory growth, call `refreshWasmVertices()` before `upload()`. Passing `null` detaches this channel.
 
 ## Syntax
 
@@ -12,5 +13,5 @@ Geometry.setWasmJoints1(source: WasmMemoryView<Uint16Array> | null, options?: Ge
 
 ## See Also
 
-- [Geometry.joints1Buffer](./geometry-joints1buffer.md)
-- [Geometry.setWasmWeights1](./geometry-setwasmweights1.md)
+- [geometry#joints1Buffer](./geometry-joints1buffer.md)
+- [geometry#setWasmWeights1](./geometry-setwasmweights1.md)

@@ -1,7 +1,7 @@
 # WasmGPU.effects
 
 ## Summary
-WasmGPU.effects exposes render-effect configuration owned by this engine instance. In v0.10.0, its public subsystem is directional shadow mapping.
+WasmGPU.effects exposes render-effect configuration owned by this engine instance. Its current public subsystem is directional shadow mapping.
 
 ## Syntax
 ```ts
@@ -31,6 +31,6 @@ wgpu.effects.shadows.mapSize = 2048;
 ```
 
 ## See Also
-- [RenderEffects.shadows](./rendereffects-shadows.md)
-- [ShadowSystem.enable](./shadowsystem-enable.md)
+- [effects.shadows](./effects-shadows.md)
+- [effects.shadows.enable](./effects-shadows-enable.md)
 - [WasmGPU.destroy](./wasmgpu-destroy.md)

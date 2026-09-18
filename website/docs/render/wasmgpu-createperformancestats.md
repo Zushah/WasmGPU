@@ -46,6 +46,16 @@ type PerformanceStatsDescriptor = {
 };
 ```
 
+Defaults are `position: "top-left"`, `zIndex: 9999`, `paddingPx: 8`,
+`graph: true`, `graphWidthPx: 120`, `graphHeightPx: 40`,
+`historyLength: 60`, `targetFps: 60`, `updateIntervalMs: 250`,
+`decimals: 1`, `showFps: true`, `showFrameTime: true`,
+`showCpuTime: true`, `showGpuTime: true`, `showMemory: true`,
+`showCulling: false`, and `pointerEvents: "none"`. The panel is appended to
+`desc.parent`, otherwise the canvas parent, otherwise `document.body`.
+
+Creating a new panel destroys and replaces the engine's previous panel.
+
 ## Example
 ```js
 const canvas = document.querySelector("canvas");
@@ -65,6 +75,6 @@ console.log(stats.element);
 ## See Also
 - [WasmGPU.performanceStats](./wasmgpu-performancestats.md)
 - [WasmGPU.destroyPerformanceStats](./wasmgpu-destroyperformancestats.md)
-- [PerformanceStats.update](./performancestats-update.md)
-- [PerformanceStats.destroy](./performancestats-destroy.md)
+- [createPerformanceStats#update](./createperformancestats-update.md)
+- [createPerformanceStats#destroy](./createperformancestats-destroy.md)
 - [WasmGPU.cullingStats](./wasmgpu-cullingstats.md)

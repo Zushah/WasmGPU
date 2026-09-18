@@ -32,6 +32,7 @@ type WasmHeapArena = {
     destroy(): void;
     alloc(bytes: number, alignBytes?: number): number;
     allocF32(len: number): WasmSlice<Float32Array>;
+    allocF64(len: number): WasmSlice<Float64Array>;
     allocU32(len: number): WasmSlice<Uint32Array>;
     allocI32(len: number): WasmSlice<Int32Array>;
     allocU8(len: number, alignBytes?: number): WasmSlice<Uint8Array>;
@@ -45,7 +46,7 @@ type WasmHeapArena = {
 - `reset()` rewinds the arena head and bumps the arena epoch.
 - `destroy()` returns the arena's entire backing block to the Wasm heap and invalidates the arena permanently. It is idempotent; if heap release throws, the arena remains live so release can be retried.
 - `alloc(bytes, alignBytes?)` returns a raw Wasm pointer for custom layouts.
-- `allocF32`, `allocU32`, `allocI32`, and `allocU8` return `WasmSlice` wrappers with epoch-aware lifetime checks.
+- `allocF32`, `allocF64`, `allocU32`, `allocI32`, and `allocU8` return `WasmSlice` wrappers with epoch-aware lifetime checks.
 
 #### Arena Lifetime
 - Arena slices use `kind: "arena"` and become invalid after `reset()` or `destroy()`.

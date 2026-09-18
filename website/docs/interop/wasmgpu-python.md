@@ -34,6 +34,6 @@ wgpu.python.copyInto(gpu, updatedPythonArray);
 ```
 
 ## See Also
-- [WasmGPU.python.toCPU](./wasmgpu-python-tocpu.md)
-- [WasmGPU.python.toGPU](./wasmgpu-python-togpu.md)
-- [WasmGPU.python.copyInto](./wasmgpu-python-copyinto.md)
+- [python.toCPU](./python-tocpu.md)
+- [python.toGPU](./python-togpu.md)
+- [python.copyInto](./python-copyinto.md)

@@ -1,7 +1,7 @@
-# Geometry.boundsCenter
+# geometry#boundsCenter
 
 ## Summary
-Geometry.boundsCenter reads the current `boundsCenter` value from this Geometry instance. Use it to inspect runtime state without mutating resources.
+geometry#boundsCenter returns the local-space center of the geometry bounds. The readonly tuple is reused rather than copied; treat it as immutable.
 
 ## Syntax
 ```ts
@@ -9,37 +9,10 @@ Geometry.boundsCenter: readonly [number, number, number]
 const value = geometry.boundsCenter;
 ```
 
-## Parameters
-This API does not take parameters.
-
 ## Returns
-`readonly [number, number, number]` - Current accessor value exposed by the runtime object.
-
-## Type Details
-```ts
-// No additional descriptor expansion is required for this signature.
-```
-
-## Example
-```js
-const canvas = document.querySelector("canvas");
-const wgpu = await WasmGPU.create(canvas);
-
-const geometry = wgpu.geometry.sphere(1, 24, 16);
-const value = geometry.boundsCenter;
-console.log(value);
-```
+The reused readonly `[x, y, z]` center tuple.
 
 ## See Also
-- [Geometry.boundsMax](./geometry-boundsmax.md)
-- [Geometry.boundsMin](./geometry-boundsmin.md)
-- [Geometry.boundsRadius](./geometry-boundsradius.md)
-- [Geometry.destroy](./geometry-destroy.md)
-- [Geometry.indexBuffer](./geometry-indexbuffer.md)
-- [Geometry.isIndexed](./geometry-isindexed.md)
-- [Geometry.isSkinned](./geometry-isskinned.md)
-- [Geometry.isSkinned8](./geometry-isskinned8.md)
-- [Geometry.joints1Buffer](./geometry-joints1buffer.md)
-- [Geometry.jointsBuffer](./geometry-jointsbuffer.md)
-- [Geometry.normalBuffer](./geometry-normalbuffer.md)
-- [Geometry.positionBuffer](./geometry-positionbuffer.md)
+- [geometry#boundsMax](./geometry-boundsmax.md)
+- [geometry#boundsMin](./geometry-boundsmin.md)
+- [geometry#boundsRadius](./geometry-boundsradius.md)

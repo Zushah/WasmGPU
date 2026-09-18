@@ -1,4 +1,4 @@
-# Geometry.setWasmIndices
+# geometry#setWasmIndices
 
 ## Summary
 
@@ -17,5 +17,5 @@ Options control active `indexCount`, grow-only managed GPU capacity, and CPU ret
 
 ## See Also
 
-- [Geometry.indexBuffer](./geometry-indexbuffer.md)
-- [Geometry.isIndexed](./geometry-isindexed.md)
+- [geometry#indexBuffer](./geometry-indexbuffer.md)
+- [geometry#isIndexed](./geometry-isindexed.md)

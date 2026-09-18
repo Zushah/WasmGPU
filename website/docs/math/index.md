@@ -14,9 +14,9 @@ The mathematics subsystem provides the vector, matrix, quaternion, and utility o
 ## Suggested Starting Points
 
 - [WasmGPU.math](./wasmgpu-math.md)
-- [WasmGPU.math.mat4.identity](./wasmgpu-math-mat4-identity.md)
-- [WasmGPU.math.mat4.invert](./wasmgpu-math-mat4-invert.md)
-- [WasmGPU.math.vec3.normalize](./wasmgpu-math-vec3-normalize.md)
-- [WasmGPU.math.quat.mul](./wasmgpu-math-quat-mul.md)
+- [math.mat4.identity](./math-mat4-identity.md)
+- [math.mat4.invert](./math-mat4-invert.md)
+- [math.vec3.normalize](./math-vec3-normalize.md)
+- [math.quat.mul](./math-quat-mul.md)
 
 Use the sidebar to navigate all math primitives and helpers.

@@ -54,5 +54,5 @@ canvas.addEventListener("click", async (event) => {
 - [WasmGPU.pick](./wasmgpu-pick.md)
 - [WasmGPU.pickRect](./wasmgpu-pickrect.md)
 - [WasmGPU.pickLasso](./wasmgpu-picklasso.md)
-- [WasmGPU.createSelectionStore().apply](./wasmgpu-createselectionstore-apply.md)
-- [WasmGPU.createSelectionStore().values](./wasmgpu-createselectionstore-values.md)
+- [createSelectionStore#apply](./createselectionstore-apply.md)
+- [createSelectionStore#values](./createselectionstore-values.md)

@@ -2,7 +2,7 @@
 
 ## Summary
 WasmGPU.math exposes JavaScript-array convenience math and precision-specific WebAssembly-pointer math.
-The legacy `mat4`, `quat`, and `vec3` namespaces accept JavaScript number arrays and allocate arrays for vector-valued results. The `mat4f`, `quatf`, and `vec3f` namespaces operate on binary32 values in Wasm memory; `mat4d`, `quatd`, and `vec3d` provide matching binary64 operations.
+The default `mat4`, `quat`, and `vec3` namespaces accept JavaScript number arrays and allocate arrays for vector-valued results. The `mat4f`, `quatf`, and `vec3f` namespaces operate on 32-bit floating point values in Wasm memory, and the `mat4d`, `quatd`, and `vec3d` provide matching 64-bit floating point operations.
 
 ## Syntax
 ```ts
@@ -98,7 +98,7 @@ try {
 ```
 
 ## See Also
-- [WasmGPU.math.mat4.identity](./wasmgpu-math-mat4-identity.md)
-- [WasmGPU.math.mat4.mul](./wasmgpu-math-mat4-mul.md)
-- [WasmGPU.math.quat.slerp](./wasmgpu-math-quat-slerp.md)
-- [WasmGPU.math.vec3.normalize](./wasmgpu-math-vec3-normalize.md)
+- [math.mat4.identity](./math-mat4-identity.md)
+- [math.mat4.mul](./math-mat4-mul.md)
+- [math.quat.slerp](./math-quat-slerp.md)
+- [math.vec3.normalize](./math-vec3-normalize.md)

@@ -29,4 +29,4 @@ console.log(stats ? stats.element : null);
 ## See Also
 - [WasmGPU.createPerformanceStats](./wasmgpu-createperformancestats.md)
 - [WasmGPU.destroyPerformanceStats](./wasmgpu-destroyperformancestats.md)
-- [PerformanceStats.update](./performancestats-update.md)
+- [createPerformanceStats#update](./createperformancestats-update.md)

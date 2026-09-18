@@ -4,7 +4,7 @@
 
 `WasmGPU.createLatticeSpace` creates a regular 2D or 3D cell lattice. Flat data uses X-fastest indexing: `x + width * y` in 2D and `x + width * (y + height * z)` in 3D.
 
-The renderer draws procedural quads for 2D cells and cubes for 3D cells. This is a surface-cell renderer, not raymarched participating-media volume rendering.
+Cells appear as procedural quads in 2D and cubes in 3D. This is surface-cell visualization, not raymarched participating-media volume rendering.
 
 ## Syntax
 
@@ -79,6 +79,8 @@ type LatticeSpaceDescriptor = {
 
 Defaults include `componentCount: 1`, `origin: [0, 0, 0]`, `spacing: [1, 1, 1]`, `cellScale: 1`, the full half-open index range, scalar/linear color interpretation, `"viridis"` colormap, full opacity, unlit shading, opaque blending, back-face culling, and enabled depth testing/writing. The `"rgba"` color mode requires four components.
 
+In scalar mode, `scaleTransform` controls value-to-colormap normalization, while `valueRange` is an optional inclusive visibility filter. Direct RGBA data marked `"srgb"` is converted to linear color before lighting and output conversion.
+
 ## Example
 
 ```js
@@ -97,18 +99,18 @@ scene.add(lattice);
 
 ## Member Reference
 
-- Structure: [transform](./latticespace-transform.md), [dimensions](./latticespace-dimensions.md), [dimensionCount](./latticespace-dimensioncount.md), [cellCount](./latticespace-cellcount.md), [componentCount](./latticespace-componentcount.md), [name](./latticespace-name.md), [visible](./latticespace-visible.md)
-- Layout and indexing: [origin](./latticespace-origin.md), [spacing](./latticespace-spacing.md), [cellScale](./latticespace-cellscale.md), [indexRange](./latticespace-indexrange.md), [drawCellCount](./latticespace-drawcellcount.md), [mapLinearIndexToCell](./latticespace-maplinearindextocell.md), [mapCellIndexToLinear](./latticespace-mapcellindextolinear.md)
-- Appearance: [valueRange](./latticespace-valuerange.md), [opacity](./latticespace-opacity.md), [lit](./latticespace-lit.md), [colorMode](./latticespace-colormode.md), [colorSpace](./latticespace-colorspace.md), [solidColor](./latticespace-solidcolor.md), [colormap](./latticespace-colormap.md), [colormapStops](./latticespace-colormapstops.md), [blendMode](./latticespace-blendmode.md), [cullMode](./latticespace-cullmode.md), [depthWrite](./latticespace-depthwrite.md), [depthTest](./latticespace-depthtest.md), [occluderRevision](./latticespace-occluderrevision.md)
-- Scaling and legends: [scaleTransform](./latticespace-scaletransform.md), [setScaleTransform](./latticespace-setscaletransform.md), [applyScaleStats](./latticespace-applyscalestats.md), [onVisualChange](./latticespace-onvisualchange.md), [getScaleSourceDescriptor](./latticespace-getscalesourcedescriptor.md), [getColormapKey](./latticespace-getcolormapkey.md), [getColormapForBinding](./latticespace-getcolormapforbinding.md)
-- Data and masks: [hasData](./latticespace-hasdata.md), [hasMask](./latticespace-hasmask.md), [setData](./latticespace-setdata.md), [updateData](./latticespace-updatedata.md), [setDataBuffer](./latticespace-setdatabuffer.md), [markDataDirty](./latticespace-markdatadirty.md), [setMask](./latticespace-setmask.md), [updateMask](./latticespace-updatemask.md), [setMaskBuffer](./latticespace-setmaskbuffer.md), [markMaskDirty](./latticespace-markmaskdirty.md), [getCellRecord](./latticespace-getcellrecord.md), [dropCPUData](./latticespace-dropcpudata.md)
-- Bounds and GPU integration: [dataBuffer](./latticespace-databuffer.md), [maskBuffer](./latticespace-maskbuffer.md), [uniformBuffer](./latticespace-uniformbuffer.md), [bindGroup](./latticespace-bindgroup.md), [bindGroupKey](./latticespace-bindgroupkey.md), [getLocalBounds](./latticespace-getlocalbounds.md), [getWorldBounds](./latticespace-getworldbounds.md), [getBounds](./latticespace-getbounds.md), [upload](./latticespace-upload.md), [getUniformBufferSize](./latticespace-getuniformbuffersize.md), [getUniformData](./latticespace-getuniformdata.md), [dirtyUniforms](./latticespace-dirtyuniforms.md), [markUniformsClean](./latticespace-markuniformsclean.md), [destroy](./latticespace-destroy.md)
-- WebAssembly lifecycle: [refreshFromWasm](./latticespace-refreshfromwasm.md), [clearWasmSources](./latticespace-clearwasmsources.md)
+- Structure: [transform](./createlatticespace-transform.md), [dimensions](./createlatticespace-dimensions.md), [dimensionCount](./createlatticespace-dimensioncount.md), [cellCount](./createlatticespace-cellcount.md), [componentCount](./createlatticespace-componentcount.md), [name](./createlatticespace-name.md), [visible](./createlatticespace-visible.md)
+- Layout and indexing: [origin](./createlatticespace-origin.md), [spacing](./createlatticespace-spacing.md), [cellScale](./createlatticespace-cellscale.md), [indexRange](./createlatticespace-indexrange.md), [drawCellCount](./createlatticespace-drawcellcount.md), [mapLinearIndexToCell](./createlatticespace-maplinearindextocell.md), [mapCellIndexToLinear](./createlatticespace-mapcellindextolinear.md)
+- Appearance: [valueRange](./createlatticespace-valuerange.md), [opacity](./createlatticespace-opacity.md), [lit](./createlatticespace-lit.md), [colorMode](./createlatticespace-colormode.md), [colorSpace](./createlatticespace-colorspace.md), [solidColor](./createlatticespace-solidcolor.md), [colormap](./createlatticespace-colormap.md), [colormapStops](./createlatticespace-colormapstops.md), [blendMode](./createlatticespace-blendmode.md), [cullMode](./createlatticespace-cullmode.md), [depthWrite](./createlatticespace-depthwrite.md), [depthTest](./createlatticespace-depthtest.md), [occluderRevision](./createlatticespace-occluderrevision.md)
+- Scaling and legends: [scaleTransform](./createlatticespace-scaletransform.md), [setScaleTransform](./createlatticespace-setscaletransform.md), [applyScaleStats](./createlatticespace-applyscalestats.md), [onVisualChange](./createlatticespace-onvisualchange.md), [getScaleSourceDescriptor](./createlatticespace-getscalesourcedescriptor.md), [getColormapKey](./createlatticespace-getcolormapkey.md), [getColormapForBinding](./createlatticespace-getcolormapforbinding.md)
+- Data and masks: [hasData](./createlatticespace-hasdata.md), [hasMask](./createlatticespace-hasmask.md), [setData](./createlatticespace-setdata.md), [updateData](./createlatticespace-updatedata.md), [setDataBuffer](./createlatticespace-setdatabuffer.md), [markDataDirty](./createlatticespace-markdatadirty.md), [setMask](./createlatticespace-setmask.md), [updateMask](./createlatticespace-updatemask.md), [setMaskBuffer](./createlatticespace-setmaskbuffer.md), [markMaskDirty](./createlatticespace-markmaskdirty.md), [getCellRecord](./createlatticespace-getcellrecord.md), [dropCPUData](./createlatticespace-dropcpudata.md)
+- Bounds and GPU integration: [dataBuffer](./createlatticespace-databuffer.md), [maskBuffer](./createlatticespace-maskbuffer.md), [uniformBuffer](./createlatticespace-uniformbuffer.md), [bindGroup](./createlatticespace-bindgroup.md), [bindGroupKey](./createlatticespace-bindgroupkey.md), [getLocalBounds](./createlatticespace-getlocalbounds.md), [getWorldBounds](./createlatticespace-getworldbounds.md), [getBounds](./createlatticespace-getbounds.md), [upload](./createlatticespace-upload.md), [getUniformBufferSize](./createlatticespace-getuniformbuffersize.md), [getUniformData](./createlatticespace-getuniformdata.md), [dirtyUniforms](./createlatticespace-dirtyuniforms.md), [markUniformsClean](./createlatticespace-markuniformsclean.md), [destroy](./createlatticespace-destroy.md)
+- WebAssembly lifecycle: [refreshFromWasm](./createlatticespace-refreshfromwasm.md), [clearWasmSources](./createlatticespace-clearwasmsources.md)
 
 ## See Also
 
-- [LatticeSpace.dimensions](./latticespace-dimensions.md)
-- [LatticeSpace.setData](./latticespace-setdata.md)
-- [LatticeSpace.setMask](./latticespace-setmask.md)
-- [LatticeSpace.getCellRecord](./latticespace-getcellrecord.md)
-- [LatticeSpace.destroy](./latticespace-destroy.md)
+- [createLatticeSpace#dimensions](./createlatticespace-dimensions.md)
+- [createLatticeSpace#setData](./createlatticespace-setdata.md)
+- [createLatticeSpace#setMask](./createlatticespace-setmask.md)
+- [createLatticeSpace#getCellRecord](./createlatticespace-getcellrecord.md)
+- [createLatticeSpace#destroy](./createlatticespace-destroy.md)

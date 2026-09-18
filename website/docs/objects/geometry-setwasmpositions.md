@@ -1,8 +1,9 @@
-# Geometry.setWasmPositions
+# geometry#setWasmPositions
 
 ## Summary
 
-`Geometry.setWasmPositions()` borrows packed position records from WebAssembly memory.
+`geometry#setWasmPositions()` borrows packed position records from WebAssembly memory.
+A non-null source is refreshed immediately with the other attached vertex channels; after later producer writes or memory growth, call `refreshWasmVertices()` before `upload()`. Passing `null` detaches this channel.
 
 ## Syntax
 
@@ -16,5 +17,5 @@ Positions use three floats per vertex. The setter refreshes active vertex source
 
 ## See Also
 
-- [Geometry.positionBuffer](./geometry-positionbuffer.md)
-- [Geometry.refreshWasmVertices](./geometry-refreshwasmvertices.md)
+- [geometry#positionBuffer](./geometry-positionbuffer.md)
+- [geometry#refreshWasmVertices](./geometry-refreshwasmvertices.md)

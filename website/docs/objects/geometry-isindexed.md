@@ -1,7 +1,7 @@
-# Geometry.isIndexed
+# geometry#isIndexed
 
 ## Summary
-Geometry.isIndexed reads the current `isIndexed` value from this Geometry instance. Use it to inspect runtime state without mutating resources.
+geometry#isIndexed reports whether indexed drawing is available after upload. Use it after `upload(device)`; it is not a test for whether index source data has been configured.
 
 ## Syntax
 ```ts
@@ -13,12 +13,7 @@ const value = geometry.isIndexed;
 This API does not take parameters.
 
 ## Returns
-`boolean` - Boolean result indicating whether the queried condition is satisfied.
-
-## Type Details
-```ts
-// No additional descriptor expansion is required for this signature.
-```
+`boolean` - Whether indexed drawing is available from the uploaded geometry.
 
 ## Example
 ```js
@@ -31,15 +26,15 @@ console.log(value);
 ```
 
 ## See Also
-- [Geometry.boundsCenter](./geometry-boundscenter.md)
-- [Geometry.boundsMax](./geometry-boundsmax.md)
-- [Geometry.boundsMin](./geometry-boundsmin.md)
-- [Geometry.boundsRadius](./geometry-boundsradius.md)
-- [Geometry.destroy](./geometry-destroy.md)
-- [Geometry.indexBuffer](./geometry-indexbuffer.md)
-- [Geometry.isSkinned](./geometry-isskinned.md)
-- [Geometry.isSkinned8](./geometry-isskinned8.md)
-- [Geometry.joints1Buffer](./geometry-joints1buffer.md)
-- [Geometry.jointsBuffer](./geometry-jointsbuffer.md)
-- [Geometry.normalBuffer](./geometry-normalbuffer.md)
-- [Geometry.positionBuffer](./geometry-positionbuffer.md)
+- [geometry#boundsCenter](./geometry-boundscenter.md)
+- [geometry#boundsMax](./geometry-boundsmax.md)
+- [geometry#boundsMin](./geometry-boundsmin.md)
+- [geometry#boundsRadius](./geometry-boundsradius.md)
+- [geometry#destroy](./geometry-destroy.md)
+- [geometry#indexBuffer](./geometry-indexbuffer.md)
+- [geometry#isSkinned](./geometry-isskinned.md)
+- [geometry#isSkinned8](./geometry-isskinned8.md)
+- [geometry#joints1Buffer](./geometry-joints1buffer.md)
+- [geometry#jointsBuffer](./geometry-jointsbuffer.md)
+- [geometry#normalBuffer](./geometry-normalbuffer.md)
+- [geometry#positionBuffer](./geometry-positionbuffer.md)

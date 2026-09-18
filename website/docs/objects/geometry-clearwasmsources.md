@@ -1,8 +1,8 @@
-# Geometry.clearWasmSources
+# geometry#clearWasmSources
 
 ## Summary
 
-`Geometry.clearWasmSources()` detaches every borrowed vertex and index view without freeing its WebAssembly allocation.
+`geometry#clearWasmSources()` detaches every borrowed vertex and index view without freeing its WebAssembly allocation.
 
 ## Syntax
 
@@ -12,5 +12,5 @@ Geometry.clearWasmSources(): void
 
 ## See Also
 
-- [Geometry.refreshFromWasm](./geometry-refreshfromwasm.md)
-- [Geometry.destroy](./geometry-destroy.md)
+- [geometry#refreshFromWasm](./geometry-refreshfromwasm.md)
+- [geometry#destroy](./geometry-destroy.md)

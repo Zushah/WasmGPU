@@ -1,7 +1,7 @@
-# Geometry.morphBaseRevision
+# geometry#morphBaseRevision
 
 ## Summary
-Geometry.morphBaseRevision changes whenever base vertex or index data used by morph deformation is replaced or refreshed.
+geometry#morphBaseRevision changes whenever base vertex or index data used by morph deformation is replaced or refreshed.
 
 ## Syntax
 ```ts
@@ -29,9 +29,9 @@ if (geometry.morphBaseRevision !== before) {
 ```
 
 ## Notes
-Use this revision only for cache invalidation. It wraps as an unsigned 32-bit counter and does not identify a global geometry version.
+Use this revision only to detect whether morph-base data changed. It wraps as an unsigned 32-bit counter and does not identify a global geometry version.
 
 ## See Also
-- [Geometry.getMorphBaseChannel](./geometry-getmorphbasechannel.md)
-- [Geometry.getMorphIndices](./geometry-getmorphindices.md)
-- [WasmGPU.geometry.custom](./wasmgpu-geometry-custom.md)
+- [geometry#getMorphBaseChannel](./geometry-getmorphbasechannel.md)
+- [geometry#getMorphIndices](./geometry-getmorphindices.md)
+- [geometry.custom](./geometry-custom.md)

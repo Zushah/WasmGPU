@@ -1,7 +1,9 @@
 # WasmGPU.createPointCloud
 
 ## Summary
-WasmGPU.createPointCloud creates a GPU-backed point cloud from packed point data or external GPU buffers. Point appearance can come from scalar-to-colormap mapping or from per-point RGBA colors.
+WasmGPU.createPointCloud creates a point cloud from packed CPU records, borrowed WebAssembly views, external GPU buffers, or an explicit count awaiting later data. CPU and Wasm inputs are uploaded lazily. Point appearance can come from scalar-to-colormap mapping or per-point RGBA colors.
+
+Canonical documentation namepaths use `createPointCloud#*` for members of the point-cloud instance returned by this factory.
 
 ## Syntax
 ```ts
@@ -15,7 +17,7 @@ const result = wgpu.createPointCloud(descriptor);
 | `descriptor` | `PointCloudDescriptor` | Yes | Descriptor object used to configure point data, colors, bounds, and point rendering behavior. |
 
 ## Returns
-`PointCloud` - PointCloud runtime object configured for scalar-driven or RGBA-driven point rendering.
+`PointCloud` - Point cloud using the supplied source family, ownership rules, bounds, and scalar or RGBA appearance.
 
 ## Type Details
 ### PointCloudDescriptor
@@ -60,17 +62,17 @@ type PointCloudDescriptor = {
 | --- | --- | --- | --- |
 | `data` | `Float32Array` | No | Packed point tuples in `[x, y, z, scalar]` order. This is the CPU-array path for point positions and scalar values. |
 | `colors` | `Float32Array` | No | Packed per-point RGBA float tuples in `[r, g, b, a]` order. Use this with `colorMode: "rgba"` when each point already has final colors. |
-| `wasmData` | `WasmMemoryView<Float32Array>` | No | Borrowed packed point source. Mutually exclusive with `data` and `pointsBuffer`. |
-| `wasmColors` | `WasmMemoryView<Float32Array>` | No | Borrowed packed RGBA source. Mutually exclusive with `colors` and `colorsBuffer`. |
-| `wasmCapacity` | `number` | No | Initial grow-only GPU capacity hint for Wasm-backed channels. |
-| `pointsBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | External GPU buffer containing packed `[x, y, z, scalar]` float tuples. When this path is used, `pointCount` is required because the runtime cannot infer it from the buffer. |
-| `colorsBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | External GPU buffer containing packed `[r, g, b, a]` float tuples. Point count must already be known from `data`, `pointsBuffer`, or `pointCount`. |
-| `pointCount` | `number` | No | Number of points represented by external GPU buffers. |
-| `colorMode` | `PointCloudColorMode` | No | `"scalar"` maps the fourth component of each point through `scaleTransform` and a colormap. `"rgba"` uses `colors` or `colorsBuffer` directly. Supplying `colors` or `colorsBuffer` switches the default to `"rgba"`. |
+| `wasmData` | `WasmMemoryView<Float32Array>` | No | Borrowed packed point source used when `data` is absent. Its active length must contain complete four-float records. |
+| `wasmColors` | `WasmMemoryView<Float32Array>` | No | Borrowed packed RGBA source used when `colors` is absent. Its active range must cover the point count. |
+| `wasmCapacity` | `number` | No | Non-negative safe-integer, grow-only GPU record-capacity hint shared by Wasm-backed point and color channels. |
+| `pointsBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | External storage buffer used when neither `data` nor `wasmData` is supplied. It contains packed `[x, y, z, scalar]` tuples, and `pointCount` must be greater than zero. |
+| `colorsBuffer` | `GPUBuffer \| { buffer: GPUBuffer }` | No | External storage buffer used when neither `colors` nor `wasmColors` is supplied. Point count must already be known. |
+| `pointCount` | `number` | No | Active record count for Wasm prefixes, external GPU buffers, or an otherwise data-less cloud. |
+| `colorMode` | `PointCloudColorMode` | No | `"scalar"` maps point data through `scaleTransform` and a colormap. `"rgba"` reads the separate color channel. The default is `"rgba"` when any color source is supplied and `"scalar"` otherwise. |
 | `colormap` | `PointCloudColormap \| Colormap` | No | Colormap used when `colorMode` is `"scalar"`. |
 | `colormapStops` | `Color4[]` | No | Explicit stop list for a custom scalar colormap. |
 | `scaleTransform` | `ScaleTransformDescriptor` | Yes | Scalar mapping descriptor over packed point data. This is still part of the point cloud even if you later switch to RGBA colors. |
-| `boundsMin`, `boundsMax`, `boundsCenter`, `boundsRadius` | Bounds fields | No | Optional explicit bounds. These are useful when point positions live only in external GPU buffers or when CPU arrays are not retained after upload. |
+| `boundsMin`, `boundsMax`, `boundsCenter`, `boundsRadius` | Bounds fields | No | Optional explicit local bounds. A min/max pair defines the box and derives a sphere, optionally overridden by center/radius. Without a box, center/radius defines a sphere and its box. Explicit bounds are not replaced by Wasm recomputation. |
 | `keepCPUData` | `boolean` | No | Retains CPU copies after upload. Without retained CPU data, helpers that inspect per-point records have less information to work with. |
 | `ownBuffers` | `boolean` | No | When true, transfers destruction responsibility for caller-supplied GPU buffers. Wasm views remain borrowed. |
 | `ndShape` | `number[]` | No | Optional multidimensional shape used to decode linear point indices into `ndIndex` values during picking. |
@@ -119,9 +121,9 @@ type ScaleTransformDescriptor = {
 
 Use `basePointSize`, `minPointSize`, `maxPointSize`, `sizeAttenuation`, `softness`, `opacity`, `blendMode`, `depthWrite`, `depthTest`, `visible`, and `name` to tune draw behavior and appearance.
 
-External-buffer workflows are useful when your data is already on the GPU. They avoid a JavaScript-side copy at creation time, but they do not automatically give the runtime CPU-readable point records or statistics.
+Choose exactly one point source from `data`, `wasmData`, and `pointsBuffer`, and at most one color source from `colors`, `wasmColors`, and `colorsBuffer`. Competing sources in the same category are unsupported. External-buffer workflows avoid a JavaScript-side copy but do not provide CPU-readable point records or automatic bounds.
 
-External GPU buffers are borrowed by default. Set `ownBuffers: true` to transfer destruction responsibility. WebAssembly views remain borrowed and require explicit refresh after producer writes.
+External GPU buffers are borrowed by default. Set `ownBuffers: true` to transfer destruction responsibility for whichever external buffers are selected. WebAssembly views remain borrowed and require explicit refresh after producer writes or memory growth. Defaults are additive blending, depth writes off, depth testing on, visible, scalar Viridis coloring, and point sizes `2`/`1`/`16` for base/min/max.
 
 ## Example
 ```js
@@ -153,9 +155,9 @@ const cloud = wgpu.createPointCloud({
 ## See Also
 - [WasmGPU.createNodeLink](./wasmgpu-createnodelink.md)
 - [WasmGPU.createGlyphField](./wasmgpu-createglyphfield.md)
-- [PointCloud.scaleTransform](./pointcloud-scaletransform.md)
-- [WasmGPU.colormap.fromStops](./wasmgpu-colormap-fromstops.md)
-- [WasmGPU.createOverlay.legend](../world/wasmgpu-createoverlay-legend.md)
-- [PointCloud.setData](./pointcloud-setdata.md)
-- [PointCloud.setColors](./pointcloud-setcolors.md)
-- [PointCloud.refreshFromWasm](./pointcloud-refreshfromwasm.md)
+- [createPointCloud#scaleTransform](./createpointcloud-scaletransform.md)
+- [colormap.fromStops](./colormap-fromstops.md)
+- [createOverlay.legend](../world/createoverlay-legend.md)
+- [createPointCloud#setData](./createpointcloud-setdata.md)
+- [createPointCloud#setColors](./createpointcloud-setcolors.md)
+- [createPointCloud#refreshFromWasm](./createpointcloud-refreshfromwasm.md)

@@ -4,6 +4,7 @@
 WasmGPU.gpu exposes the renderer GPU handles used by the engine.
 It returns the active `GPUDevice`, `GPUQueue`, and swapchain `GPUTextureFormat`.
 Use this when you need low-level WebGPU integration beside WasmGPU abstractions.
+The device and queue are borrowed engine-owned handles; do not destroy them independently of the engine.
 
 ## Syntax
 ```ts

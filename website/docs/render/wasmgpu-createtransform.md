@@ -43,8 +43,8 @@ console.log(root.index, child.worldPosition);
 ```
 
 ## See Also
-- [WasmGPU.createTransform().index](./wasmgpu-createtransform-index.md)
-- [WasmGPU.createTransform().setPosition](./wasmgpu-createtransform-setposition.md)
-- [WasmGPU.createTransform().setParent](./wasmgpu-createtransform-setparent.md)
-- [WasmGPU.createTransform().worldMatrix](./wasmgpu-createtransform-worldmatrix.md)
-- [WasmGPU.animation.createSkin](../objects/wasmgpu-animation-createskin.md)
+- [createTransform#index](./createtransform-index.md)
+- [createTransform#setPosition](./createtransform-setposition.md)
+- [createTransform#setParent](./createtransform-setparent.md)
+- [createTransform#worldMatrix](./createtransform-worldmatrix.md)
+- [animation.createSkin](../objects/animation-createskin.md)

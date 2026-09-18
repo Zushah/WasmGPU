@@ -1,7 +1,7 @@
-# Colormap.getGPUResources
+# colormap#getGPUResources
 
 ## Summary
-Colormap.getGPUResources returns the current gpuresources value derived from this Colormap runtime state.
+colormap#getGPUResources returns the one-dimensional texture view and sampler used for GPU lookup. CPU-backed colormaps return a stable resource pair for each `GPUDevice`; external colormaps return their borrowed view and sampler and require the device used at construction.
 
 ## Syntax
 ```ts
@@ -12,33 +12,12 @@ const result = colormap.getGPUResources(device, queue);
 ## Parameters
 | Name | Type | Required | Description |
 | --- | --- | --- | --- |
-| `device` | `GPUDevice` | Yes | GPUDevice used to allocate pipelines, buffers, layouts, or textures. |
-| `queue` | `GPUQueue` | Yes | GPUQueue used for data uploads and command submissions. |
+| `device` | `GPUDevice` | Yes | Device that owns or will own the returned texture view and sampler. |
+| `queue` | `GPUQueue` | Yes | Queue used to upload a CPU-backed lookup table when first needed. |
 
 ## Returns
-`ColormapGPUResources` - Result produced by this API call as `ColormapGPUResources`.
-
-## Type Details
-```ts
-// No additional descriptor expansion is required for this signature.
-```
-
-## Example
-```js
-const canvas = document.querySelector("canvas");
-const wgpu = await WasmGPU.create(canvas);
-
-const colormap = wgpu.colormap.viridis();
-const device = wgpu.gpu.device;
-const queue = wgpu.gpu.queue;
-const result = colormap.getGPUResources(device, queue);
-console.log(result);
-```
+`ColormapGPUResources` - Texture (or `null` for an external view), view, sampler, width, and filter.
 
 ## See Also
-- [Colormap.canSampleCPU](./colormap-cansamplecpu.md)
-- [Colormap.filter](./colormap-filter.md)
-- [Colormap.getRGBA8LinearLUT](./colormap-getrgba8linearlut.md)
-- [Colormap.sampleCPU](./colormap-samplecpu.md)
-- [Colormap.toUniformStops](./colormap-touniformstops.md)
-- [Colormap.width](./colormap-width.md)
+- [colormap#filter](./colormap-filter.md)
+- [colormap#width](./colormap-width.md)

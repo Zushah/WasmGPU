@@ -1,8 +1,9 @@
-# Geometry.setWasmTangents
+# geometry#setWasmTangents
 
 ## Summary
 
-`Geometry.setWasmTangents()` borrows packed four-float tangent records from WebAssembly memory.
+`geometry#setWasmTangents()` borrows packed four-float tangent records from WebAssembly memory.
+A non-null source is refreshed immediately with the other attached vertex channels; after later producer writes or memory growth, call `refreshWasmVertices()` before `upload()`. Passing `null` detaches this channel.
 
 ## Syntax
 
@@ -12,5 +13,5 @@ Geometry.setWasmTangents(source: WasmMemoryView<Float32Array> | null, options?: 
 
 ## See Also
 
-- [Geometry.refreshWasmVertices](./geometry-refreshwasmvertices.md)
-- [Geometry.setWasmAttributes](./geometry-setwasmattributes.md)
+- [geometry#refreshWasmVertices](./geometry-refreshwasmvertices.md)
+- [geometry#setWasmAttributes](./geometry-setwasmattributes.md)
