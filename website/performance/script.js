@@ -236,6 +236,31 @@
     });
     const revealNodes = document.querySelectorAll(".reveal");
     revealNodes.forEach((node) => node.classList.add("in-view"));
+    const setupNavMenu = () => {
+        const header = document.querySelector(".site-header");
+        const navToggle = document.getElementById("nav-toggle");
+        const navToggleIcon = document.getElementById("nav-toggle-icon");
+        const navMenu = document.getElementById("nav-menu");
+        if (!header || !navToggle || !navMenu) return;
+        const setOpen = (open, returnFocus = false) => {
+            header.classList.toggle("nav-open", open);
+            navToggle.setAttribute("aria-expanded", String(open));
+            navToggle.setAttribute("aria-label", open ? "Close menu" : "Open menu");
+            if (navToggleIcon) navToggleIcon.textContent = open ? "close" : "menu";
+            if (!open && returnFocus) navToggle.focus();
+        };
+        navToggle.addEventListener("click", (event) => {
+            const open = !header.classList.contains("nav-open");
+            const firstLink = navMenu.querySelector("a");
+            setOpen(open);
+            if (open && event.detail === 0 && firstLink) firstLink.focus();
+        });
+        navMenu.addEventListener("click", (event) => { if (event.target.closest("a")) setOpen(false); });
+        document.addEventListener("click", (event) => { if (header.classList.contains("nav-open") && !header.contains(event.target)) setOpen(false); });
+        document.addEventListener("keydown", (event) => { if (event.key === "Escape" && header.classList.contains("nav-open")) setOpen(false, true); });
+        window.matchMedia("(max-width: 1080px)").addEventListener("change", (event) => { if (!event.matches) setOpen(false); });
+    };
+    setupNavMenu();
     const yearElem = document.getElementById("year");
     if (yearElem) yearElem.textContent = String(new Date().getFullYear());
 })();
