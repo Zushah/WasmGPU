@@ -12,6 +12,13 @@ The render subsystem covers core engine lifecycle, runtime configuration, warmup
 - Performance and culling statistics
 - Transform graph operations
 
+## Overview Video
+
+<video controls preload="metadata" poster="../assets/images/website-video-render.png">
+    <source src="../assets/videos/render.mp4" type="video/mp4">
+    <track kind="captions" src="../assets/videos/render.vtt" srclang="en" label="English">
+</video>
+
 ## Suggested Starting Points
 
 - [WasmGPU.create](./wasmgpu-create.md)

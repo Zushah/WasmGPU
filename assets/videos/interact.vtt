@@ -1,0 +1,154 @@
+WEBVTT
+
+00:00:02.800 --> 00:00:06.972
+The interaction subsystems turn input into navigation, picking,
+
+00:00:07.072 --> 00:00:10.430
+selection, measurement, and data scaling, on top of
+
+00:00:10.530 --> 00:00:12.940
+the renderer and the compute kernels.
+
+00:00:14.866 --> 00:00:18.458
+Three navigation modes share one NavigationControls
+
+00:00:18.558 --> 00:00:20.846
+class: orbit, trackball, and fly.
+
+00:00:21.266 --> 00:00:24.912
+Orbit circles a target using azimuth and polar angles,
+
+00:00:25.012 --> 00:00:28.797
+trackball rotates freely about the target, and fly moves
+
+00:00:28.897 --> 00:00:31.918
+the camera itself with keys and pointer look.
+
+00:00:32.333 --> 00:00:36.566
+Damping smooths motion independently of the frame rate, and fitting
+
+00:00:36.666 --> 00:00:40.510
+and inspection views frame your data with smooth transitions.
+
+00:00:40.933 --> 00:00:44.311
+Axis conventions choose which way is up, y, z,
+
+00:00:44.411 --> 00:00:48.698
+or x, always right-handed, and saved states, pointer lock,
+
+00:00:48.798 --> 00:00:51.798
+and change events round out the controls.
+
+00:00:53.700 --> 00:00:57.569
+Picking renders an identifier pass, where every pixel
+
+00:00:57.669 --> 00:01:00.640
+stores an object ID and an element index.
+
+00:01:01.066 --> 00:01:05.207
+A point pick reads one pixel; rectangle and lasso picks read
+
+00:01:05.307 --> 00:01:09.094
+a region and return unique hits, up to a maximum count.
+
+00:01:09.500 --> 00:01:13.448
+Every object family is pickable, and meshes report triangle
+
+00:01:13.548 --> 00:01:17.634
+indices when the device supports the primitive-index feature.
+
+00:01:18.066 --> 00:01:21.587
+Each hit carries a world position reconstructed from
+
+00:01:21.687 --> 00:01:25.138
+depth, an n-dimensional index for gridded data, and
+
+00:01:25.238 --> 00:01:27.993
+attributes when CPU records are retained.
+
+00:01:28.400 --> 00:01:31.057
+Pick requests are serialized, and picking
+
+00:01:31.157 --> 00:01:34.017
+never uses the render-only occlusion filter.
+
+00:01:35.933 --> 00:01:40.654
+A selection store keeps hits keyed by object ID and element index.
+
+00:01:41.066 --> 00:01:44.923
+Add, remove, toggle, and replace edit it directly, and
+
+00:01:45.023 --> 00:01:48.220
+apply chooses one of those modes at run time.
+
+00:01:50.133 --> 00:01:53.505
+The annotation toolkit builds measurements on top of
+
+00:01:53.605 --> 00:01:56.710
+picking, with marker, distance, and angle modes.
+
+00:01:57.133 --> 00:02:00.360
+Distances join two picked anchors, and angles measure
+
+00:02:00.460 --> 00:02:02.494
+the corner at the middle of three.
+
+00:02:02.900 --> 00:02:07.543
+Units set the symbol, decimals, and degrees or radians, while hover
+
+00:02:07.643 --> 00:02:12.357
+and selection probes report what the pointer hovers over or selects.
+
+00:02:12.766 --> 00:02:16.389
+Records live in the toolkit's own annotation store, not in
+
+00:02:16.489 --> 00:02:19.728
+the scene, and labels are drawn through the overlay.
+
+00:02:20.133 --> 00:02:22.692
+A revision counter and change events keep
+
+00:02:22.792 --> 00:02:24.897
+interfaces in sync with the store.
+
+00:02:26.800 --> 00:02:29.650
+The scaling service maps data values into
+
+00:02:29.750 --> 00:02:32.673
+the zero-to-one range that colormaps read.
+
+00:02:33.100 --> 00:02:37.749
+A transform is linear, logarithmic, or symmetric logarithmic, with
+
+00:02:37.849 --> 00:02:42.066
+optional range or percentile clamping, gamma, and inversion.
+
+00:02:42.466 --> 00:02:46.570
+Statistics come from requestStats, which runs on the GPU:
+
+00:02:46.670 --> 00:02:50.699
+extract finite values, compact them, find the range, and
+
+00:02:50.799 --> 00:02:54.313
+build a histogram when percentiles are requested.
+
+00:02:54.733 --> 00:02:59.668
+Percentiles default to two and ninety-eight, estimated from a
+
+00:02:59.768 --> 00:03:04.702
+2048-bin histogram, and results are cached until invalidated.
+
+00:03:05.133 --> 00:03:08.378
+Objects apply the results to their own transforms,
+
+00:03:08.478 --> 00:03:10.921
+and legends read the same scale state.
+
+00:03:12.833 --> 00:03:17.016
+To recap: three navigation modes, identifier-pass picking, a
+
+00:03:17.116 --> 00:03:22.013
+selection store, measurement annotations, and GPU-backed data scaling.
+
+00:03:23.433 --> 00:03:27.834
+The full reference is in the Interaction section of the documentation.

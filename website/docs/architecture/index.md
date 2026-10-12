@@ -1,5 +1,12 @@
 # WasmGPU Architecture
 
+## Overview Video
+
+<video controls preload="metadata" poster="../assets/images/website-video-architecture.png">
+    <source src="../assets/videos/architecture.mp4" type="video/mp4">
+    <track kind="captions" src="../assets/videos/architecture.vtt" srclang="en" label="English">
+</video>
+
 ## Diagram
 
 The diagram below reflects the implemented architecture of WasmGPU v0.10.0.

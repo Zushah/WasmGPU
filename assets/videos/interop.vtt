@@ -1,0 +1,148 @@
+WEBVTT
+
+00:00:02.800 --> 00:00:07.608
+Interoperability covers three memory workflows: WasmGPU's own
+
+00:00:07.708 --> 00:00:10.907
+driver memory, arenas inside it, and data
+
+00:00:11.007 --> 00:00:14.689
+owned by foreign WebAssembly modules or Python.
+
+00:00:16.600 --> 00:00:21.546
+WasmGPU.driver exposes the Rust driver's own linear memory,
+
+00:00:21.646 --> 00:00:25.737
+with typed views and heap or frame-scoped slices.
+
+00:00:26.166 --> 00:00:31.003
+Memory can grow and replace its buffer, so typed views must be reacquired
+
+00:00:31.103 --> 00:00:35.197
+after growth, while slices hand out a fresh view on each call.
+
+00:00:35.600 --> 00:00:38.897
+Shared-memory checks report whether that memory is a
+
+00:00:38.997 --> 00:00:42.817
+SharedArrayBuffer, which the default build does not require.
+
+00:00:44.733 --> 00:00:47.212
+The frame arena is a bump allocator for
+
+00:00:47.312 --> 00:00:50.585
+per-frame scratch data, eight mebibytes by default.
+
+00:00:51.000 --> 00:00:55.412
+Each allocation advances a head pointer, aligned to sixteen bytes
+
+00:00:55.512 --> 00:00:59.646
+by default, and usedBytes and capBytes report the fill level.
+
+00:01:00.066 --> 00:01:05.672
+Reset rewinds the head and advances the epoch, which invalidates every
+
+00:01:05.772 --> 00:01:10.889
+frame slice; WasmGPU.run calls reset at the start of each frame.
+
+00:01:12.800 --> 00:01:15.616
+createHeapArena reserves one block from the
+
+00:01:15.716 --> 00:01:18.737
+WebAssembly heap and bump-allocates inside it.
+
+00:01:19.166 --> 00:01:22.834
+Its slices expire when the arena resets or is destroyed,
+
+00:01:22.934 --> 00:01:26.064
+and destroy returns the whole block to the heap.
+
+00:01:26.466 --> 00:01:29.422
+Heap slices from the driver are different: each
+
+00:01:29.522 --> 00:01:31.764
+stays valid until its own free call.
+
+00:01:33.666 --> 00:01:39.097
+WasmGPU.webassembly wraps another module's instance, exports,
+
+00:01:39.197 --> 00:01:41.545
+or memory, as a WasmModule.
+
+00:01:41.966 --> 00:01:46.333
+Views over that memory take a pointer, a length, and a dtype; the
+
+00:01:46.433 --> 00:01:50.869
+range is validated, and the pointer must be aligned for the dtype.
+
+00:01:51.300 --> 00:01:55.696
+Pointers and lengths can come from exported functions or globals,
+
+00:01:55.796 --> 00:02:00.330
+and refresh re-resolves them after the module reallocates or grows.
+
+00:02:00.733 --> 00:02:04.797
+Geometry and the scientific objects accept these views as
+
+00:02:04.897 --> 00:02:08.743
+borrowed sources, copy them into their own GPU buffers
+
+00:02:08.843 --> 00:02:11.812
+on refresh, and never free foreign memory.
+
+00:02:13.733 --> 00:02:18.857
+In Pyodide, the Python interop copies a Python buffer into
+
+00:02:18.957 --> 00:02:24.172
+a new CPUndarray, or uploads it straight into a GPUndarray.
+
+00:02:24.600 --> 00:02:28.250
+Inputs must be C-contiguous, in one of eight dtypes,
+
+00:02:28.350 --> 00:02:32.073
+and copyInto requires an exact dtype and shape match.
+
+00:02:32.500 --> 00:02:36.624
+A buffer the interop acquires is released exactly once, even
+
+00:02:36.724 --> 00:02:40.848
+on failure, while a buffer you pass directly stays borrowed.
+
+00:02:41.266 --> 00:02:45.145
+On the Python side, a helper class normalizes NumPy
+
+00:02:45.245 --> 00:02:49.358
+arrays with never, if-needed, or always copy policies.
+
+00:02:51.266 --> 00:02:55.451
+WasmGPU.webgpu builds bind group layout entries for
+
+00:02:55.551 --> 00:02:59.904
+storage, uniform, sampler, and texture bindings, with
+
+00:03:00.004 --> 00:03:03.433
+compute visibility by default for buffers.
+
+00:03:03.833 --> 00:03:08.640
+Its resource helpers normalize storage buffers, raw GPU buffers,
+
+00:03:08.740 --> 00:03:13.546
+buffer ranges, samplers, and texture views into binding entries.
+
+00:03:13.966 --> 00:03:17.815
+It only describes resources: compute pipelines and custom
+
+00:03:17.915 --> 00:03:20.586
+materials still create and run the work.
+
+00:03:22.500 --> 00:03:27.099
+To recap: driver memory views, the frame arena, heap arenas,
+
+00:03:27.199 --> 00:03:32.661
+foreign module views, Python transfers, and declarative WebGPU layouts.
+
+00:03:34.066 --> 00:03:35.823
+The full reference is in the
+
+00:03:35.923 --> 00:03:38.873
+Interoperability section of the documentation.

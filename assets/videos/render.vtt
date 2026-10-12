@@ -1,0 +1,145 @@
+WEBVTT
+
+00:00:02.800 --> 00:00:07.379
+The render subsystem covers the engine's lifecycle, what happens in
+
+00:00:07.479 --> 00:00:12.129
+each frame, culling, batching, effects, and the transform hierarchy.
+
+00:00:14.033 --> 00:00:18.696
+WasmGPU.create takes a canvas and a descriptor: antialiasing,
+
+00:00:18.796 --> 00:00:23.538
+power preference, canvas format, frustum and occlusion culling
+
+00:00:23.638 --> 00:00:26.349
+with their stats, and device limits.
+
+00:00:26.766 --> 00:00:30.595
+warmup prebuilds pipelines and other render resources for a
+
+00:00:30.695 --> 00:00:33.792
+scene and camera before the first visible frame.
+
+00:00:34.200 --> 00:00:37.937
+run starts the loop and stop ends it, isRunning reports
+
+00:00:38.037 --> 00:00:42.612
+the state, render draws one frame, and destroy releases everything.
+
+00:00:44.533 --> 00:00:48.644
+Each render call updates camera matrices and dirty transforms,
+
+00:00:48.744 --> 00:00:51.836
+then builds a draw list for each object family.
+
+00:00:52.266 --> 00:00:57.113
+It prepares shadows and packs model matrices, filters and sorts what is
+
+00:00:57.213 --> 00:01:01.852
+visible, encodes the passes, and submits them in one command buffer.
+
+00:01:02.266 --> 00:01:06.778
+You control the inputs, the scene, camera, descriptor, and effects, and
+
+00:01:06.878 --> 00:01:10.806
+the stats panel and culling counters show what each frame did.
+
+00:01:12.733 --> 00:01:17.784
+Frustum culling tests each object's world-space bounding sphere against the
+
+00:01:17.884 --> 00:01:21.081
+six camera planes in Rust, and is on by default.
+
+00:01:21.500 --> 00:01:26.648
+Occlusion culling is opt-in: it reuses a low-resolution depth hierarchy from
+
+00:01:26.748 --> 00:01:30.722
+the previous frame to skip opaque objects that were hidden.
+
+00:01:31.133 --> 00:01:35.165
+It is conservative, it is skipped unless the viewport, camera, and
+
+00:01:35.265 --> 00:01:39.673
+occluders still match the captured hierarchy, and picking never uses it.
+
+00:01:40.100 --> 00:01:42.499
+cullingStats reports how many objects
+
+00:01:42.599 --> 00:01:44.864
+were tested, visible, and occluded.
+
+00:01:46.766 --> 00:01:51.010
+Consecutive opaque meshes that share a pipeline, material,
+
+00:01:51.110 --> 00:01:54.305
+and geometry are drawn as one instanced run,
+
+00:01:54.405 --> 00:01:57.525
+and unchanged runs reuse their packed data.
+
+00:01:57.933 --> 00:02:01.777
+Transparent objects from all six families are merged into
+
+00:02:01.877 --> 00:02:05.790
+one back-to-front order, without building a combined list.
+
+00:02:06.200 --> 00:02:10.422
+Gaussian splats and transparent 3D lattice cells are sorted
+
+00:02:10.522 --> 00:02:13.353
+per element on the GPU with radix sorts.
+
+00:02:15.266 --> 00:02:21.347
+Shadows are enabled per directional light through effects.shadows, with
+
+00:02:21.447 --> 00:02:25.961
+a 1024-pixel map and 3-by-3 PCF filtering by default.
+
+00:02:26.366 --> 00:02:30.456
+Hard filtering and manual updates are available, and each shadow
+
+00:02:30.556 --> 00:02:33.861
+view fits an orthographic box to the camera frustum.
+
+00:02:34.266 --> 00:02:38.686
+Meshes cast shadows with castShadow, and only standard materials
+
+00:02:38.786 --> 00:02:43.276
+receive them; the scientific primitives neither cast nor receive.
+
+00:02:43.700 --> 00:02:47.841
+Antialiasing is optional subpixel morphological
+
+00:02:47.941 --> 00:02:51.450
+antialiasing, SMAA, enabled at creation.
+
+00:02:53.366 --> 00:02:59.090
+createPerformanceStats adds a panel with frame rate, CPU and GPU timing,
+
+00:02:59.190 --> 00:03:04.509
+and culling counters, with GPU timing when timestamp queries exist.
+
+00:03:04.933 --> 00:03:09.973
+createTransform adds a node to the structure-of-arrays transform store, with
+
+00:03:10.073 --> 00:03:13.964
+parenting that rejects cycles and pointers to its matrices.
+
+00:03:14.366 --> 00:03:19.012
+Changes mark nodes dirty, and Rust recomposes local matrices and
+
+00:03:19.112 --> 00:03:23.461
+multiplies each world matrix by its parent's before drawing.
+
+00:03:25.366 --> 00:03:29.171
+To recap: the engine lifecycle, the per-frame stages,
+
+00:03:29.271 --> 00:03:33.001
+two kinds of culling, batching and ordering, shadows
+
+00:03:33.101 --> 00:03:35.506
+and SMAA, and the transform store.
+
+00:03:36.933 --> 00:03:40.844
+The full reference is in the Render section of the documentation.

@@ -10,6 +10,13 @@ The world subsystem contains scene-level APIs: cameras, lights, overlays, and sc
 - Scene query, bounds, and traversal helpers
 - Visibility-oriented scene inspection
 
+## Overview Video
+
+<video controls preload="metadata" poster="../assets/images/website-video-world.png">
+    <source src="../assets/videos/world.mp4" type="video/mp4">
+    <track kind="captions" src="../assets/videos/world.vtt" srclang="en" label="English">
+</video>
+
 ## Suggested Starting Points
 
 - [WasmGPU.createCamera](./wasmgpu-createcamera.md)

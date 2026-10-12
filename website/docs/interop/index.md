@@ -13,6 +13,13 @@ WasmGPU's built-in Rust/WebAssembly driver memory, caller-managed frame and heap
 - Python-to-CPU/GPU ndarray transfers with validated C-contiguous metadata and deterministic proxy release
 - Declarative WebGPU layout and binding-resource normalization
 
+## Overview Video
+
+<video controls preload="metadata" poster="../assets/images/website-video-interop.png">
+    <source src="../assets/videos/interop.mp4" type="video/mp4">
+    <track kind="captions" src="../assets/videos/interop.vtt" srclang="en" label="English">
+</video>
+
 ## Suggested Starting Points
 
 - [WasmGPU.driver](./wasmgpu-driver.md)

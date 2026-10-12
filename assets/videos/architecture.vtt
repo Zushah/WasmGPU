@@ -1,0 +1,199 @@
+WEBVTT
+
+00:00:02.800 --> 00:00:07.488
+This video walks through the implemented architecture of WasmGPU,
+
+00:00:07.588 --> 00:00:11.318
+following the diagram and the sections on this page.
+
+00:00:13.233 --> 00:00:17.389
+The diagram groups forty-seven nodes into five subgraphs,
+
+00:00:17.489 --> 00:00:20.450
+from the public API to browser resources.
+
+00:00:20.866 --> 00:00:24.512
+The public API is where the application creates
+
+00:00:24.612 --> 00:00:28.020
+the WasmGPU runtime and its factory surface.
+
+00:00:28.433 --> 00:00:32.399
+The WebGPU engine holds the renderer and the interaction
+
+00:00:32.499 --> 00:00:35.885
+tools, plus the compute subsystem and its parts.
+
+00:00:36.300 --> 00:00:39.409
+The object and data model holds scenes,
+
+00:00:39.509 --> 00:00:43.688
+transforms, objects, the glTF pipeline, and interop.
+
+00:00:44.100 --> 00:00:47.876
+The WebAssembly driver provides heap and frame-arena memory,
+
+00:00:47.976 --> 00:00:50.784
+and Rust routines for the engine's hot paths.
+
+00:00:51.200 --> 00:00:53.856
+Browser resources are the device, queue,
+
+00:00:53.956 --> 00:00:56.476
+caches, buffers, textures, and passes.
+
+00:00:56.900 --> 00:01:01.890
+Solid edges carry structure: the runtime creates the factory surface, the
+
+00:01:01.990 --> 00:01:06.144
+frame loop drives the renderer, and compute owns its kernels.
+
+00:01:06.566 --> 00:01:08.724
+Dashed edges carry data, such as
+
+00:01:08.824 --> 00:01:11.970
+transform records flowing to Rust propagation.
+
+00:01:13.900 --> 00:01:19.811
+WasmGPU.create initializes WebAssembly and the frame arena, then creates the
+
+00:01:19.911 --> 00:01:24.637
+renderer with its adapter, device, queue, and canvas context.
+
+00:01:25.066 --> 00:01:28.584
+It then builds the compute subsystem on that device, and
+
+00:01:28.684 --> 00:01:31.878
+binds Python interop and the scaling service to it.
+
+00:01:32.300 --> 00:01:35.645
+Destroy stops the loop, clears the scaling cache, and
+
+00:01:35.745 --> 00:01:39.026
+destroys compute, then the renderer and its effects.
+
+00:01:40.933 --> 00:01:45.443
+Each call to render runs four stages. First it stages records
+
+00:01:45.543 --> 00:01:49.750
+in the frame arena, and updates dirty transforms in Rust.
+
+00:01:50.166 --> 00:01:53.623
+Then it prepares shadows, writes uniforms, and builds
+
+00:01:53.723 --> 00:01:56.978
+frustum-culled draw lists for every object family.
+
+00:01:57.400 --> 00:02:00.875
+Next it packs model matrices in one Rust call, and can
+
+00:02:00.975 --> 00:02:05.577
+filter hidden opaque objects with the previous frame's depth hierarchy.
+
+00:02:06.000 --> 00:02:08.937
+Finally it encodes shadows, GPU sorts, and
+
+00:02:09.037 --> 00:02:11.468
+the main passes, then submits them.
+
+00:02:13.400 --> 00:02:16.854
+Transforms live in a structure-of-arrays store in
+
+00:02:16.954 --> 00:02:20.843
+WebAssembly memory, with separate arrays for positions,
+
+00:02:20.943 --> 00:02:23.817
+rotations, scales, matrices, and parents.
+
+00:02:24.233 --> 00:02:28.747
+The frame arena is an eight mebibyte bump allocator. Each reset
+
+00:02:28.847 --> 00:02:33.434
+rewinds it and advances its epoch, so stale slices are rejected.
+
+00:02:33.866 --> 00:02:37.697
+Heap arenas bump-allocate inside one heap block, and
+
+00:02:37.797 --> 00:02:40.721
+their slices expire on reset or destroy.
+
+00:02:41.133 --> 00:02:46.169
+Scientific primitives borrow caller-supplied GPU buffers unless
+
+00:02:46.269 --> 00:02:49.431
+created with ownBuffers set to true, and
+
+00:02:49.531 --> 00:02:52.937
+a GPUndarray destroys only buffers it owns.
+
+00:02:53.366 --> 00:03:00.467
+Precision follows the domain: f64 works in CPU and WebAssembly memory
+
+00:03:00.567 --> 00:03:05.789
+and in GPU storage, but WGSL has no f64 arithmetic.
+
+00:03:07.700 --> 00:03:11.502
+The compute subsystem wraps buffers, pipelines, dispatch,
+
+00:03:11.602 --> 00:03:15.130
+kernels, ndarrays, scratch pools, and readback rings.
+
+00:03:15.533 --> 00:03:20.763
+The scaling service chains those kernels: it extracts finite values, compacts
+
+00:03:20.863 --> 00:03:25.054
+them, finds the range, and builds a histogram for percentiles.
+
+00:03:26.966 --> 00:03:32.692
+glTF loading reads JSON or binary GLB sources, decodes accessors in
+
+00:03:32.792 --> 00:03:38.344
+TypeScript and Rust, and imports the result into scene resources.
+
+00:03:38.766 --> 00:03:43.844
+Import is failure-atomic: every acquisition is registered in a transaction,
+
+00:03:43.944 --> 00:03:47.434
+and an error rolls everything back in reverse order.
+
+00:03:47.866 --> 00:03:52.279
+Interop copies Pyodide buffers into canonical ndarrays,
+
+00:03:52.379 --> 00:03:56.546
+validates views over foreign WebAssembly memory, and
+
+00:03:56.646 --> 00:04:00.566
+describes WebGPU layouts without scheduling work.
+
+00:04:02.466 --> 00:04:05.632
+WGSL lives in five directories, and is
+
+00:04:05.732 --> 00:04:08.468
+minified into the bundle as text.
+
+00:04:08.900 --> 00:04:12.876
+A few invariants hold everywhere: frame-arena slices are
+
+00:04:12.976 --> 00:04:16.444
+valid only for their epoch, and transforms update
+
+00:04:16.544 --> 00:04:19.210
+before draw lists read world matrices.
+
+00:04:19.633 --> 00:04:23.484
+Picking and warmup never use occlusion filtering, and shader
+
+00:04:23.584 --> 00:04:27.106
+uniform layouts must match the TypeScript packing code.
+
+00:04:29.033 --> 00:04:32.544
+To recap: five subgraphs, a four-stage render path,
+
+00:04:32.644 --> 00:04:37.360
+explicit memory ownership, kernel-based scaling, and atomic imports.
+
+00:04:38.766 --> 00:04:41.130
+Each subsystem is covered in depth by
+
+00:04:41.230 --> 00:04:43.594
+its own section of the documentation.

@@ -10,6 +10,13 @@ The compute subsystem provides WebGPU compute workflows, ndarray abstractions, p
 - Built-in compute kernels, including typed vector arithmetic, dot products, GEMM, stable key/value radix sort, and batched LU factorization and solve
 - Async readback and result extraction
 
+## Overview Video
+
+<video controls preload="metadata" poster="../assets/images/website-video-compute.png">
+    <source src="../assets/videos/compute.mp4" type="video/mp4">
+    <track kind="captions" src="../assets/videos/compute.vtt" srclang="en" label="English">
+</video>
+
 ## Suggested Starting Points
 
 - [WasmGPU.compute](./wasmgpu-compute.md)

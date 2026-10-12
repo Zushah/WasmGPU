@@ -59,6 +59,7 @@
     "bench:interop": "node ./benchmarks/harness/run.js --subsystem=interop",
     "bench:interact": "node ./benchmarks/harness/run.js --subsystem=interact",
     "website": "python ./scripts/build_website.py",
+    "videos": "python ./scripts/website_videos.py",
     "logo": "python ./scripts/rasterize_logo.py",
     "start": "npx serve ."
   },

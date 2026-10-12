@@ -27,6 +27,7 @@ CDN_IIFE_SCRIPT = '<script src="https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.10.
 LOCAL_ESM_IMPORT = 'import { WasmGPU } from "../release/WasmGPU.min.js";'
 CDN_ESM_IMPORT = 'import { WasmGPU } from "https://cdn.jsdelivr.net/gh/Zushah/WasmGPU@0.10.0/release/WasmGPU.min.js";'
 EXCLUDED_ASSETS_PATTERNS = ["website-visuals.html"]
+ROOT_EXCLUDED_ASSETS_PATTERNS = [*EXCLUDED_ASSETS_PATTERNS, "videos"]
 
 def ensure_required_paths() -> None:
     required_paths = [
@@ -60,7 +61,7 @@ def copy_homepage_files() -> None:
             shutil.copy2(item, destination)
 
 def copy_assets() -> None:
-    shutil.copytree(ASSETS_SOURCE_DIR, BUILD_DIR / "assets", ignore=shutil.ignore_patterns(*EXCLUDED_ASSETS_PATTERNS), dirs_exist_ok=True)
+    shutil.copytree(ASSETS_SOURCE_DIR, BUILD_DIR / "assets", ignore=shutil.ignore_patterns(*ROOT_EXCLUDED_ASSETS_PATTERNS), dirs_exist_ok=True)
 
 def copy_release_bundle() -> None:
     shutil.copy2(RELEASE_MINIFIED_SOURCE, RELEASE_MINIFIED_BUILD)

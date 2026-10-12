@@ -1,0 +1,139 @@
+WEBVTT
+
+00:00:02.800 --> 00:00:08.057
+WasmGPU's math library covers 3D vectors, four-by-four matrices,
+
+00:00:08.157 --> 00:00:13.080
+and quaternions, in single and double precision, implemented
+
+00:00:13.180 --> 00:00:15.926
+in Rust and exposed to JavaScript.
+
+00:00:17.833 --> 00:00:22.510
+The vec3, mat4, and quat namespaces take JavaScript arrays and
+
+00:00:22.610 --> 00:00:26.672
+return new arrays, which is convenient for setup code.
+
+00:00:27.100 --> 00:00:31.495
+Behind them, values are copied into reusable scratch blocks
+
+00:00:31.595 --> 00:00:36.066
+in WebAssembly memory and computed by binary32 Rust kernels.
+
+00:00:36.466 --> 00:00:43.134
+The pointer namespaces, vec3f, mat4f, and quatf for f32, and vec3d,
+
+00:00:43.234 --> 00:00:49.700
+mat4d, and quatd for f64, operate directly on WebAssembly memory.
+
+00:00:50.100 --> 00:00:54.444
+You allocate blocks and pass output pointers; nothing
+
+00:00:54.544 --> 00:00:58.470
+is allocated per call, outputs may alias inputs,
+
+00:00:58.570 --> 00:01:02.160
+and you free blocks with freeF32 or freeF64.
+
+00:01:04.066 --> 00:01:07.665
+A mat4 is sixteen numbers in column-major order, so
+
+00:01:07.765 --> 00:01:12.308
+the translation sits in elements twelve, thirteen, and fourteen.
+
+00:01:12.733 --> 00:01:17.390
+A quat is stored as x, y, z, then w, with the scalar part last.
+
+00:01:17.800 --> 00:01:21.960
+Projections are right-handed with WebGPU depth from zero
+
+00:01:22.060 --> 00:01:24.548
+to one, and angles are in radians.
+
+00:01:26.466 --> 00:01:31.719
+Vector operations include dot and cross products, norms, normalization,
+
+00:01:31.819 --> 00:01:36.393
+distances, and predicates such as isParallel and isOrthogonal.
+
+00:01:36.800 --> 00:01:39.568
+Projection keeps the component of a along b,
+
+00:01:39.668 --> 00:01:42.502
+and the orthogonal projection keeps the rest.
+
+00:01:42.933 --> 00:01:46.538
+Reflect mirrors a vector about a normal, and refract
+
+00:01:46.638 --> 00:01:49.532
+bends it by a ratio of refractive indices.
+
+00:01:49.933 --> 00:01:53.015
+ang returns the direction angles to each axis,
+
+00:01:53.115 --> 00:01:56.681
+and angBetween returns the angle between two vectors.
+
+00:01:58.600 --> 00:02:01.920
+Matrix operations include identity, multiply,
+
+00:02:02.020 --> 00:02:05.113
+invert, determinant, transpose, and trace.
+
+00:02:05.533 --> 00:02:09.548
+translate and rotateX, Y, and Z build transforms, and
+
+00:02:09.648 --> 00:02:14.052
+lookAt and perspective build view and projection matrices.
+
+00:02:14.466 --> 00:02:20.111
+Composing translation, rotation, and scale gives a model matrix, and
+
+00:02:20.211 --> 00:02:24.926
+decomposeTRS recovers the three parts in the pointer API.
+
+00:02:26.833 --> 00:02:30.751
+fromAxisAngle builds a rotation from a unit axis and an
+
+00:02:30.851 --> 00:02:34.477
+angle, using the sine and cosine of half the angle.
+
+00:02:34.900 --> 00:02:38.402
+mul composes rotations, invert undoes them, and
+
+00:02:38.502 --> 00:02:41.776
+toRotation rotates a vector by a quaternion.
+
+00:02:42.200 --> 00:02:46.691
+slerp interpolates along the shortest arc; when the quaternions are
+
+00:02:46.791 --> 00:02:50.804
+nearly parallel, it falls back to a normalized linear blend.
+
+00:02:52.733 --> 00:02:54.764
+Cameras build their projection and
+
+00:02:54.864 --> 00:02:57.646
+view-projection matrices with these functions.
+
+00:02:58.066 --> 00:03:03.649
+Inside the driver, Rust composes transform matrices, samples rotations with
+
+00:03:03.749 --> 00:03:08.270
+slerp for animation, and extracts frustum planes for culling.
+
+00:03:08.700 --> 00:03:10.990
+See the Render and World sections for
+
+00:03:11.090 --> 00:03:13.186
+how those systems use the results.
+
+00:03:15.100 --> 00:03:19.409
+To recap: two API styles, column-major matrices, vector
+
+00:03:19.509 --> 00:03:24.621
+projections and optics, transform matrices, and quaternion slerp.
+
+00:03:26.033 --> 00:03:30.541
+The full reference is in the Mathematics section of the documentation.

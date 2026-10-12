@@ -11,6 +11,13 @@ The mathematics subsystem provides the vector, matrix, quaternion, and utility o
 - Utility helpers for interpolation and projection math
 - Building blocks used by render/world/object APIs
 
+## Overview Video
+
+<video controls preload="metadata" poster="../assets/images/website-video-math.png">
+    <source src="../assets/videos/math.mp4" type="video/mp4">
+    <track kind="captions" src="../assets/videos/math.vtt" srclang="en" label="English">
+</video>
+
 ## Suggested Starting Points
 
 - [WasmGPU.math](./wasmgpu-math.md)

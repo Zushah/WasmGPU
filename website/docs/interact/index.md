@@ -10,6 +10,13 @@ The interaction subsystems contain controls, selection, picking, annotation tool
 - Annotation toolkit lifecycle
 - Scaling utilities
 
+## Overview Video
+
+<video controls preload="metadata" poster="../assets/images/website-video-interact.png">
+    <source src="../assets/videos/interact.mp4" type="video/mp4">
+    <track kind="captions" src="../assets/videos/interact.vtt" srclang="en" label="English">
+</video>
+
 ## Suggested Starting Points
 
 - [WasmGPU.createControls](./wasmgpu-createcontrols.md)

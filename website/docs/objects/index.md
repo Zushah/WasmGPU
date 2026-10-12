@@ -10,6 +10,13 @@ The objects subsystem covers renderable assets and object-level systems: geometr
 - glTF 2.0 loading, importing, metadata, variants, and animations
 - Colormaps and data-driven visual primitives
 
+## Overview Video
+
+<video controls preload="metadata" poster="../assets/images/website-video-objects.png">
+    <source src="../assets/videos/objects.mp4" type="video/mp4">
+    <track kind="captions" src="../assets/videos/objects.vtt" srclang="en" label="English">
+</video>
+
 ## Suggested Starting Points
 
 - [WasmGPU.geometry](./wasmgpu-geometry.md)

@@ -1,0 +1,148 @@
+WEBVTT
+
+00:00:02.800 --> 00:00:06.009
+The world subsystem holds what a frame looks at:
+
+00:00:06.109 --> 00:00:10.146
+scenes that register objects, cameras that view them, lights
+
+00:00:10.246 --> 00:00:13.110
+that shade them, and overlays drawn on top.
+
+00:00:15.033 --> 00:00:19.156
+createScene makes a registration container with typed collections
+
+00:00:19.256 --> 00:00:21.885
+for meshes and each of the five scientific
+
+00:00:21.985 --> 00:00:24.938
+primitives, plus lights and a background color.
+
+00:00:25.366 --> 00:00:27.766
+The background color is set when the scene
+
+00:00:27.866 --> 00:00:30.920
+is created, or later through its background property.
+
+00:00:31.333 --> 00:00:35.100
+add and remove dispatch on the object's type, and typed
+
+00:00:35.200 --> 00:00:38.124
+helpers clear or find one family at a time.
+
+00:00:38.533 --> 00:00:43.412
+Hierarchy is not stored in the scene: parent-child structure lives in
+
+00:00:43.512 --> 00:00:47.670
+transforms, so the scene stays a flat set of registrations.
+
+00:00:48.100 --> 00:00:53.537
+traverse and traverseVisible walk the meshes, findByName and findAllByName
+
+00:00:53.637 --> 00:00:57.728
+look objects up, and getBounds measures the whole scene.
+
+00:00:58.133 --> 00:01:01.284
+clear only removes references, while destroy
+
+00:01:01.384 --> 00:01:04.092
+also destroys every registered object.
+
+00:01:06.000 --> 00:01:10.264
+createCamera.perspective takes a vertical field of view in
+
+00:01:10.364 --> 00:01:13.499
+degrees, near and far planes, and an aspect
+
+00:01:13.599 --> 00:01:17.036
+ratio that can follow the canvas automatically.
+
+00:01:17.466 --> 00:01:21.164
+Setting far to infinity gives an infinite far plane.
+
+00:01:21.566 --> 00:01:26.612
+createCamera.orthographic uses left, right, top, and bottom bounds
+
+00:01:26.712 --> 00:01:30.277
+instead, so size does not change with distance.
+
+00:01:30.700 --> 00:01:35.112
+Perspective cameras also support a fixed aspect, and glTF
+
+00:01:35.212 --> 00:01:40.178
+import preserves authored aspect ratios and infinite far planes.
+
+00:01:40.600 --> 00:01:45.077
+Both cameras own a transform, so lookAt and setWorldPosition move
+
+00:01:45.177 --> 00:01:49.865
+them, and they cache view, projection, and view-projection matrices.
+
+00:01:51.766 --> 00:01:56.208
+createLight builds ambient, directional, point, and spot lights, each
+
+00:01:56.308 --> 00:01:59.368
+with a color, an intensity, and an enabled flag.
+
+00:01:59.800 --> 00:02:02.250
+Point and spot lights add a range, and
+
+00:02:02.350 --> 00:02:05.204
+spot lights add inner and outer cone angles.
+
+00:02:05.633 --> 00:02:09.960
+The renderer packs at most eight non-ambient lights per frame,
+
+00:02:10.060 --> 00:02:14.173
+and lights imported from glTF follow their node transforms.
+
+00:02:14.600 --> 00:02:17.709
+Directional lights can also cast shadows through the
+
+00:02:17.809 --> 00:02:20.857
+effects facade, which the Render section describes.
+
+00:02:22.766 --> 00:02:26.510
+createOverlay.system adds a DOM layer next to the
+
+00:02:26.610 --> 00:02:30.432
+canvas, where overlay layers are registered by ID.
+
+00:02:30.833 --> 00:02:35.652
+It redraws only when something invalidates it, such as the camera, the
+
+00:02:35.752 --> 00:02:40.290
+viewport, a layout change, a scale, a colormap, or an interaction.
+
+00:02:40.700 --> 00:02:42.872
+Binding the controls lets camera
+
+00:02:42.972 --> 00:02:45.997
+motion invalidate the overlay automatically.
+
+00:02:46.400 --> 00:02:50.460
+A layer can be hidden with setLayerEnabled without detaching
+
+00:02:50.560 --> 00:02:53.788
+it, and removing a layer releases its resources.
+
+00:02:54.200 --> 00:02:57.696
+The axis triad shows the world axes in a screen corner,
+
+00:02:57.796 --> 00:03:02.078
+and the grid draws a labeled reference plane with adaptive spacing.
+
+00:03:02.500 --> 00:03:06.308
+The legend reads an object's scale transform and colormap, and
+
+00:03:06.408 --> 00:03:09.461
+draws a color bar with ticks from that same state.
+
+00:03:11.366 --> 00:03:15.698
+To recap: scenes as flat registries, two camera types, four
+
+00:03:15.798 --> 00:03:20.205
+light types, and overlays that update only when invalidated.
+
+00:03:21.633 --> 00:03:25.650
+The full reference is in the World section of the documentation.

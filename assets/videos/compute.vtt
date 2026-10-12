@@ -1,0 +1,157 @@
+WEBVTT
+
+00:00:02.800 --> 00:00:08.281
+The compute subsystem runs general-purpose GPU work, from buffers
+
+00:00:08.381 --> 00:00:12.918
+and WGSL pipelines to ndarrays, kernels, and readback.
+
+00:00:14.833 --> 00:00:18.205
+Storage buffers hold the data that shaders read and
+
+00:00:18.305 --> 00:00:22.221
+write, and uniform buffers hold small blocks of parameters.
+
+00:00:22.633 --> 00:00:26.357
+Storage buffers accept writes by default; reading one
+
+00:00:26.457 --> 00:00:30.469
+back needs the copy-source flag, reported by canReadback.
+
+00:00:30.900 --> 00:00:33.533
+Writes are padded to four-byte alignment, so
+
+00:00:33.633 --> 00:00:35.770
+a ten-byte write fills twelve bytes.
+
+00:00:37.700 --> 00:00:41.348
+A compute pipeline compiles your WGSL, with an
+
+00:00:41.448 --> 00:00:44.853
+automatic or an explicit bind group layout.
+
+00:00:45.266 --> 00:00:48.494
+Bind groups attach buffers to the shader's bindings,
+
+00:00:48.594 --> 00:00:51.246
+and dispatch launches a grid of workgroups.
+
+00:00:51.666 --> 00:00:56.313
+The one-, two-, and three-dimensional helpers divide the problem size by
+
+00:00:56.413 --> 00:01:00.334
+the workgroup size and round up, so every element is covered.
+
+00:01:00.766 --> 00:01:04.353
+Dispatches can also be encoded into your own command
+
+00:01:04.453 --> 00:01:07.685
+encoder, or batched into a single compute pass.
+
+00:01:09.600 --> 00:01:12.567
+ndarrays describe memory with a dtype, a
+
+00:01:12.667 --> 00:01:15.558
+shape, byte strides, and a byte offset.
+
+00:01:15.966 --> 00:01:19.609
+Strides are measured in bytes, so an element's offset is
+
+00:01:19.709 --> 00:01:22.885
+the base offset plus each index times its stride.
+
+00:01:23.300 --> 00:01:27.711
+A CPUndarray lives in WebAssembly memory, and destroy
+
+00:01:27.811 --> 00:01:31.626
+frees its data, shape, and stride allocations.
+
+00:01:32.033 --> 00:01:36.638
+A GPUndarray lives in a storage buffer: empty allocates
+
+00:01:36.738 --> 00:01:40.573
+one it owns, and wrap borrows an existing one.
+
+00:01:41.000 --> 00:01:47.538
+Upload and readback move arrays between the two residences, and the
+
+00:01:47.638 --> 00:01:52.889
+f32, u32, and i32 dtypes map directly to WGSL scalars.
+
+00:01:54.800 --> 00:02:00.496
+The kernels library provides parallel building blocks: element-wise
+
+00:02:00.596 --> 00:02:04.217
+math, dot products, and GEMM over f32, u32,
+
+00:02:04.317 --> 00:02:08.716
+and c64, plus reductions, scans, sorts, and solvers.
+
+00:02:09.133 --> 00:02:12.294
+Reductions combine values in a tree inside each
+
+00:02:12.394 --> 00:02:16.457
+workgroup, and arg-reductions also return the winning index.
+
+00:02:16.866 --> 00:02:21.891
+An exclusive scan gives each element the sum of everything before it, and
+
+00:02:21.991 --> 00:02:26.174
+compaction uses a scan of keep flags to pack the kept values.
+
+00:02:26.600 --> 00:02:29.935
+Radix sorts order u32 keys, or key-value
+
+00:02:30.035 --> 00:02:33.198
+pairs, stably, using one pass per bit.
+
+00:02:33.600 --> 00:02:36.972
+GEMM computes alpha times A times B, plus beta
+
+00:02:37.072 --> 00:02:42.332
+times the output, staging sixteen-by-sixteen tiles in workgroup memory.
+
+00:02:42.733 --> 00:02:47.058
+Batched LU factorization with partial pivoting, and the matching
+
+00:02:47.158 --> 00:02:50.377
+solve, handle many small linear systems at once.
+
+00:02:52.300 --> 00:02:56.644
+Results return to JavaScript through a readback ring, which keeps
+
+00:02:56.744 --> 00:03:00.541
+three staging buffers by default and reuses them in turn.
+
+00:03:00.966 --> 00:03:04.496
+Each read copies a range into the next slot, maps it
+
+00:03:04.596 --> 00:03:08.824
+asynchronously, and resolves a typed array or a single scalar.
+
+00:03:09.233 --> 00:03:11.952
+For images, a blitter draws a packed
+
+00:03:12.052 --> 00:03:14.616
+RGBA8 buffer straight to a canvas.
+
+00:03:16.533 --> 00:03:22.803
+An f64 array can be stored, copied, and read back without loss,
+
+00:03:22.903 --> 00:03:28.870
+but WGSL has no runtime f64 type, so shaders compute in f32.
+
+00:03:29.300 --> 00:03:35.405
+Lifetimes are explicit: destroy releases buffers, readback rings, and CPU
+
+00:03:35.505 --> 00:03:40.506
+allocations, and a GPUndarray destroys only buffers it owns.
+
+00:03:42.433 --> 00:03:46.318
+To recap: buffers, pipelines and dispatch, ndarrays with
+
+00:03:46.418 --> 00:03:50.589
+byte strides, a kernels library, and ring-buffered readback.
+
+00:03:52.000 --> 00:03:56.060
+The full reference is in the Compute section of the documentation.

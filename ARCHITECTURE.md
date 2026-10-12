@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Thursday, October 1, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Monday, October 12, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Friday, September 18, 2026, [**`5d6f568`**](https://github.com/Zushah/WasmGPU/commit/5d6f568).
+Parent commit: Thursday, October 1, 2026, [**`381f5dc`**](https://github.com/Zushah/WasmGPU/commit/381f5dc).
 
 Latest release: Monday, August 31, 2026, [**`v0.10.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.10.0).
 
@@ -974,11 +974,14 @@ Important files and directories:
 - `./website/performance/`: performance page source with benchmark data and charts fetched dynamically based on the latest benchmark report in the GitHub repository.
 - `./website/build/`: generated website output.
 - `./mkdocs.yaml`: MkDocs configuration for documentation pages.
-- `./scripts/build_website.py`: website build script. It copies website files, assets, examples, performance, and `./release/WasmGPU.min.js`, rewrites the copied examples from local `./release/` imports to the pinned `./release/` URLs, and runs MkDocs.
+- `./scripts/build_website.py`: website build script. It copies website files, assets without `./assets/videos/`, examples, performance, and `./release/WasmGPU.min.js`, rewrites the copied examples from local `./release/` imports to the pinned `./release/` URLs, runs MkDocs, and copies the assets including `./assets/videos/` only into the documentation output.
+- `./scripts/website_videos.py`: documentation video generator. It renders the narrated overview videos, WebVTT captions, and poster title cards with Manim and offline Kokoro text-to-speech, bootstraps its own Python 3.11-3.13 virtual environment under `./tools/videos/`, and is run with `npm run videos`.
 - `./.agents/skills/maintain-docs/`: OpenAI Codex skill for auditing, writing, maintaining, and verifying Markdown documentation under `./website/docs/`.
 - `./.github/workflows/website.yaml`: GitHub Pages workflow for website deployment.
 
 `./scripts/build_website.py` writes generated website output under `./website/build/`. That directory is not present in the codebase unless the website build has been run locally.
+
+The documentation index page and the eight section index pages under `./website/docs/` embed the generated overview videos from `./assets/videos/` with their WebVTT captions and poster title cards.
 
 `./website/docs/`, `./website/home/`, `./website/examples/`, `./website/performance/`, `./README.md`, and `./CHANGELOG.md` are release-facing sources. They are often updated significantly during release work, not for every source change.
 
@@ -1020,6 +1023,8 @@ Architectural role:
 Important files and directories:
 
 - `./assets/`: static images and assets used by documentation, the website, or examples.
+- `./assets/videos/`: generated MP4 documentation overview videos and their WebVTT captions.
+- `./assets/fonts/`: Montserrat and Ubuntu Mono fonts with their OFL and UFL license texts, used by logo and video generation.
 - `./LICENSE.md`: project license (MPL-2.0).
 - `./.gitignore`: ignored build and local files.
 - `./.gitattributes`: line endings, linguist options, and generated files.
@@ -1119,6 +1124,7 @@ Release-update convention:
 - `./website/` contains the website and documentation and is usually updated significantly only when a new WasmGPU version is released.
 - `./CHANGELOG.md` is usually updated significantly only when a new version is released.
 - `./README.md` is usually updated significantly only when a new version is released.
+- The generated documentation videos, captions, and title cards are release-facing website assets, usually regenerated only when a new version is released.
 - Small fixes to those files may happen outside a release, such as typo fixes or small bug and documentation corrections.
 - `./ARCHITECTURE.md` is different: update it whenever there is a significant source-code architecture change, not only when preparing a release.
 
@@ -1137,6 +1143,8 @@ During non-release development, generated changes under `./wasm/` and `./release
 During an approved `$prepare-release` `prepare` run, update the target release version and date in the `releaseBanner` literal in `./esbuild.config.js` before running `npm run build`. The JavaScript build automatically emits that banner followed by one empty line at the start of `./release/WasmGPU.js`, `./release/WasmGPU.min.js`, `./release/WasmGPU.iife.min.js`, and `./release/wasm.js`. Note that the binary `./release/wasm.wasm` should remain unbannered. Do not manually edit generated files under `./release/` or `./wasm/`. `$prepare-release` `verify` mode does not run `npm run build` because verification must preserve the prepared artifacts.
 
 The release preparation workflow derives the homepage JavaScript line count from the final bannered `./release/WasmGPU.js` and the displayed minified bundle size from the final bannered `./release/WasmGPU.min.js`. It derives release additions, deletions, and changed-file count from the baseline release to the complete intended current workspace, then rechecks those values after writing them into `./website/home/index.html`. `npm run website` is used as a build-process check only, as visual website approval remains manual. Release preparation does not run benchmarks.
+
+`npm run videos` regenerates the committed documentation videos, captions, and title cards from `./scripts/website_videos.py`. Intermediate media, the voice cache, the text-to-speech model, and the virtual environment stay in the gitignored `./tools/videos/` directory. Generated video outputs should not be edited by hand.
 
 Website generation uses `npm run website`, which runs `./scripts/build_website.py`. That script reads `./release/WasmGPU.min.js`, copies assets and examples, rewrites the copied examples from their local `./release/` imports to the pinned v0.10.0 CDN `./release/` URLs, and writes output under `./website/build/`. The repository examples therefore exercise the current local bundles, while the generated website examples continue to exercise the documented v0.10.0 release.
 
@@ -1181,6 +1189,7 @@ Use the commands from `./package.json`:
 | `npm run bench:interop` | Run interop benchmark. |
 | `npm run bench:interact` | Run interact benchmarks. |
 | `npm run website` | Build the website into `./website/build/`. |
+| `npm run videos` | Generate the documentation overview videos, captions, and title cards via `./scripts/website_videos.py`. |
 | `npm run logo` | Regenerate logo raster assets via `./scripts/rasterize_logo.py`. |
 
 The appropriate minimum depends on the change. Documentation-only changes usually need Markdown review. TypeScript behavior changes need at least `npm run build:ts` and focused tests. Rust, shader, or bundle changes need the matching build steps.

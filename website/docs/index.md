@@ -15,6 +15,13 @@ WebGPU × WebAssembly rendering and computing engine for scientific workloads in
     - 🔗 **Array semantics & zero-copy staging**: Ndarray indexing utilities for explicit shape-and-stride byte-offset math plus uniforms and instance data staged as zero-copy views into WebAssembly memory with scoped ABI borrowing, alias-safe fixed-width math operands, explicit typed-slice handles, and refreshable views over external WebAssembly memories.
     - ⚡ **Performance envelope**: Transient work uses a frame arena while persistent allocations use reclaimable heap arenas with deterministic owning-object disposal, and builds are optimized through LLVM, Binaryen, and SIMD128 for higher throughput.
 
+## Overview Video
+
+<video controls preload="metadata" poster="./assets/images/website-video-wasmgpu.png">
+    <source src="./assets/videos/wasmgpu.mp4" type="video/mp4">
+    <track kind="captions" src="./assets/videos/wasmgpu.vtt" srclang="en" label="English">
+</video>
+
 ## Install
 
 ```bash
@@ -35,7 +42,7 @@ npm install @zushah/wasmgpu@0.10.0
 
 ## Architecture
 
-For an in-depth explanation of WasmGPU's software architecture, visit the [architecture guide](./architecture/index.md).
+For an in-depth explanation of WasmGPU's software architecture, visit the [architecture guide](./architecture/).
 
 The diagram below reflects the implemented architecture of WasmGPU v0.10.0.
 

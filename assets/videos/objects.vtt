@@ -1,0 +1,166 @@
+WEBVTT
+
+00:00:02.800 --> 00:00:06.867
+The objects subsystem defines everything a scene can
+
+00:00:06.967 --> 00:00:11.034
+draw: meshes built from geometry and materials, five
+
+00:00:11.134 --> 00:00:14.881
+scientific primitives, and imported glTF assets.
+
+00:00:16.800 --> 00:00:19.192
+A mesh pairs one geometry with one
+
+00:00:19.292 --> 00:00:21.905
+material, and gets its own transform.
+
+00:00:22.333 --> 00:00:26.586
+Geometry and materials are reference counted: createMesh takes
+
+00:00:26.686 --> 00:00:29.816
+over one reference and destroy releases it, so
+
+00:00:29.916 --> 00:00:33.326
+shared resources are retained once per extra mesh.
+
+00:00:33.733 --> 00:00:38.196
+Meshes form hierarchies with setParent and addChild, clones share
+
+00:00:38.296 --> 00:00:43.041
+the same resources, and castShadow and receiveShadow control shadows.
+
+00:00:44.966 --> 00:00:49.707
+Built-in primitives include boxes, spheres, cylinders, tori, prisms,
+
+00:00:49.807 --> 00:00:53.267
+pyramids, planes, and flat shapes such as circles,
+
+00:00:53.367 --> 00:00:56.898
+ellipses, rectangles, triangles, lines, and points.
+
+00:00:57.300 --> 00:01:01.188
+Cartesian and parametric curves and surfaces sample your
+
+00:01:01.288 --> 00:01:06.032
+functions; surfaces get triangles, normals, and texture coordinates.
+
+00:01:06.433 --> 00:01:10.316
+Custom geometry takes your own vertex and index arrays,
+
+00:01:10.416 --> 00:01:14.589
+and can borrow WebAssembly memory views for its attributes.
+
+00:01:16.500 --> 00:01:20.891
+Four material types share one interface: unlit for flat
+
+00:01:20.991 --> 00:01:26.200
+color, standard for glTF-style physically based shading, data for
+
+00:01:26.300 --> 00:01:30.202
+colormapped values, and custom for your own WGSL.
+
+00:01:30.633 --> 00:01:34.668
+A custom material declares its own resources in bind group
+
+00:01:34.768 --> 00:01:38.448
+one, because bind group zero belongs to the renderer.
+
+00:01:38.866 --> 00:01:43.267
+Textures upload asynchronously with mipmaps and sampler settings, and
+
+00:01:43.367 --> 00:01:46.660
+render with fallback resources until they are ready.
+
+00:01:47.066 --> 00:01:51.395
+Colormaps come built in, viridis, plasma, magma, inferno, turbo,
+
+00:01:51.495 --> 00:01:54.924
+and grayscale, or from your own stops and palettes.
+
+00:01:56.833 --> 00:01:59.560
+PointCloud draws points colored by a scalar
+
+00:01:59.660 --> 00:02:02.386
+through a colormap, or by per-point colors.
+
+00:02:02.800 --> 00:02:07.288
+GlyphField instances ellipsoids, arrows, or custom geometry,
+
+00:02:07.388 --> 00:02:09.889
+for example to show vector fields.
+
+00:02:10.300 --> 00:02:13.106
+NodeLink draws graphs, with separate scales
+
+00:02:13.206 --> 00:02:15.405
+and colormaps for nodes and edges.
+
+00:02:15.833 --> 00:02:21.453
+SplatField draws Gaussian splats, optionally with spherical harmonics up to degree
+
+00:02:21.553 --> 00:02:25.290
+three, and is always transparent and sorted on the GPU.
+
+00:02:25.700 --> 00:02:28.348
+LatticeSpace draws regular 2D or 3D
+
+00:02:28.448 --> 00:02:31.253
+cells, stored with x varying fastest.
+
+00:02:31.666 --> 00:02:35.977
+All five borrow caller-supplied GPU buffers by default, and
+
+00:02:36.077 --> 00:02:39.417
+destroy them only with ownBuffers set to true.
+
+00:02:41.333 --> 00:02:46.780
+gltf.load reads JSON or binary GLB files and their buffers,
+
+00:02:46.880 --> 00:02:53.926
+gltf.import converts them into scene resources, and loadAndImport does both.
+
+00:02:54.333 --> 00:02:58.650
+Accessor decoding, sparse patching, and numeric conversion run
+
+00:02:58.750 --> 00:03:02.497
+in Rust, and import covers material extensions, skins,
+
+00:03:02.597 --> 00:03:05.988
+animations, cameras, lights, and Gaussian splats.
+
+00:03:06.400 --> 00:03:11.281
+Each asset reports its support as supported, partial, deferred, or
+
+00:03:11.381 --> 00:03:16.262
+unsupported, and a failed import rolls back everything it created.
+
+00:03:18.166 --> 00:03:21.986
+Animation clips sample translation, rotation, and scale
+
+00:03:22.086 --> 00:03:24.907
+channels in Rust, while morph weights and
+
+00:03:25.007 --> 00:03:28.114
+animation pointers are sampled in TypeScript.
+
+00:03:28.533 --> 00:03:32.130
+Players advance clips with looping and speed, and skins
+
+00:03:32.230 --> 00:03:35.558
+drive four- or eight-influence skinning on the GPU.
+
+00:03:35.966 --> 00:03:38.736
+Morph targets blend positions, normals, and
+
+00:03:38.836 --> 00:03:41.072
+colors, and update the mesh bounds.
+
+00:03:43.000 --> 00:03:48.516
+To recap: reference-counted meshes, built-in and custom geometry, four
+
+00:03:48.616 --> 00:03:53.972
+material types, five scientific primitives, and glTF with animation.
+
+00:03:55.400 --> 00:03:59.630
+The full reference is in the Objects section of the documentation.
