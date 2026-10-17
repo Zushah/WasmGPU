@@ -25,6 +25,14 @@ import computeAxpyF32 from "./compute/kernels-axpy-f32-throughput.bench.js";
 import computeGemmF32 from "./compute/kernels-gemm-f32-throughput.bench.js";
 import computeGemmU32 from "./compute/kernels-gemm-u32-throughput.bench.js";
 import computeGemmC64 from "./compute/kernels-gemm-c64-throughput.bench.js";
+import computeLuFactorF32N from "./compute/kernels-lu-factor-f32-n-throughput.bench.js";
+import computeLuFactorC64N from "./compute/kernels-lu-factor-c64-n-throughput.bench.js";
+import computeLuSolveF32N from "./compute/kernels-lu-solve-f32-n-throughput.bench.js";
+import computeLuSolveC64N from "./compute/kernels-lu-solve-c64-n-throughput.bench.js";
+import computeLuFactorF32Batch from "./compute/kernels-lu-factor-f32-batch-throughput.bench.js";
+import computeLuFactorC64Batch from "./compute/kernels-lu-factor-c64-batch-throughput.bench.js";
+import computeLuSolveF32Batch from "./compute/kernels-lu-solve-f32-batch-throughput.bench.js";
+import computeLuSolveC64Batch from "./compute/kernels-lu-solve-c64-batch-throughput.bench.js";
 import storageBufferWrite from "./compute/storagebuffer-write-throughput.bench.js";
 import readbackRingRead from "./compute/readbackring-read-throughput.bench.js";
 import ndarrayUpload from "./compute/cpundarray-upload-to-gpu-throughput.bench.js";
@@ -88,6 +96,14 @@ export const benchmarks = [
     computeGemmF32,
     computeGemmU32,
     computeGemmC64,
+    computeLuFactorF32N,
+    computeLuFactorC64N,
+    computeLuSolveF32N,
+    computeLuSolveC64N,
+    computeLuFactorF32Batch,
+    computeLuFactorC64Batch,
+    computeLuSolveF32Batch,
+    computeLuSolveC64Batch,
     storageBufferWrite,
     readbackRingRead,
     ndarray,

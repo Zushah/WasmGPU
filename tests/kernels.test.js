@@ -601,7 +601,31 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// 16) C64 solve fallback path for n > 512 (identity LU should return rhs unchanged).
+// 16) F32 solve fallback path for n > 512 (identity LU should return rhs unchanged).
+{
+    const batch = 1;
+    const n = 513;
+    const lu = new Float32Array(batch * n * n);
+    const ipiv = new Uint32Array(batch * n);
+    const rhs = new Float32Array(batch * n);
+    for (let i = 0; i < n; i++) {
+        lu[i * n + i] = 1;
+        ipiv[i] = i >>> 0;
+        rhs[i] = Math.sin(i * 0.17);
+    }
+
+    const bufLu = compute.createStorageBuffer({ label: "lu:f32:large:lu", data: lu, copySrc: false });
+    const bufIpiv = compute.createStorageBuffer({ label: "lu:f32:large:ipiv", data: ipiv, copySrc: false });
+    const bufRhs = compute.createStorageBuffer({ label: "lu:f32:large:rhs", data: rhs, copySrc: false });
+    const bufX = compute.createStorageBuffer({ label: "lu:f32:large:x", byteLength: batch * n * 4, copySrc: true });
+
+    kernels.luSolveF32Batched(bufLu, bufIpiv, bufRhs, bufX, batch, n);
+
+    const gotX = await bufX.readAs(Float32Array);
+    arraysApproxEqual(gotX, rhs, 1e-5, "LU f32 large solve mismatch");
+}
+
+// 17) C64 solve fallback path for n > 512 (identity LU should return rhs unchanged).
 {
     const batch = 1;
     const n = 513;
@@ -627,7 +651,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     arraysApproxEqual(gotX, rhs, 1e-5, "LU c64 large solve mismatch");
 }
 
-// 17) Blocked-path regression for f32 LU at n >= 160 (covers lead/upper/trailing kernels).
+// 18) Blocked-path regression for f32 LU at n >= 160 (covers lead/upper/trailing kernels).
 {
     const n = 192;
     const batch = 2;
@@ -678,7 +702,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// 18) Blocked-path regression for c64 LU at n >= 160 (covers lead/upper/trailing kernels).
+// 19) Blocked-path regression for c64 LU at n >= 160 (covers lead/upper/trailing kernels).
 {
     const n = 192;
     const batch = 2;
@@ -747,7 +771,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     }
 }
 
-// 19) Explicit f32/u32/c64 vector arithmetic methods.
+// 20) Explicit f32/u32/c64 vector arithmetic methods.
 {
     for (const name of ["addF32", "subF32", "mulF32", "sclF32", "dotF32", "axpyF32", "gemmF32", "addU32", "subU32", "mulU32", "sclU32", "dotU32", "axpyU32", "gemmU32", "addC64", "subC64", "mulC64", "sclC64", "dotC64", "axpyC64", "gemmC64"]) assert.strictEqual(typeof kernels[name], "function", `Missing kernel: ${name}`);
 
@@ -787,7 +811,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     assert.strictEqual(empty.byteLength, 0, "zero-count c64 output logical size");
 }
 
-// 20) Dot products, including u32 wrap, non-conjugating c64, and zero count.
+// 21) Dot products, including u32 wrap, non-conjugating c64, and zero count.
 {
     const af = compute.createStorageBuffer({ data: new Float32Array([1.5, -2, 4]) });
     const bf = compute.createStorageBuffer({ data: new Float32Array([2, 3, -0.5]) });
@@ -810,7 +834,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     assert.strictEqual((await kernels.dotU32(au, bu, { count: 0 }).readAs(Uint32Array))[0], 0, "dotU32 zero");
 }
 
-// 21) Scalar parameter buffers remain independent in a shared caller encoder.
+// 22) Scalar parameter buffers remain independent in a shared caller encoder.
 {
     const input = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3]) });
     const outA = compute.createStorageBuffer({ byteLength: 12, copySrc: true });
@@ -823,7 +847,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     arraysApproxEqual(await outB.readAs(Float32Array), new Float32Array([-3, -6, -9]), 1e-6, "shared encoder second scalar");
 }
 
-// 22) Tiled row-major GEMM for f32, u32, and c64, including alpha/beta and k=0.
+// 23) Tiled row-major GEMM for f32, u32, and c64, including alpha/beta and k=0.
 {
     const af = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, 4, 5, 6]) });
     const bf = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, 4, 5, 6]) });
@@ -885,7 +909,7 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     assert.strictEqual(kernels.gemmF32(zeroF, compute.createStorageBuffer({ byteLength: 21 * 4 }), 0, 7, 3).byteLength, 0, "gemm m=0 output");
 }
 
-// 23) Cleanup releases the shared compute context before its browser GPU device.
+// 24) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

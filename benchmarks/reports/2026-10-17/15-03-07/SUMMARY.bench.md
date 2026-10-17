@@ -1,0 +1,262 @@
+# WasmGPU benchmark report
+
+## Environment
+
+- Timestamp: 2026-10-17T19:03:07.688Z
+- Machine: Zushah's PC
+- Host OS: Windows 11
+- Environment: Ubuntu 24.04 under WSL2
+- CPU: Intel Core i5-14400F
+- GPU: NVIDIA GeForce RTX 4060
+- RAM: 32 GB DDR5
+- Storage: 1 TB NVMe
+- Controller: wsl / linux / Ubuntu-24.04
+- Controller kernel: 6.18.54.1-microsoft-standard-WSL2
+- Node: v24.18.0
+- Browser: chrome 155.0.8059.84 on windows via cdp
+- WebGPU adapter: nvidia / lovelace
+- Native adapter: True
+- Fallback adapter: False
+- Mode: full
+
+## Results
+
+| Benchmark | Size | Median | Mean | p95 |
+|---|---:|---:|---:|---:|
+| compute/compute-dispatch-batch-throughput | 16 | 3.214e+05 dispatches/s | 3.065e+05 | 3.362e+05 |
+| compute/compute-dispatch-batch-throughput | 256 | 1.088e+06 dispatches/s | 1.089e+06 | 1.098e+06 |
+| compute/compute-dispatch-batch-throughput | 2,048 | 1.116e+06 dispatches/s | 1.118e+06 | 1.135e+06 |
+| compute/cpundarray-index-get-set-throughput | 65,536 | 3.402e+07 operations/s | 3.395e+07 | 3.413e+07 |
+| compute/cpundarray-index-get-set-throughput | 262,144 | 3.308e+07 operations/s | 3.306e+07 | 3.326e+07 |
+| compute/cpundarray-index-get-set-throughput | 1,048,576 | 3.31e+07 operations/s | 3.299e+07 | 3.326e+07 |
+| compute/cpundarray-upload-to-gpu-throughput | 4,194,304 | 1.018e+10 bytes/s | 9.574e+09 | 1.08e+10 |
+| compute/cpundarray-upload-to-gpu-throughput | 16,777,216 | 2.874e+09 bytes/s | 2.859e+09 | 2.911e+09 |
+| compute/cpundarray-upload-to-gpu-throughput | 33,554,432 | 2.996e+09 bytes/s | 2.992e+09 | 3.019e+09 |
+| compute/gpundarray-readback-to-cpu-throughput | 16,777,216 | 5.084e+09 bytes/s | 5.06e+09 | 5.162e+09 |
+| compute/gpundarray-readback-to-cpu-throughput | 25,165,824 | 4.959e+09 bytes/s | 4.955e+09 | 4.994e+09 |
+| compute/gpundarray-readback-to-cpu-throughput | 33,554,432 | 5.274e+09 bytes/s | 5.234e+09 | 5.41e+09 |
+| compute/kernels-add-f32-throughput | 65,536 | 17.03 GB/s | 16.59 | 17.72 |
+| compute/kernels-add-f32-throughput | 1,048,576 | 281.5 GB/s | 276.6 | 301.3 |
+| compute/kernels-add-f32-throughput | 8,388,608 | 244.3 GB/s | 244.4 | 246.6 |
+| compute/kernels-argmax-f32-throughput | 65,536 | 1.279e+09 elements/s | 1.225e+09 | 1.305e+09 |
+| compute/kernels-argmax-f32-throughput | 1,048,576 | 2.04e+10 elements/s | 2.023e+10 | 2.277e+10 |
+| compute/kernels-argmax-f32-throughput | 8,388,608 | 4.559e+10 elements/s | 4.566e+10 | 4.589e+10 |
+| compute/kernels-argmin-f32-throughput | 65,536 | 1.313e+09 elements/s | 1.284e+09 | 1.414e+09 |
+| compute/kernels-argmin-f32-throughput | 1,048,576 | 2.021e+10 elements/s | 1.997e+10 | 2.12e+10 |
+| compute/kernels-argmin-f32-throughput | 8,388,608 | 4.572e+10 elements/s | 4.579e+10 | 4.611e+10 |
+| compute/kernels-axpy-f32-throughput | 65,536 | 15.57 GB/s | 15.36 | 16.56 |
+| compute/kernels-axpy-f32-throughput | 1,048,576 | 248.3 GB/s | 246 | 269.6 |
+| compute/kernels-axpy-f32-throughput | 8,388,608 | 245.9 GB/s | 245.1 | 247.1 |
+| compute/kernels-compact-f32-throughput | 8,388,608 | 7.872e+09 elements/s | 7.888e+09 | 8.019e+09 |
+| compute/kernels-compact-f32-throughput | 12,582,912 | 8.085e+09 elements/s | 8.068e+09 | 8.133e+09 |
+| compute/kernels-compact-f32-throughput | 16,776,960 | 8.178e+09 elements/s | 8.177e+09 | 8.233e+09 |
+| compute/kernels-compact-u32-throughput | 8,388,608 | 7.884e+09 elements/s | 7.896e+09 | 8.037e+09 |
+| compute/kernels-compact-u32-throughput | 12,582,912 | 8.077e+09 elements/s | 8.068e+09 | 8.173e+09 |
+| compute/kernels-compact-u32-throughput | 16,776,960 | 8.134e+09 elements/s | 8.156e+09 | 8.273e+09 |
+| compute/kernels-copy-f32-throughput | 65,536 | 5.578 GB/s | 5.5 | 5.859 |
+| compute/kernels-copy-f32-throughput | 1,048,576 | 97.4 GB/s | 94.62 | 102.9 |
+| compute/kernels-copy-f32-throughput | 8,388,608 | 119.1 GB/s | 117.3 | 120.2 |
+| compute/kernels-dot-f32-throughput | 65,536 | 1.271e+09 elements/s | 1.26e+09 | 1.339e+09 |
+| compute/kernels-dot-f32-throughput | 1,048,576 | 1.952e+10 elements/s | 1.934e+10 | 2.19e+10 |
+| compute/kernels-dot-f32-throughput | 8,388,608 | 3.02e+10 elements/s | 3.012e+10 | 3.027e+10 |
+| compute/kernels-gemm-c64-throughput | 128 | 321.7 GFLOP/s | 311.5 | 327.2 |
+| compute/kernels-gemm-c64-throughput | 256 | 2192 GFLOP/s | 2149 | 2301 |
+| compute/kernels-gemm-c64-throughput | 512 | 2949 GFLOP/s | 2946 | 2973 |
+| compute/kernels-gemm-f32-throughput | 128 | 78.52 GFLOP/s | 74.15 | 79.97 |
+| compute/kernels-gemm-f32-throughput | 256 | 677.7 GFLOP/s | 651.7 | 738 |
+| compute/kernels-gemm-f32-throughput | 512 | 1160 GFLOP/s | 1159 | 1172 |
+| compute/kernels-gemm-f32-throughput | 1,024 | 1221 GFLOP/s | 1219 | 1236 |
+| compute/kernels-gemm-u32-throughput | 128 | 82.36 Gops/s | 79.01 | 85.02 |
+| compute/kernels-gemm-u32-throughput | 256 | 688.9 Gops/s | 677.8 | 729.4 |
+| compute/kernels-gemm-u32-throughput | 512 | 1185 Gops/s | 1187 | 1195 |
+| compute/kernels-gemm-u32-throughput | 1,024 | 1255 Gops/s | 1245 | 1262 |
+| compute/kernels-histogram-u32-throughput | 65,536 | 1.325e+09 elements/s | 1.318e+09 | 1.445e+09 |
+| compute/kernels-histogram-u32-throughput | 1,048,576 | 2.3e+10 elements/s | 2.326e+10 | 2.481e+10 |
+| compute/kernels-histogram-u32-throughput | 8,388,608 | 5.585e+10 elements/s | 5.586e+10 | 5.592e+10 |
+| compute/kernels-lu-factor-c64-batch-throughput | 1 | 5.506 GFLOP/s | 5.509 | 5.519 |
+| compute/kernels-lu-factor-c64-batch-throughput | 2 | 10.93 GFLOP/s | 10.93 | 10.97 |
+| compute/kernels-lu-factor-c64-batch-throughput | 4 | 21.58 GFLOP/s | 21.56 | 21.75 |
+| compute/kernels-lu-factor-c64-batch-throughput | 8 | 43.32 GFLOP/s | 43.19 | 43.45 |
+| compute/kernels-lu-factor-c64-batch-throughput | 16 | 86.18 GFLOP/s | 86.03 | 86.77 |
+| compute/kernels-lu-factor-c64-batch-throughput | 32 | 140.8 GFLOP/s | 140.9 | 141.7 |
+| compute/kernels-lu-factor-c64-batch-throughput | 64 | 261.2 GFLOP/s | 260.5 | 262.1 |
+| compute/kernels-lu-factor-c64-batch-throughput | 128 | 384 GFLOP/s | 383.5 | 385.6 |
+| compute/kernels-lu-factor-c64-n-throughput | 32 | 3.874 GFLOP/s | 3.834 | 4.069 |
+| compute/kernels-lu-factor-c64-n-throughput | 64 | 13.51 GFLOP/s | 13.18 | 13.57 |
+| compute/kernels-lu-factor-c64-n-throughput | 128 | 21.68 GFLOP/s | 21.65 | 21.74 |
+| compute/kernels-lu-factor-c64-n-throughput | 159 | 20.63 GFLOP/s | 20.55 | 20.75 |
+| compute/kernels-lu-factor-c64-n-throughput | 160 | 58.07 GFLOP/s | 57.45 | 58.97 |
+| compute/kernels-lu-factor-c64-n-throughput | 256 | 117.3 GFLOP/s | 117.3 | 117.8 |
+| compute/kernels-lu-factor-c64-n-throughput | 512 | 255.4 GFLOP/s | 255.1 | 255.5 |
+| compute/kernels-lu-factor-c64-n-throughput | 1,024 | 400.8 GFLOP/s | 399.9 | 402.4 |
+| compute/kernels-lu-factor-f32-batch-throughput | 1 | 1.743 GFLOP/s | 1.737 | 1.746 |
+| compute/kernels-lu-factor-f32-batch-throughput | 2 | 3.478 GFLOP/s | 3.454 | 3.488 |
+| compute/kernels-lu-factor-f32-batch-throughput | 4 | 6.817 GFLOP/s | 6.811 | 6.83 |
+| compute/kernels-lu-factor-f32-batch-throughput | 8 | 13.6 GFLOP/s | 13.59 | 13.74 |
+| compute/kernels-lu-factor-f32-batch-throughput | 16 | 27.06 GFLOP/s | 27.05 | 27.21 |
+| compute/kernels-lu-factor-f32-batch-throughput | 32 | 44.84 GFLOP/s | 44.83 | 45.12 |
+| compute/kernels-lu-factor-f32-batch-throughput | 64 | 73.18 GFLOP/s | 73.05 | 73.65 |
+| compute/kernels-lu-factor-f32-batch-throughput | 128 | 123 GFLOP/s | 123 | 123.5 |
+| compute/kernels-lu-factor-f32-n-throughput | 32 | 1.007 GFLOP/s | 1.006 | 1.103 |
+| compute/kernels-lu-factor-f32-n-throughput | 64 | 3.588 GFLOP/s | 3.588 | 3.599 |
+| compute/kernels-lu-factor-f32-n-throughput | 128 | 6.772 GFLOP/s | 6.773 | 6.816 |
+| compute/kernels-lu-factor-f32-n-throughput | 159 | 7.568 GFLOP/s | 7.558 | 7.612 |
+| compute/kernels-lu-factor-f32-n-throughput | 160 | 15.44 GFLOP/s | 15.26 | 15.78 |
+| compute/kernels-lu-factor-f32-n-throughput | 256 | 32.32 GFLOP/s | 32 | 32.39 |
+| compute/kernels-lu-factor-f32-n-throughput | 512 | 68.42 GFLOP/s | 68.34 | 68.46 |
+| compute/kernels-lu-factor-f32-n-throughput | 1,024 | 116.6 GFLOP/s | 116.4 | 116.9 |
+| compute/kernels-lu-solve-c64-batch-throughput | 1 | 0.7867 GFLOP/s | 0.7861 | 0.7881 |
+| compute/kernels-lu-solve-c64-batch-throughput | 2 | 1.567 GFLOP/s | 1.566 | 1.571 |
+| compute/kernels-lu-solve-c64-batch-throughput | 4 | 3.12 GFLOP/s | 3.116 | 3.125 |
+| compute/kernels-lu-solve-c64-batch-throughput | 8 | 6.243 GFLOP/s | 6.224 | 6.25 |
+| compute/kernels-lu-solve-c64-batch-throughput | 16 | 12.5 GFLOP/s | 12.44 | 12.52 |
+| compute/kernels-lu-solve-c64-batch-throughput | 32 | 24.57 GFLOP/s | 24.48 | 24.6 |
+| compute/kernels-lu-solve-c64-batch-throughput | 64 | 43.27 GFLOP/s | 43.27 | 43.45 |
+| compute/kernels-lu-solve-c64-batch-throughput | 128 | 68.34 GFLOP/s | 68.45 | 68.99 |
+| compute/kernels-lu-solve-c64-n-throughput | 32 | 0.6635 GFLOP/s | 0.6466 | 0.6788 |
+| compute/kernels-lu-solve-c64-n-throughput | 64 | 1.536 GFLOP/s | 1.511 | 1.544 |
+| compute/kernels-lu-solve-c64-n-throughput | 128 | 3.13 GFLOP/s | 3.112 | 3.14 |
+| compute/kernels-lu-solve-c64-n-throughput | 256 | 5.631 GFLOP/s | 5.603 | 5.642 |
+| compute/kernels-lu-solve-c64-n-throughput | 512 | 8.694 GFLOP/s | 8.709 | 8.785 |
+| compute/kernels-lu-solve-c64-n-throughput | 513 | 0.389 GFLOP/s | 0.3894 | 0.3921 |
+| compute/kernels-lu-solve-c64-n-throughput | 1,024 | 0.2772 GFLOP/s | 0.2771 | 0.2789 |
+| compute/kernels-lu-solve-f32-batch-throughput | 1 | 0.2487 GFLOP/s | 0.2495 | 0.2512 |
+| compute/kernels-lu-solve-f32-batch-throughput | 2 | 0.496 GFLOP/s | 0.4968 | 0.5016 |
+| compute/kernels-lu-solve-f32-batch-throughput | 4 | 0.9847 GFLOP/s | 0.9705 | 0.9869 |
+| compute/kernels-lu-solve-f32-batch-throughput | 8 | 1.971 GFLOP/s | 1.963 | 1.981 |
+| compute/kernels-lu-solve-f32-batch-throughput | 16 | 3.936 GFLOP/s | 3.914 | 3.956 |
+| compute/kernels-lu-solve-f32-batch-throughput | 32 | 7.815 GFLOP/s | 7.813 | 7.836 |
+| compute/kernels-lu-solve-f32-batch-throughput | 64 | 15.23 GFLOP/s | 15.24 | 15.28 |
+| compute/kernels-lu-solve-f32-batch-throughput | 128 | 27.43 GFLOP/s | 27.43 | 27.56 |
+| compute/kernels-lu-solve-f32-n-throughput | 32 | 0.1461 GFLOP/s | 0.1469 | 0.1724 |
+| compute/kernels-lu-solve-f32-n-throughput | 64 | 0.4657 GFLOP/s | 0.4572 | 0.4733 |
+| compute/kernels-lu-solve-f32-n-throughput | 128 | 0.9862 GFLOP/s | 0.9797 | 0.9911 |
+| compute/kernels-lu-solve-f32-n-throughput | 256 | 1.819 GFLOP/s | 1.819 | 1.827 |
+| compute/kernels-lu-solve-f32-n-throughput | 512 | 2.963 GFLOP/s | 2.958 | 2.974 |
+| compute/kernels-lu-solve-f32-n-throughput | 513 | 0.119 GFLOP/s | 0.1189 | 0.1203 |
+| compute/kernels-lu-solve-f32-n-throughput | 1,024 | 0.1195 GFLOP/s | 0.1193 | 0.1217 |
+| compute/kernels-min-f32-throughput | 65,536 | 1.181e+09 elements/s | 1.16e+09 | 1.321e+09 |
+| compute/kernels-min-f32-throughput | 1,048,576 | 2.036e+10 elements/s | 2.039e+10 | 2.12e+10 |
+| compute/kernels-min-f32-throughput | 8,388,608 | 5.017e+10 elements/s | 5.013e+10 | 5.023e+10 |
+| compute/kernels-radix-sort-keys-u32-throughput | 16,384 | 3.165e+07 keys/s | 3.077e+07 | 3.798e+07 |
+| compute/kernels-radix-sort-keys-u32-throughput | 262,144 | 4.269e+08 keys/s | 4.101e+08 | 4.288e+08 |
+| compute/kernels-radix-sort-keys-u32-throughput | 2,097,152 | 5.702e+08 keys/s | 5.626e+08 | 5.857e+08 |
+| compute/kernels-radix-sort-pairs-u32-throughput | 16,384 | 3.264e+07 elements/s | 3.237e+07 | 3.506e+07 |
+| compute/kernels-radix-sort-pairs-u32-throughput | 262,144 | 3.846e+08 elements/s | 3.731e+08 | 3.887e+08 |
+| compute/kernels-radix-sort-pairs-u32-throughput | 2,097,152 | 2.808e+08 elements/s | 2.805e+08 | 2.896e+08 |
+| compute/kernels-scale-extract-f32-throughput | 65,536 | 1.321e+09 elements/s | 1.301e+09 | 1.365e+09 |
+| compute/kernels-scale-extract-f32-throughput | 1,048,576 | 2.187e+10 elements/s | 2.15e+10 | 2.306e+10 |
+| compute/kernels-scale-extract-f32-throughput | 8,388,608 | 1.021e+10 elements/s | 1.022e+10 | 1.03e+10 |
+| compute/kernels-scale-histogram-f32-throughput | 65,536 | 1.342e+09 elements/s | 1.331e+09 | 1.399e+09 |
+| compute/kernels-scale-histogram-f32-throughput | 1,048,576 | 2.179e+10 elements/s | 2.169e+10 | 2.322e+10 |
+| compute/kernels-scale-histogram-f32-throughput | 8,388,608 | 5.535e+10 elements/s | 5.546e+10 | 5.584e+10 |
+| compute/kernels-scale-remap-f32-throughput | 65,536 | 1.33e+09 elements/s | 1.303e+09 | 1.379e+09 |
+| compute/kernels-scale-remap-f32-throughput | 1,048,576 | 2.121e+10 elements/s | 2.141e+10 | 2.338e+10 |
+| compute/kernels-scale-remap-f32-throughput | 8,388,608 | 2.968e+10 elements/s | 2.971e+10 | 2.991e+10 |
+| compute/kernels-scan-exclusive-u32-throughput | 65,536 | 1.168e+09 elements/s | 1.114e+09 | 1.264e+09 |
+| compute/kernels-scan-exclusive-u32-throughput | 1,048,576 | 2.018e+10 elements/s | 1.914e+10 | 2.14e+10 |
+| compute/kernels-scan-exclusive-u32-throughput | 8,388,608 | 1.507e+10 elements/s | 1.509e+10 | 1.52e+10 |
+| compute/kernels-sum-f32-throughput | 65,536 | 1.284e+09 elements/s | 1.249e+09 | 1.339e+09 |
+| compute/kernels-sum-f32-throughput | 1,048,576 | 2.023e+10 elements/s | 2.003e+10 | 2.125e+10 |
+| compute/kernels-sum-f32-throughput | 8,388,608 | 5.017e+10 elements/s | 5.015e+10 | 5.029e+10 |
+| compute/readbackring-read-throughput | 262,144 | 1.344e+08 bytes/s | 1.453e+08 | 1.781e+08 |
+| compute/readbackring-read-throughput | 1,048,576 | 2.956e+08 bytes/s | 2.962e+08 | 3.225e+08 |
+| compute/readbackring-read-throughput | 8,388,608 | 1.332e+09 bytes/s | 1.368e+09 | 1.547e+09 |
+| compute/storagebuffer-write-throughput | 65,536 | 3.509e+09 bytes/s | 3.478e+09 | 3.524e+09 |
+| compute/storagebuffer-write-throughput | 1,048,576 | 4.188e+09 bytes/s | 4.172e+09 | 4.224e+09 |
+| compute/storagebuffer-write-throughput | 8,388,608 | 6.073e+09 bytes/s | 6.036e+09 | 6.16e+09 |
+| gltf/accessors-read-interleaved-vec3-throughput | 262,144 | 1.37e+08 elements/s | 1.337e+08 | 1.398e+08 |
+| gltf/accessors-read-interleaved-vec3-throughput | 1,048,576 | 1.274e+08 elements/s | 1.279e+08 | 1.329e+08 |
+| gltf/accessors-read-interleaved-vec3-throughput | 4,194,304 | 1.268e+08 elements/s | 1.27e+08 | 1.33e+08 |
+| interact/renderer-pointcloud-pick-latency | 65,536 | 2.5 ms | 2.367 | 3.675 |
+| interact/renderer-pointcloud-pick-latency | 262,144 | 2.75 ms | 2.758 | 3 |
+| interop/python-to-cpundarray-throughput | 1,048,576 | 3.771e+10 bytes/s | 3.762e+10 | 3.859e+10 |
+| interop/python-to-cpundarray-throughput | 4,194,304 | 3.115e+10 bytes/s | 3.059e+10 | 3.176e+10 |
+| interop/python-to-cpundarray-throughput | 16,777,216 | 1.977e+10 bytes/s | 1.971e+10 | 2.007e+10 |
+| interop/python-to-gpundarray-throughput | 1,048,576 | 8.389e+09 bytes/s | 9.185e+09 | 1.398e+10 |
+| interop/python-to-gpundarray-throughput | 4,194,304 | 7.46e+09 bytes/s | 7.575e+09 | 1.015e+10 |
+| interop/python-to-gpundarray-throughput | 16,777,216 | 9.797e+09 bytes/s | 9.719e+09 | 9.935e+09 |
+| interop/webassembly-view-copy-throughput | 1,048,576 | 38.18 GB/s | 38.08 | 39.13 |
+| interop/webassembly-view-copy-throughput | 4,194,304 | 32 GB/s | 31.67 | 32.39 |
+| interop/webassembly-view-copy-throughput | 16,777,216 | 20.13 GB/s | 20.03 | 20.37 |
+| math/mat4-mul-throughput | 10,000 | 1.923e+06 operations/s | 1.955e+06 | 2.147e+06 |
+| math/mat4-mul-throughput | 100,000 | 2.227e+06 operations/s | 2.198e+06 | 2.293e+06 |
+| math/mat4-mul-throughput | 500,000 | 2.299e+06 operations/s | 2.297e+06 | 2.318e+06 |
+| math/mat4d-mul-throughput | 250,000 | 5.435e+07 operations/s | 5.43e+07 | 5.475e+07 |
+| math/mat4d-mul-throughput | 1,000,000 | 5.427e+07 operations/s | 5.408e+07 | 5.494e+07 |
+| math/mat4d-mul-throughput | 4,000,000 | 5.472e+07 operations/s | 5.468e+07 | 5.532e+07 |
+| math/mat4f-mul-throughput | 250,000 | 1.447e+08 operations/s | 1.442e+08 | 1.455e+08 |
+| math/mat4f-mul-throughput | 1,000,000 | 1.438e+08 operations/s | 1.437e+08 | 1.441e+08 |
+| math/mat4f-mul-throughput | 4,000,000 | 1.432e+08 operations/s | 1.428e+08 | 1.439e+08 |
+| math/transform-set-position-update-all-throughput | 8,192 | 2.861e+07 transforms/s | 2.836e+07 | 2.897e+07 |
+| math/transform-set-position-update-all-throughput | 32,768 | 2.881e+07 transforms/s | 2.875e+07 | 2.909e+07 |
+| math/transform-set-position-update-all-throughput | 65,536 | 2.68e+07 transforms/s | 2.682e+07 | 2.713e+07 |
+| objects/glyphfield-set-cpu-data-upload-throughput | 16,384 | 6.831e+07 instances/s | 6.803e+07 | 6.858e+07 |
+| objects/glyphfield-set-cpu-data-upload-throughput | 131,072 | 6.533e+07 instances/s | 6.517e+07 | 6.609e+07 |
+| objects/glyphfield-set-cpu-data-upload-throughput | 524,288 | 9.316e+07 instances/s | 9.31e+07 | 9.451e+07 |
+| objects/latticespace-set-data-upload-throughput | 16,384 | 4.07e+08 cells/s | 4.02e+08 | 4.361e+08 |
+| objects/latticespace-set-data-upload-throughput | 131,072 | 4.92e+08 cells/s | 4.915e+08 | 4.997e+08 |
+| objects/latticespace-set-data-upload-throughput | 524,288 | 5.805e+08 cells/s | 5.804e+08 | 5.986e+08 |
+| objects/nodelink-update-node-positions-upload-throughput | 16,384 | 7.626e+07 nodes/s | 7.614e+07 | 7.844e+07 |
+| objects/nodelink-update-node-positions-upload-throughput | 131,072 | 8.335e+07 nodes/s | 8.303e+07 | 8.79e+07 |
+| objects/nodelink-update-node-positions-upload-throughput | 524,288 | 1.064e+08 nodes/s | 1.056e+08 | 1.148e+08 |
+| objects/pointcloud-set-data-upload-throughput | 16,384 | 2.303e+08 points/s | 2.314e+08 | 2.518e+08 |
+| objects/pointcloud-set-data-upload-throughput | 131,072 | 2.757e+08 points/s | 2.759e+08 | 2.773e+08 |
+| objects/pointcloud-set-data-upload-throughput | 524,288 | 3.897e+08 points/s | 3.889e+08 | 3.95e+08 |
+| objects/splatfield-refresh-wasm-upload-throughput | 16,384 | 6.663e+07 splats/s | 6.637e+07 | 6.77e+07 |
+| objects/splatfield-refresh-wasm-upload-throughput | 131,072 | 6.473e+07 splats/s | 6.482e+07 | 6.583e+07 |
+| objects/splatfield-refresh-wasm-upload-throughput | 524,288 | 9.233e+07 splats/s | 9.239e+07 | 9.324e+07 |
+| render/renderer-antialias-render-frame | 1,280 | 3 ms/frame | 3.9 | 7.36 |
+| render/renderer-antialias-render-frame | 2,400 | 5.6 ms/frame | 5.542 | 5.69 |
+| render/renderer-antialias-render-frame | 3,200 | 6.8 ms/frame | 6.933 | 8.015 |
+| render/renderer-data-material-render-frame | 262,144 | 2.6 ms/frame | 2.775 | 3.37 |
+| render/renderer-data-material-render-frame | 2,097,152 | 5.65 ms/frame | 5.558 | 5.89 |
+| render/renderer-data-material-render-frame | 8,388,608 | 5.65 ms/frame | 5.567 | 5.925 |
+| render/renderer-directional-shadows-render-frame | 8 | 2.65 ms/frame | 2.717 | 3.8 |
+| render/renderer-directional-shadows-render-frame | 128 | 2.8 ms/frame | 2.783 | 3.045 |
+| render/renderer-directional-shadows-render-frame | 512 | 2.8 ms/frame | 2.767 | 3.845 |
+| render/renderer-frustum-culling-render-frame | 128 | 0.5 ms/frame | 0.8417 | 2.58 |
+| render/renderer-frustum-culling-render-frame | 2,048 | 1.2 ms/frame | 1.692 | 3.45 |
+| render/renderer-frustum-culling-render-frame | 8,192 | 3.65 ms/frame | 3.225 | 4.77 |
+| render/renderer-glyphfield-render-frame | 16,384 | 2.8 ms/frame | 2.808 | 3.135 |
+| render/renderer-glyphfield-render-frame | 131,072 | 5.5 ms/frame | 5.542 | 5.835 |
+| render/renderer-glyphfield-render-frame | 524,288 | 14 ms/frame | 14.3 | 15.78 |
+| render/renderer-latticespace-render-frame | 32,768 | 2.85 ms/frame | 2.842 | 3.56 |
+| render/renderer-latticespace-render-frame | 262,144 | 2.8 ms/frame | 2.808 | 2.945 |
+| render/renderer-latticespace-render-frame | 1,000,000 | 7.45 ms/frame | 7.4 | 8.015 |
+| render/renderer-many-meshes-render-frame | 64 | 2.7 ms/frame | 2.208 | 3.305 |
+| render/renderer-many-meshes-render-frame | 1,024 | 2.8 ms/frame | 2.533 | 3.715 |
+| render/renderer-many-meshes-render-frame | 4,096 | 2.7 ms/frame | 2.817 | 4.4 |
+| render/renderer-many-pointclouds-render-frame | 16 | 2.5 ms/frame | 1.85 | 2.845 |
+| render/renderer-many-pointclouds-render-frame | 256 | 2.85 ms/frame | 2.783 | 3.99 |
+| render/renderer-many-pointclouds-render-frame | 1,024 | 4.05 ms/frame | 3.508 | 4.38 |
+| render/renderer-mesh-render-frame | 262,144 | 2.55 ms/frame | 2.125 | 3.225 |
+| render/renderer-mesh-render-frame | 2,097,152 | 2.75 ms/frame | 2.775 | 3.5 |
+| render/renderer-mesh-render-frame | 8,388,608 | 4 ms/frame | 3.667 | 4.245 |
+| render/renderer-mixed-materials-render-frame | 64 | 1.6 ms/frame | 1.575 | 2.89 |
+| render/renderer-mixed-materials-render-frame | 1,024 | 1.8 ms/frame | 2.1 | 3.59 |
+| render/renderer-mixed-materials-render-frame | 4,096 | 3.65 ms/frame | 3.033 | 4.17 |
+| render/renderer-mixed-scientific-scene-render-frame | 4 | 2.8 ms/frame | 2.8 | 3.27 |
+| render/renderer-mixed-scientific-scene-render-frame | 16 | 4.05 ms/frame | 4.058 | 5.435 |
+| render/renderer-mixed-scientific-scene-render-frame | 64 | 11.3 ms/frame | 11.65 | 13.37 |
+| render/renderer-nodelink-render-frame | 1,024 | 2.5 ms/frame | 2.25 | 2.7 |
+| render/renderer-nodelink-render-frame | 16,384 | 2.75 ms/frame | 2.85 | 3.515 |
+| render/renderer-nodelink-render-frame | 65,536 | 5.5 ms/frame | 5.558 | 5.845 |
+| render/renderer-occlusion-culling-render-frame | 64 | 2.65 ms/frame | 2.258 | 3.535 |
+| render/renderer-occlusion-culling-render-frame | 512 | 2.85 ms/frame | 2.792 | 3.55 |
+| render/renderer-occlusion-culling-render-frame | 2,048 | 4.75 ms/frame | 11.43 | 45.36 |
+| render/renderer-pointcloud-render-frame | 65,536 | 2.5 ms/frame | 2.308 | 2.945 |
+| render/renderer-pointcloud-render-frame | 262,144 | 2.75 ms/frame | 2.767 | 3.28 |
+| render/renderer-pointcloud-render-frame | 1,048,576 | 2.85 ms/frame | 2.842 | 3.525 |
+| render/renderer-splatfield-render-frame | 65,536 | 2.6 ms/frame | 2.742 | 3.45 |
+| render/renderer-splatfield-render-frame | 262,144 | 2.75 ms/frame | 2.767 | 3.29 |
+| render/renderer-splatfield-render-frame | 1,048,576 | 3.1 ms/frame | 3.308 | 4.825 |
+| render/renderer-transmission-mesh-render-frame | 16 | 2.7 ms/frame | 2.475 | 2.845 |
+| render/renderer-transmission-mesh-render-frame | 256 | 2.8 ms/frame | 2.758 | 3.18 |
+| render/renderer-transmission-mesh-render-frame | 1,024 | 3.8 ms/frame | 3.9 | 4.86 |
+| render/renderer-transparent-mesh-render-frame | 64 | 2.85 ms/frame | 2.792 | 3.46 |
+| render/renderer-transparent-mesh-render-frame | 1,024 | 3.2 ms/frame | 2.95 | 4.235 |
+| render/renderer-transparent-mesh-render-frame | 4,096 | 6.4 ms/frame | 6.417 | 7.08 |
+| scaling/scale-service-percentile-stats-latency | 65,536 | 4.7 ms | 4.508 | 9.105 |
+| scaling/scale-service-percentile-stats-latency | 1,048,576 | 4.6 ms | 5.025 | 8.905 |
+| scaling/scale-service-percentile-stats-latency | 8,388,608 | 15.8 ms | 16.03 | 20.19 |
