@@ -5,7 +5,7 @@
  */
 
 import { alignTo, assert, resolveGPUBuffer } from "../utils";
-import { StorageBuffer } from "./buffer";
+import { StorageBuffer, validateStorageBufferRange } from "./buffer";
 import { ComputePipeline } from "./pipeline";
 import { encodeDispatchBatchWithLimit } from "./dispatch";
 import type { ComputeDispatchCommand } from "./dispatch";
@@ -308,7 +308,9 @@ export class ComputeKernels {
     private executeHistogramCommands(commands: ComputeDispatchCommand[], bins: StorageBuffer, binCount: number, nativeClear: boolean, opts?: KernelDispatchOptions): void {
         if (!nativeClear) { this.execute(commands, opts); return; }
         const encoder = opts?.encoder ?? this.device.createCommandEncoder();
-        encoder.clearBuffer(bins.buffer, 0, binCount * 4);
+        validateStorageBufferRange(bins, 0, binCount * 4);
+        assert((bins.usage & GPUBufferUsage.COPY_DST) !== 0, "Histogram clear requires GPUBufferUsage.COPY_DST");
+        encoder.clearBuffer(bins.buffer, bins.offsetBytes, binCount * 4);
         encodeDispatchBatchWithLimit(encoder, commands, opts?.label, opts?.validateLimits ? this.device.limits.maxComputeWorkgroupsPerDimension : undefined);
         if (!opts?.encoder) { this.queue.submit([encoder.finish()]); this.scratch.reset(); }
     }
@@ -316,25 +318,29 @@ export class ComputeKernels {
     private writeScalarU32(dst: BufferResource, value: number): void {
         const buf = resolveGPUBuffer(dst);
         const tmp = new Uint32Array([value >>> 0]);
-        this.queue.writeBuffer(buf, 0, tmp);
+        if (dst instanceof StorageBuffer) dst.write(tmp);
+        else this.queue.writeBuffer(buf, 0, tmp);
     }
 
     private writeScalarF32(dst: BufferResource, value: number): void {
         const buf = resolveGPUBuffer(dst);
         const tmp = new Float32Array([value]);
-        this.queue.writeBuffer(buf, 0, tmp);
+        if (dst instanceof StorageBuffer) dst.write(tmp);
+        else this.queue.writeBuffer(buf, 0, tmp);
     }
 
     private writeScalarF32Bits(dst: BufferResource, bits: number): void {
         const buf = resolveGPUBuffer(dst);
         const tmp = new Uint32Array([bits >>> 0]);
-        this.queue.writeBuffer(buf, 0, tmp);
+        if (dst instanceof StorageBuffer) dst.write(tmp);
+        else this.queue.writeBuffer(buf, 0, tmp);
     }
 
     private writeArgPairBits(dst: BufferResource, valueBits: number, index: number): void {
         const buf = resolveGPUBuffer(dst);
         const tmp = new Uint32Array([valueBits >>> 0, index >>> 0]);
-        this.queue.writeBuffer(buf, 0, tmp);
+        if (dst instanceof StorageBuffer) dst.write(tmp);
+        else this.queue.writeBuffer(buf, 0, tmp);
     }
 
     private getReducePipeline(type: ReduceType, op: ReduceOp): ComputePipeline {
@@ -1800,7 +1806,7 @@ export class ComputeKernels {
         assertByteLengthMultipleOf(out.byteLength, 8, "dotC64: out");
         assert(out.byteLength >= 8, "dotC64: out must be at least 8 bytes");
         assert(out !== a && out !== b, "dotC64: out must be distinct from all inputs");
-        if (count === 0) { this.queue.writeBuffer(out.buffer, 0, new Float32Array([0, 0])); return out; }
+        if (count === 0) { out.write(new Float32Array([0, 0])); return out; }
         const commands: ComputeDispatchCommand[] = [];
         let n = count;
         let input: BufferResource = a;

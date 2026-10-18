@@ -5,7 +5,7 @@
  */
 
 import { alignTo, assert, isNonNegativeInt, resolveGPUBuffer } from "../utils";
-import { StorageBuffer, type TypedArrayConstructor } from "./buffer";
+import { StorageBuffer, assertStorageBufferAlive, validateStorageBufferRange, type TypedArrayConstructor } from "./buffer";
 
 export type ReadbackSource = GPUBuffer | StorageBuffer;
 
@@ -67,7 +67,8 @@ export class ReadbackRing {
 
     private assertSourceCanReadback(src: ReadbackSource): void {
         if (src instanceof StorageBuffer) {
-            assert(src.canReadback, "ReadbackRing requires the source StorageBuffer to be created with copySrc: true");
+            assertStorageBufferAlive(src);
+            assert(src.canReadback, "ReadbackRing requires GPUBufferUsage.COPY_SRC (copySrc: true)");
             return;
         }
         const usage = resolveSourceUsage(src);
@@ -86,19 +87,22 @@ export class ReadbackRing {
         const size = sizeBytes ?? remaining;
         assert(isNonNegativeInt(size), `sizeBytes must be an integer >= 0 (got ${size})`);
         assert(size <= remaining, `sizeBytes (${size}) exceeds remaining bytes (${remaining})`);
+        if (src instanceof StorageBuffer) validateStorageBufferRange(src, srcOffsetBytes, size, true);
         return size;
     }
 
     private async copyMappedBytes(src: ReadbackSource, srcOffsetBytes: number, size: number, opts: { label?: string }, destination: () => Uint8Array): Promise<void> {
         if (size === 0) return;
         const alignedSize = alignTo(size, 4);
+        const physicalOffset = (src instanceof StorageBuffer ? src.offsetBytes : 0) + srcOffsetBytes;
         const physicalByteLength = Number(resolveGPUBuffer(src).size);
-        assert(srcOffsetBytes + alignedSize <= physicalByteLength, `Aligned copy range (offset ${srcOffsetBytes}, size ${alignedSize}) exceeds physical source bytes (${physicalByteLength})`);
+        assert(physicalOffset + alignedSize <= physicalByteLength, `Aligned copy range (offset ${physicalOffset}, size ${alignedSize}) exceeds physical source bytes (${physicalByteLength})`);
         const slotIndex = this.cursor;
         this.cursor = (this.cursor + 1) % this.slots.length;
         const slot = this.slots[slotIndex];
         const run = async (): Promise<void> => {
             this.ensureNotDestroyed();
+            if (src instanceof StorageBuffer) assertStorageBufferAlive(src);
             if (slot.buffer.mapState === "mapped" || slot.buffer.mapState === "pending") {
                 try { slot.buffer.unmap(); } catch { /* ignore */ }
                 assert(slot.buffer.mapState !== "mapped" && slot.buffer.mapState !== "pending", "ReadbackRing internal error: staging buffer is still mapped");
@@ -111,7 +115,7 @@ export class ReadbackRing {
             }
             const srcBuf = resolveGPUBuffer(src);
             const encoder = this.device.createCommandEncoder({ label: opts.label ? `${opts.label}:copyToStaging` : `${this.labelPrefix}:copyToStaging` });
-            encoder.copyBufferToBuffer(srcBuf, srcOffsetBytes, slot.buffer, 0, alignedSize);
+            encoder.copyBufferToBuffer(srcBuf, physicalOffset, slot.buffer, 0, alignedSize);
             this.queue.submit([encoder.finish()]);
             try {
                 await slot.buffer.mapAsync(GPUMapMode.READ, 0, alignedSize);

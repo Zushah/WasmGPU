@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { alignTo, assert } from "../utils";
+import { alignTo, assert, isGPUBuffer } from "../utils";
 
 export interface TypedArrayConstructor<T extends ArrayBufferView<ArrayBuffer>> {
     readonly BYTES_PER_ELEMENT: number;
@@ -84,10 +84,103 @@ export type StorageBufferDescriptor = {
     usage?: GPUBufferUsageFlags;
 };
 
+export type WrapStorageBufferOptions = {
+    offsetBytes?: number;
+    byteLength?: number;
+    ownBuffer?: boolean;
+    label?: string;
+};
+
+const storageBufferOwned = Symbol("StorageBuffer.owned");
+const storageBufferDestroyed = Symbol("StorageBuffer.destroyed");
+const storageBufferExternal = Symbol("StorageBuffer.external");
+const wrappedStorageBuffer = Symbol("StorageBuffer.wrapped");
+
+type InternalStorageBufferDescriptor = StorageBufferDescriptor & {
+    [wrappedStorageBuffer]?: {
+        buffer: GPUBuffer;
+        byteLength: number;
+        offsetBytes: number;
+        ownBuffer: boolean;
+    };
+};
+
+export const wrapStorageBuffer = (device: GPUDevice, queue: GPUQueue, buffer: GPUBuffer, options: WrapStorageBufferOptions = {}): StorageBuffer => {
+    assert(isGPUBuffer(buffer), "StorageBuffer.wrap() requires a GPUBuffer");
+    assert((buffer.usage & GPUBufferUsage.STORAGE) !== 0, "StorageBuffer.wrap() requires GPUBufferUsage.STORAGE");
+    const offsetBytes = options.offsetBytes ?? 0;
+    const byteLength = options.byteLength ?? (buffer.size - offsetBytes);
+    assert(Number.isSafeInteger(offsetBytes) && offsetBytes >= 0, `offsetBytes must be a safe integer >= 0 (got ${offsetBytes})`);
+    assert(Number.isSafeInteger(byteLength) && byteLength >= 0, `byteLength must be a safe integer >= 0 (got ${byteLength})`);
+    assert(offsetBytes <= buffer.size && byteLength <= buffer.size - offsetBytes && Number.isSafeInteger(offsetBytes + byteLength), "StorageBuffer.wrap() range out of bounds");
+    assert(offsetBytes % device.limits.minStorageBufferOffsetAlignment === 0, "StorageBuffer.offsetBytes must satisfy minStorageBufferOffsetAlignment");
+    const desc: InternalStorageBufferDescriptor = {
+        label: options.label,
+        [wrappedStorageBuffer]: { buffer, byteLength, offsetBytes, ownBuffer: options.ownBuffer ?? false }
+    };
+    return new StorageBuffer(device, queue, desc);
+};
+
+export const assertStorageBufferAlive = (storage: StorageBuffer): void => {
+    assert(!storage[storageBufferDestroyed], "StorageBuffer is destroyed");
+};
+
+export const validateStorageBufferRange = (storage: StorageBuffer, offsetBytes: number, sizeBytes: number, aligned: boolean = false): void => {
+    assertStorageBufferAlive(storage);
+    assert(Number.isSafeInteger(offsetBytes) && offsetBytes >= 0, `offsetBytes must be a safe integer >= 0 (got ${offsetBytes})`);
+    assert(Number.isSafeInteger(sizeBytes) && sizeBytes >= 0, `sizeBytes must be a safe integer >= 0 (got ${sizeBytes})`);
+    assert(offsetBytes <= storage.byteLength && sizeBytes <= storage.byteLength - offsetBytes, "StorageBuffer range out of bounds");
+    if (aligned) {
+        const capacity = storage[storageBufferExternal] ? storage.byteLength : storage.buffer.size;
+        assert(alignTo(sizeBytes, 4) <= capacity - offsetBytes, "Aligned StorageBuffer range out of bounds");
+    }
+};
+
+export const storageBufferBindingResource = (storage: StorageBuffer, offset: number = 0, size?: number): GPUBufferBinding => {
+    assertStorageBufferAlive(storage);
+    const capacity = storage[storageBufferExternal] ? storage.byteLength : storage.buffer.size;
+    const length = size ?? (capacity - offset);
+    assert(Number.isSafeInteger(offset) && offset >= 0 && offset <= storage.byteLength, "StorageBuffer binding offset out of bounds");
+    assert(Number.isSafeInteger(length) && length > 0 && length <= capacity - offset, "StorageBuffer binding range out of bounds");
+    assert(length % 4 === 0, "StorageBuffer binding size must be 4-byte aligned");
+    assert((storage.offsetBytes + offset) % storage.device.limits.minStorageBufferOffsetAlignment === 0, "StorageBuffer binding offset must satisfy minStorageBufferOffsetAlignment");
+    return { buffer: storage.buffer, offset: storage.offsetBytes + offset, size: length };
+};
+
 export class StorageBuffer extends GpuBuffer {
     readonly label: string | null;
+    readonly offsetBytes: number = 0;
+    [storageBufferOwned]: boolean = true;
+    [storageBufferDestroyed]: boolean = false;
+    [storageBufferExternal]: boolean = false;
 
-    constructor(device: GPUDevice, queue: GPUQueue, desc: StorageBufferDescriptor) {
+    override destroy(): void {
+        if (this[storageBufferDestroyed]) return;
+        this[storageBufferDestroyed] = true;
+        if (this[storageBufferOwned]) this.buffer.destroy();
+    }
+
+    override write(data: BufferSource, dstOffsetBytes: number = 0, srcOffsetBytes: number = 0, sizeBytes?: number): void {
+        assertStorageBufferAlive(this);
+        assert((this.usage & GPUBufferUsage.COPY_DST) !== 0, "StorageBuffer.write() requires GPUBufferUsage.COPY_DST");
+        assert(Number.isSafeInteger(srcOffsetBytes) && srcOffsetBytes >= 0 && srcOffsetBytes <= data.byteLength, "StorageBuffer.write() source offset out of bounds");
+        const size = sizeBytes ?? (data.byteLength - srcOffsetBytes);
+        assert(Number.isSafeInteger(size) && size >= 0 && size <= data.byteLength - srcOffsetBytes, "StorageBuffer.write() source range out of bounds");
+        validateStorageBufferRange(this, dstOffsetBytes, size, true);
+        queueWriteBufferAligned(this.queue, this.buffer, this.offsetBytes + dstOffsetBytes, data, srcOffsetBytes, size);
+    }
+
+    constructor(device: GPUDevice, queue: GPUQueue, desc: StorageBufferDescriptor);
+    constructor(device: GPUDevice, queue: GPUQueue, desc: InternalStorageBufferDescriptor) {
+        const wrapped = desc[wrappedStorageBuffer];
+        if (wrapped) {
+            super(device, queue, wrapped.buffer, wrapped.byteLength, wrapped.buffer.usage);
+            this.label = desc.label ?? null;
+            this.offsetBytes = wrapped.offsetBytes;
+            this[storageBufferOwned] = wrapped.ownBuffer;
+            this[storageBufferExternal] = true;
+            return;
+        }
         const byteLength = desc.data ? resolveSourceRange(desc.data).size : (desc.byteLength ?? 0);
         assert(Number.isInteger(byteLength) && byteLength >= 0, `StorageBuffer.byteLength must be an integer >= 0 (got ${byteLength})`);
         const size = alignTo(byteLength, 4);
@@ -117,20 +210,23 @@ export class StorageBuffer extends GpuBuffer {
     }
 
     async read(srcOffsetBytes: number = 0, sizeBytes?: number): Promise<ArrayBuffer> {
-        assert(this.canReadback, "StorageBuffer.read() requires the buffer to be created with copySrc: true");
+        assertStorageBufferAlive(this);
+        assert(this.canReadback, "StorageBuffer.read() requires GPUBufferUsage.COPY_SRC (copySrc: true)");
         assert(Number.isInteger(srcOffsetBytes) && srcOffsetBytes >= 0, `srcOffsetBytes must be an integer >= 0 (got ${srcOffsetBytes})`);
         const size = sizeBytes ?? (this.byteLength - srcOffsetBytes);
         assert(Number.isInteger(size) && size >= 0, `sizeBytes must be an integer >= 0 (got ${size})`);
         assert(srcOffsetBytes + size <= this.byteLength, `read range out of bounds (offset ${srcOffsetBytes}, size ${size}, byteLength ${this.byteLength})`);
+        validateStorageBufferRange(this, srcOffsetBytes, size, true);
         const alignedSize = alignTo(size, 4);
         const srcOffsetAligned = alignTo(srcOffsetBytes, 4);
         assert(srcOffsetAligned === srcOffsetBytes, `srcOffsetBytes must be 4-byte aligned for readback (got ${srcOffsetBytes})`);
+        if (size === 0) return new ArrayBuffer(0);
         const staging = this.device.createBuffer({
             size: Math.max(4, alignedSize),
             usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
         });
         const encoder = this.device.createCommandEncoder();
-        encoder.copyBufferToBuffer(this.buffer, srcOffsetBytes, staging, 0, alignedSize);
+        encoder.copyBufferToBuffer(this.buffer, this.offsetBytes + srcOffsetBytes, staging, 0, alignedSize);
         this.queue.submit([encoder.finish()]);
         await staging.mapAsync(GPUMapMode.READ, 0, alignedSize);
         const mapped = staging.getMappedRange(0, alignedSize);

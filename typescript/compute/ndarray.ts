@@ -5,7 +5,7 @@
  */
 
 import { alignTo, assert } from "../utils";
-import { StorageBuffer, type StorageBufferDescriptor } from "./buffer";
+import { StorageBuffer, validateStorageBufferRange, type StorageBufferDescriptor } from "./buffer";
 import { wasm, type WasmPtr } from "../wasm";
 import type { ReadbackRing } from "./readback";
 
@@ -380,8 +380,9 @@ export class GPUndarray extends Ndarray {
 
     constructor(dtype: DType, shape: number[], stridesBytes: number[], offsetBytes: number, byteLength: number, buffer: StorageBuffer, baseOffsetBytes: number = 0, owned: boolean = false, readback: ReadbackRing | null = null) {
         super(dtype, shape, stridesBytes, offsetBytes, byteLength);
-        assert(Number.isInteger(baseOffsetBytes) && baseOffsetBytes >= 0, `baseOffsetBytes must be an integer >= 0 (got ${baseOffsetBytes})`);
+        assert(Number.isSafeInteger(baseOffsetBytes) && baseOffsetBytes >= 0, `baseOffsetBytes must be a safe integer >= 0 (got ${baseOffsetBytes})`);
         assert((baseOffsetBytes & 3) === 0, `baseOffsetBytes must be 4-byte aligned for storage buffers (got ${baseOffsetBytes})`);
+        validateStorageBufferRange(buffer, baseOffsetBytes, byteLength);
         this.buffer = buffer;
         this.baseOffsetBytes = baseOffsetBytes;
         this.owned = owned;
@@ -418,6 +419,8 @@ export class GPUndarray extends Ndarray {
     }
 
     bindingResource(): { buffer: StorageBuffer; offset: number; size: number } {
+        validateStorageBufferRange(this.buffer, this.baseOffsetBytes, this.byteLength, true);
+        assert((this.buffer.offsetBytes + this.baseOffsetBytes) % this.buffer.device.limits.minStorageBufferOffsetAlignment === 0, "GPUndarray binding offset must satisfy minStorageBufferOffsetAlignment");
         return { buffer: this.buffer, offset: this.baseOffsetBytes, size: alignTo(this.byteLength, 4) };
     }
 

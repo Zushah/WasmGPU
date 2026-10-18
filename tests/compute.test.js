@@ -192,7 +192,60 @@ const compute = new Compute(device, device.queue);
     out.destroy();
 }
 
-// 5) Cleanup releases the shared compute context before its browser GPU device.
+// 5) Borrowed external storage preserves logical ranges through writes, bindings, and readback.
+{
+    const offsetBytes = device.limits.minStorageBufferOffsetAlignment;
+    const raw = device.createBuffer({ size: offsetBytes + 32, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    const expected = new Uint32Array(raw.size / 4).fill(99);
+    device.queue.writeBuffer(raw, 0, expected);
+    const storage = compute.wrapStorageBuffer(raw, { offsetBytes, byteLength: 16 });
+    assert.strictEqual(storage.buffer, raw);
+    assert.strictEqual(storage.offsetBytes, offsetBytes);
+    assert.strictEqual(storage.byteLength, 16);
+    storage.write(new Uint32Array([1, 2, 3, 4]));
+    const pipeline = compute.createPipeline({ code: `
+        @group(0) @binding(0) var<storage, read_write> values : array<u32>;
+        @compute @workgroup_size(1) fn main(@builtin(global_invocation_id) id : vec3<u32>) {
+            if (id.x < arrayLength(&values)) { values[id.x] *= 2u; }
+        }
+    ` });
+    compute.dispatch1D(pipeline, [pipeline.createBindGroup(0, { 0: storage })], 8, 1);
+    assert.deepStrictEqual(Array.from(await storage.readAs(Uint32Array)), [2, 4, 6, 8]);
+    assert.deepStrictEqual(Array.from(await compute.readback.readAs(Uint32Array, storage, 4, 8)), [4, 6]);
+    expected.set([2, 4, 6, 8], offsetBytes / 4);
+    assert.deepStrictEqual(Array.from(await compute.readback.readAs(Uint32Array, raw)), Array.from(expected), "Compute must preserve surrounding sentinel bytes");
+    storage.destroy();
+    storage.destroy();
+    assert.throws(() => storage.write(new Uint32Array([0])), /destroyed/);
+    device.queue.writeBuffer(raw, offsetBytes, new Uint32Array([42]));
+    assert.strictEqual(await compute.readback.readScalarU32(raw, offsetBytes), 42, "Borrowed wrapper destruction must leave the raw buffer alive");
+    raw.destroy();
+}
+
+// 6) External ownership, ndarray metadata, and invalid storage ranges have explicit semantics.
+{
+    const offsetBytes = device.limits.minStorageBufferOffsetAlignment;
+    const raw = device.createBuffer({ size: offsetBytes + 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST });
+    const storage = compute.wrapStorageBuffer(raw, { offsetBytes, ownBuffer: true });
+    storage.write(new Uint32Array([10, 20, 30, 40]));
+    const array = compute.GPUndarray.wrap(storage, "u32", { shape: [3], offsetBytes: 4 });
+    assert.strictEqual(array.byteLength, 16);
+    assert.deepStrictEqual(webgpuInterop.bindingResource(array.bindingResource()), { buffer: raw, offset: offsetBytes, size: 16 });
+    assert.throws(() => compute.GPUndarray.wrap(storage, "u32", { shape: [5] }), /out of bounds/);
+    assert.throws(() => compute.wrapStorageBuffer(raw, { offsetBytes, byteLength: 20 }), /out of bounds/);
+    const noStorage = device.createBuffer({ size: 16, usage: GPUBufferUsage.COPY_DST });
+    assert.throws(() => compute.wrapStorageBuffer(noStorage), /STORAGE/);
+    noStorage.destroy();
+    array.destroy();
+    assert.deepStrictEqual(Array.from(await storage.readAs(Uint32Array)), [10, 20, 30, 40], "Wrapped ndarrays borrow their StorageBuffer");
+    storage.destroy();
+    storage.destroy();
+    device.pushErrorScope("validation");
+    device.queue.writeBuffer(raw, 0, new Uint32Array([0]));
+    assert.ok(await device.popErrorScope(), "Owned wrapper destruction must destroy the raw GPUBuffer");
+}
+
+// 7) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

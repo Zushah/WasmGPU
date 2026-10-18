@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Saturday, October 17, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Sunday, October 18, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Monday, October 12, 2026, [**`1179bf7`**](https://github.com/Zushah/WasmGPU/commit/1179bf7).
+Parent commit: Saturday, October 17, 2026, [**`18aee20`**](https://github.com/Zushah/WasmGPU/commit/18aee20).
 
 Latest release: Monday, August 31, 2026, [**`v0.10.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.10.0).
 
@@ -408,6 +408,10 @@ Overlay and annotation changes cross both DOM and WebGPU paths. Inspect layer ty
 
 The compute subsystem is implemented under `./typescript/compute/`. `./typescript/compute/index.ts` stores the WebGPU device and queue references used for compute work. It creates storage buffers, uniform buffers, compute pipelines, readback rings, scratch pools, ndarray objects, and an optional RGBA8 blitter.
 
+`Compute.wrapStorageBuffer()` wraps a caller-supplied `GPUBuffer` without allocating or copying GPU storage. External buffers are borrowed by default; `ownBuffer: true` transfers destruction responsibility to the wrapper. `StorageBuffer.buffer` remains the raw handle, while `offsetBytes` and `byteLength` describe its logical range and `usage` preserves the underlying usage flags. Wrapping validates safe integer bounds, storage usage, and the device's storage-offset alignment. Same-device provenance and the lifetime of externally destroyed resources remain caller preconditions; wrappers do not track aliases or reference-count external buffers. Wrapper destruction is idempotent, invalidates later buffer operations, and destroys the raw resource only when owned.
+
+Storage writes, direct reads, shared `ReadbackRing` copies, compute bindings, blits, and scaling preserve the logical range. Explicit binding offsets are relative to the wrapper, and readback and write operations require the existing `COPY_SRC` and `COPY_DST` flags respectively. Incompatible ranges or usage flags fail without fallback allocation or copies. Aligned transfers and bindings must fit inside an external view; internal allocations retain their existing padding for odd-byte and empty storage. Blit and scaling caches distinguish wrappers over different ranges of one raw buffer. WebGPU still validates device provenance and resource usage conflicts, including simultaneous read-only and writable storage uses of one raw buffer.
+
 The main compute files are:
 
 - `./typescript/compute/buffer.ts`: storage and uniform GPU buffer wrappers, writes, reads, and typed reads.
@@ -423,6 +427,8 @@ The main compute files are:
 The compute subsystem reads WGSL from `./wgsl/compute/`, shared explicit WebGPU layouts and resources from `./typescript/wgsl/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. `ComputePipeline` remains responsible for arbitrary-WGSL pipeline creation, automatic or explicit layouts, bind-group creation, and dispatch integration, as the WebGPU interop subsystem does not execute or schedule compute work. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory. `CPUndarray` owns its backing bytes plus shape and stride allocations; scalar indexing is checked locally in TypeScript, and `destroy()` releases the owned WebAssembly allocations idempotently and makes later memory access throw. `GPUndarray` destroys only buffers it owns and continues to borrow buffers supplied through `wrap()`; a shared readback ring is an optional accelerator, with direct storage-buffer readback remaining available after that ring is destroyed.
 
 WasmGPU chooses floating-point precision by execution domain rather than imposing one width globally. CPU ndarrays and WasmGPU-owned or external WebAssembly memory support both `f32` and `f64`, including Python and WebAssembly interop. A `GPUndarray<f64>` is valid storage and transfer data, as its bytes may be uploaded to a WebGPU buffer, copied, and read back without loss. However, current WebGPU/WGSL has no concrete runtime `f64` scalar type, so `f64` GPU storage does not imply native `f6`4 shader computation or rendering arithmetic. Where a shader-facing path requires `f32`, explicitly converting `f64` CPU values through the existing typed-array or ndarray construction behavior is intentional.
+
+`GPUndarray.wrap()` layers dtype, shape, strides, and layout offset over an existing internal or external `StorageBuffer` without copying or taking ownership. The complete backing extent, including custom positive or negative strides, must fit within the logical storage range after adding `baseOffsetBytes`. Element addresses compose the storage offset, ndarray base offset, layout offset, and indexed strides; binding offsets must also satisfy storage alignment. Readback preserves this metadata, but each compute kernel retains its own layout assumptions. Arrays created by `GPUndarray.empty()` own their allocated storage.
 
 Contributors changing compute code should check buffer usage flags, copy alignment, dispatch dimensions, shader bindings, readback slot reuse, and tests that assert kernel results.
 

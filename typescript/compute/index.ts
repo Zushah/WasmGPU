@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { StorageBuffer, type StorageBufferDescriptor, UniformBuffer, type UniformBufferDescriptor } from "./buffer";
+import { StorageBuffer, wrapStorageBuffer, type StorageBufferDescriptor, type WrapStorageBufferOptions, UniformBuffer, type UniformBufferDescriptor } from "./buffer";
 import { ComputePipeline, type ComputePipelineDescriptor } from "./pipeline";
 import { workgroups1D, workgroups2D, workgroups3D, type WorkgroupCounts } from "./workgroups";
 import { encodeDispatch, encodeDispatchBatchWithLimit, type ComputeDispatchCommand, validateWorkgroupsForDevice } from "./dispatch";
@@ -41,6 +41,10 @@ export class Compute {
 
     createStorageBuffer(desc: StorageBufferDescriptor): StorageBuffer {
         return new StorageBuffer(this.device, this.queue, desc);
+    }
+
+    wrapStorageBuffer(buffer: GPUBuffer, options: WrapStorageBufferOptions = {}): StorageBuffer {
+        return wrapStorageBuffer(this.device, this.queue, buffer, options);
     }
 
     createUniformBuffer(desc: UniformBufferDescriptor): UniformBuffer {
@@ -121,7 +125,7 @@ export class Compute {
 }
 
 export { StorageBuffer, UniformBuffer } from "./buffer";
-export type { StorageBufferDescriptor, UniformBufferDescriptor, TypedArrayConstructor } from "./buffer";
+export type { StorageBufferDescriptor, WrapStorageBufferOptions, UniformBufferDescriptor, TypedArrayConstructor } from "./buffer";
 export { ComputePipeline } from "./pipeline";
 export type { ComputePipelineDescriptor } from "./pipeline";
 export { ceilDiv, makeWorkgroupSize, makeWorkgroupCounts, workgroups1D, workgroups2D, workgroups3D } from "./workgroups";

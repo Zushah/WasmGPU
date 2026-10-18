@@ -5,7 +5,7 @@
  */
 
 import { isGPUBuffer } from "../utils";
-import type { StorageBuffer, UniformBuffer } from "../compute/buffer";
+import { StorageBuffer, storageBufferBindingResource, type UniformBuffer } from "../compute/buffer";
 
 export type BufferResource = GPUBuffer | StorageBuffer | UniformBuffer;
 
@@ -122,10 +122,12 @@ const resolveBuffer = (resource: BufferResource): GPUBuffer => {
 export const normalizeBindingResource = (resource: BindingResource): GPUBindingResource => {
     if (!resource || typeof resource !== "object") throw new Error("WebGPU binding resource: resource must be a WebGPU object or buffer binding");
     if (isGPUBuffer(resource)) return { buffer: resource };
+    if (resource instanceof StorageBuffer) return normalizeBindingResource({ buffer: resource });
     if ("buffer" in resource) {
         const binding = resource as BufferBinding;
         if (binding.offset !== undefined && (!Number.isInteger(binding.offset) || binding.offset < 0)) throw new Error(`WebGPU buffer binding: offset must be a non-negative integer (got ${binding.offset})`);
         if (binding.size !== undefined && (!Number.isInteger(binding.size) || binding.size <= 0)) throw new Error(`WebGPU buffer binding: size must be a positive integer (got ${binding.size})`);
+        if (binding.buffer instanceof StorageBuffer) return storageBufferBindingResource(binding.buffer, binding.offset, binding.size);
         return { buffer: resolveBuffer(binding.buffer), offset: binding.offset, size: binding.size };
     }
     return resource as GPUSampler | GPUTextureView | GPUExternalTexture;

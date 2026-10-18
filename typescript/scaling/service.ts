@@ -6,6 +6,7 @@
 
 import { assert, clamp, isGPUBuffer } from "../utils";
 import type { Compute } from "../compute";
+import { StorageBuffer, assertStorageBufferAlive } from "../compute/buffer";
 import { normalizeScaleTransform } from "./transform";
 import type { ScaleBufferSource, ScaleSourceDescriptor, ScaleStatsRequest, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor, ScaleValueMode } from "./types";
 
@@ -24,8 +25,8 @@ type CacheEntry = {
     promise: Promise<ScaleStatsResult>;
 };
 
-const unwrapSourceBuffer = (source: ScaleBufferSource): GPUBuffer => {
-    return isGPUBuffer(source) ? source : source.buffer;
+const unwrapSourceBuffer = (source: ScaleBufferSource): GPUBuffer | StorageBuffer => {
+    return isGPUBuffer(source) || source instanceof StorageBuffer ? source : source.buffer;
 };
 
 const resolveByteLength = (source: ScaleBufferSource): number | null => {
@@ -56,6 +57,7 @@ const percentileFromHistogram = (bins: Uint32Array, percentile: number, minValue
 };
 
 const normalizeSource = (source: ScaleSourceDescriptor): NormalizedScaleSource => {
+    if (source.buffer instanceof StorageBuffer) assertStorageBufferAlive(source.buffer);
     assert(Number.isInteger(source.count) && source.count >= 0, `Scale stats source.count must be an integer >= 0 (got ${source.count})`);
     const componentCountRaw = (typeof source.componentCount === "number" && Number.isInteger(source.componentCount)) ? source.componentCount : 1;
     const componentCount = clamp(componentCountRaw, 1, 4);
@@ -103,7 +105,7 @@ export class ScaleService {
     }
 
     invalidate(sourceOrDescriptor: ScaleBufferSource | ScaleSourceDescriptor): void {
-        const source = (sourceOrDescriptor as ScaleSourceDescriptor).buffer ? (sourceOrDescriptor as ScaleSourceDescriptor).buffer : (sourceOrDescriptor as ScaleBufferSource);
+        const source = sourceOrDescriptor instanceof StorageBuffer ? sourceOrDescriptor : (sourceOrDescriptor as ScaleSourceDescriptor).buffer ? (sourceOrDescriptor as ScaleSourceDescriptor).buffer : (sourceOrDescriptor as ScaleBufferSource);
         const keyObj = unwrapSourceBuffer(source) as unknown as object;
         const sourceId = this.sourceIds.get(keyObj);
         if (sourceId === undefined) return;

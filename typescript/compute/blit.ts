@@ -4,8 +4,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { alignTo, assert, isNonNegativeInt, resolveGPUBuffer } from "../utils";
-import type { StorageBuffer } from "./buffer";
+import { alignTo, assert, isNonNegativeInt } from "../utils";
+import { StorageBuffer, validateStorageBufferRange } from "./buffer";
+import { normalizeBindingResource } from "../wgsl/interop";
 import blitRGBA8WGSL from "../../wgsl/compute/blit-rgba8.wgsl";
 
 export type RGBA8BufferSource = GPUBuffer | StorageBuffer;
@@ -25,7 +26,7 @@ export type BlitRGBA8BufferToCanvasOptions = {
 type PipelineState = {
     pipeline: GPURenderPipeline;
     bindGroupLayout: GPUBindGroupLayout;
-    bindGroups: WeakMap<GPUBuffer, GPUBindGroup>;
+    bindGroups: WeakMap<RGBA8BufferSource, GPUBindGroup>;
 };
 
 type CanvasState = {
@@ -76,6 +77,7 @@ export class RGBA8BufferCanvasBlitter {
 
     encode(encoder: GPUCommandEncoder, canvas: HTMLCanvasElement, src: RGBA8BufferSource, outWidth: number, outHeight: number, opts: BlitRGBA8BufferToCanvasOptions = {}): void {
         assert(isNonNegativeInt(outWidth) && isNonNegativeInt(outHeight), `outWidth/outHeight must be integers >= 0 (got ${outWidth}x${outHeight})`);
+        if (src instanceof StorageBuffer) validateStorageBufferRange(src, 0, outWidth * outHeight * 4);
         if (outWidth === 0 || outHeight === 0) return;
         const state = this.getOrCreateCanvasState(canvas);
         const format = opts.format ?? state.format ?? getDefaultCanvasFormat();
@@ -101,8 +103,7 @@ export class RGBA8BufferCanvasBlitter {
         const uniformOffset = this.allocParamsChunk();
         this.queue.writeBuffer(this.paramsBuffer, uniformOffset, this.paramsF32.buffer as ArrayBuffer, this.paramsF32.byteOffset, this.paramsF32.byteLength);
         const pipelineState = this.getPipeline(format);
-        const srcBuffer = resolveGPUBuffer(src);
-        let bindGroup = pipelineState.bindGroups.get(srcBuffer);
+        let bindGroup = pipelineState.bindGroups.get(src);
         if (!bindGroup) {
             bindGroup = this.device.createBindGroup({
                 label: opts.label ? `${opts.label}:bindGroup` : undefined,
@@ -114,11 +115,11 @@ export class RGBA8BufferCanvasBlitter {
                     },
                     {
                         binding: 1,
-                        resource: { buffer: srcBuffer }
+                        resource: normalizeBindingResource(src)
                     }
                 ]
             });
-            pipelineState.bindGroups.set(srcBuffer, bindGroup);
+            pipelineState.bindGroups.set(src, bindGroup);
         }
         const view = state.context.getCurrentTexture().createView();
         const loadOp: GPULoadOp = opts.loadOp ?? "load";
