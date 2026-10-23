@@ -140,9 +140,9 @@ class WasmGPUInterop:
         return out.reshape(_shape_tuple(src.shape))
 
     async def from_gpu(self, src: Any) -> Any:
-        if not hasattr(src, "readbackToCPU") or not bool(src.isContiguousC):
+        if str(getattr(src, "residency", "")) != "gpu" or not bool(src.isContiguousC):
             raise WasmGPUInteropError("from_gpu() requires a C-contiguous GPUndarray.")
-        cpu = await src.readbackToCPU()
+        cpu = await self._wgpu.compute.ndarray.toCPU(src)
         try:
             return self.from_cpu(cpu)
         finally:

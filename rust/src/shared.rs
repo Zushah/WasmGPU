@@ -36,7 +36,6 @@ pub(crate) unsafe fn f32_slice_mut<'call>(
     unsafe { core::slice::from_raw_parts_mut(ptr as *mut f32, len) }
 }
 
-#[allow(dead_code)]
 #[inline(always)]
 pub(crate) unsafe fn f64_slice<'call>(
     _call: DriverCall<'call>,

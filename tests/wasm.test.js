@@ -90,8 +90,12 @@ const RUST_ABI = {
     mat4f_transpose: 2,
     mat4d_transpose: 2,
     mesh_compute_vertex_normals: 5,
+    ndarray_affine: 8,
+    ndarray_copy: 7,
     ndarray_numel: 2,
     ndarray_offset_bytes: 5,
+    ndarray_pad: 8,
+    ndarray_resize: 9,
     ndarray_strides_row_major: 4,
     quatf_abs: 2,
     quatd_abs: 2,
@@ -512,9 +516,19 @@ const makeFixture = () => {
     const copyPtr = generatedWasm.wasmgpu_alloc_f32(17);
     const sourcePtr = generatedWasm.wasmgpu_alloc(12);
     const outputPtr = generatedWasm.wasmgpu_alloc(8);
+    const gatherSourcePtr = generatedWasm.wasmgpu_alloc(24);
+    const gatherOutputPtr = generatedWasm.wasmgpu_alloc(24);
+    const gatherLayoutPtr = generatedWasm.wasmgpu_alloc_u32(8);
     try {
         generatedWasm.u32view(shapePtr, 3).set([2, 3, 4]);
         assert.strictEqual(generatedWasm.ndarray_numel(shapePtr, 3), 24);
+
+        generatedWasm.i32view(gatherSourcePtr, 6).set([0, 1, 2, 3, 4, 5]);
+        generatedWasm.u32view(gatherLayoutPtr, 8).set([0, 0, 3, 2, 4, 12, 8, 4]);
+        assert.strictEqual(generatedWasm.ndarray_copy(gatherOutputPtr, 24, gatherSourcePtr, 24, gatherLayoutPtr, 2, 0x44), 0, "Strided i32 gather must succeed");
+        assert.deepStrictEqual(Array.from(generatedWasm.i32view(gatherOutputPtr, 6)), [0, 3, 1, 4, 2, 5], "Strided gather must transpose through byte strides");
+        assert.strictEqual(generatedWasm.ndarray_copy(gatherSourcePtr, 24, gatherSourcePtr, 24, gatherLayoutPtr, 2, 0x44), 5, "Overlapping source and destination ranges must be rejected");
+        assert.strictEqual(generatedWasm.ndarray_copy(gatherOutputPtr, 20, gatherSourcePtr, 24, gatherLayoutPtr, 2, 0x44), 7, "Destination layouts outside their byte range must be rejected");
 
         generatedWasm.mat4f_identity(matrixPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(matrixPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
@@ -574,6 +588,9 @@ const makeFixture = () => {
         generatedWasm.wasmgpu_free_f32(copyPtr, 17);
         generatedWasm.wasmgpu_free(sourcePtr, 12);
         generatedWasm.wasmgpu_free(outputPtr, 8);
+        generatedWasm.wasmgpu_free(gatherSourcePtr, 24);
+        generatedWasm.wasmgpu_free(gatherOutputPtr, 24);
+        generatedWasm.wasmgpu_free_u32(gatherLayoutPtr, 8);
     }
 }
 

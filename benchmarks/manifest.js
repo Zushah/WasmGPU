@@ -38,6 +38,11 @@ import readbackRingRead from "./compute/readbackring-read-throughput.bench.js";
 import ndarrayUpload from "./compute/cpundarray-upload-to-gpu-throughput.bench.js";
 import ndarrayReadback from "./compute/gpundarray-readback-to-cpu-throughput.bench.js";
 import computeDispatchBatch from "./compute/compute-dispatch-batch-throughput.bench.js";
+import ndarrayContiguousGPU from "./compute/ndarray-contiguous-gpu-f32-throughput.bench.js";
+import ndarrayContiguousCPU from "./compute/ndarray-contiguous-cpu-f32-throughput.bench.js";
+import ndarrayCastGPU from "./compute/ndarray-cast-gpu-u8-f32-throughput.bench.js";
+import ndarrayResizeGPU from "./compute/ndarray-resize-gpu-linear-f32-throughput.bench.js";
+import ndarrayResizeCPU from "./compute/ndarray-resize-cpu-linear-f32-throughput.bench.js";
 import math from "./math/mat4-mul-throughput.bench.js";
 import mathF32 from "./math/mat4f-mul-throughput.bench.js";
 import mathF64 from "./math/mat4d-mul-throughput.bench.js";
@@ -110,6 +115,11 @@ export const benchmarks = [
     ndarrayUpload,
     ndarrayReadback,
     computeDispatchBatch,
+    ndarrayContiguousGPU,
+    ndarrayContiguousCPU,
+    ndarrayCastGPU,
+    ndarrayResizeGPU,
+    ndarrayResizeCPU,
     pointcloud,
     glyphfield,
     nodelink,

@@ -14,7 +14,7 @@ const python = new PythonInterop(compute);
 
 const stridesOf = (shape) => { const out = new Array(shape.length); let stride = 1; for (let i = shape.length - 1; i >= 0; i--) { out[i] = stride; stride *= shape[i]; } return out; };
 const bufferOf = (data, shape, extra = {}) => ({ data, shape, strides: stridesOf(shape), offset: 0, c_contiguous: true, itemsize: data.BYTES_PER_ELEMENT, ndim: shape.length, nbytes: shape.reduce((n, dim) => n * dim, 1) * data.BYTES_PER_ELEMENT, ...extra });
-const readGPU = async (array) => { const cpu = await array.readbackToCPU(); try { return Array.from(cpu.data()); } finally { cpu.destroy(); } };
+const readGPU = async (array) => { const cpu = await compute.ndarray.toCPU(array); try { return Array.from(cpu.data()); } finally { cpu.destroy(); } };
 
 // 1) All supported dtypes preserve exact values through canonical CPU and direct GPU imports.
 {
@@ -117,6 +117,19 @@ const readGPU = async (array) => { const cpu = await array.readbackToCPU(); try 
     const noncontiguousGPU = GPUndarray.empty(compute, "f32", { shape: [2, 2], stridesBytes: [16, 4] });
     assert.throws(() => python.copyInto(noncontiguousGPU, bufferOf(new Float32Array(4), [2, 2])), /destination must be C-contiguous/i);
     noncontiguousGPU.destroy();
+
+    const offsetCPU = CPUndarray.zeros("f32", { shape: [3], offsetBytes: 8 });
+    python.copyInto(offsetCPU, bufferOf(new Float32Array([5, 6, 7]), [3]));
+    assert.deepStrictEqual(Array.from(offsetCPU.data()), [5, 6, 7], "Offset contiguous CPU destinations must be written at their layout offset");
+    offsetCPU.destroy();
+    const offsetGPU = GPUndarray.empty(compute, "f32", { shape: [3], offsetBytes: 8 }, { copySrc: true });
+    python.copyInto(offsetGPU, bufferOf(new Float32Array([5, 6, 7]), [3]));
+    assert.deepStrictEqual(await readGPU(offsetGPU), [5, 6, 7], "Offset contiguous GPU destinations must be written at their layout offset");
+    offsetGPU.destroy();
+    const row = compute.ndarray.zeros("u16", { shape: [6] }, { residency: "gpu" });
+    python.copyInto(compute.ndarray.slice(row, [[1, 4]]), bufferOf(new Uint16Array([7, 8, 9]), [3]));
+    assert.deepStrictEqual(await readGPU(row), [0, 7, 8, 9, 0, 0], "Unaligned sub-word GPU views must be written without touching neighbors");
+    row.destroy();
 }
 
 // 5) Acquired buffers release exactly once; borrowed buffers never release.
@@ -178,7 +191,7 @@ const readGPU = async (array) => { const cpu = await array.readbackToCPU(); try 
     const pyodide = await loadPyodide({ indexURL: "https://cdn.jsdelivr.net/pyodide/v0.29.3/full/" });
     await safelySilence("log", () => pyodide.loadPackage("numpy"));
     const source = await (await fetch("../python/interop.py")).text();
-    pyodide.globals.set("_wasmgpu_runtime", { python });
+    pyodide.globals.set("_wasmgpu_runtime", { python, compute });
     await pyodide.runPythonAsync(`${source}\ninterop = WasmGPUInterop(_wasmgpu_runtime)`);
 
     const results = await pyodide.runPythonAsync(

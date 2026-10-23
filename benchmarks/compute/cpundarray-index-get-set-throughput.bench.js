@@ -14,7 +14,7 @@ export default {
     gpu: false,
     setup({ compute }, size) {
         return {
-            array: compute.CPUndarray.zeros("f32", { shape: [size] }),
+            array: compute.ndarray.zeros("f32", { shape: [size] }),
             size,
             last: 0
         };

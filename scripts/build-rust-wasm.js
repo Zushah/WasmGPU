@@ -455,6 +455,10 @@ export const anim_compute_joint_matrices_to = wasm.anim_compute_joint_matrices_t
 export const ndarray_numel = wasm.ndarray_numel;
 export const ndarray_strides_row_major = wasm.ndarray_strides_row_major;
 export const ndarray_offset_bytes = wasm.ndarray_offset_bytes;
+export const ndarray_copy = wasm.ndarray_copy;
+export const ndarray_pad = wasm.ndarray_pad;
+export const ndarray_affine = wasm.ndarray_affine;
+export const ndarray_resize = wasm.ndarray_resize;
 
 export const mat4f_abs = wasm.mat4f_abs;
 export const mat4d_abs = wasm.mat4d_abs;
@@ -828,6 +832,10 @@ export function anim_compute_joint_matrices_to(outPtr: number, jointIndicesPtr: 
 export function ndarray_numel(shapePtr: number, ndim: number): number;
 export function ndarray_strides_row_major(outStridesPtr: number, shapePtr: number, ndim: number, elemBytes: number): number;
 export function ndarray_offset_bytes(shapePtr: number, stridesPtr: number, indicesPtr: number, ndim: number, baseOffsetBytes: number): number;
+export function ndarray_copy(dstPtr: number, dstLen: number, srcPtr: number, srcLen: number, layoutPtr: number, ndim: number, codes: number): number;
+export function ndarray_pad(dstPtr: number, dstLen: number, srcPtr: number, srcLen: number, layoutPtr: number, ndim: number, codes: number, valuePtr: number): number;
+export function ndarray_affine(dstPtr: number, dstLen: number, srcPtr: number, srcLen: number, layoutPtr: number, ndim: number, codes: number, paramsPtr: number): number;
+export function ndarray_resize(dstPtr: number, dstLen: number, srcPtr: number, srcLen: number, layoutPtr: number, ndim: number, codes: number, indexPtr: number, weightPtr: number): number;
 
 export function mat4f_abs(outPtr: number, mPtr: number): number;
 export function mat4d_abs(outPtr: number, mPtr: number): number;

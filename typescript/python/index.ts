@@ -175,7 +175,7 @@ export class PythonInterop {
                     copySrc: options.copySrc ?? true,
                     usage: options.usage
                 });
-                return new GPUndarray(dtype, shape, contiguousStridesBytes(shape, dtypeInfo(dtype).bytesPerElement), 0, byteLength, buffer, 0, true, this.compute.readback);
+                return new GPUndarray(dtype, shape, contiguousStridesBytes(shape, dtypeInfo(dtype).bytesPerElement), 0, byteLength, buffer, 0, true);
             } catch (error) { buffer?.destroy(); throw error; }
         });
     }
@@ -186,10 +186,19 @@ export class PythonInterop {
             assert(dst.dtype === dtype, `PythonInterop.copyInto() dtype mismatch: destination is ${dst.dtype}, source is ${dtype}`);
             assert(sameShape(dst.shape, shape), `PythonInterop.copyInto() shape mismatch: destination is [${dst.shape}], source is [${shape}]`);
             assert(dst.isContiguousC, "PythonInterop.copyInto() destination must be C-contiguous");
-            assert(dst.byteLength === byteLength, "PythonInterop.copyInto() byte length mismatch");
+            assert(dst.numel * dst.bytesPerElement === byteLength, "PythonInterop.copyInto() byte length mismatch");
             if (dst instanceof CPUndarray) { dst.data().set(data); return; }
             assert((dst.buffer.usage & GPUBufferUsage.COPY_DST) !== 0, "PythonInterop.copyInto() GPU destination requires COPY_DST usage");
-            dst.buffer.write(gpuWriteSource(data), dst.baseOffsetBytes, 0, byteLength);
+            const dstOffsetBytes = dst.baseOffsetBytes + dst.offsetBytes;
+            // Queue writes need a 4-byte-aligned start and pad their length to 4 bytes, which is safe only when the padding lies past the storage's logical range.
+            if ((dstOffsetBytes & 3) === 0 && ((byteLength & 3) === 0 || dstOffsetBytes + byteLength === dst.buffer.byteLength)) {
+                dst.buffer.write(gpuWriteSource(data), dstOffsetBytes, 0, byteLength);
+                return;
+            }
+            // Otherwise the canonical GPU copy merges partially covered words exactly.
+            const staging = new GPUndarray(dtype, shape.slice(), contiguousStridesBytes(shape, dtypeInfo(dtype).bytesPerElement), 0, byteLength, new StorageBuffer(this.compute.device, this.compute.queue, { label: "PythonInterop.copyInto:staging", data: gpuWriteSource(data) }), 0, true);
+            try { this.compute.ndarray.copyInto(dst, staging); }
+            finally { this.compute.queue.onSubmittedWorkDone().then(() => staging.destroy(), () => staging.destroy()); }
         });
     }
 }

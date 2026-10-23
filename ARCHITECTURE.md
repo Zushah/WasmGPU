@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Sunday, October 18, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Friday, October 23, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Saturday, October 17, 2026, [**`18aee20`**](https://github.com/Zushah/WasmGPU/commit/18aee20).
+Parent commit: Sunday, October 18, 2026, [**`596bf36`**](https://github.com/Zushah/WasmGPU/commit/596bf36).
 
 Latest release: Monday, August 31, 2026, [**`v0.10.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.10.0).
 
@@ -87,7 +87,7 @@ flowchart LR
         CPIP["Pipeline controller"]
         CDIS["Dispatch workgroup planner"]
         CKER["Kernels library"]
-        CND["N-dimensional array model for CPU & GPU memory"]
+        CND["N-dimensional array model, views, & transformations for CPU & GPU memory"]
         CREAD["Asynchronous readback ring"]
         CSCR["Scratch buffer pool"]
     end
@@ -114,7 +114,7 @@ flowchart LR
         WFRAME["Frame arena for transient typed memory"]
         WTRANS["Transform propagation"]
         WMATH["Matrix, vector, & quaternion mathematics"]
-        WND["N-dimensional array indexing & stride-offsetting"]
+        WND["N-dimensional array indexing, stride-offsetting, strided gathering, casting, padding, normalization, & resampling"]
         WNORM["Mesh normal generation"]
         WGLTF["glTF accessor decoding, sparse patching, & numeric conversion"]
         WANIM["Animation sampling & joint matrix generation"]
@@ -213,6 +213,8 @@ flowchart LR
     CDIS --> CPASS
     CKER --> CPASS
     CND --> CBUF
+    CND --> CPIP
+    CND --> CPASS
     CREAD --> RES
     CSCR --> RES
     CPASS --> DEV
@@ -238,7 +240,7 @@ This diagram describes the current source tree, including [unreleased work](http
 
 ### 1.2. Public API surface
 
-The public API is exported from `./typescript/index.ts`. It exports the `WasmGPU` class, the renderer, compute helpers, scaling helpers, world objects, graphics objects, glTF helpers, rendering effects, overlay and annotation types, Python interop, WebAssembly interop, WebGPU interop, and math helpers.
+The public API is exported from `./typescript/index.ts`. It exports the `WasmGPU` class, the renderer, compute helpers including the type of the per-instance `compute.ndarray` namespace, scaling helpers, world objects, graphics objects, glTF helpers, rendering effects, overlay and annotation types, Python interop, WebAssembly interop, WebGPU interop, and math helpers.
 
 Applications normally enter through `WasmGPU.create(canvas, descriptor)` in `./typescript/core/engine.ts`. The runtime initializes WebAssembly, creates a WebGPU renderer, constructs the compute subsystem, and exposes factories for scenes, cameras, controls, geometry, materials, textures, meshes, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, lights, effects, glTF loading, animation, overlays, and annotations.
 
@@ -386,7 +388,7 @@ Model and normal matrices occupy 128-byte records in one growable uniform buffer
 
 Active shadows add one renderer-owned `depth32float` texture array, per-layer render views, one comparison sampler, metadata/view/model uniform buffers, bind groups, and cached caster pipelines. Reconfiguration destroys and replaces incompatible shadow textures and buffers; disabling the final active scene shadow releases the lazy resources on the next prepare.
 
-Geometry, materials, textures, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, skin instances, and compute objects store WebGPU handles. Render and compute command encoding read those handles. Destruction paths exist for renderer resources, textures, geometry and material buffers, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, private splatfield and latticespace sort scratch buffers, skin instances, compute buffers, readback rings, scratch pools, and GPUndarray-owned buffers. Compute pipeline wrappers do not expose a `destroy()` method because WebGPU pipeline objects are not explicitly destroyed.
+Geometry, materials, textures, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, skin instances, and compute objects store WebGPU handles. Render and compute command encoding read those handles. Destruction paths exist for renderer resources, textures, geometry and material buffers, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, private splatfield and latticespace sort scratch buffers, skin instances, compute buffers, readback rings, scratch pools, `compute.ndarray` parameter, staging, and placeholder buffers, and GPUndarray-owned buffers. Compute pipeline wrappers do not expose a `destroy()` method because WebGPU pipeline objects are not explicitly destroyed.
 
 Changing browser resource layout requires checking usage flags, bind group layout entries, pipeline layout creation, shader bindings, fallback resources, resize paths, and destruction paths. A resource layout change usually spans TypeScript, WGSL, and at least one test or example.
 
@@ -406,7 +408,7 @@ Overlay and annotation changes cross both DOM and WebGPU paths. Inspect layer ty
 
 ### 1.13. Compute and ndarray systems
 
-The compute subsystem is implemented under `./typescript/compute/`. `./typescript/compute/index.ts` stores the WebGPU device and queue references used for compute work. It creates storage buffers, uniform buffers, compute pipelines, readback rings, scratch pools, ndarray objects, and an optional RGBA8 blitter.
+The compute subsystem is implemented under `./typescript/compute/`. `./typescript/compute/index.ts` stores the WebGPU device and queue references used for compute work. It creates storage buffers, uniform buffers, compute pipelines, readback rings, scratch pools, the per-instance `compute.ndarray` namespace, and an optional RGBA8 blitter.
 
 `Compute.wrapStorageBuffer()` wraps a caller-supplied `GPUBuffer` without allocating or copying GPU storage. External buffers are borrowed by default; `ownBuffer: true` transfers destruction responsibility to the wrapper. `StorageBuffer.buffer` remains the raw handle, while `offsetBytes` and `byteLength` describe its logical range and `usage` preserves the underlying usage flags. Wrapping validates safe integer bounds, storage usage, and the device's storage-offset alignment. Same-device provenance and the lifetime of externally destroyed resources remain caller preconditions; wrappers do not track aliases or reference-count external buffers. Wrapper destruction is idempotent, invalidates later buffer operations, and destroys the raw resource only when owned.
 
@@ -421,14 +423,24 @@ The main compute files are:
 - `./typescript/compute/kernels.ts`: built-in copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, and LU factor/solve kernels.
 - `./typescript/compute/readback.ts`: reusable asynchronous GPU readback slots.
 - `./typescript/compute/scratch.ts`: scratch buffer pooling.
-- `./typescript/compute/ndarray.ts`: CPU and GPU ndarray layout, dtype, stride, offset, upload, and readback logic.
+- `./typescript/compute/ndarray.ts`: CPU and GPU ndarray layout, dtype, stride, offset, and view logic, the `compute.ndarray` namespace, transfers, and the WebAssembly and WebGPU transformation engines.
 - `./typescript/compute/blit.ts`: RGBA8 storage-buffer-to-canvas blitting.
 
-The compute subsystem reads WGSL from `./wgsl/compute/`, shared explicit WebGPU layouts and resources from `./typescript/wgsl/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. `ComputePipeline` remains responsible for arbitrary-WGSL pipeline creation, automatic or explicit layouts, bind-group creation, and dispatch integration, as the WebGPU interop subsystem does not execute or schedule compute work. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory. `CPUndarray` owns its backing bytes plus shape and stride allocations; scalar indexing is checked locally in TypeScript, and `destroy()` releases the owned WebAssembly allocations idempotently and makes later memory access throw. `GPUndarray` destroys only buffers it owns and continues to borrow buffers supplied through `wrap()`; a shared readback ring is an optional accelerator, with direct storage-buffer readback remaining available after that ring is destroyed.
+The compute subsystem reads WGSL from `./wgsl/compute/`, shared explicit WebGPU layouts and resources from `./typescript/wgsl/`, WebGPU buffer descriptors, ndarray descriptors, and caller-provided typed arrays. `ComputePipeline` remains responsible for arbitrary-WGSL pipeline creation, automatic or explicit layouts, bind-group creation, and dispatch integration, as the WebGPU interop subsystem does not execute or schedule compute work. It mutates GPU buffers, command encoders, readback staging buffers, scratch pool entries, and WebAssembly-backed CPU ndarray memory. `CPUndarray` owns its backing bytes plus shape and stride allocations; scalar indexing is checked locally in TypeScript, and `destroy()` releases the owned WebAssembly allocations idempotently and makes later memory access throw. `GPUndarray` destroys only buffers it owns and continues to borrow buffers supplied through `wrap()`, while every destroyed array, owned or borrowed, rejects later bindings and ndarray operations.
 
-WasmGPU chooses floating-point precision by execution domain rather than imposing one width globally. CPU ndarrays and WasmGPU-owned or external WebAssembly memory support both `f32` and `f64`, including Python and WebAssembly interop. A `GPUndarray<f64>` is valid storage and transfer data, as its bytes may be uploaded to a WebGPU buffer, copied, and read back without loss. However, current WebGPU/WGSL has no concrete runtime `f64` scalar type, so `f64` GPU storage does not imply native `f6`4 shader computation or rendering arithmetic. Where a shader-facing path requires `f32`, explicitly converting `f64` CPU values through the existing typed-array or ndarray construction behavior is intentional.
+`compute.ndarray` is an `NdarrayNamespace` constructed by each `Compute` with its device, queue, and readback ring, and it is the single entry point for creating, transferring, viewing, and transforming ndarrays. `x instanceof compute.ndarray` tests for any ndarray, `Compute.destroy()` destroys the namespace before the readback ring and kernels, and later namespace calls throw. `empty()`, `zeros()`, and `fromArray()` create CPU arrays by default or GPU arrays with `residency: "gpu"`; GPU arrays created by the namespace default to `copySrc: true` and `copyDst: true`, and GPU buffer options are rejected for CPU residency. `wrap()` borrows a `StorageBuffer` from the namespace's device. `toGPU()` and `toCPU()` replace the former per-object upload and readback methods, preserve shape, strides, and layout offset exactly, and copy only the array's own byte extent; `toCPU()` requires `COPY_SRC` and uses the shared readback ring as an optional accelerator, with direct storage-buffer readback remaining available after that ring is destroyed. The static constructors on `CPUndarray` and `GPUndarray` remain the low-level layer used by Python interop and by CPU-only code that initializes WebAssembly without a GPU device.
 
-`GPUndarray.wrap()` layers dtype, shape, strides, and layout offset over an existing internal or external `StorageBuffer` without copying or taking ownership. The complete backing extent, including custom positive or negative strides, must fit within the logical storage range after adding `baseOffsetBytes`. Element addresses compose the storage offset, ndarray base offset, layout offset, and indexed strides; binding offsets must also satisfy storage alignment. Readback preserves this metadata, but each compute kernel retains its own layout assumptions. Arrays created by `GPUndarray.empty()` own their allocated storage.
+Metadata-only views (`slice()` with Python basic-slicing semantics, `transpose()`, `swapAxes()`, `moveAxis()`, `flip()`, `reshape()` with NumPy's no-copy algorithm, `squeeze()`, `expandDims()`, and NumPy-rule `broadcastTo()`) are synchronous, keep the input's residency, and borrow the root owning array's storage. A view's `base` is that root rather than an intermediate view, destroying a view releases only what the view allocated, and destroying the root invalidates every view; CPU views check the root's destruction state and allocate their WebAssembly shape and stride arrays only on first access, while GPU views also fail through `StorageBuffer` destruction tracking. Each view is rebased onto the byte extent of its own elements, as CPU views advance their base pointer to the extent start and GPU views advance `baseOffsetBytes` to the 4-byte-aligned extent start and keep the remainder in `offsetBytes`, so transfers stay proportional to the view. `isContiguousC` follows NumPy's relaxed `C_CONTIGUOUS` rule, ignoring the strides of size-1 dimensions and the layout offset, and `CPUndarray.data()` therefore works for contiguous views. `CPUndarray.set()` writes through views to the base storage.
+
+Materialized operations (`contiguous()`, `cast()`, `pad()`, `normalize()`, and two-axis `resize()`) always return new owned C-contiguous arrays in the input's residency, while `copyInto()` writes a broadcastable source into a caller-supplied destination of the same residency and GPU operations accept a caller-supplied C-contiguous `out`. CPU operations run in Rust through the `ndarrayf` WebAssembly wrappers with per-call heap descriptors, and GPU operations run as storage-buffer WGSL dispatches; nothing transfers implicitly. Every operation validates liveness, coalesces dimensions that are contiguous in every participating layout while keeping padded, resized, and per-channel axes separate, and supports at most 64 coalesced dimensions on the CPU and 8 on the GPU. `copyInto()` rejects destinations that may address the same memory twice and copies through a temporary when CPU source and destination storage overlap or when GPU source and destination share a raw `GPUBuffer`, as WebGPU forbids read-only and writable bindings of one buffer in a dispatch. GPU destinations with 8-bit or 16-bit dtypes must be C-contiguous so that each invocation owns whole 32-bit words and merges the partially covered words at either end.
+
+`cast()` follows Rust `as` semantics on both backends: integer conversions wrap unless `overflow: "saturate"` is requested, float-to-integer conversions truncate and saturate with NaN mapped to zero unless `rounding: "nearest-even"` or `overflow: "wrap"` is requested, integer-to-`f32` and `f64`-to-`f32` conversions round to nearest even, and widening to `f64` is exact. These conversions deliberately differ from the typed-array assignment used by `fromArray()`. `normalize()` applies `x × scale + offset` or `(x − mean) / std` with scalar or per-axis parameters, `resize()` applies nearest-exact or linear interpolation with half-pixel or corner alignment and `pad()`-style boundaries from tap tables built once in TypeScript, and integer outputs of both operations round half to even, saturate, and map NaN to zero. Layout operations and casts are bit-exact and identical on the CPU and GPU, nearest resizing is bit-identical, and normalization and linear resizing compute in `f64` on the CPU and `f32` on the GPU within a documented tolerance. GPU operations reject `f64`↔integer casts and any `f64` input or output to `normalize()` or `resize()`, while `f64`↔`f32` casts and `f64` layout operations use integer bit routines.
+
+GPU ndarray operations use one cached pipeline per entry point and override set, bind every array as raw 32-bit words, and create a fresh immutable parameter buffer with `mappedAtCreation` for each call instead of queue-written pooled scratch buffers, so parameters cannot be overwritten before a caller-supplied encoder is submitted. Without an `encoder`, an operation submits its own work and destroys its parameter buffers and temporaries after `onSubmittedWorkDone()`; with an `encoder`, it drops those references and the browser reclaims them after the caller's work completes. Dispatches fold large invocation counts into two-dimensional workgroup grids of 256-invocation workgroups. Each binding starts at the array's absolute start aligned down to `minStorageBufferOffsetAlignment`, with the difference added to element offsets; odd-length external wrappers whose 4-byte-rounded binding would leave the logical range, bindings above `maxStorageBufferBindingSize`, and outputs above `maxBufferSize` fail with errors naming the device limits.
+
+WasmGPU chooses floating-point precision by execution domain rather than imposing one width globally. CPU ndarrays and WasmGPU-owned or external WebAssembly memory support both `f32` and `f64`, including Python and WebAssembly interop. A `GPUndarray<f64>` is valid storage and transfer data, as its bytes may be uploaded to a WebGPU buffer, copied, padded, and read back without loss, and cast to `f32` on the GPU with the same rounding as on the CPU. However, current WebGPU/WGSL has no concrete runtime `f64` scalar type, so `f64` GPU storage does not imply native `f64` shader computation or rendering arithmetic. Where a shader-facing path requires `f32`, explicitly converting `f64` values through `compute.ndarray.cast()` or the existing typed-array or ndarray construction behavior is intentional.
+
+`compute.ndarray.wrap()` and `GPUndarray.wrap()` layer dtype, shape, strides, and layout offset over an existing internal or external `StorageBuffer` without copying or taking ownership. The complete backing extent, including custom positive or negative strides, must fit within the logical storage range after adding `baseOffsetBytes`. Element addresses compose the storage offset, ndarray base offset, layout offset, and indexed strides; `bindingResource()` binding offsets must also satisfy storage alignment. Transfers preserve this metadata and the `compute.ndarray` operations honor arbitrary layouts, but each kernel in `./typescript/compute/kernels.ts` retains its own dense layout assumptions. Arrays created by `GPUndarray.empty()` own their allocated storage.
 
 Contributors changing compute code should check buffer usage flags, copy alignment, dispatch dimensions, shader bindings, readback slot reuse, and tests that assert kernel results.
 
@@ -486,15 +498,15 @@ Animation changes should be checked against glTF import, mesh morph handling, sk
 
 Python interop is implemented in `./typescript/python/index.ts` and `./python/interop.py`. Every `WasmGPU` instance owns a `PythonInterop` service bound to its existing compute device, queue, and readback resources. The TypeScript boundary accepts only Pyodide proxies or resolved Pyodide-like numeric buffers in the engine's eight supported dtypes, and requires C-contiguous layouts. Ordinary JavaScript typed arrays use the existing compute APIs instead.
 
-`toCPU()` performs one bulk copy from the Pyodide buffer into a caller-owned canonical `CPUndarray`. `toGPU()` directly uploads the Pyodide buffer into the storage resource owned by a canonical `GPUndarray`. Both results use the normal canonical `destroy()` semantics. `copyInto()` strictly matches dtype and shape, requires a C-contiguous canonical destination, and updates its existing CPU allocation or `COPY_DST`-capable GPU buffer without reallocating it.
+`toCPU()` performs one bulk copy from the Pyodide buffer into a caller-owned canonical `CPUndarray`. `toGPU()` directly uploads the Pyodide buffer into the storage resource owned by a canonical `GPUndarray`. Both results use the normal canonical `destroy()` semantics. `copyInto()` strictly matches dtype and shape, requires a C-contiguous canonical destination under the relaxed contiguity rule, writes at the destination's layout offset, and updates its existing CPU allocation or `COPY_DST`-capable GPU buffer without reallocating it. GPU destinations are written with one queue write when the write is 4-byte aligned and cannot pad into neighboring data; otherwise, as for sub-word views at unaligned offsets, the source is uploaded to a temporary staging array and merged through the canonical `compute.ndarray.copyInto()`.
 
 When `PythonInterop` obtains a buffer by calling `getBuffer()`, it releases that buffer exactly once on success or failure. A resolved `PyBufferLike` passed directly by the caller is borrowed and is never released by `PythonInterop`. Source offsets are validated and locally accommodated for WebGPU alignment without changing the storage-buffer subsystem's alignment contract.
 
-The Python helper binds to one concrete `WasmGPU` instance. It normalizes ordinary NumPy inputs and non-contiguous views to C-contiguous storage according to the explicit `never`, `if_needed`, or `always` copy policy and NumPy casting policy. It returns the real JavaScript ndarray proxies, copies CPU results into independent NumPy arrays, and implements GPU conversion through canonical readback with destruction of only the temporary CPU ndarray. Python interop has no independent pointer, allocator, ndarray wrapper, or lifetime model.
+The Python helper binds to one concrete `WasmGPU` instance. It normalizes ordinary NumPy inputs and non-contiguous views to C-contiguous storage according to the explicit `never`, `if_needed`, or `always` copy policy and NumPy casting policy. It returns the real JavaScript ndarray proxies, copies CPU results into independent NumPy arrays, and implements GPU conversion through the bound instance's `compute.ndarray.toCPU()` with destruction of only the temporary CPU ndarray. Python interop has no independent pointer, allocator, ndarray wrapper, or lifetime model.
 
 ### 1.19. WebAssembly driver
 
-WebAssembly driver initialization is implemented in `./typescript/wasm/driver.ts` and exported through `./typescript/wasm/index.ts`. It imports the generated loader from `./wasm/wasm.js`, creates an eight-mebibyte (8,388,608 bytes) frame arena, and exposes grouped Rust functions for accessors, animation, bounds, culling, matrix math, mesh normals, ndarray indexing, quaternion math, transforms, and mathematics, which includes `vec3`, `vec3f`, `vec3d`, `mat4`, `mat4f`, `mat4d`, `quat`, `quatf`, and `quatd` namespaces.
+WebAssembly driver initialization is implemented in `./typescript/wasm/driver.ts` and exported through `./typescript/wasm/index.ts`. It imports the generated loader from `./wasm/wasm.js`, creates an eight-mebibyte (8,388,608 bytes) frame arena, and exposes grouped Rust functions for accessors, animation, bounds, culling, matrix math, mesh normals, ndarray indexing and transformations, quaternion math, transforms, and mathematics, which includes `vec3`, `vec3f`, `vec3d`, `mat4`, `mat4f`, `mat4d`, `quat`, `quatf`, and `quatd` namespaces.
 
 `WasmSlice`, `WasmHeapArena`, `frameArena`, `wasm`, and the `driver` namespace are part of the WebAssembly driver. `WasmSlice` records pointer, length, dtype, allocation kind, and epoch. Frame arena and heap arena slices check epochs so callers do not reuse memory after a reset or destroyed arena, and freed slices reject later view or handle creation. `WasmHeapArena` allocates a WebAssembly heap block and provides bump allocation within that block. Explicit release remains retryable if its allocator call throws; garbage-collection finalization is only a fallback for abandoned heap slices.
 
@@ -504,7 +516,7 @@ Rust memory allocation is implemented in `./rust/src/heap.rs` through Rust's sta
 
 The Rust driver separates portable slice and fixed-array computation from WebAssembly-only heap and frame-arena adapters where native testing requires it. The heap and frame-arena modules compile only for `wasm32`; their 32-bit pointer, memory-growth, alignment, capacity, and epoch contracts are tested against the compiled WebAssembly module rather than emulated with native pointers.
 
-Each Rust ABI entry point that borrows WebAssembly memory creates an opaque driver-call scope inside a higher-ranked callback. Slice helpers consume a copy of that capability and return references tied to its generated lifetime, so the compiler prevents those references from escaping the driver call rather than relying on an unconstrained or fabricated static lifetime. Pointer-consuming and deallocation exports are `unsafe extern "C"` functions on the Rust side, so Rust callers must acknowledge their foreign-memory preconditions at each call site; this marker does not change their WebAssembly signatures, so JavaScript callers remain responsible for the same ABI contract. Fixed-width matrix, quaternion, and vector kernels stage their inputs in local arrays before creating mutable output slices, so output may exactly alias or partially overlap an input without violating Rust's reference-aliasing rules. Their `copy` exports use memmove semantics and support exact, forward, and backward overlap. Variable-length accessor, animation, bounds, culling, mesh, ndarray, and transform kernels require every pointer range to be valid, initialized, naturally aligned for its element type, contained within its live allocation, and large enough for the supplied count; mutable output ranges must be mutually disjoint and must not overlap input ranges unless an export explicitly documents otherwise.
+Each Rust ABI entry point that borrows WebAssembly memory creates an opaque driver-call scope inside a higher-ranked callback. Slice helpers consume a copy of that capability and return references tied to its generated lifetime, so the compiler prevents those references from escaping the driver call rather than relying on an unconstrained or fabricated static lifetime. Pointer-consuming and deallocation exports are `unsafe extern "C"` functions on the Rust side, so Rust callers must acknowledge their foreign-memory preconditions at each call site; this marker does not change their WebAssembly signatures, so JavaScript callers remain responsible for the same ABI contract. Fixed-width matrix, quaternion, and vector kernels stage their inputs in local arrays before creating mutable output slices, so output may exactly alias or partially overlap an input without violating Rust's reference-aliasing rules. Their `copy` exports use memmove semantics and support exact, forward, and backward overlap. Variable-length accessor, animation, bounds, culling, mesh, ndarray, and transform kernels require every pointer range to be valid, initialized, naturally aligned for its element type, contained within its live allocation, and large enough for the supplied count; mutable output ranges must be mutually disjoint and must not overlap input ranges unless an export explicitly documents otherwise. The ndarray transformation exports `ndarray_copy`, `ndarray_pad`, `ndarray_affine`, and `ndarray_resize` instead borrow the entire source and destination backing ranges as byte slices, take layout descriptors and tap tables as small u32, i32, and f64 arrays, compute every strided element offset with checked arithmetic and validate the complete extents before any access, read and write elements through little-endian byte conversions so element offsets need no alignment, and require disjoint source and destination ranges. They check null, misaligned, and destination-overlapping descriptor arrays and overlapping source and destination ranges themselves, and they report every validation failure as a nonzero status code that TypeScript converts into a descriptive error.
 
 Data movement commonly follows these paths:
 
@@ -526,7 +538,7 @@ Shader directories currently map to architecture areas:
 - `./wgsl/effects/`: renderer-integrated shadow caster variants and the StandardMaterial receiver declarations and sampling function.
 - `./wgsl/graphics/`: mesh material shaders, transmission shaders, data material shaders, custom material defaults, mipmap generation, and skinned or instanced variants.
 - `./wgsl/world/`: pointcloud, glyphfield, nodelink, splatfield, latticespace, picking, private splatfield and latticespace sorting, and object-family occlusion capture shaders.
-- `./wgsl/compute/`: copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, blitting, vector & matrix arithmetic, and LU solving & factoring kernels.
+- `./wgsl/compute/`: copy, reduce, arg-reduce, scan, histogram, compact, radix sort, scaling, blitting, vector & matrix arithmetic, LU solving & factoring, and ndarray strided gathering, casting, padding, normalization, & resampling kernels.
 
 WGSL changes must stay in sync with bind group layouts, vertex buffer layouts, uniform packing, material descriptors, object uniform layouts, and compute pipeline resource bindings in TypeScript.
 
@@ -552,6 +564,10 @@ These invariants are visible in the current code:
 - `WasmHeapArena` slices are invalid after the arena is reset or destroyed.
 - Python imports return canonical ndarrays, and acquired Pyodide buffers are released exactly once and directly supplied buffers remain borrowed.
 - Destroyed `CPUndarray` objects reject WebAssembly pointer and data access, and repeated destruction is harmless.
+- ndarray views borrow their root array's storage, never free it, and become invalid when that root is destroyed.
+- Materialized ndarray operations return owned C-contiguous arrays in the input's residency unless a GPU `out` destination is supplied, and nothing transfers between residencies implicitly.
+- ndarray layout operations and casts are bit-exact and identical on the CPU and GPU, and GPU ndarray operations reject `f64` arithmetic and `f64`↔integer casts.
+- GPU ndarray operations create fresh immutable parameter buffers per call rather than writing pooled scratch buffers.
 - Disposed animation clips, skins, and skin instances reject operations that would consume their released WebAssembly allocations.
 - Mesh shadow flags default to true but have no render effect until a directional light is explicitly enabled through `effects.shadows`, as `castShadow` controls independent depth-pass membership and `receiveShadow` controls only standard material receiver variants.
 - Shadow visibility attenuates direct light only. Ambient and emissive terms remain visible, and configured lights are referenced rather than owned by the shadow system.
@@ -692,7 +708,7 @@ Architectural role:
 
 Important files:
 
-- `./typescript/compute/index.ts`: `Compute` facade, buffer creation, pipeline creation, dispatch helpers, readback rings, ndarray factories, and blitter creation.
+- `./typescript/compute/index.ts`: `Compute` facade, buffer creation, pipeline creation, dispatch helpers, readback rings, the `compute.ndarray` namespace, and blitter creation.
 - `./typescript/compute/buffer.ts`: storage and uniform buffer wrappers.
 - `./typescript/compute/pipeline.ts`: compute pipeline wrapper and bind group creation.
 - `./typescript/wgsl/index.ts`: public WebGPU interop barrel export.
@@ -702,7 +718,7 @@ Important files:
 - `./typescript/compute/kernels.ts`: built-in compute kernels.
 - `./typescript/compute/readback.ts`: asynchronous readback ring.
 - `./typescript/compute/scratch.ts`: scratch GPU buffer pool.
-- `./typescript/compute/ndarray.ts`: CPU and GPU ndarray classes, dtype handling, shape and stride validation, deterministic WebAssembly-backed CPU allocation lifetime, upload, and readback.
+- `./typescript/compute/ndarray.ts`: CPU and GPU ndarray classes, dtype handling, shape and stride validation, deterministic WebAssembly-backed CPU allocation lifetime, borrowed views, the `NdarrayNamespace` behind `compute.ndarray`, transfers, and the WebAssembly and WebGPU transformation engines.
 - `./typescript/compute/blit.ts`: RGBA8 compute output blitting.
 - `./typescript/scaling/service.ts`: cached statistics requests over GPU data.
 - `./typescript/scaling/transform.ts`: scale transform packing and CPU-side helpers.
@@ -713,7 +729,7 @@ Common interactions:
 
 - `./typescript/world/pointcloud.ts`, `./typescript/world/glyphfield.ts`, `./typescript/world/nodelink.ts`, `./typescript/world/latticespace.ts`, and `./typescript/graphics/material.ts` expose scale sources.
 - `./typescript/overlay/legendLayer.ts` reads scaling and colormap state for legends.
-- WGSL kernels under `./wgsl/compute/` implement GPU work.
+- WGSL kernels under `./wgsl/compute/` implement GPU work, including the `gather` and `resize` entry points of `./wgsl/compute/ndarray.wgsl` used by `compute.ndarray`.
 - Caller-authored compute WGSL may use automatic pipeline layouts or explicit layouts and borrowed resources from `webgpuInterop`, but execution remains owned by `Compute` and `ComputePipeline`.
 
 ### 2.6. Asset loading and glTF
@@ -794,7 +810,7 @@ Important files:
 
 Common interactions:
 
-- Python interop uses the existing compute device, queue, readback resources, and canonical `CPUndarray` and `GPUndarray` implementations rather than maintaining a separate ndarray or lifetime model.
+- Python interop uses the existing compute device, queue, readback resources, `compute.ndarray` namespace, and canonical `CPUndarray` and `GPUndarray` implementations rather than maintaining a separate ndarray or lifetime model.
 - `./typescript/compute/ndarray.ts` uses WebAssembly memory for CPU ndarray storage.
 - `./typescript/core/transform.ts`, `./typescript/graphics/geometry.ts`, `./typescript/graphics/animation.ts`, and `./typescript/gltf/accessors.ts` call Rust helpers through `./typescript/wasm/index.ts`.
 - External WebAssembly views can feed existing object and buffer upload paths without transferring ownership of the foreign memory.
@@ -809,7 +825,7 @@ Architectural role:
 
 - Implements the WebAssembly Driver area in the diagram.
 - `./typescript/wasm/driver.ts` is the TypeScript layer over the generated WebAssembly output of the Rust.
-- Provides exported functions for allocation, frame scratch memory, transforms, math, bounds, culling, normals, accessors, animation, and ndarray layout.
+- Provides exported functions for allocation, frame scratch memory, transforms, math, bounds, culling, normals, accessors, animation, and ndarray layout and transformations.
 - Mutates WebAssembly memory owned by the current WebAssembly instance.
 
 Important files:
@@ -821,7 +837,7 @@ Important files:
 - `./rust/src/frame_arena.rs`: resettable per-frame bump allocator.
 - `./rust/src/transform.rs`: transform composition and world propagation.
 - `./rust/src/mat4.rs`, `./rust/src/vec3.rs`, and `./rust/src/quat.rs`: math helpers.
-- `./rust/src/ndarray.rs`: shape, stride, and offset helpers.
+- `./rust/src/ndarray.rs`: shape, stride, and offset helpers plus strided gathering with dtype conversion, padding, affine normalization, and two-axis resampling from tap tables.
 - `./rust/src/mesh.rs`: normal generation.
 - `./rust/src/accessors.rs`: glTF accessor conversion, generalized padded-layout compaction/deinterleaving, sparse patching, and numeric conversion.
 - `./rust/src/anim.rs`: animation sampling and joint matrix generation.
@@ -851,12 +867,12 @@ Important directories:
 - `./wgsl/effects/`: directional shadow depth shaders for static, instanced, skinned-4, and skinned-8 meshes plus the injected standard material receiver sampling path.
 - `./wgsl/graphics/`: material shaders, standard and transmission shader variants, data material shaders, mipmap generation, and custom material defaults.
 - `./wgsl/world/`: pointcloud, glyphfield, nodelink, splatfield, latticespace, picking, private object-family sorting, and occlusion capture shaders.
-- `./wgsl/compute/`: compute kernels for copy, reductions, scans, histograms, compaction, radix sort, scaling, blitting, and LU factoring/solving.
+- `./wgsl/compute/`: compute kernels for copy, reductions, scans, histograms, compaction, radix sort, scaling, blitting, LU factoring/solving, and ndarray gathering, casting, padding, normalization, and resampling.
 
 Common interactions:
 
 - `./typescript/core/renderer.ts` and the internal renderer helper modules under `./typescript/core/` import render shaders.
-- `./typescript/compute/kernels.ts` imports compute shaders.
+- `./typescript/compute/kernels.ts` imports compute shaders, and `./typescript/compute/ndarray.ts` imports `./wgsl/compute/ndarray.wgsl`.
 - `./typescript/wgsl/interop.ts` supplies shared explicit layout and resource normalization to compute pipelines and `CustomMaterial`, but it does not inspect shader source.
 - `./esbuild.config.js` minifies WGSL imports during bundling.
 
@@ -931,7 +947,7 @@ The CI selection table below makes the platform decision explicit instead of tre
 | MacOS 26 ARM64 Firefox | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | MacOS 26 ARM64 WebKit | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
 
-`npm run test` first removes prior aggregate artifacts, then uses an ordinary npm command chain to check Rust formatting, run Clippy over all native targets and the WebAssembly library, run the Rust tests, run two setup checks, run the 25 fast browser-module tests, run the 16 slower example tests, and merge reports. The chain stops at the first failing command. `npm run test:setup`, `npm run test:js`, and `npm run test:ex` select only their respective Playwright projects, so their terminal counts remain 2, 25, and 16 and development iteration does not implicitly rerun setup or examples. The full command and CI explicitly sequence setup before the primary suites. In CI, setup is a prerequisite for the browser-module, example, and merge steps, preventing an unavailable WebGPU implementation from turning every subsequent test into a timeout; after setup passes, the browser-module and example suites still run independently so both can retain diagnostics if either fails.
+`npm run test` first removes prior aggregate artifacts, then uses an ordinary npm command chain to check Rust formatting, run Clippy over all native targets and the WebAssembly library, run the Rust tests, run two setup checks, run the 28 fast browser-module tests, run the 16 slower example tests, and merge reports. The chain stops at the first failing command. `npm run test:setup`, `npm run test:js`, and `npm run test:ex` select only their respective Playwright projects, so their terminal counts remain 2, 28, and 16 and development iteration does not implicitly rerun setup or examples. The full command and CI explicitly sequence setup before the primary suites. In CI, setup is a prerequisite for the browser-module, example, and merge steps, preventing an unavailable WebGPU implementation from turning every subsequent test into a timeout; after setup passes, the browser-module and example suites still run independently so both can retain diagnostics if either fails.
 
 Playwright owns each test server it starts, requests graceful shutdown after its suite, and forcefully terminates the process group if shutdown exceeds the bounded timeout; a server explicitly started with `npm run test:js:serve` remains open until that command is stopped. Each invocation writes separate HTML, blob, attachment, and provenance records; merging rejects missing, filtered, listed-only, or incomplete runs before combining all three blob reports under `./playwright-report/combined/`. Before diagnostics are asserted, every monitored queue is settled so late uncaptured WebGPU errors and device losses are observable.
 
@@ -1111,6 +1127,7 @@ Reason explicitly about data ownership and lifetime:
 - WebAssembly heap slices remain valid until explicitly freed; their storage may be reused immediately afterward, while the grown WebAssembly memory pages remain allocated to the instance.
 - `WasmHeapArena` slices expire when the arena resets or is destroyed, and destroying the arena releases its backing heap allocation for reuse.
 - Python interop owns no separate memory handles, as returned `CPUndarray` and `GPUndarray` objects follow their canonical destruction and readback rules.
+- ndarray views borrow their root's storage and never free it; destroying a view releases only the shape and stride arrays a CPU view allocated on first access, while destroying the root invalidates every view.
 - `CPUndarray`, animation, skin, renderer culling, geometry scratch, and glTF import paths release the WebAssembly allocations they own; borrowed external WebAssembly views are never freed by those consumers.
 - The active global transform store and frame arena retain their current backing storage for the WebAssembly module lifetime, while superseded transform capacity and scoped scratch blocks are reclaimed.
 - GPU buffers need correct usage flags for writes, copies, storage binding, vertex binding, index binding, uniform binding, or readback.

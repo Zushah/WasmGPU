@@ -11,18 +11,18 @@ export default {
     subsystem: "compute",
     type: "throughput",
     unit: "bytes/s",
-    description: "GPUndarray.readbackToCPU complete GPU-to-Wasm transfer throughput with returned CPU storage destroyed after each sample.",
+    description: "compute.ndarray.toCPU complete GPU-to-Wasm transfer throughput with returned CPU storage destroyed after each sample.",
     sizes: { quick: [4_194_304, 8_388_608], full: [16_777_216, 25_165_824, 33_554_432] },
     gpu: false,
     maximumRepetitions: 1,
     setup({ compute }, size) {
-        const source = compute.CPUndarray.fromArray("f32", [size], makeF32(size));
-        const gpu = source.uploadToGPU(compute, { copySrc: true });
+        const source = compute.ndarray.fromArray("f32", [size], makeF32(size));
+        const gpu = compute.ndarray.toGPU(source);
         source.destroy();
         return { gpu, result: null };
     },
-    async run(state) {
-        state.result = await state.gpu.readbackToCPU();
+    async run(state, { compute }) {
+        state.result = await compute.ndarray.toCPU(state.gpu);
     },
     afterSample(state) { state.result?.destroy(); state.result = null; },
     operations(size) { return size * 4; },

@@ -11,19 +11,19 @@ export default {
     subsystem: "compute",
     type: "throughput",
     unit: "bytes/s",
-    description: "Single-call CPUndarray.uploadToGPU allocation and CPU-Wasm-to-GPU upload throughput; returned GPU storage is destroyed after each sample.",
+    description: "Single-call compute.ndarray.toGPU allocation and CPU-Wasm-to-GPU upload throughput; returned GPU storage is destroyed after each sample.",
     sizes: { quick: [4_194_304, 16_777_216], full: [4_194_304, 16_777_216, 33_554_432] },
     warmup: { quick: 10, full: 10 },
     gpu: false,
     maximumRepetitions: 1,
     setup({ compute }, size) {
         return {
-            source: compute.CPUndarray.fromArray("f32", [size], makeF32(size)),
+            source: compute.ndarray.fromArray("f32", [size], makeF32(size)),
             result: null
         };
     },
     run(state, { compute }) {
-        state.result = state.source.uploadToGPU(compute);
+        state.result = compute.ndarray.toGPU(state.source);
     },
     async afterSample(state) { state.result?.destroy(); state.result = null; await new Promise(resolve => setTimeout(resolve, 0)); },
     operations(size) { return size * 4; },

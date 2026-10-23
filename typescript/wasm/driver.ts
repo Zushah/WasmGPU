@@ -621,6 +621,18 @@ export const ndarrayf = {
     },
     offsetBytes: (shapePtr: WasmPtr, stridesPtr: WasmPtr, indicesPtr: WasmPtr, ndim: number, baseOffsetBytes: number): number => {
         return ensure().ndarray_offset_bytes(shapePtr >>> 0, stridesPtr >>> 0, indicesPtr >>> 0, ndim >>> 0, baseOffsetBytes >>> 0) >>> 0;
+    },
+    copy: (dstPtr: WasmPtr, dstLen: number, srcPtr: WasmPtr, srcLen: number, layoutPtr: WasmPtr, ndim: number, codes: number): number => {
+        return ensure().ndarray_copy(dstPtr >>> 0, dstLen >>> 0, srcPtr >>> 0, srcLen >>> 0, layoutPtr >>> 0, ndim >>> 0, codes >>> 0) >>> 0;
+    },
+    pad: (dstPtr: WasmPtr, dstLen: number, srcPtr: WasmPtr, srcLen: number, layoutPtr: WasmPtr, ndim: number, codes: number, valuePtr: WasmPtr): number => {
+        return ensure().ndarray_pad(dstPtr >>> 0, dstLen >>> 0, srcPtr >>> 0, srcLen >>> 0, layoutPtr >>> 0, ndim >>> 0, codes >>> 0, valuePtr >>> 0) >>> 0;
+    },
+    affine: (dstPtr: WasmPtr, dstLen: number, srcPtr: WasmPtr, srcLen: number, layoutPtr: WasmPtr, ndim: number, codes: number, paramsPtr: WasmPtr): number => {
+        return ensure().ndarray_affine(dstPtr >>> 0, dstLen >>> 0, srcPtr >>> 0, srcLen >>> 0, layoutPtr >>> 0, ndim >>> 0, codes >>> 0, paramsPtr >>> 0) >>> 0;
+    },
+    resize: (dstPtr: WasmPtr, dstLen: number, srcPtr: WasmPtr, srcLen: number, layoutPtr: WasmPtr, ndim: number, codes: number, indexPtr: WasmPtr, weightPtr: WasmPtr): number => {
+        return ensure().ndarray_resize(dstPtr >>> 0, dstLen >>> 0, srcPtr >>> 0, srcLen >>> 0, layoutPtr >>> 0, ndim >>> 0, codes >>> 0, indexPtr >>> 0, weightPtr >>> 0) >>> 0;
     }
 };
 
