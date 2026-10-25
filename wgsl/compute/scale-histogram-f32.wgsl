@@ -124,9 +124,21 @@ fn scale_apply_transform(
     return scale_clamp01(t);
 }
 
+fn invocation_index(wid: vec3<u32>, nwg: vec3<u32>, lid: u32) -> u32 {
+    return (wid.y * nwg.x + wid.x) * 256u + lid;
+}
+
+fn workgroup_index(wid: vec3<u32>, nwg: vec3<u32>) -> u32 {
+    return wid.y * nwg.x + wid.x;
+}
+
 @compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+fn main(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+    @builtin(local_invocation_index) lid: u32,
+) {
+    let i = invocation_index(wid, nwg, lid);
     if (i >= params.count) {
         return;
     }
@@ -151,12 +163,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
 fn main_local_256(
     @builtin(local_invocation_id) lid: vec3<u32>,
     @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
 ) {
     let tid = lid.x;
+    let block = workgroup_index(wid, nwg);
     atomicStore(&local_bins[tid], 0u);
     workgroupBarrier();
     if (params.bin_count > 0u && params.max_value > params.min_value) {
-        let base = wid.x * 1024u + tid;
+        let base = block * 1024u + tid;
         for (var j = 0u; j < 4u; j++) {
             let i = base + j * 256u;
             if (i < params.count) {
@@ -174,7 +188,7 @@ fn main_local_256(
         }
     }
     workgroupBarrier();
-    if (tid < params.bin_count) {
+    if (tid < params.bin_count && block * 1024u < params.count) {
         _ = atomicAdd(&bins[tid], atomicLoad(&local_bins[tid]));
     }
 }

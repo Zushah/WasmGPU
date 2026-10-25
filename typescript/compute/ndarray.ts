@@ -4,10 +4,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { alignTo, assert, ceilDiv } from "../utils";
+import { alignTo, assert } from "../utils";
 import { StorageBuffer, validateStorageBufferRange, type StorageBufferDescriptor } from "./buffer";
 import { ComputePipeline } from "./pipeline";
 import { encodeDispatchBatchWithLimit, type ComputeDispatchCommand } from "./dispatch";
+import { workgroups1D } from "./workgroups";
 import { storageBufferLayout } from "../wgsl";
 import { ndarrayf, wasm, type WasmPtr } from "../wasm";
 import type { ReadbackRing } from "./readback";
@@ -912,15 +913,6 @@ const buildResizeTable = (nIn: number, nOut: number, method: NdarrayResizeMethod
     return table;
 };
 
-const foldedWorkgroups = (invocations: number, maxPerDimension: number, op: string): [number, number, number] => {
-    if (invocations === 0) return [0, 1, 1];
-    const groups = ceilDiv(invocations, 256);
-    const x = Math.min(groups, maxPerDimension);
-    const y = ceilDiv(groups, x);
-    assert(y <= maxPerDimension, `${opName(op)}: ${invocations} invocations exceed the device's dispatch limits`);
-    return [x, y, 1];
-};
-
 const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, P_VALUE_LO = 5, P_VALUE_HI = 6, P_PARAM_AXIS = 7, P_PARAM_LEN = 8, P_AXIS_Y = 9, P_AXIS_X = 10, P_TABLE = 11, P_SHAPE = 16, P_SRC_STRIDE = 24, P_DST_STRIDE = 32, P_SRC_SHAPE = 40, P_BEFORE = 48, P_HEADER_WORDS = 56;
 
 type GPUDisposable = { destroy(): void };
@@ -1063,7 +1055,7 @@ class NdarrayGPUEngine {
         disposables.push(params);
         const pipeline = this.pipeline(spec.entryPoint, spec.constants);
         const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: { buffer: params, size: words.byteLength } }, `${opName(op)}:bg`);
-        commands.push({ pipeline, bindGroups: [bindGroup], workgroups: foldedWorkgroups(count, this.device.limits.maxComputeWorkgroupsPerDimension, op), label: opName(op) });
+        commands.push({ pipeline, bindGroups: [bindGroup], workgroups: workgroups1D(count, 256, this.device.limits.maxComputeWorkgroupsPerDimension), label: opName(op) });
     }
 
     submit(commands: ComputeDispatchCommand[], disposables: GPUDisposable[], encoder: GPUCommandEncoder | undefined, label: string | undefined, op: string): void {

@@ -84,7 +84,7 @@ export class Compute {
     }
 
     dispatch1D(pipeline: GPUComputePipeline | ComputePipeline, bindGroups: ReadonlyArray<GPUBindGroup | null | undefined>, invocations: number, workgroupSizeX: number, label?: string, opts: ComputeDispatchOptions = {}): GPUCommandBuffer {
-        const workgroups: WorkgroupCounts = workgroups1D(invocations, workgroupSizeX);
+        const workgroups: WorkgroupCounts = workgroups1D(invocations, workgroupSizeX, this.device.limits.maxComputeWorkgroupsPerDimension);
         return this.dispatch({ pipeline, bindGroups, workgroups, label }, opts);
     }
 
@@ -104,7 +104,7 @@ export class Compute {
     }
 
     workgroups1D(invocations: number, workgroupSizeX: number): WorkgroupCounts {
-        return workgroups1D(invocations, workgroupSizeX);
+        return workgroups1D(invocations, workgroupSizeX, this.device.limits.maxComputeWorkgroupsPerDimension);
     }
 
     workgroups2D(width: number, height: number, workgroupSizeX: number, workgroupSizeY: number): WorkgroupCounts {

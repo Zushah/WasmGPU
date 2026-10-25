@@ -12,7 +12,7 @@ export default {
     type: "throughput",
     unit: "elements/s",
     description: "Steady-state out-of-place ComputeKernels.radixSortPairsU32 throughput excluding readback and including GPU completion.",
-    sizes: { quick: [16_384, 262_144], full: [16_384, 262_144, 2_097_152] },
+    sizes: { quick: [16_384, 262_144], full: [16_384, 262_144, 2_097_152, 16_777_216] },
     gpu: true,
     setup({ compute }, size) {
         return {

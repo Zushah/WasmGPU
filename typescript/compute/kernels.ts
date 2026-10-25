@@ -10,6 +10,7 @@ import { ComputePipeline } from "./pipeline";
 import { encodeDispatchBatchWithLimit } from "./dispatch";
 import type { ComputeDispatchCommand } from "./dispatch";
 import { ceilDiv, makeWorkgroupCounts, workgroups1D } from "./workgroups";
+import type { WorkgroupCounts } from "./workgroups";
 import { ScratchBufferPool } from "./scratch";
 import { storageBufferLayout, uniformBufferLayout } from "../wgsl";
 import type { BufferResource } from "../wgsl";
@@ -286,15 +287,29 @@ export class ComputeKernels {
     private bindSized(res: BufferResource, sizeBytes: number): { buffer: BufferResource; size: number } {
         assert(Number.isInteger(sizeBytes) && sizeBytes >= 0, `bindSized: sizeBytes must be an integer >= 0 (got ${sizeBytes})`);
         const aligned = alignTo(sizeBytes, 4);
+        const limit = this.device.limits.maxStorageBufferBindingSize;
+        assert(aligned <= limit, `bindSized: a ${aligned}-byte binding exceeds device.limits.maxStorageBufferBindingSize (${limit}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
         return { buffer: res, size: Math.max(4, aligned) };
     }
 
-    private resolveCount(buf: StorageBuffer, elemBytes: number, count?: number): number {
+    private assertBindingBytes(bytes: number, label: string): void {
+        const bindingLimit = this.device.limits.maxStorageBufferBindingSize;
+        const bufferLimit = this.device.limits.maxBufferSize;
+        assert(bytes <= bindingLimit, `${label}: a ${bytes}-byte binding exceeds device.limits.maxStorageBufferBindingSize (${bindingLimit}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
+        assert(bytes <= bufferLimit, `${label}: a ${bytes}-byte buffer exceeds device.limits.maxBufferSize (${bufferLimit}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
+    }
+
+    private workgroups(invocations: number, perWorkgroup: number): WorkgroupCounts {
+        return workgroups1D(invocations, perWorkgroup, this.device.limits.maxComputeWorkgroupsPerDimension);
+    }
+
+    private resolveCount(buf: StorageBuffer, elemBytes: number, count: number | undefined, label: string): number {
         assertByteLengthMultipleOf(buf.byteLength, elemBytes, "resolveCount");
         const total = buf.byteLength / elemBytes;
-        if (count === undefined) return total;
+        if (count === undefined) { this.assertBindingBytes(total * elemBytes, label); return total; }
         assert(Number.isInteger(count) && count >= 0, `count must be an integer >= 0 (got ${count})`);
         assert(count <= total, `count (${count}) exceeds buffer element capacity (${total})`);
+        this.assertBindingBytes(count * elemBytes, label);
         return count;
     }
 
@@ -424,7 +439,7 @@ export class ComputeKernels {
             commands.push({
                 pipeline,
                 bindGroups: [bg],
-                workgroups: makeWorkgroupCounts(outCount, 1, 1),
+                workgroups: this.workgroups(n, 512),
                 label: `${labelPrefix}:reduce:${pass}`
             });
             if (isFinal) break;
@@ -452,7 +467,7 @@ export class ComputeKernels {
             commands.push({
                 pipeline,
                 bindGroups: [bg],
-                workgroups: makeWorkgroupCounts(outCount, 1, 1),
+                workgroups: this.workgroups(n, 512),
                 label: `${labelPrefix}:argreduce:${pass}`
             });
             if (isFinal) break;
@@ -519,7 +534,7 @@ export class ComputeKernels {
             commands.push({
                 pipeline,
                 bindGroups: [bg],
-                workgroups: makeWorkgroupCounts(numBlocks, 1, 1),
+                workgroups: this.workgroups(count, 1024),
                 label: `${labelPrefix}:scanBlocks`
             });
         }
@@ -535,7 +550,7 @@ export class ComputeKernels {
             commands.push({
                 pipeline,
                 bindGroups: [bg],
-                workgroups: workgroups1D(count, 256),
+                workgroups: this.workgroups(count, 256),
                 label: `${labelPrefix}:addOffsets`
             });
         }
@@ -553,7 +568,7 @@ export class ComputeKernels {
         commands.push({
             pipeline,
             bindGroups: [bg],
-            workgroups: makeWorkgroupCounts(numBlocks, 1, 1),
+            workgroups: this.workgroups(count, 1024),
             label: `${labelPrefix}:scanBlocks`
         });
         if (numBlocks <= 1) return;
@@ -567,7 +582,7 @@ export class ComputeKernels {
         commands.push({
             pipeline: addPipeline,
             bindGroups: [addBg],
-            workgroups: workgroups1D(count, 256),
+            workgroups: this.workgroups(count, 256),
             label: `${labelPrefix}:addOffsets`
         });
     }
@@ -1544,7 +1559,7 @@ export class ComputeKernels {
         commands.push({
             pipeline,
             bindGroups: [bg],
-            workgroups: workgroups1D(count, 256),
+            workgroups: this.workgroups(count, 256),
             label: `${labelPrefix}:copy`
         });
     }
@@ -1560,7 +1575,7 @@ export class ComputeKernels {
         commands.push({
             pipeline,
             bindGroups: [bg],
-            workgroups: workgroups1D(count, 256),
+            workgroups: this.workgroups(count, 256),
             label: `${labelPrefix}:copy`
         });
     }
@@ -1570,10 +1585,11 @@ export class ComputeKernels {
         assertByteLengthMultipleOf(b.byteLength, elemBytes, `${label}: b`);
         const aCount = a.byteLength / elemBytes;
         const bCount = b.byteLength / elemBytes;
-        if (count === undefined) { assert(aCount === bCount, `${label}: input logical lengths must match when count is omitted (${aCount} != ${bCount})`); return aCount; }
+        if (count === undefined) { assert(aCount === bCount, `${label}: input logical lengths must match when count is omitted (${aCount} != ${bCount})`); this.assertBindingBytes(aCount * elemBytes, label); return aCount; }
         assert(Number.isInteger(count) && count >= 0, `${label}: count must be an integer >= 0 (got ${count})`);
         assert(count <= aCount, `${label}: a has insufficient capacity for count ${count}`);
         assert(count <= bCount, `${label}: b has insufficient capacity for count ${count}`);
+        this.assertBindingBytes(count * elemBytes, label);
         return count;
     }
 
@@ -1585,7 +1601,7 @@ export class ComputeKernels {
         return result;
     }
 
-    private validateGemmDimensions(m: number, n: number, k: number, label: string): { aCount: number; bCount: number; cCount: number } {
+    private validateGemmDimensions(m: number, n: number, k: number, elemBytes: number, label: string): { aCount: number; bCount: number; cCount: number } {
         assert(Number.isInteger(m) && m >= 0, `${label}: m must be an integer >= 0 (got ${m})`);
         assert(Number.isInteger(n) && n >= 0, `${label}: n must be an integer >= 0 (got ${n})`);
         assert(Number.isInteger(k) && k >= 0, `${label}: k must be an integer >= 0 (got ${k})`);
@@ -1595,6 +1611,9 @@ export class ComputeKernels {
         const cCount = m * n;
         assert(Number.isSafeInteger(aCount) && Number.isSafeInteger(bCount) && Number.isSafeInteger(cCount), `${label}: matrix element-count overflow`);
         assert(aCount <= 0xFFFFFFFF && bCount <= 0xFFFFFFFF && cCount <= 0xFFFFFFFF, `${label}: matrix element count must fit in u32`);
+        this.assertBindingBytes(aCount * elemBytes, label);
+        this.assertBindingBytes(bCount * elemBytes, label);
+        this.assertBindingBytes(cCount * elemBytes, label);
         return { aCount, bCount, cCount };
     }
 
@@ -1604,7 +1623,7 @@ export class ComputeKernels {
         if (count === 0) return out;
         const pipeline = this.getAddF32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "addF32:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "addF32" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "addF32" }], opts);
         return out;
     }
 
@@ -1614,7 +1633,7 @@ export class ComputeKernels {
         if (count === 0) return out;
         const pipeline = this.getAddU32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "addU32:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "addU32" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "addU32" }], opts);
         return out;
     }
 
@@ -1624,7 +1643,7 @@ export class ComputeKernels {
         if (count === 0) return out;
         const pipeline = this.getAddC64Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 8), 1: this.bindSized(b, count * 8), 2: this.bindSized(out, count * 8) }, "addC64:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "addC64" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "addC64" }], opts);
         return out;
     }
 
@@ -1634,7 +1653,7 @@ export class ComputeKernels {
         if (count === 0) return out;
         const pipeline = this.getSubF32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "subF32:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "subF32" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "subF32" }], opts);
         return out;
     }
 
@@ -1644,7 +1663,7 @@ export class ComputeKernels {
         if (count === 0) return out;
         const pipeline = this.getSubU32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "subU32:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "subU32" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "subU32" }], opts);
         return out;
     }
 
@@ -1654,7 +1673,7 @@ export class ComputeKernels {
         if (count === 0) return out;
         const pipeline = this.getSubC64Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 8), 1: this.bindSized(b, count * 8), 2: this.bindSized(out, count * 8) }, "subC64:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "subC64" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "subC64" }], opts);
         return out;
     }
 
@@ -1664,7 +1683,7 @@ export class ComputeKernels {
         if (count === 0) return out;
         const pipeline = this.getMulF32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "mulF32:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "mulF32" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "mulF32" }], opts);
         return out;
     }
 
@@ -1674,7 +1693,7 @@ export class ComputeKernels {
         if (count === 0) return out;
         const pipeline = this.getMulU32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(out, count * 4) }, "mulU32:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "mulU32" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "mulU32" }], opts);
         return out;
     }
 
@@ -1684,45 +1703,45 @@ export class ComputeKernels {
         if (count === 0) return out;
         const pipeline = this.getMulC64Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 8), 1: this.bindSized(b, count * 8), 2: this.bindSized(out, count * 8) }, "mulC64:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "mulC64" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "mulC64" }], opts);
         return out;
     }
 
     sclF32(input: StorageBuffer, scalar: number, opts: VectorKernelOptions = {}): StorageBuffer {
-        const count = this.resolveCount(input, 4, opts.count);
+        const count = this.resolveCount(input, 4, opts.count, "sclF32");
         const out = this.resolveVectorOutput(input, null, 4, count, opts.out, "sclF32");
         if (count === 0) return out;
         const params = this.scratch.acquire(4, "sclF32:params");
         this.queue.writeBuffer(params, 0, new Float32Array([scalar]));
         const pipeline = this.getSclF32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(input, count * 4), 1: this.bindSized(out, count * 4), 2: { buffer: params, size: 4 } }, "sclF32:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "sclF32" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "sclF32" }], opts);
         return out;
     }
 
     sclU32(input: StorageBuffer, scalar: number, opts: VectorKernelOptions = {}): StorageBuffer {
         assert(Number.isInteger(scalar) && scalar >= 0 && scalar <= 0xFFFFFFFF, `sclU32: scalar must be a u32 integer (got ${scalar})`);
-        const count = this.resolveCount(input, 4, opts.count);
+        const count = this.resolveCount(input, 4, opts.count, "sclU32");
         const out = this.resolveVectorOutput(input, null, 4, count, opts.out, "sclU32");
         if (count === 0) return out;
         const params = this.scratch.acquire(4, "sclU32:params");
         this.queue.writeBuffer(params, 0, new Uint32Array([scalar]));
         const pipeline = this.getSclU32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(input, count * 4), 1: this.bindSized(out, count * 4), 2: { buffer: params, size: 4 } }, "sclU32:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "sclU32" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "sclU32" }], opts);
         return out;
     }
 
     sclC64(input: StorageBuffer, scalar: C64Scalar, opts: VectorKernelOptions = {}): StorageBuffer {
         assert(Array.isArray(scalar) && scalar.length === 2 && typeof scalar[0] === "number" && typeof scalar[1] === "number", `sclC64: scalar must be a [real, imaginary] tuple`);
-        const count = this.resolveCount(input, 8, opts.count);
+        const count = this.resolveCount(input, 8, opts.count, "sclC64");
         const out = this.resolveVectorOutput(input, null, 8, count, opts.out, "sclC64");
         if (count === 0) return out;
         const params = this.scratch.acquire(8, "sclC64:params");
         this.queue.writeBuffer(params, 0, new Float32Array(scalar));
         const pipeline = this.getSclC64Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(input, count * 8), 1: this.bindSized(out, count * 8), 2: { buffer: params, size: 8 } }, "sclC64:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "sclC64" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "sclC64" }], opts);
         return out;
     }
 
@@ -1734,7 +1753,7 @@ export class ComputeKernels {
         this.queue.writeBuffer(params, 0, new Float32Array([alpha]));
         const pipeline = this.getAxpyF32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(x, count * 4), 1: this.bindSized(y, count * 4), 2: this.bindSized(out, count * 4), 3: { buffer: params, size: 4 } }, "axpyF32:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "axpyF32" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "axpyF32" }], opts);
         return out;
     }
 
@@ -1747,7 +1766,7 @@ export class ComputeKernels {
         this.queue.writeBuffer(params, 0, new Uint32Array([alpha]));
         const pipeline = this.getAxpyU32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(x, count * 4), 1: this.bindSized(y, count * 4), 2: this.bindSized(out, count * 4), 3: { buffer: params, size: 4 } }, "axpyU32:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "axpyU32" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "axpyU32" }], opts);
         return out;
     }
 
@@ -1760,7 +1779,7 @@ export class ComputeKernels {
         this.queue.writeBuffer(params, 0, new Float32Array(alpha));
         const pipeline = this.getAxpyC64Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(x, count * 8), 1: this.bindSized(y, count * 8), 2: this.bindSized(out, count * 8), 3: { buffer: params, size: 8 } }, "axpyC64:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: workgroups1D(count, 256), label: "axpyC64" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: "axpyC64" }], opts);
         return out;
     }
 
@@ -1776,7 +1795,7 @@ export class ComputeKernels {
         const partial: BufferResource = partialCount === 1 ? out : this.scratch.acquire(partialCount * 4, "dotF32:partial");
         const pipeline = this.getDotF32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(partial, partialCount * 4) }, "dotF32:bg");
-        commands.push({ pipeline, bindGroups: [bg], workgroups: makeWorkgroupCounts(partialCount, 1, 1), label: "dotF32" });
+        commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 512), label: "dotF32" });
         if (partialCount > 1) this.encodeReduceScalar(commands, "f32", "sum", partial, partialCount, out, "dotF32");
         this.execute(commands, opts);
         return out;
@@ -1794,7 +1813,7 @@ export class ComputeKernels {
         const partial: BufferResource = partialCount === 1 ? out : this.scratch.acquire(partialCount * 4, "dotU32:partial");
         const pipeline = this.getDotU32Pipeline();
         const bg = pipeline.createBindGroup(0, { 0: this.bindSized(a, count * 4), 1: this.bindSized(b, count * 4), 2: this.bindSized(partial, partialCount * 4) }, "dotU32:bg");
-        commands.push({ pipeline, bindGroups: [bg], workgroups: makeWorkgroupCounts(partialCount, 1, 1), label: "dotU32" });
+        commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 512), label: "dotU32" });
         if (partialCount > 1) this.encodeReduceScalar(commands, "u32", "sum", partial, partialCount, out, "dotU32");
         this.execute(commands, opts);
         return out;
@@ -1817,7 +1836,7 @@ export class ComputeKernels {
             const pipeline = pass === 0 ? this.getDotC64Pipeline() : this.getDotC64ReducePipeline();
             const second: BufferResource = pass === 0 ? b : input;
             const bg = pipeline.createBindGroup(0, { 0: this.bindSized(input, n * 8), 1: this.bindSized(second, n * 8), 2: this.bindSized(partial, partialCount * 8) }, `dotC64:${pass}:bg`);
-            commands.push({ pipeline, bindGroups: [bg], workgroups: makeWorkgroupCounts(partialCount, 1, 1), label: `dotC64:${pass}` });
+            commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(n, 512), label: `dotC64:${pass}` });
             if (partialCount === 1) break;
             input = partial;
             n = partialCount;
@@ -1828,7 +1847,7 @@ export class ComputeKernels {
     }
 
     gemmF32(a: StorageBuffer, b: StorageBuffer, m: number, n: number, k: number, opts: GemmF32Options = {}): StorageBuffer {
-        const sizes = this.validateGemmDimensions(m, n, k, "gemmF32");
+        const sizes = this.validateGemmDimensions(m, n, k, 4, "gemmF32");
         assertByteLengthMultipleOf(a.byteLength, 4, "gemmF32: a");
         assertByteLengthMultipleOf(b.byteLength, 4, "gemmF32: b");
         assert(a.byteLength >= sizes.aCount * 4, "gemmF32: a has insufficient capacity");
@@ -1858,7 +1877,7 @@ export class ComputeKernels {
         const beta = opts.beta ?? 0;
         assert(Number.isInteger(alpha) && alpha >= 0 && alpha <= 0xFFFFFFFF, `gemmU32: alpha must be a u32 integer (got ${alpha})`);
         assert(Number.isInteger(beta) && beta >= 0 && beta <= 0xFFFFFFFF, `gemmU32: beta must be a u32 integer (got ${beta})`);
-        const sizes = this.validateGemmDimensions(m, n, k, "gemmU32");
+        const sizes = this.validateGemmDimensions(m, n, k, 4, "gemmU32");
         assertByteLengthMultipleOf(a.byteLength, 4, "gemmU32: a");
         assertByteLengthMultipleOf(b.byteLength, 4, "gemmU32: b");
         assert(a.byteLength >= sizes.aCount * 4, "gemmU32: a has insufficient capacity");
@@ -1887,7 +1906,7 @@ export class ComputeKernels {
         const beta = opts.beta ?? [0, 0];
         assert(Array.isArray(alpha) && alpha.length === 2 && typeof alpha[0] === "number" && typeof alpha[1] === "number", `gemmC64: alpha must be a [real, imaginary] tuple`);
         assert(Array.isArray(beta) && beta.length === 2 && typeof beta[0] === "number" && typeof beta[1] === "number", `gemmC64: beta must be a [real, imaginary] tuple`);
-        const sizes = this.validateGemmDimensions(m, n, k, "gemmC64");
+        const sizes = this.validateGemmDimensions(m, n, k, 8, "gemmC64");
         assertByteLengthMultipleOf(a.byteLength, 8, "gemmC64: a");
         assertByteLengthMultipleOf(b.byteLength, 8, "gemmC64: b");
         assert(a.byteLength >= sizes.aCount * 8, "gemmC64: a has insufficient capacity");
@@ -1919,10 +1938,11 @@ export class ComputeKernels {
     copyU32(src: BufferResource, opts: CopyOptions = {}): StorageBuffer {
         let count = opts.count;
         if (count === undefined) {
-            if (src instanceof StorageBuffer) count = this.resolveCount(src, 4, undefined);
+            if (src instanceof StorageBuffer) count = this.resolveCount(src, 4, undefined, "copyU32");
             else assert(false, "copyU32: opts.count is required when src is not a StorageBuffer");
         }
         assert(Number.isInteger(count) && count >= 0, `copyU32: count must be an integer >= 0 (got ${count})`);
+        this.assertBindingBytes(count * 4, "copyU32");
         const out = opts.out ?? new StorageBuffer(this.device, this.queue, {
             label: "copyU32:out",
             byteLength: count * 4,
@@ -1936,7 +1956,7 @@ export class ComputeKernels {
     }
 
     reduceU32(input: StorageBuffer, op: ReduceOp, opts: ReduceOptions = {}): StorageBuffer {
-        const count = this.resolveCount(input, 4, opts.count);
+        const count = this.resolveCount(input, 4, opts.count, `reduceU32:${op}`);
         const out = opts.out ?? new StorageBuffer(this.device, this.queue, {
             label: `reduceU32:${op}`,
             byteLength: 4,
@@ -1968,10 +1988,11 @@ export class ComputeKernels {
     copyF32(src: BufferResource, opts: CopyOptions = {}): StorageBuffer {
         let count = opts.count;
         if (count === undefined) {
-            if (src instanceof StorageBuffer) count = this.resolveCount(src, 4, undefined);
+            if (src instanceof StorageBuffer) count = this.resolveCount(src, 4, undefined, "copyF32");
             else assert(false, "copyF32: opts.count is required when src is not a StorageBuffer");
         }
         assert(Number.isInteger(count) && count >= 0, `copyF32: count must be an integer >= 0 (got ${count})`);
+        this.assertBindingBytes(count * 4, "copyF32");
         const out = opts.out ?? new StorageBuffer(this.device, this.queue, {
             label: "copyF32:out",
             byteLength: count * 4,
@@ -1997,6 +2018,8 @@ export class ComputeKernels {
         const requiredSourceFloats = count > 0 ? (offset + ((count - 1) * stride) + componentCount) : 0;
         const srcByteLength = src instanceof StorageBuffer ? src.byteLength : resolveGPUBuffer(src).size;
         assert((requiredSourceFloats * 4) <= srcByteLength, `extractScaleValuesF32: source range exceeds source buffer capacity (required ${requiredSourceFloats} f32, capacity ${Math.floor(srcByteLength / 4)} f32)`);
+        this.assertBindingBytes(requiredSourceFloats * 4, "extractScaleValuesF32");
+        this.assertBindingBytes(count * 4, "extractScaleValuesF32");
         const values = opts.values ?? new StorageBuffer(this.device, this.queue, {
             label: "scale:extract:values",
             byteLength: count * 4,
@@ -2032,7 +2055,7 @@ export class ComputeKernels {
         commands.push({
             pipeline,
             bindGroups: [bg],
-            workgroups: workgroups1D(count, 256),
+            workgroups: this.workgroups(count, 256),
             label: "scale:extract"
         });
         this.execute(commands, opts);
@@ -2042,7 +2065,8 @@ export class ComputeKernels {
     histogramF32(values: StorageBuffer, binCount: number, opts: ScaleHistogramOptions): StorageBuffer {
         assert(!opts.encoder, "histogramF32 does not support opts.encoder");
         assert(Number.isInteger(binCount) && binCount >= 0, `histogramF32: binCount must be an integer >= 0 (got ${binCount})`);
-        const count = this.resolveCount(values, 4, opts.count);
+        const count = this.resolveCount(values, 4, opts.count, "histogramF32");
+        this.assertBindingBytes(binCount * 4, "histogramF32");
         const bins = opts.bins ?? new StorageBuffer(this.device, this.queue, {
             label: "histogramF32:bins",
             byteLength: binCount * 4,
@@ -2060,7 +2084,7 @@ export class ComputeKernels {
             commands.push({
                 pipeline: pipelineClear,
                 bindGroups: [bgClear],
-                workgroups: workgroups1D(binCount, 256),
+                workgroups: this.workgroups(binCount, 256),
                 label: "histogramF32:clear"
             });
         }
@@ -2083,7 +2107,7 @@ export class ComputeKernels {
             commands.push({
                 pipeline: pipelineHist,
                 bindGroups: [bgHist],
-                workgroups: workgroups1D(count, local256 ? 1024 : 256),
+                workgroups: this.workgroups(count, local256 ? 1024 : 256),
                 label: "histogramF32:accum"
             });
         }
@@ -2093,7 +2117,7 @@ export class ComputeKernels {
 
     remapScaleF32(input: StorageBuffer, opts: ScaleRemapOptions): StorageBuffer {
         assert(!opts.encoder, "remapScaleF32 does not support opts.encoder");
-        const count = this.resolveCount(input, 4, opts.count);
+        const count = this.resolveCount(input, 4, opts.count, "remapScaleF32");
         const out = opts.out ?? new StorageBuffer(this.device, this.queue, {
             label: "scale:remap:out",
             byteLength: count * 4,
@@ -2136,7 +2160,7 @@ export class ComputeKernels {
             {
                 pipeline,
                 bindGroups: [bg],
-                workgroups: workgroups1D(count, 256),
+                workgroups: this.workgroups(count, 256),
                 label: "scale:remap"
             }
         ], opts);
@@ -2144,7 +2168,7 @@ export class ComputeKernels {
     }
 
     reduceF32(input: StorageBuffer, op: ReduceOp, opts: ReduceOptions = {}): StorageBuffer {
-        const count = this.resolveCount(input, 4, opts.count);
+        const count = this.resolveCount(input, 4, opts.count, `reduceF32:${op}`);
         const out = opts.out ?? new StorageBuffer(this.device, this.queue, {
             label: `reduceF32:${op}`,
             byteLength: 4,
@@ -2182,7 +2206,7 @@ export class ComputeKernels {
     }
 
     argReduceF32(input: StorageBuffer, op: ArgReduceOp, opts: ArgReduceOptions = {}): StorageBuffer {
-        const count = this.resolveCount(input, 4, opts.count);
+        const count = this.resolveCount(input, 4, opts.count, `argReduceF32:${op}`);
         const out = opts.out ?? new StorageBuffer(this.device, this.queue, {
             label: `argReduceF32:${op}`,
             byteLength: 8,
@@ -2201,7 +2225,7 @@ export class ComputeKernels {
     }
 
     scanExclusiveU32(input: StorageBuffer, opts: ScanOptions = {}): StorageBuffer {
-        const count = this.resolveCount(input, 4, opts.count);
+        const count = this.resolveCount(input, 4, opts.count, "scanExclusiveU32");
         const out = opts.out ?? new StorageBuffer(this.device, this.queue, {
             label: "scanExclusiveU32",
             byteLength: count * 4,
@@ -2217,7 +2241,8 @@ export class ComputeKernels {
 
     histogramU32(keys: StorageBuffer, binCount: number, opts: HistogramOptions = {}): StorageBuffer {
         assert(Number.isInteger(binCount) && binCount >= 0, `binCount must be an integer >= 0 (got ${binCount})`);
-        const count = this.resolveCount(keys, 4, opts.count);
+        const count = this.resolveCount(keys, 4, opts.count, "histogramU32");
+        this.assertBindingBytes(binCount * 4, "histogramU32");
         const bins = opts.bins ?? new StorageBuffer(this.device, this.queue, {
             label: "histogramU32:bins",
             byteLength: binCount * 4,
@@ -2235,7 +2260,7 @@ export class ComputeKernels {
             commands.push({
                 pipeline: pipelineClear,
                 bindGroups: [bgClear],
-                workgroups: workgroups1D(binCount, 256),
+                workgroups: this.workgroups(binCount, 256),
                 label: "histogramU32:clear"
             });
         }
@@ -2249,7 +2274,7 @@ export class ComputeKernels {
             commands.push({
                 pipeline: pipelineHist,
                 bindGroups: [bgHist],
-                workgroups: workgroups1D(count, local256 ? 1024 : 256),
+                workgroups: this.workgroups(count, local256 ? 1024 : 256),
                 label: "histogramU32:accum"
             });
         }
@@ -2266,8 +2291,8 @@ export class ComputeKernels {
     }
 
     private compactTyped(input: StorageBuffer, flags: StorageBuffer, type: "u32" | "f32", opts: CompactOptions): CompactResult {
-        const count = this.resolveCount(flags, 4, opts.count);
-        const inputCount = this.resolveCount(input, 4, opts.count);
+        const count = this.resolveCount(flags, 4, opts.count, `compact:${type}`);
+        const inputCount = this.resolveCount(input, 4, opts.count, `compact:${type}`);
         assert(inputCount === count, "compact: input and flags counts must match");
         const out = opts.out ?? new StorageBuffer(this.device, this.queue, {
             label: `compact:${type}:out`,
@@ -2299,7 +2324,7 @@ export class ComputeKernels {
             commands.push({
                 pipeline,
                 bindGroups: [bg],
-                workgroups: workgroups1D(count, 256),
+                workgroups: this.workgroups(count, 256),
                 label: `compact:${type}:scatter`
             });
         }
@@ -2308,7 +2333,7 @@ export class ComputeKernels {
     }
 
     radixSortKeysU32(keys: StorageBuffer, opts: RadixSortOptions = {}): StorageBuffer {
-        const count = this.resolveCount(keys, 4, opts.count);
+        const count = this.resolveCount(keys, 4, opts.count, "radixSortKeysU32");
         const inPlace = opts.inPlace ?? false;
         const out = inPlace ? keys : (opts.out ?? new StorageBuffer(this.device, this.queue, {
             label: "radixSortKeysU32:out",
@@ -2343,7 +2368,7 @@ export class ComputeKernels {
                 commands.push({
                     pipeline,
                     bindGroups: [bg],
-                    workgroups: workgroups1D(count, 256),
+                    workgroups: this.workgroups(count, 256),
                     label: `radix:bit${bit}:scatter`
                 });
             }
@@ -2358,8 +2383,8 @@ export class ComputeKernels {
 
     radixSortPairsU32(keys: StorageBuffer, values: StorageBuffer, opts: RadixSortPairsOptions = {}): RadixSortPairsResult {
         assert(keys !== values, "radixSortPairsU32: keys and values must be distinct StorageBuffer instances");
-        const count = this.resolveCount(keys, 4, opts.count);
-        this.resolveCount(values, 4, count);
+        const count = this.resolveCount(keys, 4, opts.count, "radixSortPairsU32");
+        this.resolveCount(values, 4, count, "radixSortPairsU32");
         const inPlace = opts.inPlace ?? false;
         assert(!(inPlace && (opts.outKeys !== undefined || opts.outValues !== undefined)), "radixSortPairsU32: outKeys/outValues are not supported when inPlace is true");
         const outKeys = inPlace ? keys : (opts.outKeys ?? new StorageBuffer(this.device, this.queue, {
@@ -2415,7 +2440,7 @@ export class ComputeKernels {
                 commands.push({
                     pipeline,
                     bindGroups: [bg],
-                    workgroups: workgroups1D(count, 256),
+                    workgroups: this.workgroups(count, 256),
                     label: `radixPairs:bit${bit}:scatter`
                 });
             }
@@ -2448,12 +2473,14 @@ export class ComputeKernels {
         const ipivBytes = batchCount * n * 4;
         assert(matrices.byteLength >= needBytes, `luFactorF32Batched: matrices buffer too small (need ${needBytes} bytes, have ${matrices.byteLength})`);
         assert(ipiv.byteLength >= ipivBytes, `luFactorF32Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
+        this.assertBindingBytes(needBytes, "luFactorF32Batched");
+        this.assertBindingBytes(ipivBytes, "luFactorF32Batched");
         if (n < 160) {
             const params = this.getLuBatchedParamsBuffer();
             this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, 0]));
             const pipeline = this.getLuFactorRealPipeline();
             const bg = pipeline.createBindGroup(0, { 0: { buffer: params, size: 16 }, 1: this.bindSized(matrices, needBytes), 2: this.bindSized(ipiv, ipivBytes) }, "luFactorF32Batched:bg");
-            this.execute([{ pipeline, bindGroups: [bg], workgroups: { x: batchCount, y: 1, z: 1 }, label: "luFactorF32Batched" }], opts);
+            this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(batchCount, 1), label: "luFactorF32Batched" }], opts);
             return;
         }
         const params = this.getLuBlockedParamsBuffer();
@@ -2468,17 +2495,17 @@ export class ComputeKernels {
             const pw = Math.min(PANEL_B, n - kk);
             const trail = n - (kk + pw);
             this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, kk >>> 0, pw >>> 0, 0, 0, 0]));
-            const cmds: ComputeDispatchCommand[] = [{ pipeline: leadPipe, bindGroups: [bgLead], workgroups: { x: batchCount, y: 1, z: 1 }, label: `luFactorF32:lead:kk${kk}` }];
+            const cmds: ComputeDispatchCommand[] = [{ pipeline: leadPipe, bindGroups: [bgLead], workgroups: this.workgroups(batchCount, 1), label: `luFactorF32:lead:kk${kk}` }];
             if (trail > 0) {
                 const totalTrsm = batchCount * trail;
-                cmds.push({ pipeline: upperPipe, bindGroups: [bgUpper], workgroups: workgroups1D(totalTrsm, 256), label: `luFactorF32:upper:kk${kk}` });
+                cmds.push({ pipeline: upperPipe, bindGroups: [bgUpper], workgroups: this.workgroups(totalTrsm, 256), label: `luFactorF32:upper:kk${kk}` });
                 const mDim = trail;
                 const nDim = trail;
                 const tileM = 16;
                 const tileN = 8;
                 const mTiles = Math.ceil(mDim / tileM);
                 const nTiles = Math.ceil(nDim / tileN);
-                cmds.push({ pipeline: trailingPipe, bindGroups: [bgTrailing], workgroups: { x: nTiles, y: mTiles, z: batchCount }, label: `luFactorF32:trailing:kk${kk}` });
+                cmds.push({ pipeline: trailingPipe, bindGroups: [bgTrailing], workgroups: this.workgroups(nTiles * mTiles * batchCount, 1), label: `luFactorF32:trailing:kk${kk}` });
             }
             this.execute(cmds, opts);
         }
@@ -2499,11 +2526,14 @@ export class ComputeKernels {
         assert(ipiv.byteLength >= ipivBytes, `luSolveF32Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
         assert(rhs.byteLength >= rhsBytes, `luSolveF32Batched: rhs buffer too small (need ${rhsBytes} bytes, have ${rhs.byteLength})`);
         assert(outX.byteLength >= rhsBytes, `luSolveF32Batched: outX buffer too small (need ${rhsBytes} bytes, have ${outX.byteLength})`);
+        this.assertBindingBytes(luBytes, "luSolveF32Batched");
+        this.assertBindingBytes(rhsBytes, "luSolveF32Batched");
+        this.assertBindingBytes(ipivBytes, "luSolveF32Batched");
         const params = this.getLuBatchedParamsBuffer();
         this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, 0]));
         const pipeline = (n <= 512) ? this.getLuSolveRealSharedPipeline() : this.getLuSolveRealPipeline();
         const bg = pipeline.createBindGroup(0, { 0: { buffer: params, size: 16 }, 1: this.bindSized(lu, luBytes), 2: this.bindSized(rhs, rhsBytes), 3: this.bindSized(outX, rhsBytes), 4: this.bindSized(ipiv, ipivBytes) }, "luSolveF32Batched:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: { x: batchCount, y: 1, z: 1 }, label: "luSolveF32Batched" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(batchCount, 1), label: "luSolveF32Batched" }], opts);
     }
 
     luFactorC64Batched(matrices: StorageBuffer, ipiv: StorageBuffer, batchCount: number, n: number, opts: KernelDispatchOptions = {}): void {
@@ -2518,12 +2548,14 @@ export class ComputeKernels {
         const ipivBytes = batchCount * n * 4;
         assert(matrices.byteLength >= needBytes, `luFactorC64Batched: matrices buffer too small (need ${needBytes} bytes, have ${matrices.byteLength})`);
         assert(ipiv.byteLength >= ipivBytes, `luFactorC64Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
+        this.assertBindingBytes(needBytes, "luFactorC64Batched");
+        this.assertBindingBytes(ipivBytes, "luFactorC64Batched");
         if (n < 160) {
             const params = this.getLuBatchedParamsBuffer();
             this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, 0]));
             const pipeline = this.getLuFactorC64SmallPipeline();
             const bg = pipeline.createBindGroup(0, { 0: { buffer: params, size: 16 }, 1: this.bindSized(matrices, needBytes), 2: this.bindSized(ipiv, ipivBytes) }, "luFactorC64Batched:bg");
-            this.execute([{ pipeline, bindGroups: [bg], workgroups: { x: batchCount, y: 1, z: 1 }, label: "luFactorC64Batched" }], opts);
+            this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(batchCount, 1), label: "luFactorC64Batched" }], opts);
             return;
         }
         const params = this.getLuBlockedParamsBuffer();
@@ -2538,17 +2570,17 @@ export class ComputeKernels {
             const pw = Math.min(PANEL_B, n - kk);
             const trail = n - (kk + pw);
             this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, kk >>> 0, pw >>> 0, 0, 0, 0]));
-            const cmds: ComputeDispatchCommand[] = [{ pipeline: leadPipe, bindGroups: [bgLead], workgroups: { x: batchCount, y: 1, z: 1 }, label: `luFactorC64:lead:kk${kk}` }];
+            const cmds: ComputeDispatchCommand[] = [{ pipeline: leadPipe, bindGroups: [bgLead], workgroups: this.workgroups(batchCount, 1), label: `luFactorC64:lead:kk${kk}` }];
             if (trail > 0) {
                 const totalTrsm = batchCount * trail;
-                cmds.push({ pipeline: upperPipe, bindGroups: [bgUpper], workgroups: workgroups1D(totalTrsm, 256), label: `luFactorC64:upper:kk${kk}` });
+                cmds.push({ pipeline: upperPipe, bindGroups: [bgUpper], workgroups: this.workgroups(totalTrsm, 256), label: `luFactorC64:upper:kk${kk}` });
                 const mDim = trail;
                 const nDim = trail;
                 const tileM = 16;
                 const tileN = 8;
                 const mTiles = Math.ceil(mDim / tileM);
                 const nTiles = Math.ceil(nDim / tileN);
-                cmds.push({ pipeline: trailingPipe, bindGroups: [bgTrailing], workgroups: { x: nTiles, y: mTiles, z: batchCount }, label: `luFactorC64:trailing:kk${kk}` });
+                cmds.push({ pipeline: trailingPipe, bindGroups: [bgTrailing], workgroups: this.workgroups(nTiles * mTiles * batchCount, 1), label: `luFactorC64:trailing:kk${kk}` });
             }
             this.execute(cmds, opts);
         }
@@ -2569,10 +2601,13 @@ export class ComputeKernels {
         assert(ipiv.byteLength >= ipivBytes, `luSolveC64Batched: ipiv buffer too small (need ${ipivBytes} bytes, have ${ipiv.byteLength})`);
         assert(rhs.byteLength >= rhsBytes, `luSolveC64Batched: rhs buffer too small (need ${rhsBytes} bytes, have ${rhs.byteLength})`);
         assert(outX.byteLength >= rhsBytes, `luSolveC64Batched: outX buffer too small (need ${rhsBytes} bytes, have ${outX.byteLength})`);
+        this.assertBindingBytes(luBytes, "luSolveC64Batched");
+        this.assertBindingBytes(rhsBytes, "luSolveC64Batched");
+        this.assertBindingBytes(ipivBytes, "luSolveC64Batched");
         const params = this.getLuBatchedParamsBuffer();
         this.queue.writeBuffer(params, 0, new Uint32Array([batchCount >>> 0, n >>> 0, elemsPerMatrix >>> 0, 0]));
         const pipeline = (n <= 512) ? this.getLuSolveC64Pipeline() : this.getLuSolveC64LargePipeline();
         const bg = pipeline.createBindGroup(0, { 0: { buffer: params, size: 16 }, 1: this.bindSized(lu, luBytes), 2: this.bindSized(rhs, rhsBytes), 3: this.bindSized(outX, rhsBytes), 4: this.bindSized(ipiv, ipivBytes) }, "luSolveC64Batched:bg");
-        this.execute([{ pipeline, bindGroups: [bg], workgroups: { x: batchCount, y: 1, z: 1 }, label: "luSolveC64Batched" }], opts);
+        this.execute([{ pipeline, bindGroups: [bg], workgroups: this.workgroups(batchCount, 1), label: "luSolveC64Batched" }], opts);
     }
 }

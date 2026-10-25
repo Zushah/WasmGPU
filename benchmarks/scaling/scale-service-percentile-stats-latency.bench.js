@@ -12,7 +12,7 @@ export default {
     type: "latency",
     unit: "ms",
     description: "ScaleService.requestStats latency for min/max plus 2nd/98th percentiles with cache misses and GPU readback.",
-    sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608] },
+    sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608, 16_777_216] },
     gpu: false,
     setup({ WasmGPU, compute }, size) {
         return {

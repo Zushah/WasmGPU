@@ -32,32 +32,43 @@ fn cx_mul(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
 }
 
+fn workgroup_index(wid: vec3<u32>, nwg: vec3<u32>) -> u32 {
+    return wid.y * nwg.x + wid.x;
+}
+
 @compute @workgroup_size(TILE_M, TILE_N, 1)
 fn main(
     @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
     @builtin(local_invocation_id) lid: vec3<u32>,
     @builtin(local_invocation_index) lid_idx: u32,
 ) {
-    let b = wg_id.z;
-    if (b >= params.batch_count) {
-        return;
-    }
     let n  = params.n;
     let kk = params.kk;
     let pw = params.pw;
-    let base = b * params.elems_per_matrix;
     let m_dim = n - (kk + pw);
     let n_dim = n - (kk + pw);
     if (m_dim == 0u || n_dim == 0u || pw == 0u) {
         return;
     }
-    let global_i = wg_id.y * TILE_M + lid.x;
-    let global_j = wg_id.x * TILE_N + lid.y;
+    let tiles_n = (n_dim + TILE_N - 1u) / TILE_N;
+    let tiles_m = (m_dim + TILE_M - 1u) / TILE_M;
+    let linear = workgroup_index(wg_id, nwg);
+    let tile_n = linear % tiles_n;
+    let rest = linear / tiles_n;
+    let tile_m = rest % tiles_m;
+    let b = rest / tiles_m;
+    if (b >= params.batch_count) {
+        return;
+    }
+    let base = b * params.elems_per_matrix;
+    let global_i = tile_m * TILE_M + lid.x;
+    let global_j = tile_n * TILE_N + lid.y;
     let valid = (global_i < m_dim) && (global_j < n_dim);
     var acc = vec2<f32>(0.0, 0.0);
     for (var k: u32 = 0u; k < pw; k = k + 1u) {
         if (lid_idx < TILE_M) {
-            let i_g = wg_id.y * TILE_M + lid_idx;
+            let i_g = tile_m * TILE_M + lid_idx;
             if (i_g < m_dim) {
                 let row = (kk + pw) + i_g;
                 l_tile[lid_idx] = matrices[base + row * n + (kk + k)];
@@ -66,7 +77,7 @@ fn main(
             }
         } else if (lid_idx < TILE_M + TILE_N) {
             let j_local = lid_idx - TILE_M;
-            let j_g = wg_id.x * TILE_N + j_local;
+            let j_g = tile_n * TILE_N + j_local;
             if (j_g < n_dim) {
                 let col = (kk + pw) + j_g;
                 u_tile[j_local] = matrices[base + (kk + k) * n + col];

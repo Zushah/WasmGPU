@@ -12,7 +12,7 @@ export default {
     type: "throughput",
     unit: "elements/s",
     description: "Steady-state ComputeKernels.minF32 reduction throughput including command submission and GPU completion.",
-    sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608] },
+    sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608, 16_777_216] },
     gpu: true,
     setup({ compute }, size) {
         return {

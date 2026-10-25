@@ -12,7 +12,7 @@ export default {
     type: "throughput",
     unit: "elements/s",
     description: "Complete ComputeKernels.compactU32 throughput at 50% keep density, excluding readback and including GPU completion.",
-    sizes: { quick: [4_194_304, 8_388_608], full: [8_388_608, 12_582_912, 16_776_960] },
+    sizes: { quick: [4_194_304, 8_388_608], full: [8_388_608, 12_582_912, 16_777_216] },
     gpu: true,
     maximumRepetitions: 32,
     setup({ compute }, size) {

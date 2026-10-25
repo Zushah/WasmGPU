@@ -42,9 +42,17 @@ fn cx_magsq(z: vec2<f32>) -> f32 {
     return z.x * z.x + z.y * z.y;
 }
 
+fn workgroup_index(wid: vec3<u32>, nwg: vec3<u32>) -> u32 {
+    return wid.y * nwg.x + wid.x;
+}
+
 @compute @workgroup_size(WG_SIZE, 1, 1)
-fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
-    let b = wg_id.x;
+fn main(
+    @builtin(workgroup_id) wg_id: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+    @builtin(local_invocation_index) lid: u32,
+) {
+    let b = workgroup_index(wg_id, nwg);
     if (b >= params.batch_count) {
         return;
     }

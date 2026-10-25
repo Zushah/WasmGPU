@@ -13,6 +13,7 @@ import type { PointCloud } from "../world/pointcloud";
 import type { SplatField } from "../world/splatfield";
 import type { LatticeSpace } from "../world/latticespace";
 import type { WasmPtr } from "../wasm";
+import type { WorkgroupCounts } from "../compute/workgroups";
 
 export type RendererDescriptor = {
     antialias?: boolean;
@@ -113,6 +114,8 @@ export type SplatFieldSortState = {
     sortCount: number;
     radixBindGroupKey: string | null;
     radixBindGroups: Array<GPUBindGroup | null>;
+    elementWorkgroups: WorkgroupCounts;
+    blockWorkgroups: WorkgroupCounts;
 };
 
 export type SplatFieldSortScanLevel = {
@@ -120,6 +123,9 @@ export type SplatFieldSortScanLevel = {
     blockSumsCapacity: number;
     blockOffsets: GPUBuffer | null;
     blockOffsetsCapacity: number;
+    dispatchCount: number;
+    elementWorkgroups: WorkgroupCounts;
+    blockWorkgroups: WorkgroupCounts;
 };
 
 export type LatticeSpaceSortState = {
@@ -134,6 +140,8 @@ export type LatticeSpaceSortState = {
     sortCount: number;
     radixBindGroupKey: string | null;
     radixBindGroups: Array<GPUBindGroup | null>;
+    elementWorkgroups: WorkgroupCounts;
+    blockWorkgroups: WorkgroupCounts;
 };
 
 export type LatticeSpaceSortScanLevel = {
@@ -141,6 +149,9 @@ export type LatticeSpaceSortScanLevel = {
     blockSumsCapacity: number;
     blockOffsets: GPUBuffer | null;
     blockOffsetsCapacity: number;
+    dispatchCount: number;
+    elementWorkgroups: WorkgroupCounts;
+    blockWorkgroups: WorkgroupCounts;
 };
 
 export type OcclusionCandidateKind = "mesh" | "pointcloud" | "glyphfield" | "nodelink" | "latticespace";

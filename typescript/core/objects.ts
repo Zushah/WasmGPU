@@ -4,7 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { ceilDiv } from "../utils";
+import { assert, ceilDiv } from "../utils";
+import { workgroups1D } from "../compute/workgroups";
 import { Geometry } from "../graphics/geometry";
 import { BlendMode, Material, StandardMaterial } from "../graphics/material";
 import { TransformStore } from "./transform";
@@ -424,14 +425,27 @@ export const drawInstancedRun = (ctx: RendererContext, pass: GPURenderPassEncode
     ctx.instanceBufferOffset = dstEnd;
 };
 
+const assertSortBinding = (ctx: RendererContext, label: string, count: number, bytes: number): void => {
+    const limit = ctx.device.limits.maxStorageBufferBindingSize;
+    assert(bytes <= limit, `${label}: sorting ${count} elements needs a ${bytes}-byte binding, which exceeds device.limits.maxStorageBufferBindingSize (${limit}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
+};
+
+const clampSortCapacity = (ctx: RendererContext, label: string, count: number, capacity: number): number => {
+    const limit = ctx.device.limits.maxBufferSize;
+    assert(count * 4 <= limit, `${label}: sorting ${count} elements needs a ${count * 4}-byte buffer, which exceeds device.limits.maxBufferSize (${limit}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
+    return Math.max(count, Math.min(capacity, Math.floor(limit / 4)));
+};
+
 export const getOrCreateSplatFieldSortState = (ctx: RendererContext, field: SplatField): SplatFieldSortState => {
     let state = ctx.splatFieldSortStates.get(field);
-    if (!state) { state = { sortedIndexBuffer: null, sortedIndexCapacity: 0, transformBuffer: null, lastMvp: new Float32Array(16), lastRevision: -1, lastCount: -1, valid: false, sortCount: 0, radixBindGroupKey: null, radixBindGroups: [] }; ctx.splatFieldSortStates.set(field, state); }
+    if (!state) { state = { sortedIndexBuffer: null, sortedIndexCapacity: 0, transformBuffer: null, lastMvp: new Float32Array(16), lastRevision: -1, lastCount: -1, valid: false, sortCount: 0, radixBindGroupKey: null, radixBindGroups: [], elementWorkgroups: [0, 1, 1], blockWorkgroups: [0, 1, 1] }; ctx.splatFieldSortStates.set(field, state); }
     if (!state.transformBuffer) state.transformBuffer = ctx.device.createBuffer({ size: 16 * 4, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     if (field.splatCount > state.sortedIndexCapacity) {
         state.sortedIndexBuffer?.destroy();
         let cap = Math.max(1, state.sortedIndexCapacity || 256);
         while (cap < field.splatCount) cap *= 2;
+        assertSortBinding(ctx, "SplatField", field.splatCount, field.splatCount * 4);
+        cap = clampSortCapacity(ctx, "SplatField", field.splatCount, Math.min(cap, Math.floor(ctx.device.limits.maxStorageBufferBindingSize / 4)));
         state.sortedIndexCapacity = cap;
         state.sortedIndexBuffer = ctx.device.createBuffer({ size: cap * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC });
         state.valid = false;
@@ -452,6 +466,7 @@ export const ensureSplatSortCapacity = (ctx: RendererContext, count: number): vo
     if (count <= ctx.splatSortCapacity) return;
     let cap = Math.max(1, ctx.splatSortCapacity || 256);
     while (cap < count) cap *= 2;
+    cap = clampSortCapacity(ctx, "SplatField", count, cap);
     const keyUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
     const indexUsage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
     ctx.splatSortKeyA?.destroy();
@@ -468,12 +483,13 @@ export const ensureSplatSortCapacity = (ctx: RendererContext, count: number): vo
 };
 
 export const ensureSplatSortScanLevel = (ctx: RendererContext, level: number, count: number): SplatFieldSortScanLevel => {
-    while (ctx.splatSortScanLevels.length <= level) ctx.splatSortScanLevels.push({ blockSums: null, blockSumsCapacity: 0, blockOffsets: null, blockOffsetsCapacity: 0 });
+    while (ctx.splatSortScanLevels.length <= level) ctx.splatSortScanLevels.push({ blockSums: null, blockSumsCapacity: 0, blockOffsets: null, blockOffsetsCapacity: 0, dispatchCount: -1, elementWorkgroups: [0, 1, 1], blockWorkgroups: [0, 1, 1] });
     const scanLevel = ctx.splatSortScanLevels[level];
     if (count > scanLevel.blockSumsCapacity) {
         scanLevel.blockSums?.destroy();
         let cap = Math.max(1, scanLevel.blockSumsCapacity || 1);
         while (cap < count) cap *= 2;
+        cap = clampSortCapacity(ctx, "SplatField", count, cap);
         scanLevel.blockSumsCapacity = cap;
         scanLevel.blockSums = ctx.device.createBuffer({ size: cap * 4, usage: GPUBufferUsage.STORAGE });
     }
@@ -481,6 +497,7 @@ export const ensureSplatSortScanLevel = (ctx: RendererContext, level: number, co
         scanLevel.blockOffsets?.destroy();
         let cap = Math.max(1, scanLevel.blockOffsetsCapacity || 1);
         while (cap < count) cap *= 2;
+        cap = clampSortCapacity(ctx, "SplatField", count, cap);
         scanLevel.blockOffsetsCapacity = cap;
         scanLevel.blockOffsets = ctx.device.createBuffer({ size: cap * 4, usage: GPUBufferUsage.STORAGE });
     }
@@ -490,7 +507,7 @@ export const ensureSplatSortScanLevel = (ctx: RendererContext, level: number, co
 export const ensureSplatSortFrameCapacity = (ctx: RendererContext, count: number, level: number = 0): void => {
     if (count <= 0) return;
     if (level === 0) ensureSplatSortCapacity(ctx, count);
-    const numBlocks = ceilDiv(count, 512);
+    const numBlocks = ceilDiv(count, 1024);
     ensureSplatSortScanLevel(ctx, level, numBlocks);
     if (numBlocks > 1) ensureSplatSortFrameCapacity(ctx, numBlocks, level + 1);
 };
@@ -732,8 +749,13 @@ export const getOrCreateSplatSortScatterPipeline = (ctx: RendererContext, bit: n
 
 export const encodeSplatSortScanExclusive = (ctx: RendererContext, pass: GPUComputePassEncoder, input: GPUBuffer, count: number, out: GPUBuffer, level: number = 0): void => {
     if (count <= 0) return;
-    const numBlocks = ceilDiv(count, 512);
+    const numBlocks = ceilDiv(count, 1024);
     const scanLevel = ensureSplatSortScanLevel(ctx, level, numBlocks);
+    if (scanLevel.dispatchCount !== count) {
+        scanLevel.dispatchCount = count;
+        scanLevel.elementWorkgroups = workgroups1D(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        scanLevel.blockWorkgroups = workgroups1D(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+    }
     const scanBlocksBg = ctx.device.createBindGroup({
         layout: getSplatSortScanBlockBindGroupLayout(ctx),
         entries: [
@@ -744,7 +766,7 @@ export const encodeSplatSortScanExclusive = (ctx: RendererContext, pass: GPUComp
     });
     pass.setPipeline(getOrCreateSplatSortScanBlockPipeline(ctx));
     pass.setBindGroup(0, scanBlocksBg);
-    pass.dispatchWorkgroups(numBlocks, 1, 1);
+    pass.dispatchWorkgroups(...scanLevel.blockWorkgroups);
     if (numBlocks <= 1) return;
     encodeSplatSortScanExclusive(ctx, pass, scanLevel.blockSums!, numBlocks, scanLevel.blockOffsets!, level + 1);
     const addOffsetsBg = ctx.device.createBindGroup({
@@ -756,7 +778,7 @@ export const encodeSplatSortScanExclusive = (ctx: RendererContext, pass: GPUComp
     });
     pass.setPipeline(getOrCreateSplatSortScanAddPipeline(ctx));
     pass.setBindGroup(0, addOffsetsBg);
-    pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
+    pass.dispatchWorkgroups(...scanLevel.elementWorkgroups);
 };
 
 export const encodeSplatFieldSort = (ctx: RendererContext, pass: GPUComputePassEncoder, field: SplatField, state: SplatFieldSortState): GPUBuffer | null => {
@@ -800,10 +822,12 @@ export const encodeSplatFieldSort = (ctx: RendererContext, pass: GPUComputePassE
             ] }) : null
         ];
         state.radixBindGroupKey = bindGroupKey;
+        state.elementWorkgroups = workgroups1D(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        state.blockWorkgroups = workgroups1D(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
     }
     pass.setPipeline(getOrCreateSplatSortKeygenPipeline(ctx));
     pass.setBindGroup(0, state.radixBindGroups[0]!);
-    pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
+    pass.dispatchWorkgroups(...state.elementWorkgroups);
     let keyIn = ctx.splatSortKeyA!;
     let keyOut = ctx.splatSortKeyB!;
     let valueIn = ctx.splatSortIndexA!;
@@ -811,16 +835,16 @@ export const encodeSplatFieldSort = (ctx: RendererContext, pass: GPUComputePassE
     for (let bit = 0; bit < 32; bit++) {
         pass.setPipeline(getOrCreateSplatSortFlagsPipeline(ctx, bit));
         pass.setBindGroup(0, state.radixBindGroups[1 + (bit & 1)]!);
-        pass.dispatchWorkgroups(blocks, 1, 1);
+        pass.dispatchWorkgroups(...state.blockWorkgroups);
         if (blocks > 1) {
             encodeSplatSortScanExclusive(ctx, pass, scan.blockSums!, blocks, scan.blockOffsets!, 1);
             pass.setPipeline(getOrCreateSplatSortScanAddPipeline(ctx));
             pass.setBindGroup(0, state.radixBindGroups[5]!);
-            pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
+            pass.dispatchWorkgroups(...state.elementWorkgroups);
         }
         pass.setPipeline(getOrCreateSplatSortScatterPipeline(ctx, bit));
         pass.setBindGroup(0, state.radixBindGroups[3 + (bit & 1)]!);
-        pass.dispatchWorkgroups(ceilDiv(count, 256), 1, 1);
+        pass.dispatchWorkgroups(...state.elementWorkgroups);
         const nextKeyIn = keyOut;
         keyOut = keyOut === ctx.splatSortKeyA ? ctx.splatSortKeyB! : ctx.splatSortKeyA!;
         keyIn = nextKeyIn;
@@ -838,6 +862,7 @@ export const encodeSplatFieldSorts = (ctx: RendererContext, encoder: GPUCommandE
         const field = item.field;
         if (!field.visible) continue;
         if (field.splatCount <= 0) continue;
+        assertSortBinding(ctx, "SplatField", field.splatCount, field.splatCount * 16);
         if (field.splatCount > maxCount) maxCount = field.splatCount;
     }
     ensureSplatSortFrameCapacity(ctx, maxCount);
@@ -869,12 +894,14 @@ export const encodeSplatFieldSorts = (ctx: RendererContext, encoder: GPUCommandE
 
 export const getOrCreateLatticeSpaceSortState = (ctx: RendererContext, space: LatticeSpace): LatticeSpaceSortState => {
     let state = ctx.latticeSpaceSortStates.get(space);
-    if (!state) { state = { sortedIndexBuffer: null, sortedIndexCapacity: 0, identityKey: null, transformBuffer: null, lastMvp: new Float32Array(16), lastRevision: -1, lastCount: -1, valid: false, sortCount: 0, radixBindGroupKey: null, radixBindGroups: [] }; ctx.latticeSpaceSortStates.set(space, state); }
+    if (!state) { state = { sortedIndexBuffer: null, sortedIndexCapacity: 0, identityKey: null, transformBuffer: null, lastMvp: new Float32Array(16), lastRevision: -1, lastCount: -1, valid: false, sortCount: 0, radixBindGroupKey: null, radixBindGroups: [], elementWorkgroups: [0, 1, 1], blockWorkgroups: [0, 1, 1] }; ctx.latticeSpaceSortStates.set(space, state); }
     if (!state.transformBuffer) state.transformBuffer = ctx.device.createBuffer({ label: "LatticeSpace.sortTransform", size: 64, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     if (space.drawCellCount > state.sortedIndexCapacity) {
         state.sortedIndexBuffer?.destroy();
         let capacity = Math.max(256, state.sortedIndexCapacity || 256);
         while (capacity < space.drawCellCount) capacity *= 2;
+        assertSortBinding(ctx, "LatticeSpace", space.drawCellCount, space.drawCellCount * 4);
+        capacity = clampSortCapacity(ctx, "LatticeSpace", space.drawCellCount, Math.min(capacity, Math.floor(ctx.device.limits.maxStorageBufferBindingSize / 4)));
         state.sortedIndexCapacity = capacity;
         state.sortedIndexBuffer = ctx.device.createBuffer({
             label: "LatticeSpace.sortedIndices",
@@ -916,6 +943,7 @@ export const ensureLatticeSortCapacity = (ctx: RendererContext, count: number): 
     if (count <= ctx.latticeSortCapacity) return;
     let capacity = Math.max(256, ctx.latticeSortCapacity || 256);
     while (capacity < count) capacity *= 2;
+    capacity = clampSortCapacity(ctx, "LatticeSpace", count, capacity);
     for (const buffer of [ctx.latticeSortKeyA, ctx.latticeSortKeyB, ctx.latticeSortIndexA, ctx.latticeSortIndexB, ctx.latticeSortPrefix]) buffer?.destroy();
     const usage = GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC | GPUBufferUsage.COPY_DST;
     ctx.latticeSortCapacity = capacity;
@@ -927,12 +955,13 @@ export const ensureLatticeSortCapacity = (ctx: RendererContext, count: number): 
 };
 
 export const ensureLatticeSortScanLevel = (ctx: RendererContext, level: number, count: number): LatticeSpaceSortScanLevel => {
-    while (ctx.latticeSortScanLevels.length <= level) ctx.latticeSortScanLevels.push({ blockSums: null, blockSumsCapacity: 0, blockOffsets: null, blockOffsetsCapacity: 0 });
+    while (ctx.latticeSortScanLevels.length <= level) ctx.latticeSortScanLevels.push({ blockSums: null, blockSumsCapacity: 0, blockOffsets: null, blockOffsetsCapacity: 0, dispatchCount: -1, elementWorkgroups: [0, 1, 1], blockWorkgroups: [0, 1, 1] });
     const scan = ctx.latticeSortScanLevels[level];
     if (count > scan.blockSumsCapacity) {
         scan.blockSums?.destroy();
         let capacity = Math.max(1, scan.blockSumsCapacity);
         while (capacity < count) capacity *= 2;
+        capacity = clampSortCapacity(ctx, "LatticeSpace", count, capacity);
         scan.blockSumsCapacity = capacity;
         scan.blockSums = ctx.device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE });
     }
@@ -940,6 +969,7 @@ export const ensureLatticeSortScanLevel = (ctx: RendererContext, level: number, 
         scan.blockOffsets?.destroy();
         let capacity = Math.max(1, scan.blockOffsetsCapacity);
         while (capacity < count) capacity *= 2;
+        capacity = clampSortCapacity(ctx, "LatticeSpace", count, capacity);
         scan.blockOffsetsCapacity = capacity;
         scan.blockOffsets = ctx.device.createBuffer({ size: capacity * 4, usage: GPUBufferUsage.STORAGE });
     }
@@ -949,7 +979,7 @@ export const ensureLatticeSortScanLevel = (ctx: RendererContext, level: number, 
 export const ensureLatticeSortFrameCapacity = (ctx: RendererContext, count: number, level: number = 0): void => {
     if (count <= 0) return;
     if (level === 0) ensureLatticeSortCapacity(ctx, count);
-    const blocks = ceilDiv(count, 512);
+    const blocks = ceilDiv(count, 1024);
     ensureLatticeSortScanLevel(ctx, level, blocks);
     if (blocks > 1) ensureLatticeSortFrameCapacity(ctx, blocks, level + 1);
 };
@@ -1090,8 +1120,13 @@ const latticePipeline = (ctx: RendererContext, key: string, shader: string, layo
 
 export const encodeLatticeSortScanExclusive = (ctx: RendererContext, pass: GPUComputePassEncoder, input: GPUBuffer, count: number, output: GPUBuffer, level: number = 0): void => {
     if (count <= 0) return;
-    const blocks = ceilDiv(count, 512);
+    const blocks = ceilDiv(count, 1024);
     const scan = ensureLatticeSortScanLevel(ctx, level, blocks);
+    if (scan.dispatchCount !== count) {
+        scan.dispatchCount = count;
+        scan.elementWorkgroups = workgroups1D(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        scan.blockWorkgroups = workgroups1D(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+    }
     pass.setPipeline(latticePipeline(ctx, "lattice:sort:scan:block", scanBlockExclusiveU32WGSL, getLatticeSortScanBlockLayout(ctx)));
     pass.setBindGroup(0, ctx.device.createBindGroup({
         layout: getLatticeSortScanBlockLayout(ctx),
@@ -1101,7 +1136,7 @@ export const encodeLatticeSortScanExclusive = (ctx: RendererContext, pass: GPUCo
             { binding: 2, resource: bindSizedBuffer(ctx, scan.blockSums!, blocks * 4) }
         ]
     }));
-    pass.dispatchWorkgroups(blocks);
+    pass.dispatchWorkgroups(...scan.blockWorkgroups);
     if (blocks <= 1) return;
     encodeLatticeSortScanExclusive(ctx, pass, scan.blockSums!, blocks, scan.blockOffsets!, level + 1);
     pass.setPipeline(latticePipeline(ctx, "lattice:sort:scan:add", scanAddBlockOffsetsU32WGSL, getLatticeSortScanAddLayout(ctx)));
@@ -1112,7 +1147,7 @@ export const encodeLatticeSortScanExclusive = (ctx: RendererContext, pass: GPUCo
             { binding: 1, resource: bindSizedBuffer(ctx, scan.blockOffsets!, blocks * 4) }
         ]
     }));
-    pass.dispatchWorkgroups(ceilDiv(count, 256));
+    pass.dispatchWorkgroups(...scan.elementWorkgroups);
 };
 
 export const encodeLatticeSpaceSort = (ctx: RendererContext, pass: GPUComputePassEncoder, space: LatticeSpace, state: LatticeSpaceSortState): GPUBuffer | null => {
@@ -1154,10 +1189,12 @@ export const encodeLatticeSpaceSort = (ctx: RendererContext, pass: GPUComputePas
             ] }) : null
         ];
         state.radixBindGroupKey = bindGroupKey;
+        state.elementWorkgroups = workgroups1D(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        state.blockWorkgroups = workgroups1D(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
     }
     pass.setPipeline(latticePipeline(ctx, "lattice:sort:keygen", latticeSpaceSortWGSL, getLatticeSortKeygenLayout(ctx)));
     pass.setBindGroup(0, state.radixBindGroups[0]!);
-    pass.dispatchWorkgroups(ceilDiv(count, 256));
+    pass.dispatchWorkgroups(...state.elementWorkgroups);
     let keyIn = ctx.latticeSortKeyA!;
     let keyOut = ctx.latticeSortKeyB!;
     let valueIn = ctx.latticeSortIndexA!;
@@ -1165,16 +1202,16 @@ export const encodeLatticeSpaceSort = (ctx: RendererContext, pass: GPUComputePas
     for (let bit = 0; bit < 32; bit++) {
         pass.setPipeline(latticePipeline(ctx, `lattice:sort:flags:${bit}`, latticeSpaceRadixFlagsWGSL, getLatticeSortFlagsLayout(ctx), { BIT: bit }));
         pass.setBindGroup(0, state.radixBindGroups[1 + (bit & 1)]!);
-        pass.dispatchWorkgroups(blocks);
+        pass.dispatchWorkgroups(...state.blockWorkgroups);
         if (blocks > 1) {
             encodeLatticeSortScanExclusive(ctx, pass, scan.blockSums!, blocks, scan.blockOffsets!, 1);
             pass.setPipeline(latticePipeline(ctx, "lattice:sort:scan:add", scanAddBlockOffsetsU32WGSL, getLatticeSortScanAddLayout(ctx)));
             pass.setBindGroup(0, state.radixBindGroups[5]!);
-            pass.dispatchWorkgroups(ceilDiv(count, 256));
+            pass.dispatchWorkgroups(...state.elementWorkgroups);
         }
         pass.setPipeline(latticePipeline(ctx, `lattice:sort:scatter:${bit}`, latticeSpaceRadixScatterPairsWGSL, getLatticeSortScatterLayout(ctx), { BIT: bit }));
         pass.setBindGroup(0, state.radixBindGroups[3 + (bit & 1)]!);
-        pass.dispatchWorkgroups(ceilDiv(count, 256));
+        pass.dispatchWorkgroups(...state.elementWorkgroups);
         [keyIn, keyOut] = [keyOut, keyIn];
         [valueIn, valueOut] = [valueOut, valueIn];
     }
@@ -1183,7 +1220,11 @@ export const encodeLatticeSpaceSort = (ctx: RendererContext, pass: GPUComputePas
 
 export const encodeLatticeSpaceSorts = (ctx: RendererContext, encoder: GPUCommandEncoder): void => {
     let maximum = 0;
-    for (const item of ctx.transparentLatticeSpaceDrawList) if (item.space.dimensionCount === 3) maximum = Math.max(maximum, item.space.drawCellCount);
+    for (const item of ctx.transparentLatticeSpaceDrawList) {
+        if (item.space.dimensionCount !== 3 || item.space.drawCellCount <= 0) continue;
+        assertSortBinding(ctx, "LatticeSpace", item.space.drawCellCount, item.space.drawCellCount * 4);
+        maximum = Math.max(maximum, item.space.drawCellCount);
+    }
     if (maximum <= 0) return;
     ensureLatticeSortFrameCapacity(ctx, maximum);
     for (const item of ctx.transparentLatticeSpaceDrawList) {

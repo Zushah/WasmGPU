@@ -30,9 +30,13 @@ fn cx_div(a: vec2<f32>, b: vec2<f32>) -> vec2<f32> {
     return vec2<f32>((a.x * b.x + a.y * b.y) / d, (a.y * b.x - a.x * b.y) / d);
 }
 
+fn workgroup_index(wid: vec3<u32>, nwg: vec3<u32>) -> u32 {
+    return wid.y * nwg.x + wid.x;
+}
+
 @compute @workgroup_size(1, 1, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let b = gid.x;
+fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
+    let b = workgroup_index(wg_id, nwg);
     if (b >= params.batch_count) {
         return;
     }

@@ -12,9 +12,17 @@ override BIT: u32 = 0u;
 @group(0) @binding(3) var<storage, read_write> keys_out: array<u32>;
 @group(0) @binding(4) var<storage, read_write> values_out: array<u32>;
 
+fn invocation_index(wid: vec3<u32>, nwg: vec3<u32>, lid: u32) -> u32 {
+    return (wid.y * nwg.x + wid.x) * 256u + lid;
+}
+
 @compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let i = gid.x;
+fn main(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+    @builtin(local_invocation_index) lid: u32,
+) {
+    let i = invocation_index(wid, nwg, lid);
     let n = arrayLength(&keys_in);
     if (i >= n) {
         return;

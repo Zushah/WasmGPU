@@ -12,9 +12,18 @@ fn cmul(x: vec2<f32>, y: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(x.x * y.x - x.y * y.y, x.x * y.y + x.y * y.x);
 }
 
+fn invocation_index(wid: vec3<u32>, nwg: vec3<u32>, lid: u32) -> u32 {
+    return (wid.y * nwg.x + wid.x) * 256u + lid;
+}
+
 @compute @workgroup_size(256)
-fn main(@builtin(global_invocation_id) id: vec3<u32>) {
-    if (id.x < arrayLength(&out)) {
-        out[id.x] = cmul(a[id.x], b[id.x]);
+fn main(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+    @builtin(local_invocation_index) lid: u32,
+) {
+    let i = invocation_index(wid, nwg, lid);
+    if (i < arrayLength(&out)) {
+        out[i] = cmul(a[i], b[i]);
     }
 }

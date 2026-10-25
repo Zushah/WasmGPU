@@ -26,8 +26,16 @@ struct LuBlockedParams {
 @group(0) @binding(0) var<uniform> params: LuBlockedParams;
 @group(0) @binding(1) var<storage, read_write> matrices: array<f32>;
 
+fn invocation_index(wid: vec3<u32>, nwg: vec3<u32>, lid: u32) -> u32 {
+    return (wid.y * nwg.x + wid.x) * 256u + lid;
+}
+
 @compute @workgroup_size(256, 1, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+fn main(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+    @builtin(local_invocation_index) lid: u32,
+) {
     let n = params.n;
     let kk = params.kk;
     let pw = params.pw;
@@ -35,7 +43,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     if (trail_n == 0u || pw == 0u) {
         return;
     }
-    let idx = gid.x;
+    let idx = invocation_index(wid, nwg, lid);
     let b = idx / trail_n;
     if (b >= params.batch_count) {
         return;

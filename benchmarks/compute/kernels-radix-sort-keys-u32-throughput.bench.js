@@ -12,7 +12,7 @@ export default {
     type: "throughput",
     unit: "keys/s",
     description: "Steady-state out-of-place ComputeKernels.radixSortKeysU32 throughput including GPU completion.",
-    sizes: { quick: [16_384, 262_144], full: [16_384, 262_144, 2_097_152] },
+    sizes: { quick: [16_384, 262_144], full: [16_384, 262_144, 2_097_152, 16_777_216] },
     gpu: true,
     setup({ compute }, size) {
         return {

@@ -25,13 +25,19 @@ export const makeWorkgroupCounts = (x: number, y: number = 1, z: number = 1): Wo
     return [x, y, z];
 };
 
-export const workgroups1D = (invocations: number, workgroupSizeX: number): WorkgroupCounts => {
+export const workgroups1D = (invocations: number, workgroupSizeX: number, maxWorkgroupsPerDimension: number = 65535): WorkgroupCounts => {
     assert(Number.isFinite(invocations), `invocations must be finite (got ${invocations})`);
     assert(invocations >= 0, `invocations must be >= 0 (got ${invocations})`);
     assert(isPositiveInt(workgroupSizeX), `workgroupSizeX must be a positive integer (got ${workgroupSizeX})`);
+    assert(isPositiveInt(maxWorkgroupsPerDimension), `maxWorkgroupsPerDimension must be a positive integer (got ${maxWorkgroupsPerDimension})`);
     if (invocations === 0) return [0, 1, 1];
-    const x = ceilDiv(invocations, workgroupSizeX);
-    return [x, 1, 1];
+    const groups = ceilDiv(invocations, workgroupSizeX);
+    if (groups <= maxWorkgroupsPerDimension) return [groups, 1, 1];
+    const y = ceilDiv(groups, maxWorkgroupsPerDimension);
+    assert(y <= maxWorkgroupsPerDimension, `${invocations} invocations need ${groups} workgroups, which exceeds device.limits.maxComputeWorkgroupsPerDimension (${maxWorkgroupsPerDimension}) squared`);
+    const x = ceilDiv(groups, y);
+    assert(x * y * workgroupSizeX <= 2 ** 32, `${invocations} invocations in ${x}x${y} workgroups of ${workgroupSizeX} exceed 32-bit invocation indexing`);
+    return [x, y, 1];
 };
 
 export const workgroups2D = (width: number, height: number, workgroupSizeX: number, workgroupSizeY: number): WorkgroupCounts => {

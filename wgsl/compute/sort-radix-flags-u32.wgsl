@@ -23,11 +23,20 @@ fn zero_bit(i: u32, n: u32) -> u32 {
     return select(0u, 1u, ((keys[i] >> BIT) & 1u) == 0u);
 }
 
+fn workgroup_index(wid: vec3<u32>, nwg: vec3<u32>) -> u32 {
+    return wid.y * nwg.x + wid.x;
+}
+
 @compute @workgroup_size(256)
-fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
+fn main(
+    @builtin(local_invocation_id) lid: vec3<u32>,
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+) {
     let tid = lid.x;
     let n = arrayLength(&keys);
-    let base = wid.x * ELEMENTS_PER_WORKGROUP;
+    let block = workgroup_index(wid, nwg);
+    let base = block * ELEMENTS_PER_WORKGROUP;
     let i0 = base + tid * ELEMENTS_PER_INVOCATION;
     let i1 = i0 + 1u;
     let i2 = i0 + 2u;
@@ -53,7 +62,9 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
         d = d / 2u;
     }
     if (tid == 0u) {
-        block_sums[wid.x] = temp[WORKGROUP_SIZE - 1u];
+        if (block < arrayLength(&block_sums)) {
+            block_sums[block] = temp[WORKGROUP_SIZE - 1u];
+        }
         temp[WORKGROUP_SIZE - 1u] = 0u;
     }
     d = 1u;

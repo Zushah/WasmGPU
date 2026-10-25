@@ -29,6 +29,18 @@ const compute = new Compute(device, device.queue);
     assert.deepStrictEqual(makeWorkgroupSize(64, 1, 1), [64, 1, 1]);
     assert.deepStrictEqual(makeWorkgroupCounts(10, 2, 3), [10, 2, 3]);
     assert.deepStrictEqual(workgroups1D(0, 64), [0, 1, 1]);
+    assert.deepStrictEqual(workgroups1D(16_776_960, 256), [65535, 1, 1]);
+    assert.deepStrictEqual(workgroups1D(16_776_961, 256), [32768, 2, 1]);
+    assert.deepStrictEqual(workgroups1D(4096 * 4096, 256), [32768, 2, 1]);
+    assert.deepStrictEqual(workgroups1D(33_554_432, 512), [32768, 2, 1]);
+    assert.deepStrictEqual(workgroups1D(512 ** 3, 256), [58255, 9, 1]);
+    assert.deepStrictEqual(workgroups1D(1000, 64, 4), [4, 4, 1]);
+    assert.deepStrictEqual(workgroups1D(1100, 64, 5), [5, 4, 1]);
+    assert.throws(() => workgroups1D(26 * 64, 64, 5), /maxComputeWorkgroupsPerDimension/);
+    assert.throws(() => workgroups1D(2 ** 32, 256), /32-bit invocation indexing/);
+    assert.throws(() => workgroups1D(64, 64, 0), /maxWorkgroupsPerDimension must be a positive integer/);
+    const maxWorkgroups = device.limits.maxComputeWorkgroupsPerDimension;
+    for (const n of [1000, maxWorkgroups * 256 + 1]) assert.deepStrictEqual(compute.workgroups1D(n, 256), workgroups1D(n, 256, maxWorkgroups), `Compute.workgroups1D must apply the device limit for n=${n}`);
     assert.deepStrictEqual(workgroups2D(33, 33, 16, 16), [3, 3, 1]);
     assert.deepStrictEqual(workgroups3D(9, 8, 8, 8, 8, 8), [2, 1, 1]);
     assert.deepStrictEqual(normalizeWorkgroups([5, 2, 3]), { x: 5, y: 2, z: 3 });
@@ -247,7 +259,45 @@ const compute = new Compute(device, device.queue);
     assert.ok(await device.popErrorScope(), "Owned wrapper destruction must destroy the raw GPUBuffer");
 }
 
-// 7) Cleanup releases the shared compute context before its browser GPU device.
+// 7) Kernels on folded workgroup grids rebuild each linear index exactly once, and oversized kernel bindings fail before allocation.
+{
+    const pipeline = compute.createPipeline({ code: `
+        @group(0) @binding(0) var<storage, read_write> out : array<u32>;
+        @group(0) @binding(1) var<storage, read_write> executions : atomic<u32>;
+        fn invocation_index(wid : vec3<u32>, nwg : vec3<u32>, lid : u32) -> u32 {
+            return (wid.y * nwg.x + wid.x) * 256u + lid;
+        }
+        @compute @workgroup_size(256)
+        fn main(@builtin(workgroup_id) wid : vec3<u32>, @builtin(num_workgroups) nwg : vec3<u32>, @builtin(local_invocation_index) lid : u32) {
+            let i = invocation_index(wid, nwg, lid);
+            if (i < arrayLength(&out)) {
+                out[i] = i * 3u + 1u;
+                atomicAdd(&executions, 1u);
+            }
+        }
+    ` });
+    for (const [n, smallMax, expected] of [[5000, 5, [5, 4, 1]], [5000, 7, [7, 3, 1]], [70_000, 17, [17, 17, 1]]]) {
+        const workgroups = workgroups1D(n, 256, smallMax);
+        assert.deepStrictEqual(workgroups, expected, `folded grid for n=${n}, max=${smallMax}`);
+        assert.ok(workgroups[1] > 1 && workgroups[0] <= smallMax && workgroups[1] <= smallMax, `n=${n} must fold within max=${smallMax}`);
+        const out = compute.createStorageBuffer({ data: new Uint32Array(n).fill(0xFFFFFFFF), copySrc: true });
+        const executions = compute.createStorageBuffer({ data: new Uint32Array([0]), copySrc: true });
+        compute.dispatchBatch([{ pipeline, bindGroups: [pipeline.createBindGroup(0, { 0: out, 1: executions })], workgroups, label: `folded_${n}_${smallMax}` }], `folded_${n}`, { validateLimits: true });
+        const values = await out.readAs(Uint32Array);
+        let mismatch = -1;
+        for (let i = 0; i < n && mismatch < 0; i++) if (values[i] !== ((i * 3 + 1) >>> 0)) mismatch = i;
+        assert.strictEqual(mismatch, -1, `folded output mismatch for n=${n}, max=${smallMax} at ${mismatch}`);
+        assert.strictEqual(await compute.readback.readScalarU32(executions), n, `every index must execute exactly once for n=${n}, max=${smallMax}`);
+        out.destroy();
+        executions.destroy();
+    }
+    const raw = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE });
+    const tooMany = Math.floor(device.limits.maxStorageBufferBindingSize / 4) + 1;
+    assert.throws(() => compute.kernels.copyF32(raw, { count: tooMany }), /copyF32: a \d+-byte binding exceeds device\.limits\.maxStorageBufferBindingSize/);
+    raw.destroy();
+}
+
+// 8) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

@@ -21,9 +21,13 @@ struct LuBatchedParams {
 @group(0) @binding(3) var<storage, read_write> x: array<f32>;
 @group(0) @binding(4) var<storage, read> ipiv: array<u32>;
 
+fn workgroup_index(wid: vec3<u32>, nwg: vec3<u32>) -> u32 {
+    return wid.y * nwg.x + wid.x;
+}
+
 @compute @workgroup_size(1, 1, 1)
-fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
-    let b = gid.x;
+fn main(@builtin(workgroup_id) wg_id: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>) {
+    let b = workgroup_index(wg_id, nwg);
     if (b >= params.batch_count) {
         return;
     }

@@ -12,7 +12,7 @@ export default {
     type: "throughput",
     unit: "elements/s",
     description: "Complete ComputeKernels.histogramU32 throughput with 256-bin clearing, accumulation, and GPU completion.",
-    sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608] },
+    sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608, 16_777_216] },
     gpu: true,
     setup({ compute }, size) {
         const data = new Uint32Array(size);

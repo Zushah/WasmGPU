@@ -17,7 +17,11 @@ fn cmul(x: vec2<f32>, y: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(x.x * y.x - x.y * y.y, x.x * y.y + x.y * y.x);
 }
 
-fn reduce_and_write(tid: u32, wid: u32, acc: vec2<f32>) {
+fn workgroup_index(wid: vec3<u32>, nwg: vec3<u32>) -> u32 {
+    return wid.y * nwg.x + wid.x;
+}
+
+fn reduce_and_write(tid: u32, block: u32, acc: vec2<f32>) {
     share[tid] = acc;
     workgroupBarrier();
     var stride = WORKGROUP_SIZE / 2u;
@@ -31,14 +35,19 @@ fn reduce_and_write(tid: u32, wid: u32, acc: vec2<f32>) {
         workgroupBarrier();
         stride = stride / 2u;
     }
-    if (tid == 0u) {
-        output[wid] = share[0];
+    if (tid == 0u && block < arrayLength(&output)) {
+        output[block] = share[0];
     }
 }
 
 @compute @workgroup_size(256)
-fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
-    let i0 = wid.x * ELEMENTS_PER_WORKGROUP + lid.x;
+fn main(
+    @builtin(local_invocation_id) lid: vec3<u32>,
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+) {
+    let block = workgroup_index(wid, nwg);
+    let i0 = block * ELEMENTS_PER_WORKGROUP + lid.x;
     let i1 = i0 + WORKGROUP_SIZE;
     let n = arrayLength(&a);
     var acc = vec2<f32>(0.0);
@@ -48,12 +57,17 @@ fn main(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid
     if (i1 < n) {
         acc = acc + cmul(a[i1], b[i1]);
     }
-    reduce_and_write(lid.x, wid.x, acc);
+    reduce_and_write(lid.x, block, acc);
 }
 
 @compute @workgroup_size(256)
-fn reduce(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) wid: vec3<u32>) {
-    let i0 = wid.x * ELEMENTS_PER_WORKGROUP + lid.x;
+fn reduce(
+    @builtin(local_invocation_id) lid: vec3<u32>,
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+) {
+    let block = workgroup_index(wid, nwg);
+    let i0 = block * ELEMENTS_PER_WORKGROUP + lid.x;
     let i1 = i0 + WORKGROUP_SIZE;
     let n = arrayLength(&a);
     var acc = vec2<f32>(0.0);
@@ -63,5 +77,5 @@ fn reduce(@builtin(local_invocation_id) lid: vec3<u32>, @builtin(workgroup_id) w
     if (i1 < n) {
         acc = acc + a[i1];
     }
-    reduce_and_write(lid.x, wid.x, acc);
+    reduce_and_write(lid.x, block, acc);
 }
