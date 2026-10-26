@@ -8,7 +8,7 @@ import { alignTo, assert } from "../utils";
 import { StorageBuffer, validateStorageBufferRange, wrapStorageBuffer, type StorageBufferDescriptor } from "./buffer";
 import { ComputePipeline } from "./pipeline";
 import { encodeDispatchBatchWithLimit, type ComputeDispatchCommand } from "./dispatch";
-import { workgroups1D } from "./workgroups";
+import { workgroupsFolded } from "./workgroups";
 import { storageBufferLayout } from "../wgsl";
 import { ndarrayf, wasm, type WasmPtr } from "../wasm";
 import type { ReadbackRing } from "./readback";
@@ -1045,7 +1045,7 @@ class NdarrayGPUEngine {
         const params = this.scratch.params(words, encoder);
         const pipeline = this.pipeline(spec.entryPoint, spec.constants);
         const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: params }, `${opName(op)}:bg`);
-        commands.push({ pipeline, bindGroups: [bindGroup], workgroups: workgroups1D(count, 256, this.device.limits.maxComputeWorkgroupsPerDimension), label: opName(op) });
+        commands.push({ pipeline, bindGroups: [bindGroup], workgroups: workgroupsFolded(count, 256, this.device.limits.maxComputeWorkgroupsPerDimension), label: opName(op) });
     }
 
     submit(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, label: string | undefined, op: string): void {

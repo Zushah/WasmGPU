@@ -5,7 +5,7 @@
  */
 
 import { assert, ceilDiv } from "../utils";
-import { workgroups1D } from "../compute/workgroups";
+import { workgroupsFolded } from "../compute/workgroups";
 import { Geometry } from "../graphics/geometry";
 import { BlendMode, Material, StandardMaterial } from "../graphics/material";
 import { TransformStore } from "./transform";
@@ -753,8 +753,8 @@ export const encodeSplatSortScanExclusive = (ctx: RendererContext, pass: GPUComp
     const scanLevel = ensureSplatSortScanLevel(ctx, level, numBlocks);
     if (scanLevel.dispatchCount !== count) {
         scanLevel.dispatchCount = count;
-        scanLevel.elementWorkgroups = workgroups1D(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
-        scanLevel.blockWorkgroups = workgroups1D(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        scanLevel.elementWorkgroups = workgroupsFolded(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        scanLevel.blockWorkgroups = workgroupsFolded(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
     }
     const scanBlocksBg = ctx.device.createBindGroup({
         layout: getSplatSortScanBlockBindGroupLayout(ctx),
@@ -822,8 +822,8 @@ export const encodeSplatFieldSort = (ctx: RendererContext, pass: GPUComputePassE
             ] }) : null
         ];
         state.radixBindGroupKey = bindGroupKey;
-        state.elementWorkgroups = workgroups1D(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
-        state.blockWorkgroups = workgroups1D(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        state.elementWorkgroups = workgroupsFolded(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        state.blockWorkgroups = workgroupsFolded(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
     }
     pass.setPipeline(getOrCreateSplatSortKeygenPipeline(ctx));
     pass.setBindGroup(0, state.radixBindGroups[0]!);
@@ -1124,8 +1124,8 @@ export const encodeLatticeSortScanExclusive = (ctx: RendererContext, pass: GPUCo
     const scan = ensureLatticeSortScanLevel(ctx, level, blocks);
     if (scan.dispatchCount !== count) {
         scan.dispatchCount = count;
-        scan.elementWorkgroups = workgroups1D(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
-        scan.blockWorkgroups = workgroups1D(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        scan.elementWorkgroups = workgroupsFolded(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        scan.blockWorkgroups = workgroupsFolded(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
     }
     pass.setPipeline(latticePipeline(ctx, "lattice:sort:scan:block", scanBlockExclusiveU32WGSL, getLatticeSortScanBlockLayout(ctx)));
     pass.setBindGroup(0, ctx.device.createBindGroup({
@@ -1189,8 +1189,8 @@ export const encodeLatticeSpaceSort = (ctx: RendererContext, pass: GPUComputePas
             ] }) : null
         ];
         state.radixBindGroupKey = bindGroupKey;
-        state.elementWorkgroups = workgroups1D(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
-        state.blockWorkgroups = workgroups1D(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        state.elementWorkgroups = workgroupsFolded(count, 256, ctx.device.limits.maxComputeWorkgroupsPerDimension);
+        state.blockWorkgroups = workgroupsFolded(count, 1024, ctx.device.limits.maxComputeWorkgroupsPerDimension);
     }
     pass.setPipeline(latticePipeline(ctx, "lattice:sort:keygen", latticeSpaceSortWGSL, getLatticeSortKeygenLayout(ctx)));
     pass.setBindGroup(0, state.radixBindGroups[0]!);

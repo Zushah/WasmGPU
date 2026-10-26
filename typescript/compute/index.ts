@@ -4,9 +4,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+import { assert } from "../utils";
 import { StorageBuffer, wrapStorageBuffer, type StorageBufferDescriptor, type WrapStorageBufferOptions, UniformBuffer, type UniformBufferDescriptor } from "./buffer";
 import { ComputePipeline, type ComputePipelineDescriptor } from "./pipeline";
-import { workgroups1D, workgroups2D, workgroups3D, type WorkgroupCounts } from "./workgroups";
+import { workgroups1D, workgroups2D, workgroups3D, workgroupsFolded, type WorkgroupCounts, type WorkgroupExtent } from "./workgroups";
 import { encodeDispatch, encodeDispatchBatchWithLimit, type ComputeDispatchCommand, validateWorkgroupsForDevice } from "./dispatch";
 import { ComputeKernels } from "./kernels";
 import { RGBA8BufferCanvasBlitter, type BlitRGBA8BufferToCanvasOptions, type RGBA8BufferSource } from "./blit";
@@ -88,17 +89,22 @@ export class Compute {
     }
 
     dispatch1D(pipeline: GPUComputePipeline | ComputePipeline, bindGroups: ReadonlyArray<GPUBindGroup | null | undefined>, invocations: number, workgroupSizeX: number, label?: string, opts: ComputeDispatchOptions = {}): GPUCommandBuffer {
-        const workgroups: WorkgroupCounts = workgroups1D(invocations, workgroupSizeX, this.device.limits.maxComputeWorkgroupsPerDimension);
+        const workgroups: WorkgroupCounts = this.workgroups1D(invocations, workgroupSizeX);
         return this.dispatch({ pipeline, bindGroups, workgroups, label }, opts);
     }
 
     dispatch2D(pipeline: GPUComputePipeline | ComputePipeline, bindGroups: ReadonlyArray<GPUBindGroup | null | undefined>, width: number, height: number, workgroupSizeX: number, workgroupSizeY: number, label?: string, opts: ComputeDispatchOptions = {}): GPUCommandBuffer {
-        const workgroups: WorkgroupCounts = workgroups2D(width, height, workgroupSizeX, workgroupSizeY);
+        const workgroups: WorkgroupCounts = this.workgroups2D(width, height, workgroupSizeX, workgroupSizeY);
         return this.dispatch({ pipeline, bindGroups, workgroups, label }, opts);
     }
 
     dispatch3D(pipeline: GPUComputePipeline | ComputePipeline, bindGroups: ReadonlyArray<GPUBindGroup | null | undefined>, width: number, height: number, depth: number, workgroupSizeX: number, workgroupSizeY: number, workgroupSizeZ: number, label?: string, opts: ComputeDispatchOptions = {}): GPUCommandBuffer {
-        const workgroups: WorkgroupCounts = workgroups3D(width, height, depth, workgroupSizeX, workgroupSizeY, workgroupSizeZ);
+        const workgroups: WorkgroupCounts = this.workgroups3D(width, height, depth, workgroupSizeX, workgroupSizeY, workgroupSizeZ);
+        return this.dispatch({ pipeline, bindGroups, workgroups, label }, opts);
+    }
+
+    dispatchFolded(pipeline: GPUComputePipeline | ComputePipeline, bindGroups: ReadonlyArray<GPUBindGroup | null | undefined>, size: WorkgroupExtent, workgroupSize: WorkgroupExtent, label?: string, opts: ComputeDispatchOptions = {}): GPUCommandBuffer {
+        const workgroups: WorkgroupCounts = this.workgroupsFolded(size, workgroupSize);
         return this.dispatch({ pipeline, bindGroups, workgroups, label }, opts);
     }
 
@@ -108,15 +114,26 @@ export class Compute {
     }
 
     workgroups1D(invocations: number, workgroupSizeX: number): WorkgroupCounts {
-        return workgroups1D(invocations, workgroupSizeX, this.device.limits.maxComputeWorkgroupsPerDimension);
+        return this.assertWorkgroupLimit(workgroups1D(invocations, workgroupSizeX));
     }
 
     workgroups2D(width: number, height: number, workgroupSizeX: number, workgroupSizeY: number): WorkgroupCounts {
-        return workgroups2D(width, height, workgroupSizeX, workgroupSizeY);
+        return this.assertWorkgroupLimit(workgroups2D(width, height, workgroupSizeX, workgroupSizeY));
     }
 
     workgroups3D(width: number, height: number, depth: number, workgroupSizeX: number, workgroupSizeY: number, workgroupSizeZ: number): WorkgroupCounts {
-        return workgroups3D(width, height, depth, workgroupSizeX, workgroupSizeY, workgroupSizeZ);
+        return this.assertWorkgroupLimit(workgroups3D(width, height, depth, workgroupSizeX, workgroupSizeY, workgroupSizeZ));
+    }
+
+    workgroupsFolded(size: WorkgroupExtent, workgroupSize: WorkgroupExtent): WorkgroupCounts {
+        return workgroupsFolded(size, workgroupSize, this.device.limits.maxComputeWorkgroupsPerDimension);
+    }
+
+    private assertWorkgroupLimit(workgroups: WorkgroupCounts): WorkgroupCounts {
+        const max = this.device.limits.maxComputeWorkgroupsPerDimension;
+        const [x, y, z] = workgroups;
+        assert(x <= max && y <= max && z <= max, `${x}x${y}x${z} workgroups exceed device.limits.maxComputeWorkgroupsPerDimension (${max}); use workgroupsFolded() or dispatchFolded() with a shader that decodes the folded grid`);
+        return workgroups;
     }
 
     destroy(): void {
@@ -133,8 +150,8 @@ export { StorageBuffer, UniformBuffer } from "./buffer";
 export type { StorageBufferDescriptor, WrapStorageBufferOptions, UniformBufferDescriptor, TypedArrayConstructor } from "./buffer";
 export { ComputePipeline } from "./pipeline";
 export type { ComputePipelineDescriptor } from "./pipeline";
-export { ceilDiv, makeWorkgroupSize, makeWorkgroupCounts, workgroups1D, workgroups2D, workgroups3D } from "./workgroups";
-export type { WorkgroupSize, WorkgroupCounts } from "./workgroups";
+export { ceilDiv, makeWorkgroupSize, makeWorkgroupCounts, workgroups1D, workgroups2D, workgroups3D, workgroupsFolded } from "./workgroups";
+export type { WorkgroupSize, WorkgroupCounts, WorkgroupExtent } from "./workgroups";
 export { normalizeWorkgroups, validateWorkgroupsForDevice, encodeDispatch, encodeDispatchBatch } from "./dispatch";
 export type { DispatchWorkgroups, ComputeDispatchCommand } from "./dispatch";
 export { RGBA8BufferCanvasBlitter } from "./blit";

@@ -50,12 +50,9 @@
             @group(0) @binding(0) var<storage, read> in_coord: array<Star>;
             @group(0) @binding(1) var<storage, read_write> out_points: array<PointData>;
             @group(0) @binding(2) var<uniform> time: f32;
-            fn invocation_index(wid: vec3<u32>, nwg: vec3<u32>, lid: u32) -> u32 {
-                return (wid.y * nwg.x + wid.x) * 256u + lid;
-            }
             @compute @workgroup_size(256)
-            fn main(@builtin(workgroup_id) wid: vec3<u32>, @builtin(num_workgroups) nwg: vec3<u32>, @builtin(local_invocation_index) lid: u32) {
-                let idx = invocation_index(wid, nwg, lid);
+            fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
+                let idx = global_id.x;
                 if (idx >= arrayLength(&in_coord)) { return; }
                 let star = in_coord[idx];
                 let r = max(star.r, 0.1);

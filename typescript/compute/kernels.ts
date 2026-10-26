@@ -9,7 +9,7 @@ import { StorageBuffer, validateStorageBufferRange } from "./buffer";
 import { ComputePipeline } from "./pipeline";
 import { encodeDispatchBatchWithLimit } from "./dispatch";
 import type { ComputeDispatchCommand } from "./dispatch";
-import { ceilDiv, makeWorkgroupCounts, workgroups1D } from "./workgroups";
+import { ceilDiv, makeWorkgroupCounts, workgroupsFolded } from "./workgroups";
 import type { WorkgroupCounts } from "./workgroups";
 import { ScratchAllocator } from "./scratch";
 import { storageBufferLayout, uniformBufferLayout } from "../wgsl";
@@ -257,7 +257,9 @@ export class ComputeKernels {
     }
 
     private workgroups(invocations: number, perWorkgroup: number): WorkgroupCounts {
-        return workgroups1D(invocations, perWorkgroup, this.device.limits.maxComputeWorkgroupsPerDimension);
+        const workgroups = workgroupsFolded(invocations, perWorkgroup, this.device.limits.maxComputeWorkgroupsPerDimension);
+        assert(workgroups[2] === 1, `${invocations} invocations of ${perWorkgroup} per workgroup fold into ${workgroups[0]}x${workgroups[1]}x${workgroups[2]} workgroups, but built-in kernels only decode folded grids with z = 1`);
+        return workgroups;
     }
 
     private resolveCount(buf: StorageBuffer, elemBytes: number, count: number | undefined, label: string): number {

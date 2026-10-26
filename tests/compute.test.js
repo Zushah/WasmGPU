@@ -6,7 +6,7 @@
 
 import assert from "./utils/assert.js";
 import { createApproxHelpers, createTestRandom, destroyTestDevice, setupTest } from "./utils/helpers.js";
-import { Compute, ComputePipeline, webgpuInterop, makeWorkgroupSize, makeWorkgroupCounts, workgroups1D, workgroups2D, workgroups3D, normalizeWorkgroups } from "../release/WasmGPU.js";
+import { Compute, ComputePipeline, webgpuInterop, makeWorkgroupSize, makeWorkgroupCounts, workgroups1D, workgroups2D, workgroups3D, workgroupsFolded, normalizeWorkgroups } from "../release/WasmGPU.js";
 
 const { arraysApproxEqual } = createApproxHelpers(1e-5);
 
@@ -29,20 +29,21 @@ const compute = new Compute(device, device.queue);
     assert.deepStrictEqual(makeWorkgroupSize(64, 1, 1), [64, 1, 1]);
     assert.deepStrictEqual(makeWorkgroupCounts(10, 2, 3), [10, 2, 3]);
     assert.deepStrictEqual(workgroups1D(0, 64), [0, 1, 1]);
-    assert.deepStrictEqual(workgroups1D(16_776_960, 256), [65535, 1, 1]);
-    assert.deepStrictEqual(workgroups1D(16_776_961, 256), [32768, 2, 1]);
-    assert.deepStrictEqual(workgroups1D(4096 * 4096, 256), [32768, 2, 1]);
-    assert.deepStrictEqual(workgroups1D(33_554_432, 512), [32768, 2, 1]);
-    assert.deepStrictEqual(workgroups1D(512 ** 3, 256), [58255, 9, 1]);
-    assert.deepStrictEqual(workgroups1D(1000, 64, 4), [4, 4, 1]);
-    assert.deepStrictEqual(workgroups1D(1100, 64, 5), [5, 4, 1]);
-    assert.throws(() => workgroups1D(26 * 64, 64, 5), /maxComputeWorkgroupsPerDimension/);
-    assert.throws(() => workgroups1D(2 ** 32, 256), /32-bit invocation indexing/);
-    assert.throws(() => workgroups1D(64, 64, 0), /maxWorkgroupsPerDimension must be a positive integer/);
-    const maxWorkgroups = device.limits.maxComputeWorkgroupsPerDimension;
-    for (const n of [1000, maxWorkgroups * 256 + 1]) assert.deepStrictEqual(compute.workgroups1D(n, 256), workgroups1D(n, 256, maxWorkgroups), `Compute.workgroups1D must apply the device limit for n=${n}`);
+    assert.deepStrictEqual(workgroups1D(16_777_216, 256), [65536, 1, 1], "workgroups1D must never fold");
     assert.deepStrictEqual(workgroups2D(33, 33, 16, 16), [3, 3, 1]);
     assert.deepStrictEqual(workgroups3D(9, 8, 8, 8, 8, 8), [2, 1, 1]);
+    assert.deepStrictEqual(workgroupsFolded(16_776_961, 256), [32768, 2, 1]);
+    assert.deepStrictEqual(workgroupsFolded([33, 33], [16, 16]), [3, 3, 1], "Fitting grids must not fold");
+    assert.deepStrictEqual(workgroupsFolded([40, 3], [8, 1], 4), [4, 4, 1]);
+    assert.deepStrictEqual(workgroupsFolded([7, 5, 3], [2, 2, 2], 3), [3, 3, 3]);
+    assert.deepStrictEqual(workgroupsFolded(26 * 64, 64, 5), [5, 3, 2]);
+    assert.throws(() => workgroupsFolded([10, 10], 8), /same rank/);
+    assert.throws(() => workgroupsFolded(2 ** 32, 256), /32-bit invocation indexing/);
+    assert.throws(() => workgroupsFolded([2.5, 4], [1, 1]), /integer/);
+    assert.throws(() => workgroups1D(256.5, 256), /integer/);
+    const maxWorkgroups = device.limits.maxComputeWorkgroupsPerDimension;
+    assert.throws(() => compute.workgroups1D(maxWorkgroups * 256 + 1, 256), /workgroupsFolded/);
+    for (const n of [1000, maxWorkgroups * 256 + 1]) assert.deepStrictEqual(compute.workgroupsFolded(n, 256), workgroupsFolded(n, 256, maxWorkgroups), `Compute.workgroupsFolded must apply the device limit for n=${n}`);
     assert.deepStrictEqual(normalizeWorkgroups([5, 2, 3]), { x: 5, y: 2, z: 3 });
     assert.deepStrictEqual(normalizeWorkgroups({ x: 5 }), { x: 5, y: 1, z: 1 });
 }
@@ -259,7 +260,7 @@ const compute = new Compute(device, device.queue);
     assert.ok(await device.popErrorScope(), "Owned wrapper destruction must destroy the raw GPUBuffer");
 }
 
-// 7) Kernels on folded workgroup grids rebuild each linear index exactly once, and oversized kernel bindings fail before allocation.
+// 7) Kernels on folded workgroup grids rebuild each linear index exactly once in one to three dimensions, and oversized kernel bindings fail before allocation.
 {
     const pipeline = compute.createPipeline({ code: `
         @group(0) @binding(0) var<storage, read_write> out : array<u32>;
@@ -277,7 +278,7 @@ const compute = new Compute(device, device.queue);
         }
     ` });
     for (const [n, smallMax, expected] of [[5000, 5, [5, 4, 1]], [5000, 7, [7, 3, 1]], [70_000, 17, [17, 17, 1]]]) {
-        const workgroups = workgroups1D(n, 256, smallMax);
+        const workgroups = workgroupsFolded(n, 256, smallMax);
         assert.deepStrictEqual(workgroups, expected, `folded grid for n=${n}, max=${smallMax}`);
         assert.ok(workgroups[1] > 1 && workgroups[0] <= smallMax && workgroups[1] <= smallMax, `n=${n} must fold within max=${smallMax}`);
         const out = compute.createStorageBuffer({ data: new Uint32Array(n).fill(0xFFFFFFFF), copySrc: true });
@@ -291,6 +292,27 @@ const compute = new Compute(device, device.queue);
         out.destroy();
         executions.destroy();
     }
+    const volume = compute.createPipeline({ code: `
+        @group(0) @binding(0) var<storage, read_write> hits : array<atomic<u32>>;
+        @compute @workgroup_size(2, 2, 2)
+        fn main(@builtin(workgroup_id) wid : vec3<u32>, @builtin(num_workgroups) nwg : vec3<u32>, @builtin(local_invocation_id) lid : vec3<u32>) {
+            let size = vec3<u32>(7u, 5u, 3u);
+            let groups = (size + 1u) / 2u;
+            let linear = wid.x + nwg.x * (wid.y + nwg.y * wid.z);
+            let lz = linear / (groups.x * groups.y);
+            if (lz >= groups.z) {
+                return;
+            }
+            let p = vec3<u32>(linear % groups.x, (linear / groups.x) % groups.y, lz) * 2u + lid;
+            if (all(p < size)) {
+                atomicAdd(&hits[(p.z * size.y + p.y) * size.x + p.x], 1u);
+            }
+        }
+    ` });
+    const hits = compute.createStorageBuffer({ byteLength: 7 * 5 * 3 * 4, copySrc: true });
+    compute.dispatchBatch([{ pipeline: volume, bindGroups: [volume.createBindGroup(0, { 0: hits })], workgroups: workgroupsFolded([7, 5, 3], [2, 2, 2], 3) }], "folded_volume", { validateLimits: true });
+    assert.deepStrictEqual(Array.from(await hits.readAs(Uint32Array)), new Array(7 * 5 * 3).fill(1), "every voxel of a z-folded 3D grid must execute exactly once");
+    hits.destroy();
     const raw = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE });
     const tooMany = Math.floor(device.limits.maxStorageBufferBindingSize / 4) + 1;
     assert.throws(() => compute.kernels.copyF32(raw, { count: tooMany }), /copyF32: a \d+-byte binding exceeds device\.limits\.maxStorageBufferBindingSize/);
