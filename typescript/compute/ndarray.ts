@@ -5,13 +5,14 @@
  */
 
 import { alignTo, assert } from "../utils";
-import { StorageBuffer, validateStorageBufferRange, type StorageBufferDescriptor } from "./buffer";
+import { StorageBuffer, validateStorageBufferRange, wrapStorageBuffer, type StorageBufferDescriptor } from "./buffer";
 import { ComputePipeline } from "./pipeline";
 import { encodeDispatchBatchWithLimit, type ComputeDispatchCommand } from "./dispatch";
 import { workgroups1D } from "./workgroups";
 import { storageBufferLayout } from "../wgsl";
 import { ndarrayf, wasm, type WasmPtr } from "../wasm";
 import type { ReadbackRing } from "./readback";
+import { ScratchAllocator } from "./scratch";
 import ndarrayWGSL from "../../wgsl/compute/ndarray.wgsl";
 
 export type DType = "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "f32" | "f64";
@@ -915,8 +916,6 @@ const buildResizeTable = (nIn: number, nOut: number, method: NdarrayResizeMethod
 
 const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, P_VALUE_LO = 5, P_VALUE_HI = 6, P_PARAM_AXIS = 7, P_PARAM_LEN = 8, P_AXIS_Y = 9, P_AXIS_X = 10, P_TABLE = 11, P_SHAPE = 16, P_SRC_STRIDE = 24, P_DST_STRIDE = 32, P_SRC_SHAPE = 40, P_BEFORE = 48, P_HEADER_WORDS = 56;
 
-type GPUDisposable = { destroy(): void };
-
 type GPUGather = {
     dst: GPUndarray;
     src: GPUndarray;
@@ -936,20 +935,18 @@ type GPUGather = {
 class NdarrayGPUEngine {
     private readonly device: GPUDevice;
     private readonly queue: GPUQueue;
+    private readonly scratch: ScratchAllocator;
     private readonly pipelines: Map<string, ComputePipeline> = new Map();
-    private readonly pending: Set<GPUDisposable> = new Set();
     private empty: StorageBuffer | null = null;
 
-    constructor(device: GPUDevice, queue: GPUQueue) {
+    constructor(device: GPUDevice, queue: GPUQueue, scratch: ScratchAllocator) {
         this.device = device;
         this.queue = queue;
+        this.scratch = scratch;
     }
 
     destroy(): void {
-        for (const resource of this.pending) resource.destroy();
-        this.pending.clear();
         this.pipelines.clear();
-        this.empty?.destroy();
         this.empty = null;
     }
 
@@ -996,13 +993,6 @@ class NdarrayGPUEngine {
         return { resource: { buffer: storage, offset, size }, delta };
     }
 
-    private params(words: Uint32Array, label: string): GPUBuffer {
-        const buffer = this.device.createBuffer({ label, size: words.byteLength, usage: GPUBufferUsage.STORAGE, mappedAtCreation: true });
-        new Uint32Array(buffer.getMappedRange()).set(words);
-        buffer.unmap();
-        return buffer;
-    }
-
     output(dtype: DType, shape: ReadonlyArray<number>, options: NdarrayGPUOptions, op: string): GPUndarray {
         const info = dtypeInfo(dtype);
         const bytes = alignTo(numelFromShape(shape) * info.bytesPerElement, 4);
@@ -1010,14 +1000,15 @@ class NdarrayGPUEngine {
         return GPUndarray.empty({ device: this.device, queue: this.queue }, dtype, { shape }, { label: options.label ?? opName(op), copySrc: options.copySrc ?? true, copyDst: options.copyDst ?? true, usage: options.usage });
     }
 
-    stage(src: GPUndarray, commands: ComputeDispatchCommand[], disposables: GPUDisposable[], op: string): GPUndarray {
-        const temp = this.output(src.dtype, src.shape, { label: `${opName(op)}:staging`, copySrc: false, copyDst: false }, op);
-        disposables.push(temp);
-        this.gather(commands, disposables, { dst: temp, src, entryPoint: "gather", constants: castConstants(src.dtype, src.dtype, ARITHMETIC_MODE), srcStrides: src.stridesBytes }, op);
+    stage(src: GPUndarray, commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, op: string): GPUndarray {
+        const bytes = alignTo(src.numel * src.bytesPerElement, 4);
+        const storage = wrapStorageBuffer(this.device, this.queue, this.scratch.acquire(bytes, `${opName(op)}:staging`), { byteLength: bytes });
+        const temp = GPUndarray.wrap(storage, src.dtype, { shape: src.shape });
+        this.gather(commands, encoder, { dst: temp, src, entryPoint: "gather", constants: castConstants(src.dtype, src.dtype, ARITHMETIC_MODE), srcStrides: src.stridesBytes }, op);
         return temp;
     }
 
-    gather(commands: ComputeDispatchCommand[], disposables: GPUDisposable[], spec: GPUGather, op: string): void {
+    gather(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, spec: GPUGather, op: string): void {
         const { dst, src } = spec;
         if (dst.numel === 0) return;
         const c = coalesceDims(dst.shape, [spec.srcStrides, dst.stridesBytes], spec.keep);
@@ -1051,21 +1042,16 @@ class NdarrayGPUEngine {
             words[P_BEFORE + i] = (axis !== undefined && spec.before) ? spec.before[axis]! : 0;
         }
         words.set(table, P_HEADER_WORDS);
-        const params = this.params(words, `${opName(op)}:params`);
-        disposables.push(params);
+        const params = this.scratch.params(words, encoder);
         const pipeline = this.pipeline(spec.entryPoint, spec.constants);
-        const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: { buffer: params, size: words.byteLength } }, `${opName(op)}:bg`);
+        const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: params }, `${opName(op)}:bg`);
         commands.push({ pipeline, bindGroups: [bindGroup], workgroups: workgroups1D(count, 256, this.device.limits.maxComputeWorkgroupsPerDimension), label: opName(op) });
     }
 
-    submit(commands: ComputeDispatchCommand[], disposables: GPUDisposable[], encoder: GPUCommandEncoder | undefined, label: string | undefined, op: string): void {
+    submit(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, label: string | undefined, op: string): void {
         const target = encoder ?? this.device.createCommandEncoder({ label: label ?? opName(op) });
         if (commands.length > 0) encodeDispatchBatchWithLimit(target, commands, label ?? opName(op), this.device.limits.maxComputeWorkgroupsPerDimension);
-        if (encoder) return;
-        this.queue.submit([target.finish()]);
-        for (const resource of disposables) this.pending.add(resource);
-        const release = (): void => { for (const resource of disposables) if (this.pending.delete(resource)) resource.destroy(); };
-        this.queue.onSubmittedWorkDone().then(release, release);
+        if (!encoder) this.queue.submit([target.finish()]);
     }
 }
 
@@ -1113,14 +1099,18 @@ export class NdarrayNamespace {
     private readonly device: GPUDevice;
     private readonly queue: GPUQueue;
     private readonly readback: ReadbackRing | null;
+    private readonly scratch: ScratchAllocator;
+    private readonly ownsScratch: boolean;
     private readonly gpu: NdarrayGPUEngine;
     private destroyed: boolean = false;
 
-    constructor(device: GPUDevice, queue: GPUQueue, readback: ReadbackRing | null = null) {
+    constructor(device: GPUDevice, queue: GPUQueue, readback: ReadbackRing | null = null, scratch?: ScratchAllocator) {
         this.device = device;
         this.queue = queue;
         this.readback = readback;
-        this.gpu = new NdarrayGPUEngine(device, queue);
+        this.scratch = scratch ?? new ScratchAllocator(device, queue);
+        this.ownsScratch = !scratch;
+        this.gpu = new NdarrayGPUEngine(device, queue, this.scratch);
     }
 
     [Symbol.hasInstance](value: unknown): value is Ndarray {
@@ -1131,6 +1121,7 @@ export class NdarrayNamespace {
         if (this.destroyed) return;
         this.destroyed = true;
         this.gpu.destroy();
+        if (this.ownsScratch) this.scratch.destroy();
     }
 
     private assertGPUArray(a: GPUndarray, op: string, label: string = "array"): void {
@@ -1150,21 +1141,16 @@ export class NdarrayNamespace {
         return { out, owned: false };
     }
 
-    private gpuRun(src: GPUndarray, dtype: DType, shape: ReadonlyArray<number>, options: NdarrayOperationOptions, op: string, encode: (commands: ComputeDispatchCommand[], disposables: GPUDisposable[], out: GPUndarray, src: GPUndarray) => void): GPUndarray {
+    private gpuRun(src: GPUndarray, dtype: DType, shape: ReadonlyArray<number>, options: NdarrayOperationOptions, op: string, encode: (commands: ComputeDispatchCommand[], out: GPUndarray, src: GPUndarray) => void): GPUndarray {
         this.assertGPUArray(src, op);
         const { out, owned } = this.gpuOutput(dtype, shape, options, op);
         const commands: ComputeDispatchCommand[] = [];
-        const disposables: GPUDisposable[] = [];
         try {
-            const input = (out.buffer.buffer === src.buffer.buffer && out.numel > 0) ? this.gpu.stage(src, commands, disposables, op) : src;
-            encode(commands, disposables, out, input);
-            this.gpu.submit(commands, disposables, options.encoder, options.label, op);
+            const input = (out.buffer.buffer === src.buffer.buffer && out.numel > 0) ? this.gpu.stage(src, commands, options.encoder, op) : src;
+            encode(commands, out, input);
+            this.gpu.submit(commands, options.encoder, options.label, op);
             return out;
-        } catch (error) {
-            for (const resource of disposables) resource.destroy();
-            if (owned) out.destroy();
-            throw error;
-        }
+        } catch (error) { if (owned) out.destroy(); throw error; } finally { this.scratch.reset(options.encoder); }
     }
 
     private castImpl<T extends AnyNdarray>(a: T, dtype: DType, options: NdarrayCastOptions, op: string): T {
@@ -1180,8 +1166,8 @@ export class NdarrayNamespace {
             catch (error) { out.destroy(); throw error; }
         }
         assertGPUCast(a.dtype, dtype, op);
-        return this.gpuRun(a as GPUndarray, dtype, a.shape, options, op, (commands, disposables, out, src) => {
-            this.gpu.gather(commands, disposables, { dst: out, src, entryPoint: "gather", constants: castConstants(src.dtype, dtype, mode), srcStrides: src.stridesBytes }, op);
+        return this.gpuRun(a as GPUndarray, dtype, a.shape, options, op, (commands, out, src) => {
+            this.gpu.gather(commands, options.encoder, { dst: out, src, entryPoint: "gather", constants: castConstants(src.dtype, dtype, mode), srcStrides: src.stridesBytes }, op);
         }) as T;
     }
 
@@ -1224,16 +1210,12 @@ export class NdarrayNamespace {
         assert(target.bytesPerElement >= 4 || target.isContiguousC, `${opName(op)}: GPU destinations with 8-bit or 16-bit dtypes must be C-contiguous`);
         if (target.numel === 0) return;
         const commands: ComputeDispatchCommand[] = [];
-        const disposables: GPUDisposable[] = [];
         try {
-            const input = (target.buffer.buffer === source.buffer.buffer) ? this.gpu.stage(source, commands, disposables, op) : source;
+            const input = (target.buffer.buffer === source.buffer.buffer) ? this.gpu.stage(source, commands, options.encoder, op) : source;
             const strides = (input === source) ? srcStrides : broadcastStrides(input.shape, input.stridesBytes, target.shape, opName(op));
-            this.gpu.gather(commands, disposables, { dst: target, src: input, entryPoint: "gather", constants: castConstants(input.dtype, target.dtype, mode), srcStrides: strides }, op);
-            this.gpu.submit(commands, disposables, options.encoder, options.label, op);
-        } catch (error) {
-            for (const resource of disposables) resource.destroy();
-            throw error;
-        }
+            this.gpu.gather(commands, options.encoder, { dst: target, src: input, entryPoint: "gather", constants: castConstants(input.dtype, target.dtype, mode), srcStrides: strides }, op);
+            this.gpu.submit(commands, options.encoder, options.label, op);
+        } finally { this.scratch.reset(options.encoder); }
     }
 
     pad<T extends AnyNdarray>(a: T, options: NdarrayPadOptions): T {
@@ -1263,8 +1245,8 @@ export class NdarrayNamespace {
             catch (error) { out.destroy(); throw error; }
         }
         for (let i = 0; i < a.ndim; i++) assert(shape[i]! <= 0x7FFFFFFF, `${opName(op)}: GPU padding supports padded axes up to 2^31 - 1 elements (axis ${i} has ${shape[i]})`);
-        return this.gpuRun(a as GPUndarray, a.dtype, shape, options, op, (commands, disposables, out, src) => {
-            this.gpu.gather(commands, disposables, { dst: out, src, entryPoint: "gather", constants: { SRC_DTYPE: DTYPE_CODE[a.dtype], DST_DTYPE: DTYPE_CODE[a.dtype], OPERATION: 1, PAD_MODE: PAD_MODE_CODE[mode] }, srcStrides: src.stridesBytes, keep, srcShape: src.shape, before, valueBits: bits }, op);
+        return this.gpuRun(a as GPUndarray, a.dtype, shape, options, op, (commands, out, src) => {
+            this.gpu.gather(commands, options.encoder, { dst: out, src, entryPoint: "gather", constants: { SRC_DTYPE: DTYPE_CODE[a.dtype], DST_DTYPE: DTYPE_CODE[a.dtype], OPERATION: 1, PAD_MODE: PAD_MODE_CODE[mode] }, srcStrides: src.stridesBytes, keep, srcShape: src.shape, before, valueBits: bits }, op);
         }) as T;
     }
 
@@ -1300,8 +1282,8 @@ export class NdarrayNamespace {
         const f0 = p0.map(Math.fround), f1 = p1.map(Math.fround);
         assert([...f0, ...f1].every(Number.isFinite) && (!meanStd || f1.every((v) => v !== 0)), `${opName(op)}: parameters must stay finite (and std nonzero) when rounded to f32 for the GPU`);
         const table = new Uint32Array(new Float32Array([...f0, ...f1]).buffer);
-        return this.gpuRun(a as GPUndarray, dtype, a.shape, options, op, (commands, disposables, out, src) => {
-            this.gpu.gather(commands, disposables, { dst: out, src, entryPoint: "gather", constants: { SRC_DTYPE: DTYPE_CODE[src.dtype], DST_DTYPE: DTYPE_CODE[dtype], OPERATION: 2, AFFINE_FORM: meanStd ? 1 : 0, OVERFLOW: 1, ROUNDING: 1 }, srcStrides: src.stridesBytes, keep: a.shape.map((_, i) => i === axis && vector), paramAxis: vector ? axis : -1, paramLen: f0.length, table }, op);
+        return this.gpuRun(a as GPUndarray, dtype, a.shape, options, op, (commands, out, src) => {
+            this.gpu.gather(commands, options.encoder, { dst: out, src, entryPoint: "gather", constants: { SRC_DTYPE: DTYPE_CODE[src.dtype], DST_DTYPE: DTYPE_CODE[dtype], OPERATION: 2, AFFINE_FORM: meanStd ? 1 : 0, OVERFLOW: 1, ROUNDING: 1 }, srcStrides: src.stridesBytes, keep: a.shape.map((_, i) => i === axis && vector), paramAxis: vector ? axis : -1, paramLen: f0.length, table }, op);
         }) as T;
     }
 
@@ -1354,8 +1336,8 @@ export class NdarrayNamespace {
         table.set(new Uint32Array(tx.i1.buffer), tx0 + tx.i0.length);
         table.set(asWords(tx.w0), tx0 + 2 * tx.i0.length);
         table.set(asWords(tx.w1), tx0 + 3 * tx.i0.length);
-        return this.gpuRun(a as GPUndarray, dtype, shape, options, op, (commands, disposables, out, src) => {
-            this.gpu.gather(commands, disposables, { dst: out, src, entryPoint: "resize", constants: { SRC_DTYPE: DTYPE_CODE[src.dtype], DST_DTYPE: DTYPE_CODE[dtype], OPERATION: 3, RESIZE_METHOD: method === "linear" ? 1 : 0, OVERFLOW: 1, ROUNDING: 1 }, srcStrides: src.stridesBytes, keep: shape.map((_, i) => i === axes[0] || i === axes[1]), resizeAxes: axes, valueBits: elementBits("f32", value), table }, op);
+        return this.gpuRun(a as GPUndarray, dtype, shape, options, op, (commands, out, src) => {
+            this.gpu.gather(commands, options.encoder, { dst: out, src, entryPoint: "resize", constants: { SRC_DTYPE: DTYPE_CODE[src.dtype], DST_DTYPE: DTYPE_CODE[dtype], OPERATION: 3, RESIZE_METHOD: method === "linear" ? 1 : 0, OVERFLOW: 1, ROUNDING: 1 }, srcStrides: src.stridesBytes, keep: shape.map((_, i) => i === axes[0] || i === axes[1]), resizeAxes: axes, valueBits: elementBits("f32", value), table }, op);
         }) as T;
     }
 

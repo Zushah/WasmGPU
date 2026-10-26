@@ -834,8 +834,20 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     assert.strictEqual((await kernels.dotU32(au, bu, { count: 0 }).readAs(Uint32Array))[0], 0, "dotU32 zero");
 }
 
-// 22) Scalar parameter buffers remain independent in a shared caller encoder.
+// 22) Kernel parameters and temporaries stay isolated across caller encoders and self-submitted calls.
 {
+    const a = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, 4]) });
+    const b = compute.createStorageBuffer({ data: new Float32Array([10, 20, 30, 40]) });
+    const c = compute.createStorageBuffer({ data: new Float32Array([100, 200, 300, 400]) });
+    const pending = device.createCommandEncoder();
+    const sa = kernels.sclF32(a, 2, { encoder: pending });
+    const sb = kernels.sclF32(b, 5);
+    const sc = kernels.sclF32(c, 3, { encoder: pending });
+    device.queue.submit([pending.finish()]);
+    assert.deepStrictEqual(Array.from(await sa.readAs(Float32Array)), [2, 4, 6, 8], "encoder parameters survive an intervening self-submitted call");
+    assert.deepStrictEqual(Array.from(await sb.readAs(Float32Array)), [50, 100, 150, 200], "intervening self-submitted scalar");
+    assert.deepStrictEqual(Array.from(await sc.readAs(Float32Array)), [300, 600, 900, 1200], "second encoder scalar");
+
     const input = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3]) });
     const outA = compute.createStorageBuffer({ byteLength: 12, copySrc: true });
     const outB = compute.createStorageBuffer({ byteLength: 12, copySrc: true });
@@ -845,6 +857,69 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
     device.queue.submit([encoder.finish()]);
     arraysApproxEqual(await outA.readAs(Float32Array), new Float32Array([2, 4, 6]), 1e-6, "shared encoder first scalar");
     arraysApproxEqual(await outB.readAs(Float32Array), new Float32Array([-3, -6, -9]), 1e-6, "shared encoder second scalar");
+
+    const empty = compute.createStorageBuffer({ byteLength: 0 });
+    const prior = compute.createStorageBuffer({ data: new Float32Array([7, 8]) });
+    for (const [label, run, bits] of [
+        ["sumF32", (out, enc) => kernels.sumF32(empty, { out, encoder: enc }), [0]],
+        ["minF32", (out, enc) => kernels.minF32(empty, { out, encoder: enc }), [0x7F800000]],
+        ["argminF32", (out, enc) => kernels.argminF32(empty, { out, encoder: enc }), [0x7F800000, 0xFFFFFFFF]]
+    ]) {
+        const out = compute.createStorageBuffer({ byteLength: bits.length * 4, copySrc: true });
+        const enc = device.createCommandEncoder();
+        kernels.copyF32(prior, { out, count: bits.length, encoder: enc });
+        run(out, enc);
+        device.queue.submit([enc.finish()]);
+        arraysEqualU32(await out.readAs(Uint32Array), new Uint32Array(bits), `${label} identity must follow earlier encoder commands`);
+    }
+
+    const n = 160;
+    const lu = new Float32Array(n * n);
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) lu[i * n + j] = (i === j ? n : 0) + ((i * 7 + j * 13) % 17) / 17 - 0.5;
+    const rhs = compute.createStorageBuffer({ data: makeRandomF32Array(n, -1, 1) });
+    const solveLU = async (opts) => {
+        const m = compute.createStorageBuffer({ data: lu, copySrc: true });
+        const ipiv = compute.createStorageBuffer({ byteLength: n * 4, copySrc: true });
+        const x = compute.createStorageBuffer({ byteLength: n * 4, copySrc: true });
+        kernels.luFactorF32Batched(m, ipiv, 1, n, opts);
+        kernels.luSolveF32Batched(m, ipiv, rhs, x, 1, n, opts);
+        if (opts.encoder) device.queue.submit([opts.encoder.finish()]);
+        return [await m.readAs(Uint32Array), await x.readAs(Uint32Array)];
+    };
+    const [selfLU, selfX] = await solveLU({});
+    const [encLU, encX] = await solveLU({ encoder: device.createCommandEncoder() });
+    arraysEqualU32(encLU, selfLU, "encoder blocked LU factors must match self-submitted factors");
+    arraysEqualU32(encX, selfX, "encoder blocked LU solution must match self-submitted solution");
+    const scaleIn = compute.createStorageBuffer({ data: new Float32Array([0.1, 0.5, 1, 2, 10]) });
+    const transform = { mode: "log", clampMode: "range", clampMin: 0.1, clampMax: 10, domainMin: 0.1, domainMax: 10, logBase: 10 };
+    const remapSelf = await kernels.remapScaleF32(scaleIn, { transform }).readAs(Uint32Array);
+    const remapEncoder = device.createCommandEncoder();
+    const remapOut = kernels.remapScaleF32(scaleIn, { transform, encoder: remapEncoder });
+    device.queue.submit([remapEncoder.finish()]);
+    arraysEqualU32(await remapOut.readAs(Uint32Array), remapSelf, "encoder remapScaleF32 must match self-submitted remap");
+
+    const many = compute.createStorageBuffer({ data: new Float32Array(1025).fill(1) });
+    const sclOut = compute.createStorageBuffer({ byteLength: 16, copySrc: true });
+    const dotOut = compute.createStorageBuffer({ byteLength: 4, copySrc: true });
+    const calls = 64;
+    const createBuffer = device.createBuffer;
+    let created = 0;
+    const countCreated = (run) => { created = 0; device.createBuffer = function (descriptor) { created++; return createBuffer.call(this, descriptor); }; try { run(); } finally { device.createBuffer = createBuffer; } return created; };
+    kernels.sclF32(a, 2, { out: sclOut });
+    assert.strictEqual(countCreated(() => { for (let i = 0; i < calls; i++) kernels.sclF32(a, i, { out: sclOut }); }), 0, "self-submitted calls must reuse their parameter block");
+    const dotEncoder = device.createCommandEncoder();
+    kernels.dotF32(many, many, { out: dotOut, encoder: dotEncoder });
+    assert.strictEqual(countCreated(() => { for (let i = 0; i < calls; i++) kernels.dotF32(many, many, { out: dotOut, encoder: dotEncoder }); }), 0, "encoder-only calls must reuse pooled temporaries");
+    device.queue.submit([dotEncoder.finish()]);
+    numberApproxEqual((await dotOut.readAs(Float32Array))[0], 1025, 1e-3, "encoder-only dotF32");
+    const alignment = Math.max(device.limits.minStorageBufferOffsetAlignment, device.limits.minUniformBufferOffsetAlignment);
+    let blocks = 0;
+    for (let regions = 0, size = 4096; regions < calls; size = Math.min(2 * size, 65536)) { regions += Math.floor(size / alignment); blocks++; }
+    const sclEncoder = device.createCommandEncoder();
+    const encoderBlocks = countCreated(() => { for (let i = 0; i < calls; i++) kernels.sclF32(a, i, { out: sclOut, encoder: sclEncoder }); });
+    assert.ok(encoderBlocks >= 1 && encoderBlocks <= blocks, `encoder parameters must use at most ${blocks} blocks for ${calls} calls (got ${encoderBlocks})`);
+    device.queue.submit([sclEncoder.finish()]);
+    assert.deepStrictEqual(Array.from(await sclOut.readAs(Float32Array)), [calls - 1, 2 * (calls - 1), 3 * (calls - 1), 4 * (calls - 1)], "last encoder scalar wins");
 }
 
 // 23) Tiled row-major GEMM for f32, u32, and c64, including alpha/beta and k=0.

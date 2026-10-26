@@ -12,6 +12,7 @@ import { ComputeKernels } from "./kernels";
 import { RGBA8BufferCanvasBlitter, type BlitRGBA8BufferToCanvasOptions, type RGBA8BufferSource } from "./blit";
 import { ReadbackRing, type ReadbackRingDescriptor } from "./readback";
 import { NdarrayNamespace } from "./ndarray";
+import { ScratchAllocator, type ScratchAllocatorDescriptor } from "./scratch";
 
 export type ComputeDispatchOptions = {
     submit?: boolean;
@@ -20,6 +21,7 @@ export type ComputeDispatchOptions = {
 
 export type ComputeDescriptor = {
     readback?: ReadbackRingDescriptor;
+    scratch?: ScratchAllocatorDescriptor;
 };
 
 export class Compute {
@@ -28,14 +30,16 @@ export class Compute {
     readonly kernels: ComputeKernels;
     readonly readback: ReadbackRing;
     readonly ndarray: NdarrayNamespace;
+    private readonly scratch: ScratchAllocator;
     private _rgba8Blitter: RGBA8BufferCanvasBlitter | null = null;
 
     constructor(device: GPUDevice, queue: GPUQueue, desc: ComputeDescriptor = {}) {
         this.device = device;
         this.queue = queue;
-        this.kernels = new ComputeKernels(device, queue);
+        this.scratch = new ScratchAllocator(device, queue, desc.scratch);
+        this.kernels = new ComputeKernels(device, queue, this.scratch);
         this.readback = new ReadbackRing(device, queue, desc.readback);
-        this.ndarray = new NdarrayNamespace(device, queue, this.readback);
+        this.ndarray = new NdarrayNamespace(device, queue, this.readback, this.scratch);
     }
 
     createStorageBuffer(desc: StorageBufferDescriptor): StorageBuffer {
@@ -121,6 +125,7 @@ export class Compute {
         this._rgba8Blitter = null;
         this.readback.destroy();
         this.kernels.destroy();
+        this.scratch.destroy();
     }
 }
 
@@ -138,5 +143,6 @@ export { ComputeKernels } from "./kernels";
 export type { KernelDispatchOptions, VectorKernelOptions, C64Scalar, GemmF32Options, GemmU32Options, GemmC64Options, ReduceOptions, ArgReduceOptions, ScanOptions, HistogramOptions, CompactOptions, RadixSortOptions, RadixSortPairsOptions, RadixSortPairsResult, CopyOptions, ScaleExtractOptions, ScaleExtractResult, ScaleHistogramOptions, ScaleRemapOptions, ReduceOp, ArgReduceOp } from "./kernels";
 export { ReadbackRing } from "./readback";
 export type { ReadbackSource, ReadbackRingDescriptor } from "./readback";
+export type { ScratchAllocatorDescriptor } from "./scratch";
 export { Ndarray, CPUndarray, GPUndarray, NdarrayNamespace, dtypeInfo } from "./ndarray";
 export type { DType, NdarrayResidency, NdLayoutDescriptor, DTypeInfo, NumberTypedArray, NumberTypedArrayConstructor, NdarrayGPUOptions, NdarrayCreateOptions, NdarraySliceEntry, NdarraySliceRange, NdarrayPadMode, NdarrayPadWidth, NdarrayPadOptions, NdarrayOperationOptions, NdarrayOverflowMode, NdarrayRoundingMode, NdarrayCastOptions, NdarrayCopyIntoOptions, NdarrayParameter, NdarrayNormalizeOptions, NdarrayResizeMethod, NdarrayResizeOptions } from "./ndarray";

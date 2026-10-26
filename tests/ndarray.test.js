@@ -417,7 +417,56 @@ const readGPU = async (a) => { const cpu = await compute.ndarray.toCPU(a); try {
     infinite.destroy();
 }
 
-// 19) Cleanup releases the shared compute context before its browser GPU device.
+// 19) GPU operations recorded into a caller's encoder match self-submitted results and reuse scratch memory.
+{
+    const bitsOf = async (a) => { const cpu = await compute.ndarray.toCPU(a); try { return Array.from(new Uint8Array(cpu.data().buffer, cpu.data().byteOffset, cpu.data().byteLength)); } finally { cpu.destroy(); } };
+    const g = compute.ndarray.fromArray("f32", [3, 4], [0.5, -1.5, 2.5, 300.7, -7, 8.25, NaN, Infinity, 1e-3, -0, 42, -42], { residency: "gpu" });
+    const ops = [
+        (options) => compute.ndarray.cast(compute.ndarray.transpose(g), "i16", options),
+        (options) => compute.ndarray.pad(g, { width: [[1, 0], [2, 1]], mode: "reflect", ...options }),
+        (options) => compute.ndarray.resize(g, { axes: [0, 1], size: [5, 7], ...options })
+    ];
+    const expected = [];
+    for (const op of ops) expected.push(await bitsOf(op({})));
+    const kernelIn = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, 4]) });
+    const encoder = device.createCommandEncoder();
+    const recorded = [];
+    for (let i = 0; i < ops.length; i++) {
+        recorded.push(ops[i]({ encoder }));
+        compute.ndarray.contiguous(g);
+        compute.kernels.sclF32(kernelIn, i + 2);
+        compute.ndarray.normalize(g, { scale: i + 1, offset: -i });
+    }
+    const shared = compute.ndarray.fromArray("u16", [6], [1, 2, 3, 4, 5, 6], { residency: "gpu" });
+    compute.ndarray.copyInto(compute.ndarray.slice(shared, [[0, 5]]), compute.ndarray.slice(shared, [[1, 6]]), { encoder });
+    compute.ndarray.copyInto(compute.ndarray.slice(shared, [[1, 6]]), compute.ndarray.slice(shared, [[0, 5]]));
+    device.queue.submit([encoder.finish()]);
+    for (let i = 0; i < ops.length; i++) assert.deepStrictEqual(await bitsOf(recorded[i]), expected[i], `encoder-mode GPU operation ${i} must be bit-identical to its self-submitted result`);
+    assert.deepStrictEqual(await readGPU(shared), [1, 2, 3, 4, 5, 5], "Same-buffer copies stage correctly in a caller's encoder and run in queue order after the self-submitted copy");
+
+    // Repeated encoder-mode operations on one encoder grow parameter blocks, not buffers per call.
+    const out = compute.ndarray.empty("i16", { shape: [4, 3] }, { residency: "gpu" });
+    const repeat = device.createCommandEncoder();
+    compute.ndarray.cast(compute.ndarray.transpose(g), "i16", { out, encoder: repeat });
+    compute.ndarray.copyInto(compute.ndarray.slice(shared, [[0, 5]]), compute.ndarray.slice(shared, [[1, 6]]), { encoder: repeat });
+    const createBuffer = device.createBuffer;
+    let created = 0;
+    device.createBuffer = function (descriptor) { created++; return createBuffer.call(this, descriptor); };
+    try { for (let i = 0; i < 32; i++) { compute.ndarray.cast(compute.ndarray.transpose(g), "i16", { out, encoder: repeat }); compute.ndarray.copyInto(compute.ndarray.slice(shared, [[0, 5]]), compute.ndarray.slice(shared, [[1, 6]]), { encoder: repeat }); } }
+    finally { device.createBuffer = createBuffer; }
+    const alignment = Math.max(device.limits.minStorageBufferOffsetAlignment, device.limits.minUniformBufferOffsetAlignment);
+    let blocks = 0;
+    for (let regions = 0, size = 4096; regions < 3 * 33; size = Math.min(2 * size, 65536)) { regions += Math.floor(size / alignment); blocks++; }
+    assert.ok(created <= blocks, `96 encoder-mode gathers must reuse staging buffers and need at most ${blocks} parameter blocks (created ${created} buffers)`);
+    device.queue.submit([repeat.finish()]);
+    assert.deepStrictEqual(await bitsOf(out), expected[0], "repeated encoder-mode cast");
+    g.destroy();
+    shared.destroy();
+    out.destroy();
+    kernelIn.destroy();
+}
+
+// 20) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);
