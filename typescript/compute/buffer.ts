@@ -127,8 +127,8 @@ export const assertStorageBufferAlive = (storage: StorageBuffer): void => {
 
 export const validateStorageBufferRange = (storage: StorageBuffer, offsetBytes: number, sizeBytes: number, aligned: boolean = false): void => {
     assertStorageBufferAlive(storage);
-    assert(Number.isSafeInteger(offsetBytes) && offsetBytes >= 0, `offsetBytes must be a safe integer >= 0 (got ${offsetBytes})`);
-    assert(Number.isSafeInteger(sizeBytes) && sizeBytes >= 0, `sizeBytes must be a safe integer >= 0 (got ${sizeBytes})`);
+    assert(Number.isSafeInteger(offsetBytes) && offsetBytes >= 0, () => `offsetBytes must be a safe integer >= 0 (got ${offsetBytes})`);
+    assert(Number.isSafeInteger(sizeBytes) && sizeBytes >= 0, () => `sizeBytes must be a safe integer >= 0 (got ${sizeBytes})`);
     assert(offsetBytes <= storage.byteLength && sizeBytes <= storage.byteLength - offsetBytes, "StorageBuffer range out of bounds");
     if (aligned) {
         const capacity = storage[storageBufferExternal] ? storage.byteLength : storage.buffer.size;

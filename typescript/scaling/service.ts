@@ -7,6 +7,7 @@
 import { assert, clamp, isGPUBuffer } from "../utils";
 import type { Compute } from "../compute";
 import { StorageBuffer, assertStorageBufferAlive } from "../compute/buffer";
+import type { GPUndarray } from "../compute/ndarray";
 import { normalizeScaleTransform } from "./transform";
 import type { ScaleBufferSource, ScaleSourceDescriptor, ScaleStatsRequest, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor, ScaleValueMode } from "./types";
 
@@ -77,16 +78,7 @@ const normalizeSource = (source: ScaleSourceDescriptor): NormalizedScaleSource =
         const required = source.count > 0 ? (offset + ((source.count - 1) * stride) + componentCount) : 0;
         assert(required <= capacity, `Scale stats source range exceeds source buffer capacity (required ${required} f32, capacity ${capacity} f32)`);
     }
-    return {
-        buffer: source.buffer,
-        count: source.count,
-        componentCount,
-        componentIndex,
-        valueMode,
-        stride,
-        offset,
-        revision
-    };
+    return { buffer: source.buffer, count: source.count, componentCount, componentIndex, valueMode, stride, offset, revision };
 };
 
 export class ScaleService {
@@ -169,48 +161,35 @@ export class ScaleService {
         return id;
     }
 
+    private sourceArray(source: NormalizedScaleSource): GPUndarray {
+        const buffer = unwrapSourceBuffer(source.buffer);
+        const storage = buffer instanceof StorageBuffer ? buffer : this.compute.wrapStorageBuffer(buffer);
+        return this.compute.ndarray.wrap(storage, "f32", { shape: [source.count, source.componentCount], stridesBytes: [source.stride * 4, 4], offsetBytes: source.offset * 4 });
+    }
+
     private async computeStats(source: NormalizedScaleSource, percentile: { low: number; high: number; bins: number } | null): Promise<ScaleStatsResult> {
-        const sourceBuffer = unwrapSourceBuffer(source.buffer);
-        const extracted = this.compute.kernels.extractScaleValuesF32(sourceBuffer, {
-            count: source.count,
-            componentCount: source.componentCount,
-            componentIndex: source.componentIndex,
-            valueMode: source.valueMode,
-            stride: source.stride,
-            offset: source.offset
-        });
-        const compact = this.compute.kernels.compactF32(extracted.values, extracted.flags, { count: source.count });
-        const finiteCount = await this.compute.readback.readScalarU32(compact.count);
+        const kernels = this.compute.kernels;
+        const extracted = kernels.scaleExtract(this.sourceArray(source), { componentIndex: source.componentIndex, valueMode: source.valueMode });
+        const compact = kernels.compact(extracted.values, extracted.flags);
+        const finiteCount = await this.compute.readback.readScalarU32(compact.count.buffer);
         if (finiteCount === 0) {
             extracted.values.destroy();
             extracted.flags.destroy();
-            compact.output.destroy();
+            compact.values.destroy();
             compact.count.destroy();
-            return {
-                count: source.count,
-                finiteCount: 0,
-                min: Number.NaN,
-                max: Number.NaN,
-                percentileMin: null,
-                percentileMax: null,
-                histogramBins: null
-            };
+            return { count: source.count, finiteCount: 0, min: Number.NaN, max: Number.NaN, percentileMin: null, percentileMax: null, histogramBins: null };
         }
-        const minBuffer = this.compute.kernels.minF32(compact.output, { count: finiteCount });
-        const maxBuffer = this.compute.kernels.maxF32(compact.output, { count: finiteCount });
-        const min = await this.compute.readback.readScalarF32(minBuffer);
-        const max = await this.compute.readback.readScalarF32(maxBuffer);
+        const finite = this.compute.ndarray.slice(compact.values, [[0, finiteCount]]);
+        const minArray = kernels.min(finite);
+        const maxArray = kernels.max(finite);
+        const min = await this.compute.readback.readScalarF32(minArray.buffer);
+        const max = await this.compute.readback.readScalarF32(maxArray.buffer);
         let percentileMin: number | null = null;
         let percentileMax: number | null = null;
         let histogramBins: number | null = null;
         if (percentile) {
-            const hist = this.compute.kernels.histogramF32(compact.output, percentile.bins, {
-                count: finiteCount,
-                minValue: min,
-                maxValue: max,
-                clear: true
-            });
-            const binsData = await this.compute.readback.readAs(Uint32Array, hist);
+            const hist = kernels.scaleHistogram(finite, { bins: percentile.bins, minValue: min, maxValue: max, clear: true });
+            const binsData = await this.compute.readback.readAs(Uint32Array, hist.buffer);
             percentileMin = percentileFromHistogram(binsData, percentile.low, min, max, finiteCount);
             percentileMax = percentileFromHistogram(binsData, percentile.high, min, max, finiteCount);
             histogramBins = percentile.bins;
@@ -218,18 +197,10 @@ export class ScaleService {
         }
         extracted.values.destroy();
         extracted.flags.destroy();
-        compact.output.destroy();
+        compact.values.destroy();
         compact.count.destroy();
-        minBuffer.destroy();
-        maxBuffer.destroy();
-        return {
-            count: source.count,
-            finiteCount,
-            min,
-            max,
-            percentileMin,
-            percentileMax,
-            histogramBins
-        };
+        minArray.destroy();
+        maxArray.destroy();
+        return { count: source.count, finiteCount, min, max, percentileMin, percentileMax, histogramBins };
     }
 }

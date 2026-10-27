@@ -428,13 +428,13 @@ const readGPU = async (a) => { const cpu = await compute.ndarray.toCPU(a); try {
     ];
     const expected = [];
     for (const op of ops) expected.push(await bitsOf(op({})));
-    const kernelIn = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, 4]) });
+    const kernelIn = compute.ndarray.fromArray("f32", [4], [1, 2, 3, 4], { residency: "gpu" });
     const encoder = device.createCommandEncoder();
     const recorded = [];
     for (let i = 0; i < ops.length; i++) {
         recorded.push(ops[i]({ encoder }));
         compute.ndarray.contiguous(g);
-        compute.kernels.sclF32(kernelIn, i + 2);
+        compute.kernels.scl(kernelIn, i + 2);
         compute.ndarray.normalize(g, { scale: i + 1, offset: -i });
     }
     const shared = compute.ndarray.fromArray("u16", [6], [1, 2, 3, 4, 5, 6], { residency: "gpu" });

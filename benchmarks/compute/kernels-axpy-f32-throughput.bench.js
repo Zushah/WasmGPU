@@ -11,18 +11,18 @@ export default {
     subsystem: "compute",
     type: "throughput",
     unit: "GB/s",
-    description: "Steady-state axpyF32 memory throughput with caller-provided output.",
+    description: "Steady-state axpy memory throughput with caller-provided output.",
     sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608, 16_777_216] },
     gpu: true,
     setup({ compute }, size) {
         return {
-            x: compute.createStorageBuffer({ data: makeF32(size) }),
-            y: compute.createStorageBuffer({ data: makeF32(size) }),
-            out: compute.createStorageBuffer({ byteLength: size * 4 })
+            x: compute.ndarray.fromArray("f32", [size], makeF32(size), { residency: "gpu" }),
+            y: compute.ndarray.fromArray("f32", [size], makeF32(size), { residency: "gpu" }),
+            out: compute.ndarray.empty("f32", { shape: [size] }, { residency: "gpu" })
         };
     },
-    run(s, { compute }, size) {
-        compute.kernels.axpyF32(s.x, s.y, 0.75, { out: s.out, count: size });
+    run(s, { compute }) {
+        compute.kernels.axpy(s.x, s.y, 0.75, { out: s.out });
     },
     operations(size) { return size * 12 / 1e9; },
     workload(size) { return { elements: size, bytes: size * 12 }; },

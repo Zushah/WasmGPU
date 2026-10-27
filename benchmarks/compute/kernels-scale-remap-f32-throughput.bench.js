@@ -11,17 +11,17 @@ export default {
     subsystem: "compute",
     type: "throughput",
     unit: "elements/s",
-    description: "Steady-state ComputeKernels.remapScaleF32 linear range transform excluding readback and including GPU completion.",
+    description: "Steady-state ComputeKernels.scaleRemap linear range transform excluding readback and including GPU completion.",
     sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608, 16_777_216] },
     gpu: true,
     setup({ compute }, size) {
         return {
-            input: compute.createStorageBuffer({ data: makeF32(size) }),
-            output: compute.createStorageBuffer({ byteLength: size * 4 })
+            input: compute.ndarray.fromArray("f32", [size], makeF32(size), { residency: "gpu" }),
+            output: compute.ndarray.empty("f32", { shape: [size] }, { residency: "gpu" })
         };
     },
     run(state, { compute }) {
-        compute.kernels.remapScaleF32(state.input, { out: state.output, transform: {
+        compute.kernels.scaleRemap(state.input, { out: state.output, transform: {
             mode: "linear",
             clampMode: "range",
             domainMin: 0,

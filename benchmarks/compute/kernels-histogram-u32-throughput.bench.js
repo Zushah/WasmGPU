@@ -11,19 +11,19 @@ export default {
     subsystem: "compute",
     type: "throughput",
     unit: "elements/s",
-    description: "Complete ComputeKernels.histogramU32 throughput with 256-bin clearing, accumulation, and GPU completion.",
+    description: "Complete ComputeKernels.histogram throughput with 256-bin clearing, accumulation, and GPU completion.",
     sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608, 16_777_216] },
     gpu: true,
     setup({ compute }, size) {
         const data = new Uint32Array(size);
         for (let i = 0; i < size; i++) data[i] = (Math.imul(i, 2654435761) >>> 16) & (BIN_COUNT - 1);
         return {
-            keys: compute.createStorageBuffer({ data }),
-            bins: compute.createStorageBuffer({ byteLength: BIN_COUNT * 4 })
+            keys: compute.ndarray.fromArray("u32", [size], data, { residency: "gpu" }),
+            bins: compute.ndarray.empty("u32", { shape: [BIN_COUNT] }, { residency: "gpu" })
         };
     },
     run(state, { compute }) {
-        compute.kernels.histogramU32(state.keys, BIN_COUNT, { bins: state.bins, clear: true });
+        compute.kernels.histogram(state.keys, { bins: BIN_COUNT, out: state.bins, clear: true });
     },
     operations(size) { return size; },
     workload(size) { return { elements: size, bins: BIN_COUNT }; },

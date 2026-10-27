@@ -16,7 +16,7 @@ assert.ok(PointCloud, "Missing export: PointCloud");
 assert.ok(Compute, "Missing export: Compute");
 assert.ok(WasmMemoryView, "Missing export: WasmMemoryView");
 const compute = new Compute(device, device.queue);
-assert.ok(compute.kernels && typeof compute.kernels.copyF32 === "function", "Missing kernel: compute.kernels.copyF32");
+assert.ok(compute.ndarray && typeof compute.ndarray.copyInto === "function", "Missing API: compute.ndarray.copyInto");
 const { readBufferAsF32 } = createBufferReaders(compute);
 
 const createRawStorageBuffer = (label, data) => device.createBuffer({ label, size: data.byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });

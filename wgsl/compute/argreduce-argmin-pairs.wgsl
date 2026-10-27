@@ -22,18 +22,17 @@ fn is_nan(val: f32) -> bool {
     return (u & 0x7F800000u) == 0x7F800000u && (u & 0x007FFFFFu) != 0u;
 }
 
+var<private> padding_bits: u32 = 0x7F800000u;
+
 fn invalid_pair() -> Pair {
-    return Pair(0x1.fffffep+127f, 0xFFFFFFFFu);
+    return Pair(bitcast<f32>(padding_bits), 0xFFFFFFFFu);
 }
 
 fn better(a: Pair, b: Pair) -> Pair {
     let a_nan = is_nan(a.value);
     let b_nan = is_nan(b.value);
     if (a_nan && b_nan) {
-        if (a.index <= b.index) {
-            return a;
-        }
-        return b;
+        return invalid_pair();
     }
     if (a_nan) {
         return b;

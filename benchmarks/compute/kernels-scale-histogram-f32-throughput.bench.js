@@ -12,17 +12,17 @@ export default {
     subsystem: "compute",
     type: "throughput",
     unit: "elements/s",
-    description: "Complete ComputeKernels.histogramF32 throughput with finite range, bin clearing, and GPU completion.",
+    description: "Complete ComputeKernels.scaleHistogram throughput with finite range, bin clearing, and GPU completion.",
     sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608, 16_777_216] },
     gpu: true,
     setup({ compute }, size) {
         return {
-            input: compute.createStorageBuffer({ data: makeF32(size) }),
-            bins: compute.createStorageBuffer({ byteLength: BIN_COUNT * 4 })
+            input: compute.ndarray.fromArray("f32", [size], makeF32(size), { residency: "gpu" }),
+            bins: compute.ndarray.empty("u32", { shape: [BIN_COUNT] }, { residency: "gpu" })
         };
     },
     run(state, { compute }) {
-        compute.kernels.histogramF32(state.input, BIN_COUNT, { bins: state.bins, clear: true, minValue: 0, maxValue: 1 });
+        compute.kernels.scaleHistogram(state.input, { bins: BIN_COUNT, out: state.bins, clear: true, minValue: 0, maxValue: 1 });
     },
     operations(size) { return size; },
     workload(size) { return { elements: size, bins: BIN_COUNT, range: [0, 1] }; },

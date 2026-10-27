@@ -19,16 +19,16 @@ export default {
     setup({ compute }, size) {
         const matrices = makeMatricesF32(size, MATRIX_ORDER);
         return {
-            source: compute.createStorageBuffer({ label: "bench:lu-factor-f32-batch:source", data: matrices, copyDst: false, copySrc: true }),
-            matrices: compute.createStorageBuffer({ label: "bench:lu-factor-f32-batch:matrices", byteLength: matrices.byteLength }),
-            ipiv: compute.createStorageBuffer({ label: "bench:lu-factor-f32-batch:ipiv", byteLength: size * MATRIX_ORDER * 4 })
+            source: compute.ndarray.fromArray("f32", [size, MATRIX_ORDER, MATRIX_ORDER], matrices, { residency: "gpu", label: "bench:lu-factor-f32-batch:source", copyDst: false, copySrc: true }),
+            matrices: compute.ndarray.empty("f32", { shape: [size, MATRIX_ORDER, MATRIX_ORDER] }, { residency: "gpu", label: "bench:lu-factor-f32-batch:matrices" }),
+            ipiv: compute.ndarray.empty("u32", { shape: [size, MATRIX_ORDER] }, { residency: "gpu", label: "bench:lu-factor-f32-batch:ipiv" })
         };
     },
     run(state, { compute, device, queue }, size) {
         const encoder = device.createCommandEncoder();
-        encoder.copyBufferToBuffer(state.source.buffer, 0, state.matrices.buffer, 0, state.source.byteLength);
+        encoder.copyBufferToBuffer(state.source.buffer.buffer, 0, state.matrices.buffer.buffer, 0, state.source.byteLength);
         queue.submit([encoder.finish()]);
-        compute.kernels.luFactorF32Batched(state.matrices, state.ipiv, size, MATRIX_ORDER);
+        compute.kernels.luFactor(state.matrices, { overwrite: true, ipiv: state.ipiv });
     },
     operations(size) { return size * (2 / 3) * MATRIX_ORDER * MATRIX_ORDER * MATRIX_ORDER / 1e9; },
     workload(size) { return { n: MATRIX_ORDER, batchCount: size, matrices: size, matrixElements: size * MATRIX_ORDER * MATRIX_ORDER, scalarElements: size * MATRIX_ORDER * MATRIX_ORDER, dtype: "f32", includesGpuReset: true }; },

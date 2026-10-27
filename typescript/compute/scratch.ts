@@ -25,10 +25,6 @@ const nextPow2 = (n: number): number => { let p = 1; while (p < n) p *= 2; retur
 const sizeClass = (n: number): number => { const p = nextPow2(n); return (p <= MAX_POW2_CLASS_BYTES) ? p : alignTo(n, p / 16); };
 const emptyChain = (): ScratchChain => ({ blocks: [], index: 0, offset: 0 });
 
-// Temporaries are pooled buffers whose contents never cross calls, so any later call may reuse them; once a caller's
-// encoder has used one it is never destroyed, only dropped. Parameter regions are rewritten only after their readers
-// were submitted: self-submitted calls rewind one shared chain after their own submit, and each caller encoder gets
-// its own chain that is never reused and is released with the encoder by the garbage collector.
 export class ScratchAllocator {
     private readonly device: GPUDevice;
     private readonly queue: GPUQueue;

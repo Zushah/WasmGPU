@@ -190,12 +190,10 @@ export class PythonInterop {
             if (dst instanceof CPUndarray) { dst.data().set(data); return; }
             assert((dst.buffer.usage & GPUBufferUsage.COPY_DST) !== 0, "PythonInterop.copyInto() GPU destination requires COPY_DST usage");
             const dstOffsetBytes = dst.baseOffsetBytes + dst.offsetBytes;
-            // Queue writes need a 4-byte-aligned start and pad their length to 4 bytes, which is safe only when the padding lies past the storage's logical range.
             if ((dstOffsetBytes & 3) === 0 && ((byteLength & 3) === 0 || dstOffsetBytes + byteLength === dst.buffer.byteLength)) {
                 dst.buffer.write(gpuWriteSource(data), dstOffsetBytes, 0, byteLength);
                 return;
             }
-            // Otherwise the canonical GPU copy merges partially covered words exactly.
             const staging = new GPUndarray(dtype, shape.slice(), contiguousStridesBytes(shape, dtypeInfo(dtype).bytesPerElement), 0, byteLength, new StorageBuffer(this.compute.device, this.compute.queue, { label: "PythonInterop.copyInto:staging", data: gpuWriteSource(data) }), 0, true);
             try { this.compute.ndarray.copyInto(dst, staging); }
             finally { this.compute.queue.onSubmittedWorkDone().then(() => staging.destroy(), () => staging.destroy()); }

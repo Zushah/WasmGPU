@@ -4,9 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import computeCopy from "./compute/kernels-copy-f32-throughput.bench.js";
-import computeReduce from "./compute/kernels-sum-f32-throughput.bench.js";
-import computeRadix from "./compute/kernels-radix-sort-keys-u32-throughput.bench.js";
+import computeSum from "./compute/kernels-sum-f32-throughput.bench.js";
+import computeSort from "./compute/kernels-sort-u32-throughput.bench.js";
 import ndarray from "./compute/cpundarray-index-get-set-throughput.bench.js";
 import computeMin from "./compute/kernels-min-f32-throughput.bench.js";
 import computeArgmin from "./compute/kernels-argmin-f32-throughput.bench.js";
@@ -15,16 +14,16 @@ import computeScan from "./compute/kernels-scan-exclusive-u32-throughput.bench.j
 import computeHistogram from "./compute/kernels-histogram-u32-throughput.bench.js";
 import computeCompactU32 from "./compute/kernels-compact-u32-throughput.bench.js";
 import computeCompactF32 from "./compute/kernels-compact-f32-throughput.bench.js";
-import computeRadixPairs from "./compute/kernels-radix-sort-pairs-u32-throughput.bench.js";
+import computeSortPairs from "./compute/kernels-sort-pairs-u32-throughput.bench.js";
 import computeScaleExtract from "./compute/kernels-scale-extract-f32-throughput.bench.js";
 import computeScaleHistogram from "./compute/kernels-scale-histogram-f32-throughput.bench.js";
 import computeScaleRemap from "./compute/kernels-scale-remap-f32-throughput.bench.js";
 import computeAddF32 from "./compute/kernels-add-f32-throughput.bench.js";
 import computeDotF32 from "./compute/kernels-dot-f32-throughput.bench.js";
 import computeAxpyF32 from "./compute/kernels-axpy-f32-throughput.bench.js";
-import computeGemmF32 from "./compute/kernels-gemm-f32-throughput.bench.js";
-import computeGemmU32 from "./compute/kernels-gemm-u32-throughput.bench.js";
-import computeGemmC64 from "./compute/kernels-gemm-c64-throughput.bench.js";
+import computeMatmulF32 from "./compute/kernels-matmul-f32-throughput.bench.js";
+import computeMatmulU32 from "./compute/kernels-matmul-u32-throughput.bench.js";
+import computeMatmulC64 from "./compute/kernels-matmul-c64-throughput.bench.js";
 import computeLuFactorF32N from "./compute/kernels-lu-factor-f32-n-throughput.bench.js";
 import computeLuFactorC64N from "./compute/kernels-lu-factor-c64-n-throughput.bench.js";
 import computeLuSolveF32N from "./compute/kernels-lu-solve-f32-n-throughput.bench.js";
@@ -81,8 +80,7 @@ export const benchmarks = [
     mathF32,
     mathF64,
     transforms,
-    computeCopy,
-    computeReduce,
+    computeSum,
     computeMin,
     computeArgmin,
     computeArgmax,
@@ -90,17 +88,17 @@ export const benchmarks = [
     computeHistogram,
     computeCompactU32,
     computeCompactF32,
-    computeRadix,
-    computeRadixPairs,
+    computeSort,
+    computeSortPairs,
     computeScaleExtract,
     computeScaleHistogram,
     computeScaleRemap,
     computeAddF32,
     computeDotF32,
     computeAxpyF32,
-    computeGemmF32,
-    computeGemmU32,
-    computeGemmC64,
+    computeMatmulF32,
+    computeMatmulU32,
+    computeMatmulC64,
     computeLuFactorF32N,
     computeLuFactorC64N,
     computeLuSolveF32N,

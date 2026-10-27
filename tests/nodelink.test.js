@@ -21,8 +21,7 @@ assert.ok(WasmMemoryView, "Missing export: WasmMemoryView");
 assert.strictEqual(typeof Engine.prototype.createNodeLink, "function", "Missing API: WasmGPU.createNodeLink(descriptor)");
 
 const compute = new Compute(device, device.queue);
-assert.ok(compute.kernels && typeof compute.kernels.copyF32 === "function", "Missing kernel: copyF32");
-assert.ok(typeof compute.kernels.copyU32 === "function", "Missing kernel: copyU32");
+assert.ok(compute.ndarray && typeof compute.ndarray.copyInto === "function", "Missing API: compute.ndarray.copyInto");
 const { readBufferAsF32, readBufferAsU32 } = createBufferReaders(compute);
 
 const createNodeLinkBufferSet = (label) => ({
@@ -325,33 +324,13 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     link.updateEdgeColors(new Float32Array([0.9, 0.8, 0.7, 1.0]), 0);
     link.upload(device, device.queue);
 
-    const outPos = compute.createStorageBuffer({ label: "nodelink:update:pos:out", byteLength: 16 * 4, copySrc: true });
-    const outEdges = compute.createStorageBuffer({ label: "nodelink:update:edges:out", byteLength: 4 * 6, copySrc: true });
-    const outNodeScalars = compute.createStorageBuffer({ label: "nodelink:update:nodeScalars:out", byteLength: 4 * 4, copySrc: true });
-    const outEdgeScalars = compute.createStorageBuffer({ label: "nodelink:update:edgeScalars:out", byteLength: 4 * 3, copySrc: true });
-    const outNodeColors = compute.createStorageBuffer({ label: "nodelink:update:nodeColors:out", byteLength: 4 * 16, copySrc: true });
-    const outEdgeColors = compute.createStorageBuffer({ label: "nodelink:update:edgeColors:out", byteLength: 4 * 12, copySrc: true });
-    compute.kernels.copyF32(link.nodePositionsBuffer, { out: outPos, count: 16 });
-    compute.kernels.copyU32(link.edgesBuffer, { out: outEdges, count: 6 });
-    compute.kernels.copyF32(link.nodeScalarsBuffer, { out: outNodeScalars, count: 4 });
-    compute.kernels.copyF32(link.edgeScalarsBuffer, { out: outEdgeScalars, count: 3 });
-    compute.kernels.copyF32(link.nodeColorsBuffer, { out: outNodeColors, count: 16 });
-    compute.kernels.copyF32(link.edgeColorsBuffer, { out: outEdgeColors, count: 12 });
-    await device.queue.onSubmittedWorkDone();
+    arraysApproxEqual(await readBufferAsF32(link.nodePositionsBuffer, 16), new Float32Array([0, 0, 0, 0, 9, 9, 9, 0, 2, 0, 0, 0, 3, 0, 0, 0]), 0, "Partial node position update mismatch");
+    assert.deepStrictEqual(Array.from(await readBufferAsU32(link.edgesBuffer, 6)), [0, 1, 3, 0, 2, 3], "Partial edge update mismatch");
+    arraysApproxEqual(await readBufferAsF32(link.nodeScalarsBuffer, 4), new Float32Array([0.1, 0.22, 0.33, 0.4]), 0, "Partial node scalar update mismatch");
+    arraysApproxEqual(await readBufferAsF32(link.edgeScalarsBuffer, 3), new Float32Array([0.5, 0.6, 0.77]), 0, "Partial edge scalar update mismatch");
+    arraysApproxEqual(await readBufferAsF32(link.nodeColorsBuffer, 16), new Float32Array([1, 0, 0, 1, 0, 1, 0, 1, 0.4, 0.5, 0.6, 0.7, 1, 1, 1, 1]), 0, "Partial node color update mismatch");
+    arraysApproxEqual(await readBufferAsF32(link.edgeColorsBuffer, 12), new Float32Array([0.9, 0.8, 0.7, 1, 0.2, 0.2, 0.2, 1, 0.3, 0.3, 0.3, 1]), 0, "Partial edge color update mismatch");
 
-    arraysApproxEqual(await outPos.readAs(Float32Array), new Float32Array([0, 0, 0, 0, 9, 9, 9, 0, 2, 0, 0, 0, 3, 0, 0, 0]), 0, "Partial node position update mismatch");
-    assert.deepStrictEqual(Array.from(await outEdges.readAs(Uint32Array)), [0, 1, 3, 0, 2, 3], "Partial edge update mismatch");
-    arraysApproxEqual(await outNodeScalars.readAs(Float32Array), new Float32Array([0.1, 0.22, 0.33, 0.4]), 0, "Partial node scalar update mismatch");
-    arraysApproxEqual(await outEdgeScalars.readAs(Float32Array), new Float32Array([0.5, 0.6, 0.77]), 0, "Partial edge scalar update mismatch");
-    arraysApproxEqual(await outNodeColors.readAs(Float32Array), new Float32Array([1, 0, 0, 1, 0, 1, 0, 1, 0.4, 0.5, 0.6, 0.7, 1, 1, 1, 1]), 0, "Partial node color update mismatch");
-    arraysApproxEqual(await outEdgeColors.readAs(Float32Array), new Float32Array([0.9, 0.8, 0.7, 1, 0.2, 0.2, 0.2, 1, 0.3, 0.3, 0.3, 1]), 0, "Partial edge color update mismatch");
-
-    outPos.destroy();
-    outEdges.destroy();
-    outNodeScalars.destroy();
-    outEdgeScalars.destroy();
-    outNodeColors.destroy();
-    outEdgeColors.destroy();
     link.destroy();
 }
 

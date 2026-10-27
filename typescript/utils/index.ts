@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-export const assert: (cond: unknown, msg: string) => asserts cond = (cond, msg) => { if (!cond) throw new Error(msg); };
+export const assert: (cond: unknown, msg: string | (() => string)) => asserts cond = (cond, msg) => { if (!cond) throw new Error((typeof msg === "function") ? msg() : msg); };
 
 export const alignTo = (n: number, alignment: number): number => Math.ceil(n / alignment) * alignment;
 

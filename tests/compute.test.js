@@ -315,7 +315,8 @@ const compute = new Compute(device, device.queue);
     hits.destroy();
     const raw = device.createBuffer({ size: 16, usage: GPUBufferUsage.STORAGE });
     const tooMany = Math.floor(device.limits.maxStorageBufferBindingSize / 4) + 1;
-    assert.throws(() => compute.kernels.copyF32(raw, { count: tooMany }), /copyF32: a \d+-byte binding exceeds device\.limits\.maxStorageBufferBindingSize/);
+    const huge = compute.ndarray.broadcastTo(compute.ndarray.wrap(compute.wrapStorageBuffer(raw), "f32", { shape: [1] }), [tooMany]);
+    assert.throws(() => compute.kernels.sum(huge), /compute\.kernels\.sum: a \d+-byte binding exceeds device\.limits\.maxStorageBufferBindingSize/);
     raw.destroy();
 }
 

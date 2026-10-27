@@ -5,7 +5,7 @@
  */
 
 import assert from "./utils/assert.js";
-import { createApproxHelpers, destroyTestDevice, setupTest, trackDestroy } from "./utils/helpers.js";
+import { createApproxHelpers, destroyTestDevice, readBufferAsF32, setupTest, trackDestroy } from "./utils/helpers.js";
 import * as WasmGPU from "../release/WasmGPU.js";
 
 const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
@@ -17,7 +17,7 @@ assert.ok(Compute, "Missing export: Compute");
 assert.ok(wasm, "Missing export: wasm");
 assert.ok(WasmMemoryView, "Missing export: WasmMemoryView");
 const compute = new Compute(device, device.queue);
-assert.ok(compute.kernels && typeof compute.kernels.copyF32 === "function", "Missing kernel: compute.kernels.copyF32");
+assert.ok(compute.ndarray && typeof compute.ndarray.copyInto === "function", "Missing API: compute.ndarray.copyInto");
 
 const createGlyphBufferSet = (label) => ({
     positions: compute.createStorageBuffer({ label: `${label}:positions`, data: new Float32Array([1.0, 2.0, 3.0, 0.0]), copySrc: false }),
@@ -68,33 +68,16 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
     assert.ok(gf.scalesBuffer, "GlyphField.scalesBuffer not created after upload");
     assert.ok(gf.attributesBuffer, "GlyphField.attributesBuffer not created after upload");
 
-    const outPos = compute.createStorageBuffer({ label: "glyphfield:cpu:positions:out", byteLength: positions.byteLength, copySrc: true });
-    const outRot = compute.createStorageBuffer({ label: "glyphfield:cpu:rotations:out", byteLength: rotations.byteLength, copySrc: true });
-    const outScl = compute.createStorageBuffer({ label: "glyphfield:cpu:scales:out", byteLength: scales.byteLength, copySrc: true });
-    const outAttr = compute.createStorageBuffer({ label: "glyphfield:cpu:attributes:out", byteLength: attributes.byteLength, copySrc: true });
-
-    compute.kernels.copyF32(gf.positionsBuffer, { out: outPos, count: positions.length });
-    compute.kernels.copyF32(gf.rotationsBuffer, { out: outRot, count: rotations.length });
-    compute.kernels.copyF32(gf.scalesBuffer, { out: outScl, count: scales.length });
-    compute.kernels.copyF32(gf.attributesBuffer, { out: outAttr, count: attributes.length });
-
-    await device.queue.onSubmittedWorkDone();
-
-    arraysApproxEqual(await outPos.readAs(Float32Array), positions, 0, "CPU-uploaded positionsBuffer contents mismatch");
-    arraysApproxEqual(await outRot.readAs(Float32Array), rotations, 0, "CPU-uploaded rotationsBuffer contents mismatch");
-    arraysApproxEqual(await outScl.readAs(Float32Array), scales, 0, "CPU-uploaded scalesBuffer contents mismatch");
-    arraysApproxEqual(await outAttr.readAs(Float32Array), attributes, 0, "CPU-uploaded attributesBuffer contents mismatch");
-
-    outPos.destroy();
-    outRot.destroy();
-    outScl.destroy();
-    outAttr.destroy();
+    arraysApproxEqual(await readBufferAsF32(compute, gf.positionsBuffer, positions.length), positions, 0, "CPU-uploaded positionsBuffer contents mismatch");
+    arraysApproxEqual(await readBufferAsF32(compute, gf.rotationsBuffer, rotations.length), rotations, 0, "CPU-uploaded rotationsBuffer contents mismatch");
+    arraysApproxEqual(await readBufferAsF32(compute, gf.scalesBuffer, scales.length), scales, 0, "CPU-uploaded scalesBuffer contents mismatch");
+    arraysApproxEqual(await readBufferAsF32(compute, gf.attributesBuffer, attributes.length), attributes, 0, "CPU-uploaded attributesBuffer contents mismatch");
     gf.destroy?.();
 }
 
 // 2) External WebAssembly memory views: constructors, explicit refresh, CPU snapshots, validation, and grow-only GPU capacity.
 {
-    const readF32 = async (buffer, count, label = "glyphfield:wasm:read") => { const out = compute.createStorageBuffer({ label, byteLength: count * 4, copySrc: true }); try { compute.kernels.copyF32(buffer, { out, count }); await device.queue.onSubmittedWorkDone(); return await out.readAs(Float32Array); } finally { out.destroy(); } };
+    const readF32 = (buffer, count) => readBufferAsF32(compute, buffer, count);
     const makeView = (length, name, dynamicLength = false) => { const memory = new WebAssembly.Memory({ initial: 1 }), moduleRef = WasmGPU.webassemblyInterop.fromMemory(memory, { name }), data = new Float32Array(memory.buffer, 0, Math.max(length, 64)), lengthGlobal = dynamicLength ? new WebAssembly.Global({ value: "i32", mutable: true }, length) : null, view = moduleRef.view({ ptr: 0, length: lengthGlobal ? { global: lengthGlobal } : length, dtype: "f32", name }); assert.ok(view instanceof WasmMemoryView, "Expected fromMemory().view() to return a WasmMemoryView"); return { memory, moduleRef, data, lengthGlobal, view }; };
 
     const positions = makeView(8, "gf:wasm:positions");
@@ -272,27 +255,10 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
         assert.ok(gf.scalesBuffer, "GlyphField.scalesBuffer not created after wasm upload");
         assert.ok(gf.attributesBuffer, "GlyphField.attributesBuffer not created after wasm upload");
 
-        const outPos = compute.createStorageBuffer({ label: "glyphfield:wasm:positions:out", byteLength: positions.byteLength, copySrc: true });
-        const outRot = compute.createStorageBuffer({ label: "glyphfield:wasm:rotations:out", byteLength: rotations.byteLength, copySrc: true });
-        const outScl = compute.createStorageBuffer({ label: "glyphfield:wasm:scales:out", byteLength: scales.byteLength, copySrc: true });
-        const outAttr = compute.createStorageBuffer({ label: "glyphfield:wasm:attributes:out", byteLength: attributes.byteLength, copySrc: true });
-
-        compute.kernels.copyF32(gf.positionsBuffer, { out: outPos, count: positions.length });
-        compute.kernels.copyF32(gf.rotationsBuffer, { out: outRot, count: rotations.length });
-        compute.kernels.copyF32(gf.scalesBuffer, { out: outScl, count: scales.length });
-        compute.kernels.copyF32(gf.attributesBuffer, { out: outAttr, count: attributes.length });
-
-        await device.queue.onSubmittedWorkDone();
-
-        arraysApproxEqual(await outPos.readAs(Float32Array), positions, 0, "WebAssembly-uploaded positionsBuffer contents mismatch");
-        arraysApproxEqual(await outRot.readAs(Float32Array), rotations, 0, "WebAssembly-uploaded rotationsBuffer contents mismatch");
-        arraysApproxEqual(await outScl.readAs(Float32Array), scales, 0, "WebAssembly-uploaded scalesBuffer contents mismatch");
-        arraysApproxEqual(await outAttr.readAs(Float32Array), attributes, 0, "WebAssembly-uploaded attributesBuffer contents mismatch");
-
-        outPos.destroy();
-        outRot.destroy();
-        outScl.destroy();
-        outAttr.destroy();
+        arraysApproxEqual(await readBufferAsF32(compute, gf.positionsBuffer, positions.length), positions, 0, "WebAssembly-uploaded positionsBuffer contents mismatch");
+        arraysApproxEqual(await readBufferAsF32(compute, gf.rotationsBuffer, rotations.length), rotations, 0, "WebAssembly-uploaded rotationsBuffer contents mismatch");
+        arraysApproxEqual(await readBufferAsF32(compute, gf.scalesBuffer, scales.length), scales, 0, "WebAssembly-uploaded scalesBuffer contents mismatch");
+        arraysApproxEqual(await readBufferAsF32(compute, gf.attributesBuffer, attributes.length), attributes, 0, "WebAssembly-uploaded attributesBuffer contents mismatch");
         gf.destroy?.();
     } finally { wasm.freeF32(posPtr, len4); wasm.freeF32(rotPtr, len4); wasm.freeF32(sclPtr, len4); wasm.freeF32(attrPtr, len4); }
 }

@@ -23,17 +23,17 @@ export default {
             for (let row = 0; row < size; row++) rhs[batch * size + row] = ((row * 17 + batch * 13) % 97) / 97 - 0.5;
         }
         const state = {
-            lu: compute.createStorageBuffer({ label: "bench:lu-solve-f32-n:lu", data: matrices }),
-            ipiv: compute.createStorageBuffer({ label: "bench:lu-solve-f32-n:ipiv", byteLength: BATCH_COUNT * size * 4 }),
-            rhs: compute.createStorageBuffer({ label: "bench:lu-solve-f32-n:rhs", data: rhs }),
-            outX: compute.createStorageBuffer({ label: "bench:lu-solve-f32-n:outX", byteLength: rhs.byteLength })
+            lu: compute.ndarray.fromArray("f32", [BATCH_COUNT, size, size], matrices, { residency: "gpu", label: "bench:lu-solve-f32-n:lu" }),
+            ipiv: compute.ndarray.empty("u32", { shape: [BATCH_COUNT, size] }, { residency: "gpu", label: "bench:lu-solve-f32-n:ipiv" }),
+            rhs: compute.ndarray.fromArray("f32", [BATCH_COUNT, size], rhs, { residency: "gpu", label: "bench:lu-solve-f32-n:rhs" }),
+            outX: compute.ndarray.empty("f32", { shape: [BATCH_COUNT, size] }, { residency: "gpu", label: "bench:lu-solve-f32-n:outX" })
         };
-        compute.kernels.luFactorF32Batched(state.lu, state.ipiv, BATCH_COUNT, size);
+        compute.kernels.luFactor(state.lu, { overwrite: true, ipiv: state.ipiv });
         await queue.onSubmittedWorkDone();
         return state;
     },
     run(state, { compute }, size) {
-        compute.kernels.luSolveF32Batched(state.lu, state.ipiv, state.rhs, state.outX, BATCH_COUNT, size);
+        compute.kernels.luSolve(state.lu, state.ipiv, state.rhs, { out: state.outX });
     },
     operations(size) { return BATCH_COUNT * 2 * size * size / 1e9; },
     workload(size) { return { n: size, batchCount: BATCH_COUNT, matrices: BATCH_COUNT, matrixElements: BATCH_COUNT * size * size, rhsElements: BATCH_COUNT * size, scalarElements: BATCH_COUNT * (size * size + size), dtype: "f32", factorizationTimed: false }; },

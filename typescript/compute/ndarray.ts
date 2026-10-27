@@ -153,7 +153,7 @@ const INTEGER_RANGE: Record<DType, readonly [number, number] | null> = { i8: [-1
 
 const isFloatDType = (dtype: DType): boolean => dtype === "f32" || dtype === "f64";
 
-const sameShape = (a: ReadonlyArray<number>, b: ReadonlyArray<number>): boolean => a.length === b.length && a.every((dim, i) => dim === b[i]);
+export const sameShape = (a: ReadonlyArray<number>, b: ReadonlyArray<number>): boolean => a.length === b.length && a.every((dim, i) => dim === b[i]);
 
 const normalizeAxis = (axis: number, ndim: number, op: string): number => {
     assert(Number.isInteger(axis), `${op}: axis must be an integer (got ${axis})`);
@@ -252,7 +252,7 @@ const nocopyReshapeStrides = (oldShape: ReadonlyArray<number>, oldStrides: Reado
     return newStrides;
 };
 
-const broadcastStrides = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, target: ReadonlyArray<number>, op: string): number[] => {
+export const broadcastStrides = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, target: ReadonlyArray<number>, op: string): number[] => {
     const lead = target.length - shape.length;
     assert(lead >= 0, `${op}: cannot broadcast shape [${shape}] to [${target}]`);
     const out = new Array<number>(target.length);
@@ -267,7 +267,7 @@ const broadcastStrides = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyAr
 
 type CoalescedLayout = { shape: number[]; strides: number[][]; axes: number[] };
 
-const coalesceDims = (shape: ReadonlyArray<number>, strides: ReadonlyArray<ReadonlyArray<number>>, keep: ReadonlyArray<boolean> = []): CoalescedLayout => {
+export const coalesceDims = (shape: ReadonlyArray<number>, strides: ReadonlyArray<ReadonlyArray<number>>, keep: ReadonlyArray<boolean> = []): CoalescedLayout => {
     const outShape: number[] = [];
     const outStrides: number[][] = strides.map(() => []);
     const axes = new Array<number>(shape.length).fill(-1);
@@ -290,7 +290,7 @@ const coalesceDims = (shape: ReadonlyArray<number>, strides: ReadonlyArray<Reado
     return { shape: outShape, strides: outStrides, axes };
 };
 
-const mayAddressTwice = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, bytesPerElement: number): boolean => {
+export const mayAddressTwice = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, bytesPerElement: number): boolean => {
     const dims: Array<readonly [number, number]> = [];
     for (let i = 0; i < shape.length; i++) {
         if (shape[i]! <= 1) continue;
@@ -707,6 +707,8 @@ type AnyNdarray = CPUndarray | GPUndarray;
 
 const opName = (op: string): string => `compute.ndarray.${op}`;
 
+const qualifiedName = (op: string): string => op.startsWith("compute.") ? op : opName(op);
+
 const assertNdarray = (a: unknown, op: string, label: string = "array"): AnyNdarray => { assert(a instanceof CPUndarray || a instanceof GPUndarray, `${opName(op)}: ${label} must be a CPUndarray or GPUndarray`); return a; };
 
 const hasGPUOptions = (options: NdarrayGPUOptions & { encoder?: unknown; out?: unknown }): boolean => options.label !== undefined || options.copySrc !== undefined || options.copyDst !== undefined || options.usage !== undefined || options.encoder !== undefined || options.out !== undefined;
@@ -785,7 +787,7 @@ const rootOf = (a: Ndarray): Ndarray => a[ndarrayBase] ?? a;
 
 const CPU_MAX_RANK = 64;
 
-const GPU_MAX_RANK = 8;
+export const GPU_MAX_RANK = 8;
 
 const WASM_STATUS: ReadonlyArray<string> = ["ok", "invalid dtype code", "invalid mode code", "invalid rank", "invalid pointer", "overlapping source and destination ranges", "source layout out of bounds", "destination layout out of bounds", "invalid shape", "invalid tap table", "invalid parameters"];
 
@@ -827,7 +829,7 @@ const withWasmScratch = <T>(run: (scratch: WasmScratch) => T): T => {
 };
 
 const assertRank = (rank: number, limit: number, backend: string, op: string): void => {
-    assert(rank <= limit, `${opName(op)}: ${backend} operations support at most ${limit} dimensions after coalescing (got ${rank})`);
+    assert(rank <= limit, `${qualifiedName(op)}: ${backend} operations support at most ${limit} dimensions after coalescing (got ${rank})`);
 };
 
 const cpuCopy = (dst: CPUndarray, src: CPUndarray, srcStrides: ReadonlyArray<number>, mode: IntMode, op: string): void => {
@@ -932,17 +934,21 @@ type GPUGather = {
     paramLen?: number;
 };
 
-class NdarrayGPUEngine {
+export class NdarrayGPUEngine {
     private readonly device: GPUDevice;
     private readonly queue: GPUQueue;
     private readonly scratch: ScratchAllocator;
     private readonly pipelines: Map<string, ComputePipeline> = new Map();
+    private readonly alignment: number;
+    private readonly maxBindingBytes: number;
     private empty: StorageBuffer | null = null;
 
     constructor(device: GPUDevice, queue: GPUQueue, scratch: ScratchAllocator) {
         this.device = device;
         this.queue = queue;
         this.scratch = scratch;
+        this.alignment = device.limits.minStorageBufferOffsetAlignment;
+        this.maxBindingBytes = device.limits.maxStorageBufferBindingSize;
     }
 
     destroy(): void {
@@ -975,7 +981,12 @@ class NdarrayGPUEngine {
         return pipeline;
     }
 
-    private binding(a: GPUndarray, op: string): { resource: { buffer: StorageBuffer; offset: number; size: number }; delta: number } {
+    assertArray(a: GPUndarray, op: string, label: string = "array"): void {
+        a[ndarrayAssertAlive]();
+        assert(a.buffer.device === this.device, () => `${qualifiedName(op)}: ${label} belongs to a different GPUDevice`);
+    }
+
+    binding(a: GPUndarray, op: string): { resource: { buffer: StorageBuffer; offset: number; size: number }; delta: number } {
         if (a.byteLength === 0) {
             this.empty ??= new StorageBuffer(this.device, this.queue, { label: "compute.ndarray:empty", byteLength: 4, copyDst: false });
             return { resource: { buffer: this.empty, offset: 0, size: 4 }, delta: 0 };
@@ -988,24 +999,48 @@ class NdarrayGPUEngine {
         const offset = start - storage.offsetBytes;
         const size = alignTo(delta + a.byteLength, 4);
         try { validateStorageBufferRange(storage, offset, delta + a.byteLength, true); }
-        catch { throw new Error(`${opName(op)}: the 4-byte-aligned binding range of an array extends past its StorageBuffer's logical range (odd-length external wrappers cannot be bound)`); }
-        assert(size <= this.device.limits.maxStorageBufferBindingSize, `${opName(op)}: a ${size}-byte binding exceeds device.limits.maxStorageBufferBindingSize (${this.device.limits.maxStorageBufferBindingSize}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
+        catch { throw new Error(`${qualifiedName(op)}: the 4-byte-aligned binding range of an array extends past its StorageBuffer's logical range (odd-length external wrappers cannot be bound)`); }
+        assert(size <= this.device.limits.maxStorageBufferBindingSize, () => `${qualifiedName(op)}: a ${size}-byte binding exceeds device.limits.maxStorageBufferBindingSize (${this.device.limits.maxStorageBufferBindingSize}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
         return { resource: { buffer: storage, offset, size }, delta };
+    }
+
+    bindable(a: GPUndarray): boolean {
+        if (a.numel === 0 || !a.isContiguousC) return false;
+        const offset = a.baseOffsetBytes + a.offsetBytes;
+        if ((a.buffer.offsetBytes + offset) % this.alignment !== 0) return false;
+        const size = alignTo(a.numel * a.bytesPerElement, 4);
+        if (size > this.maxBindingBytes) return false;
+        if (offset + size <= a.buffer.byteLength) return true;
+        try { validateStorageBufferRange(a.buffer, offset, a.numel * a.bytesPerElement, true); }
+        catch { return false; }
+        return true;
+    }
+
+    direct(a: GPUndarray): { buffer: StorageBuffer; offset: number; size: number } {
+        return { buffer: a.buffer, offset: a.baseOffsetBytes + a.offsetBytes, size: alignTo(a.numel * a.bytesPerElement, 4) };
     }
 
     output(dtype: DType, shape: ReadonlyArray<number>, options: NdarrayGPUOptions, op: string): GPUndarray {
         const info = dtypeInfo(dtype);
         const bytes = alignTo(numelFromShape(shape) * info.bytesPerElement, 4);
-        assert(bytes <= this.device.limits.maxBufferSize, `${opName(op)}: a ${bytes}-byte output exceeds device.limits.maxBufferSize (${this.device.limits.maxBufferSize}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
-        return GPUndarray.empty({ device: this.device, queue: this.queue }, dtype, { shape }, { label: options.label ?? opName(op), copySrc: options.copySrc ?? true, copyDst: options.copyDst ?? true, usage: options.usage });
+        assert(bytes <= this.device.limits.maxBufferSize, () => `${qualifiedName(op)}: a ${bytes}-byte output exceeds device.limits.maxBufferSize (${this.device.limits.maxBufferSize}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
+        return GPUndarray.empty({ device: this.device, queue: this.queue }, dtype, { shape }, { label: options.label ?? qualifiedName(op), copySrc: options.copySrc ?? true, copyDst: options.copyDst ?? true, usage: options.usage });
+    }
+
+    temp(dtype: DType, shape: ReadonlyArray<number>, op: string): GPUndarray {
+        const bytes = alignTo(numelFromShape(shape) * dtypeInfo(dtype).bytesPerElement, 4);
+        const storage = wrapStorageBuffer(this.device, this.queue, this.scratch.acquire(bytes, `${qualifiedName(op)}:staging`), { byteLength: bytes });
+        return GPUndarray.wrap(storage, dtype, { shape });
     }
 
     stage(src: GPUndarray, commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, op: string): GPUndarray {
-        const bytes = alignTo(src.numel * src.bytesPerElement, 4);
-        const storage = wrapStorageBuffer(this.device, this.queue, this.scratch.acquire(bytes, `${opName(op)}:staging`), { byteLength: bytes });
-        const temp = GPUndarray.wrap(storage, src.dtype, { shape: src.shape });
-        this.gather(commands, encoder, { dst: temp, src, entryPoint: "gather", constants: castConstants(src.dtype, src.dtype, ARITHMETIC_MODE), srcStrides: src.stridesBytes }, op);
+        const temp = this.temp(src.dtype, src.shape, op);
+        this.copy(src, temp, commands, encoder, op);
         return temp;
+    }
+
+    copy(src: GPUndarray, dst: GPUndarray, commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, op: string): void {
+        this.gather(commands, encoder, { dst, src, entryPoint: "gather", constants: castConstants(src.dtype, dst.dtype, ARITHMETIC_MODE), srcStrides: src.stridesBytes }, op);
     }
 
     gather(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, spec: GPUGather, op: string): void {
@@ -1044,13 +1079,13 @@ class NdarrayGPUEngine {
         words.set(table, P_HEADER_WORDS);
         const params = this.scratch.params(words, encoder);
         const pipeline = this.pipeline(spec.entryPoint, spec.constants);
-        const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: params }, `${opName(op)}:bg`);
-        commands.push({ pipeline, bindGroups: [bindGroup], workgroups: workgroupsFolded(count, 256, this.device.limits.maxComputeWorkgroupsPerDimension), label: opName(op) });
+        const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: params }, `${qualifiedName(op)}:bg`);
+        commands.push({ pipeline, bindGroups: [bindGroup], workgroups: workgroupsFolded(count, 256, this.device.limits.maxComputeWorkgroupsPerDimension), label: qualifiedName(op) });
     }
 
     submit(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, label: string | undefined, op: string): void {
-        const target = encoder ?? this.device.createCommandEncoder({ label: label ?? opName(op) });
-        if (commands.length > 0) encodeDispatchBatchWithLimit(target, commands, label ?? opName(op), this.device.limits.maxComputeWorkgroupsPerDimension);
+        const target = encoder ?? this.device.createCommandEncoder({ label: label ?? qualifiedName(op) });
+        if (commands.length > 0) encodeDispatchBatchWithLimit(target, commands, label ?? qualifiedName(op), this.device.limits.maxComputeWorkgroupsPerDimension);
         if (!encoder) this.queue.submit([target.finish()]);
     }
 }
@@ -1102,15 +1137,18 @@ export class NdarrayNamespace {
     private readonly scratch: ScratchAllocator;
     private readonly ownsScratch: boolean;
     private readonly gpu: NdarrayGPUEngine;
+    private readonly ownsEngine: boolean;
     private destroyed: boolean = false;
 
-    constructor(device: GPUDevice, queue: GPUQueue, readback: ReadbackRing | null = null, scratch?: ScratchAllocator) {
+    constructor(device: GPUDevice, queue: GPUQueue, readback: ReadbackRing | null = null, scratch?: ScratchAllocator, engine?: NdarrayGPUEngine) {
+        assert(!engine || scratch, "NdarrayNamespace: an injected engine requires the scratch allocator it was created with");
         this.device = device;
         this.queue = queue;
         this.readback = readback;
         this.scratch = scratch ?? new ScratchAllocator(device, queue);
         this.ownsScratch = !scratch;
-        this.gpu = new NdarrayGPUEngine(device, queue, this.scratch);
+        this.gpu = engine ?? new NdarrayGPUEngine(device, queue, this.scratch);
+        this.ownsEngine = !engine;
     }
 
     [Symbol.hasInstance](value: unknown): value is Ndarray {
@@ -1120,7 +1158,7 @@ export class NdarrayNamespace {
     destroy(): void {
         if (this.destroyed) return;
         this.destroyed = true;
-        this.gpu.destroy();
+        if (this.ownsEngine) this.gpu.destroy();
         if (this.ownsScratch) this.scratch.destroy();
     }
 

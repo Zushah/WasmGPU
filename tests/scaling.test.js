@@ -100,12 +100,9 @@ const scale = new ScaleService(compute);
             data: testCase.values,
             copySrc: false
         });
-        const remapped = compute.kernels.remapScaleF32(src, {
-            count: testCase.values.length,
-            transform: testCase.transform
-        });
+        const remapped = compute.kernels.scaleRemap(compute.ndarray.wrap(src, "f32", { shape: [testCase.values.length] }), { transform: testCase.transform });
         await device.queue.onSubmittedWorkDone();
-        const gpuOut = await remapped.readAs(Float32Array);
+        const gpuOut = await remapped.buffer.readAs(Float32Array);
         const cpuOut = new Float32Array(testCase.values.length);
         for (let i = 0; i < testCase.values.length; i++) cpuOut[i] = applyScaleTransformCPU(testCase.values[i], testCase.transform);
         arraysApproxEqual(gpuOut, cpuOut, 2e-4, `GPU remap parity mismatch (${testCase.name})`);

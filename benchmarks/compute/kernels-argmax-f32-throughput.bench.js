@@ -11,19 +11,19 @@ export default {
     subsystem: "compute",
     type: "throughput",
     unit: "elements/s",
-    description: "Steady-state ComputeKernels.argmaxF32 pair-reduction throughput excluding readback and including GPU completion.",
+    description: "Steady-state ComputeKernels.argmax pair-reduction throughput excluding readback and including GPU completion.",
     sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608, 16_777_216] },
     gpu: true,
     setup({ compute }, size) {
         return {
-            input: compute.createStorageBuffer({ data: makeF32(size) }),
-            output: compute.createStorageBuffer({ byteLength: 8 })
+            input: compute.ndarray.fromArray("f32", [size], makeF32(size), { residency: "gpu" }),
+            output: compute.ndarray.empty("u32", { shape: [] }, { residency: "gpu" })
         };
     },
     run(state, { compute }) {
-        compute.kernels.argmaxF32(state.input, { out: state.output });
+        compute.kernels.argmax(state.input, { out: state.output });
     },
     operations(size) { return size; },
-    workload(size) { return { elements: size, resultBytes: 8 }; },
+    workload(size) { return { elements: size, resultBytes: 4 }; },
     teardown(state) { state.input.destroy(); state.output.destroy(); }
 };

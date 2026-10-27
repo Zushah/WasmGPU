@@ -1356,7 +1356,7 @@ class ArchitectureVideo(WasmGPUVideoScene):
 # Sources: ./typescript/compute/index.ts, ./typescript/compute/buffer.ts, ./typescript/compute/pipeline.ts,
 # ./typescript/compute/dispatch.ts, ./typescript/compute/workgroups.ts, ./typescript/compute/ndarray.ts,
 # ./typescript/compute/kernels.ts, ./typescript/compute/readback.ts, ./typescript/compute/blit.ts,
-# ./wgsl/compute/reduce-sum-f32.wgsl, ./wgsl/compute/gemm-f32.wgsl, ./wgsl/compute/sort-radix-flags-u32.wgsl,
+# ./wgsl/compute/reduce-sum-f32.wgsl, ./wgsl/compute/matmul-f32.wgsl, ./wgsl/compute/sort-radix-flags-u32.wgsl,
 # ./website/docs/compute/*.md (examples for createPipeline and dispatch1D), and ./ARCHITECTURE.md §1.13.
 
 KERNEL_FAMILIES = [

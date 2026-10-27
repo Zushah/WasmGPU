@@ -11,17 +11,17 @@ export default {
     subsystem: "compute",
     type: "throughput",
     unit: "elements/s",
-    description: "Steady-state ComputeKernels.scanExclusiveU32 multi-pass throughput excluding readback and including GPU completion.",
+    description: "Steady-state ComputeKernels.scanExclusive multi-pass throughput excluding readback and including GPU completion.",
     sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608, 16_777_216] },
     gpu: true,
     setup({ compute }, size) {
         return {
-            input: compute.createStorageBuffer({ data: makeU32(size) }),
-            output: compute.createStorageBuffer({ byteLength: size * 4 })
+            input: compute.ndarray.fromArray("u32", [size], makeU32(size), { residency: "gpu" }),
+            output: compute.ndarray.empty("u32", { shape: [size] }, { residency: "gpu" })
         };
     },
     run(state, { compute }) {
-        compute.kernels.scanExclusiveU32(state.input, { out: state.output });
+        compute.kernels.scanExclusive(state.input, { out: state.output });
     },
     operations(size) { return size; },
     workload(size) { return { elements: size }; },

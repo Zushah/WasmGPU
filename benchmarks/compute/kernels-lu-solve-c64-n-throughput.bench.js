@@ -27,17 +27,17 @@ export default {
             }
         }
         const state = {
-            lu: compute.createStorageBuffer({ label: "bench:lu-solve-c64-n:lu", data: matrices }),
-            ipiv: compute.createStorageBuffer({ label: "bench:lu-solve-c64-n:ipiv", byteLength: BATCH_COUNT * size * 4 }),
-            rhs: compute.createStorageBuffer({ label: "bench:lu-solve-c64-n:rhs", data: rhs }),
-            outX: compute.createStorageBuffer({ label: "bench:lu-solve-c64-n:outX", byteLength: rhs.byteLength })
+            lu: compute.ndarray.fromArray("f32", [BATCH_COUNT, size, size, 2], matrices, { residency: "gpu", label: "bench:lu-solve-c64-n:lu" }),
+            ipiv: compute.ndarray.empty("u32", { shape: [BATCH_COUNT, size] }, { residency: "gpu", label: "bench:lu-solve-c64-n:ipiv" }),
+            rhs: compute.ndarray.fromArray("f32", [BATCH_COUNT, size, 2], rhs, { residency: "gpu", label: "bench:lu-solve-c64-n:rhs" }),
+            outX: compute.ndarray.empty("f32", { shape: [BATCH_COUNT, size, 2] }, { residency: "gpu", label: "bench:lu-solve-c64-n:outX" })
         };
-        compute.kernels.luFactorC64Batched(state.lu, state.ipiv, BATCH_COUNT, size);
+        compute.kernels.luFactor(state.lu, { overwrite: true, ipiv: state.ipiv, complex: true });
         await queue.onSubmittedWorkDone();
         return state;
     },
     run(state, { compute }, size) {
-        compute.kernels.luSolveC64Batched(state.lu, state.ipiv, state.rhs, state.outX, BATCH_COUNT, size);
+        compute.kernels.luSolve(state.lu, state.ipiv, state.rhs, { out: state.outX, complex: true });
     },
     operations(size) { return BATCH_COUNT * 8 * size * size / 1e9; },
     workload(size) { return { n: size, batchCount: BATCH_COUNT, matrices: BATCH_COUNT, complexElements: BATCH_COUNT * (size * size + size), matrixComplexElements: BATCH_COUNT * size * size, rhsComplexElements: BATCH_COUNT * size, scalarElements: BATCH_COUNT * (size * size + size) * 2, dtype: "c64", factorizationTimed: false }; },

@@ -23,17 +23,17 @@ export default {
             for (let row = 0; row < MATRIX_ORDER; row++) rhs[batch * MATRIX_ORDER + row] = ((row * 17 + batch * 13) % 97) / 97 - 0.5;
         }
         const state = {
-            lu: compute.createStorageBuffer({ label: "bench:lu-solve-f32-batch:lu", data: matrices }),
-            ipiv: compute.createStorageBuffer({ label: "bench:lu-solve-f32-batch:ipiv", byteLength: size * MATRIX_ORDER * 4 }),
-            rhs: compute.createStorageBuffer({ label: "bench:lu-solve-f32-batch:rhs", data: rhs }),
-            outX: compute.createStorageBuffer({ label: "bench:lu-solve-f32-batch:outX", byteLength: rhs.byteLength })
+            lu: compute.ndarray.fromArray("f32", [size, MATRIX_ORDER, MATRIX_ORDER], matrices, { residency: "gpu", label: "bench:lu-solve-f32-batch:lu" }),
+            ipiv: compute.ndarray.empty("u32", { shape: [size, MATRIX_ORDER] }, { residency: "gpu", label: "bench:lu-solve-f32-batch:ipiv" }),
+            rhs: compute.ndarray.fromArray("f32", [size, MATRIX_ORDER], rhs, { residency: "gpu", label: "bench:lu-solve-f32-batch:rhs" }),
+            outX: compute.ndarray.empty("f32", { shape: [size, MATRIX_ORDER] }, { residency: "gpu", label: "bench:lu-solve-f32-batch:outX" })
         };
-        compute.kernels.luFactorF32Batched(state.lu, state.ipiv, size, MATRIX_ORDER);
+        compute.kernels.luFactor(state.lu, { overwrite: true, ipiv: state.ipiv });
         await queue.onSubmittedWorkDone();
         return state;
     },
     run(state, { compute }, size) {
-        compute.kernels.luSolveF32Batched(state.lu, state.ipiv, state.rhs, state.outX, size, MATRIX_ORDER);
+        compute.kernels.luSolve(state.lu, state.ipiv, state.rhs, { out: state.outX });
     },
     operations(size) { return size * 2 * MATRIX_ORDER * MATRIX_ORDER / 1e9; },
     workload(size) { return { n: MATRIX_ORDER, batchCount: size, matrices: size, matrixElements: size * MATRIX_ORDER * MATRIX_ORDER, rhsElements: size * MATRIX_ORDER, scalarElements: size * (MATRIX_ORDER * MATRIX_ORDER + MATRIX_ORDER), dtype: "f32", factorizationTimed: false }; },

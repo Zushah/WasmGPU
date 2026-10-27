@@ -11,7 +11,7 @@ export default {
     subsystem: "compute",
     type: "throughput",
     unit: "elements/s",
-    description: "Complete ComputeKernels.compactF32 throughput at 50% keep density, excluding readback and including GPU completion.",
+    description: "Complete ComputeKernels.compact f32 throughput at 50% keep density with a GPU-resident count, excluding readback and including GPU completion.",
     sizes: { quick: [4_194_304, 8_388_608], full: [8_388_608, 12_582_912, 16_777_216] },
     gpu: true,
     maximumRepetitions: 32,
@@ -19,22 +19,16 @@ export default {
         const flags = new Uint32Array(size);
         for (let i = 0; i < size; i++) flags[i] = i & 1;
         return {
-            input: compute.createStorageBuffer({ data: makeF32(size) }),
-            flags: compute.createStorageBuffer({ data: flags }),
-            output: compute.createStorageBuffer({ byteLength: size * 4 }),
-            counts: []
+            input: compute.ndarray.fromArray("f32", [size], makeF32(size), { residency: "gpu" }),
+            flags: compute.ndarray.fromArray("u32", [size], flags, { residency: "gpu" }),
+            output: compute.ndarray.empty("f32", { shape: [size] }, { residency: "gpu" }),
+            count: compute.ndarray.empty("u32", { shape: [] }, { residency: "gpu" })
         };
     },
     run(state, { compute }) {
-        const result = compute.kernels.compactF32(
-            state.input,
-            state.flags,
-            { out: state.output }
-        );
-        state.counts.push(result.count);
+        compute.kernels.compact(state.input, state.flags, { out: state.output, outCount: state.count });
     },
-    afterSample(state) { for (const count of state.counts) count.destroy(); state.counts.length = 0; },
     operations(size) { return size; },
-    workload(size) { return { elements: size, keepDensity: 0.5, maximumBatchedCountBuffers: 32 }; },
-    teardown(state) { for (const count of state.counts) count.destroy(); state.input.destroy(); state.flags.destroy(); state.output.destroy(); }
+    workload(size) { return { elements: size, keepDensity: 0.5 }; },
+    teardown(state) { state.input.destroy(); state.flags.destroy(); state.output.destroy(); state.count.destroy(); }
 };

@@ -205,20 +205,19 @@ export const safelySilence = (method, run) => {
     }
 };
 
-const readBuffer = async (compute, buffer, count, TypedArray, copy) => {
-    const output = compute.createStorageBuffer({ byteLength: count * TypedArray.BYTES_PER_ELEMENT, copySrc: true });
+const readBuffer = async (compute, buffer, count, dtype, TypedArray) => {
+    const storage = (buffer instanceof GPUBuffer) ? compute.wrapStorageBuffer(buffer) : buffer;
+    const output = compute.ndarray.empty(dtype, { shape: [count] }, { residency: "gpu" });
     try {
-        copy(buffer, { out: output, count });
+        compute.ndarray.copyInto(output, compute.ndarray.wrap(storage, dtype, { shape: [count] }));
         await compute.queue.onSubmittedWorkDone();
-        return await output.readAs(TypedArray);
-    } finally {
-        output.destroy();
-    }
+        return await output.buffer.readAs(TypedArray);
+    } finally { output.destroy(); }
 };
 
-export const readBufferAsF32 = (compute, buffer, count) => readBuffer(compute, buffer, count, Float32Array, compute.kernels.copyF32.bind(compute.kernels));
+export const readBufferAsF32 = (compute, buffer, count) => readBuffer(compute, buffer, count, "f32", Float32Array);
 
-export const readBufferAsU32 = (compute, buffer, count) => readBuffer(compute, buffer, count, Uint32Array, compute.kernels.copyU32.bind(compute.kernels));
+export const readBufferAsU32 = (compute, buffer, count) => readBuffer(compute, buffer, count, "u32", Uint32Array);
 
 export const createBufferReaders = (compute) => ({
     readBufferAsF32: (buffer, count) => readBufferAsF32(compute, buffer, count),

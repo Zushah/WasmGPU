@@ -12,7 +12,7 @@ import { encodeDispatch, encodeDispatchBatchWithLimit, type ComputeDispatchComma
 import { ComputeKernels } from "./kernels";
 import { RGBA8BufferCanvasBlitter, type BlitRGBA8BufferToCanvasOptions, type RGBA8BufferSource } from "./blit";
 import { ReadbackRing, type ReadbackRingDescriptor } from "./readback";
-import { NdarrayNamespace } from "./ndarray";
+import { NdarrayGPUEngine, NdarrayNamespace } from "./ndarray";
 import { ScratchAllocator, type ScratchAllocatorDescriptor } from "./scratch";
 
 export type ComputeDispatchOptions = {
@@ -32,15 +32,17 @@ export class Compute {
     readonly readback: ReadbackRing;
     readonly ndarray: NdarrayNamespace;
     private readonly scratch: ScratchAllocator;
+    private readonly engine: NdarrayGPUEngine;
     private _rgba8Blitter: RGBA8BufferCanvasBlitter | null = null;
 
     constructor(device: GPUDevice, queue: GPUQueue, desc: ComputeDescriptor = {}) {
         this.device = device;
         this.queue = queue;
         this.scratch = new ScratchAllocator(device, queue, desc.scratch);
-        this.kernels = new ComputeKernels(device, queue, this.scratch);
+        this.engine = new NdarrayGPUEngine(device, queue, this.scratch);
+        this.kernels = new ComputeKernels(device, queue, this.scratch, this.engine);
         this.readback = new ReadbackRing(device, queue, desc.readback);
-        this.ndarray = new NdarrayNamespace(device, queue, this.readback, this.scratch);
+        this.ndarray = new NdarrayNamespace(device, queue, this.readback, this.scratch, this.engine);
     }
 
     createStorageBuffer(desc: StorageBufferDescriptor): StorageBuffer {
@@ -142,6 +144,7 @@ export class Compute {
         this._rgba8Blitter = null;
         this.readback.destroy();
         this.kernels.destroy();
+        this.engine.destroy();
         this.scratch.destroy();
     }
 }
@@ -157,7 +160,7 @@ export type { DispatchWorkgroups, ComputeDispatchCommand } from "./dispatch";
 export { RGBA8BufferCanvasBlitter } from "./blit";
 export type { RGBA8BufferSource, BlitRGBA8BufferToCanvasOptions } from "./blit";
 export { ComputeKernels } from "./kernels";
-export type { KernelDispatchOptions, VectorKernelOptions, C64Scalar, GemmF32Options, GemmU32Options, GemmC64Options, ReduceOptions, ArgReduceOptions, ScanOptions, HistogramOptions, CompactOptions, RadixSortOptions, RadixSortPairsOptions, RadixSortPairsResult, CopyOptions, ScaleExtractOptions, ScaleExtractResult, ScaleHistogramOptions, ScaleRemapOptions, ReduceOp, ArgReduceOp } from "./kernels";
+export type { KernelDispatchOptions, KernelOutputOptions, KernelComplexOptions, C64Scalar, KernelScalar, ElementwiseOptions, MatmulOptions, HistogramOptions, CompactOptions, CompactResult, SortPairsOptions, SortPairsResult, LuFactorOptions, LuFactorResult, LuSolveOptions, ScaleExtractOptions, ScaleExtractResult, ScaleHistogramOptions, ScaleRemapOptions } from "./kernels";
 export { ReadbackRing } from "./readback";
 export type { ReadbackSource, ReadbackRingDescriptor } from "./readback";
 export type { ScratchAllocatorDescriptor } from "./scratch";

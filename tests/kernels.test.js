@@ -16,648 +16,406 @@ const makeRandomU32Array = (n, maxInclusive = 1024) => { const a = new Uint32Arr
 
 const makeRandomF32Array = (n, min = -10, max = 10) => { const a = new Float32Array(n); for (let i = 0; i < n; i++) a[i] = min + (max - min) * random(); return a; };
 
-const { device } = await setupTest({ webgpu: true });
+const { device } = await setupTest({ initWebAssembly: WasmGPU.initWebAssembly, webgpu: true });
 
-const { Compute, ComputeKernels } = WasmGPU;
+const { Compute, ComputeKernels, GPUndarray } = WasmGPU;
 assert.ok(Compute, "Missing export: Compute");
 const compute = new Compute(device, device.queue);
 const kernels = compute.kernels ?? (ComputeKernels ? new ComputeKernels(device, device.queue) : null);
 assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported ComputeKernels.");
+const nd = compute.ndarray;
 
-// 1) Copy kernels u32 / f32.
+const gpu = (dtype, shape, data, options = {}) => nd.fromArray(dtype, shape, data, { residency: "gpu", ...options });
+
+const read = async (array) => { const c = nd.contiguous(array); try { return await c.buffer.readAs(array.dtype === "u32" ? Uint32Array : Float32Array); } finally { c.destroy(); } };
+
+// 1) Kernels consume and produce GPUndarrays; obsolete raw-buffer methods are gone.
 {
-    assert.strictEqual(typeof kernels.copyU32, "function", "Missing kernel: copyU32");
-    assert.strictEqual(typeof kernels.copyF32, "function", "Missing kernel: copyF32");
-
-    // copyU32 (full)
-    {
-        const n = 8192 + 17;
-        const a = makeRandomU32Array(n, 0xFFFFFFFF >>> 0);
-        const bufA = compute.createStorageBuffer({ label: "copy:u32:in", data: a, copySrc: false });
-        const out = compute.createStorageBuffer({ label: "copy:u32:out", byteLength: n * 4, copySrc: true });
-        const outRef = kernels.copyU32(bufA, { out, count: n }) ?? out;
-        const got = await outRef.readAs(Uint32Array);
-        arraysEqualU32(got, a, "copyU32 mismatch");
-    }
-
-    // copyU32 (partial count)
-    {
-        const n = 4096 + 9;
-        const a = makeRandomU32Array(n, 1000);
-        const bufA = compute.createStorageBuffer({ label: "copy:u32:in_partial", data: a, copySrc: false });
-        const m = 1024 + 3;
-        const out = compute.createStorageBuffer({ label: "copy:u32:out_partial", byteLength: m * 4, copySrc: true });
-        const outRef = kernels.copyU32(bufA, { out, count: m }) ?? out;
-        const got = await outRef.readAs(Uint32Array);
-        arraysEqualU32(got, a.subarray(0, m), "copyU32 partial mismatch");
-    }
-
-    // copyF32 (full)
-    {
-        const n = 8192 + 7;
-        const a = makeRandomF32Array(n, -50, 50);
-        const bufA = compute.createStorageBuffer({ label: "copy:f32:in", data: a, copySrc: false });
-        const out = compute.createStorageBuffer({ label: "copy:f32:out", byteLength: n * 4, copySrc: true });
-        const outRef = kernels.copyF32(bufA, { out, count: n }) ?? out;
-        const got = await outRef.readAs(Float32Array);
-        arraysApproxEqual(got, a, 1e-5, "copyF32 mismatch");
-    }
-
-    // copyF32 (partial count)
-    {
-        const n = 4096 + 11;
-        const a = makeRandomF32Array(n, -5, 5);
-        const bufA = compute.createStorageBuffer({ label: "copy:f32:in_partial", data: a, copySrc: false });
-        const m = 777;
-        const out = compute.createStorageBuffer({ label: "copy:f32:out_partial", byteLength: m * 4, copySrc: true });
-        const outRef = kernels.copyF32(bufA, { out, count: m }) ?? out;
-        const got = await outRef.readAs(Float32Array);
-        arraysApproxEqual(got, a.subarray(0, m), 1e-5, "copyF32 partial mismatch");
-    }
+    for (const name of ["add", "sub", "mul", "scl", "axpy", "dot", "matmul", "sum", "min", "max", "argmin", "argmax", "scanExclusive", "histogram", "compact", "sort", "sortPairs", "luFactor", "luSolve", "scaleExtract", "scaleHistogram", "scaleRemap"]) assert.strictEqual(typeof kernels[name], "function", `Missing kernel: ${name}`);
+    for (const name of ["addF32", "gemmF32", "sumF32", "copyF32", "copyU32", "radixSortKeysU32", "luFactorF32Batched"]) assert.strictEqual(kernels[name], undefined, `Obsolete kernel still present: ${name}`);
+    const sum = kernels.add(gpu("f32", [3], [1, -2, 3]), gpu("f32", [3], [4, 5, -6]));
+    assert.ok(sum instanceof GPUndarray, "kernels return GPUndarrays");
+    assert.deepStrictEqual(sum.shape, [3], "owned output shape");
+    assert.strictEqual(sum.buffer.buffer.label, "compute.kernels.add", "owned outputs default to a compute.kernels.<op> label");
+    assert.ok((sum.buffer.usage & GPUBufferUsage.COPY_SRC) !== 0 && (sum.buffer.usage & GPUBufferUsage.COPY_DST) !== 0, "owned outputs default to copySrc and copyDst");
+    arraysApproxEqual(await read(sum), new Float32Array([5, 3, -3]), 1e-6, "add");
 }
 
-// 2) Reduction kernels u32.
+// 2) Elementwise f32/u32 arithmetic with NumPy broadcasting.
+{
+    const af = gpu("f32", [3], [1, -2, 3]), bf = gpu("f32", [3], [4, 5, -6]);
+    arraysApproxEqual(await read(kernels.sub(af, bf)), new Float32Array([-3, -7, 9]), 1e-6, "sub f32");
+    arraysApproxEqual(await read(kernels.mul(af, bf)), new Float32Array([4, -10, -18]), 1e-6, "mul f32");
+    const au = gpu("u32", [3], [1, 7, 0xFFFFFFFF]), bu = gpu("u32", [3], [4, 3, 2]);
+    arraysEqualU32(await read(kernels.add(au, bu)), new Uint32Array([5, 10, 1]), "add u32 wraps");
+    arraysEqualU32(await read(kernels.sub(au, bu)), new Uint32Array([0xFFFFFFFD, 4, 0xFFFFFFFD]), "sub u32 wraps");
+    arraysEqualU32(await read(kernels.mul(au, bu)), new Uint32Array([4, 21, 0xFFFFFFFE]), "mul u32 wraps");
+
+    // [m, n] + [n] broadcasts the row; a 0-d operand broadcasts everywhere.
+    const m = 37, n = 300;
+    const matrix = makeRandomF32Array(m * n), row = makeRandomF32Array(n);
+    const sum = kernels.add(gpu("f32", [m, n], matrix), gpu("f32", [n], row));
+    assert.deepStrictEqual(sum.shape, [m, n], "broadcast output shape");
+    arraysApproxEqual(await read(sum), matrix.map((x, i) => Math.fround(x + row[i % n])), 1e-6, "[m, n] + [n]");
+    const scaled = kernels.mul(gpu("f32", [], [2.5]), gpu("f32", [2, 2], [1, 2, 3, 4]));
+    arraysApproxEqual(await read(scaled), new Float32Array([2.5, 5, 7.5, 10]), 1e-6, "0-d operand");
+    const outer = kernels.sub(gpu("u32", [3, 1], [10, 20, 30]), gpu("u32", [1, 2], [1, 2]));
+    arraysEqualU32(await read(outer), new Uint32Array([9, 8, 19, 18, 29, 28]), "[m, 1] - [1, n]");
+    assert.deepStrictEqual(kernels.add(gpu("f32", [0, 4], []), gpu("f32", [4], [1, 2, 3, 4])).shape, [0, 4], "empty broadcast output");
+
+    // Transposed and unaligned operands are read in place through their strides.
+    const t = gpu("f32", [3, 4], makeRandomF32Array(12)), tv = await read(t), base = makeRandomF32Array(13);
+    const unaligned = nd.reshape(nd.slice(gpu("f32", [13], base), [[1, 13]]), [4, 3]);
+    const want = new Float32Array(12);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 3; j++) want[i * 3 + j] = Math.fround(tv[j * 4 + i] + base[1 + i * 3 + j]);
+    arraysApproxEqual(await read(kernels.add(nd.transpose(t), unaligned)), want, 1e-6, "transposed + unaligned slice");
+}
+
+// 3) Complex arithmetic uses f32 [..., 2] pair arrays with complex: true.
+{
+    const ac = gpu("f32", [3, 2], [1, 2, -3, 4, 0.5, -1]), bc = gpu("f32", [3, 2], [3, -1, 2, 5, -2, 4]);
+    arraysApproxEqual(await read(kernels.add(ac, bc, { complex: true })), new Float32Array([4, 1, -1, 9, -1.5, 3]), 1e-6, "add complex");
+    arraysApproxEqual(await read(kernels.sub(ac, bc, { complex: true })), new Float32Array([-2, 3, -5, -1, 2.5, -5]), 1e-6, "sub complex");
+    arraysApproxEqual(await read(kernels.mul(ac, bc, { complex: true })), new Float32Array([5, 5, -26, -7, 3, 4]), 1e-6, "mul complex");
+    arraysApproxEqual(await read(kernels.mul(ac, bc)), new Float32Array([3, -2, -6, 20, -1, -4]), 1e-6, "without complex: true, pair arrays multiply componentwise");
+    arraysApproxEqual(await read(kernels.scl(ac, [2, -1], { complex: true })), new Float32Array([4, 3, -2, 11, 0, -2.5]), 1e-6, "scl complex");
+    arraysApproxEqual(await read(kernels.scl(ac, 2, { complex: true })), new Float32Array([2, 4, -6, 8, 1, -2]), 1e-6, "scl complex with a real number");
+    arraysApproxEqual(await read(kernels.axpy(ac, bc, [2, -1], { complex: true })), new Float32Array([7, 2, 0, 16, -2, 1.5]), 1e-6, "axpy complex");
+    const col = kernels.mul(gpu("f32", [2, 1, 2], [1, 1, 0, 2]), gpu("f32", [3, 2], [1, 0, 0, 1, 2, 2]), { complex: true });
+    assert.deepStrictEqual(col.shape, [2, 3, 2], "complex broadcasting applies to logical shapes");
+    arraysApproxEqual(await read(col), new Float32Array([1, 1, -1, 1, 0, 4, 0, 2, -2, 0, -4, 4]), 1e-6, "complex broadcast mul");
+    assert.throws(() => kernels.mul(gpu("u32", [1, 2], [1, 2]), gpu("u32", [1, 2], [1, 2]), { complex: true }), /compute\.kernels\.mul: complex: true requires a to be an f32 array/);
+    assert.throws(() => kernels.add(gpu("f32", [2, 3], new Float32Array(6)), gpu("f32", [2, 3], new Float32Array(6)), { complex: true }), /last axis of length 2/);
+    assert.throws(() => kernels.scl(ac, [1, 2]), /alpha is a \[real, imaginary\] tuple, which requires complex: true/);
+}
+
+// 4) scl and axpy, including in-place axpy through out: y.
+{
+    const af = gpu("f32", [3], [1, -2, 3]), bf = gpu("f32", [3], [4, 5, -6]);
+    arraysApproxEqual(await read(kernels.scl(af, -2)), new Float32Array([-2, 4, -6]), 1e-6, "scl f32");
+    arraysApproxEqual(await read(kernels.axpy(af, bf, 2)), new Float32Array([6, 1, 0]), 1e-6, "axpy f32");
+    const au = gpu("u32", [3], [1, 7, 0xFFFFFFFF]), bu = gpu("u32", [3], [4, 3, 2]);
+    arraysEqualU32(await read(kernels.scl(au, 3)), new Uint32Array([3, 21, 0xFFFFFFFD]), "scl u32");
+    arraysEqualU32(await read(kernels.axpy(au, bu, 2)), new Uint32Array([6, 17, 0]), "axpy u32");
+    assert.throws(() => kernels.scl(au, 1.5), /compute\.kernels\.scl: alpha must be a u32 integer/);
+
+    // out may share its buffer with an input; the result goes through a temporary and is written back.
+    const x = gpu("f32", [4], [1, 2, 3, 4]), y = gpu("f32", [4], [10, 20, 30, 40]);
+    assert.strictEqual(kernels.axpy(x, y, 0.5, { out: y }), y, "axpy returns the caller out");
+    arraysApproxEqual(await read(y), new Float32Array([10.5, 21, 31.5, 42]), 1e-6, "in-place axpy");
+    const row = kernels.axpy(gpu("f32", [2, 2], [1, 2, 3, 4]), gpu("f32", [2], [100, 200]), 3);
+    arraysApproxEqual(await read(row), new Float32Array([103, 206, 109, 212]), 1e-6, "axpy broadcasts y");
+}
+
+// 5) Dot products, including u32 wrap, non-conjugating complex, multipass, and empty inputs.
+{
+    const out = kernels.dot(gpu("f32", [3], [1.5, -2, 4]), gpu("f32", [3], [2, 3, -0.5]));
+    assert.strictEqual(out.ndim, 0, "dot returns a 0-d array");
+    numberApproxEqual((await read(out))[0], -5, 1e-5, "dot f32");
+    assert.strictEqual((await read(kernels.dot(gpu("u32", [2], [0xFFFFFFFF, 2]), gpu("u32", [2], [2, 3]))))[0], 4, "dot u32 wrap");
+    const dotc = kernels.dot(gpu("f32", [2, 2], [1, 2, 3, -1]), gpu("f32", [2, 2], [2, 1, -4, 2]), { complex: true });
+    assert.deepStrictEqual(dotc.shape, [2], "complex dot returns one pair");
+    arraysApproxEqual(await read(dotc), new Float32Array([-10, 15]), 1e-5, "dot complex non-conjugating");
+    const many = gpu("f32", [1025], new Float32Array(1025).fill(1.25));
+    numberApproxEqual((await read(kernels.dot(many, many)))[0], 1025 * 1.25 * 1.25, 1e-3, "dot multipass");
+    const manyC = gpu("f32", [513, 2], new Float32Array(1026).fill(1));
+    arraysApproxEqual(await read(kernels.dot(manyC, manyC, { complex: true })), new Float32Array([0, 1026]), 1e-3, "dot complex multipass");
+    const stale = gpu("f32", [2], [7, 7]);
+    kernels.dot(gpu("f32", [0, 2], []), gpu("f32", [0, 2], []), { complex: true, out: stale });
+    arraysApproxEqual(await read(stale), new Float32Array([0, 0]), 0, "empty complex dot writes zero into out");
+    assert.strictEqual((await read(kernels.dot(gpu("u32", [0], []), gpu("u32", [0], []))))[0], 0, "empty dot");
+    assert.throws(() => kernels.dot(gpu("f32", [2, 2], new Float32Array(4)), gpu("f32", [2, 2], new Float32Array(4))), /compute\.kernels\.dot: a must be 1-D/);
+}
+
+// 6) Whole-array reductions over any shape and layout; min/max of empty arrays throw.
 {
     const n = 10000;
     const a = makeRandomU32Array(n, 10);
-    const bufA = compute.createStorageBuffer({ label: "reduce:u32:in", data: a, copySrc: false });
-    const outSum = kernels.sumU32(bufA);
-    const outMin = kernels.minU32(bufA);
-    const outMax = kernels.maxU32(bufA);
-    let sum = 0 >>> 0;
-    let mn = 0xFFFFFFFF >>> 0;
-    let mx = 0 >>> 0;
-    for (let i = 0; i < a.length; i++) {
-        sum = (sum + (a[i] >>> 0)) >>> 0;
-        mn = Math.min(mn, a[i] >>> 0) >>> 0;
-        mx = Math.max(mx, a[i] >>> 0) >>> 0;
+    const ua = gpu("u32", [100, 100], a);
+    let sum = 0, mn = 0xFFFFFFFF, mx = 0;
+    for (const v of a) { sum = (sum + v) >>> 0; mn = Math.min(mn, v); mx = Math.max(mx, v); }
+    assert.strictEqual((await read(kernels.sum(ua)))[0], sum, "sum u32");
+    assert.strictEqual((await read(kernels.min(ua)))[0], mn, "min u32");
+    assert.strictEqual((await read(kernels.max(ua)))[0], mx, "max u32");
+    const ones = gpu("f32", [8192 + 37], new Float32Array(8192 + 37).fill(1));
+    const out = kernels.sum(ones);
+    assert.ok(out.ndim === 0 && out.dtype === "f32", "reductions return 0-d arrays of the input dtype");
+    numberApproxEqual((await read(out))[0], 8192 + 37, 1e-3, "sum f32");
+
+    // An unaligned contiguous slice and a stepped view are staged into dense temporaries first.
+    const f = makeRandomF32Array(4099);
+    const root = gpu("f32", [4099], f);
+    const sliced = nd.slice(root, [[3, 4099]]);
+    const stepped = nd.slice(root, [[4098, null, -3]]);
+    let want = 0, wantMax = -Infinity;
+    for (let i = 3; i < 4099; i++) want += f[i];
+    for (let i = 4098; i >= 0; i -= 3) wantMax = Math.max(wantMax, f[i]);
+    numberApproxEqual((await read(kernels.sum(sliced)))[0], want, 1e-2, "sum of an unaligned slice");
+    assert.strictEqual((await read(kernels.max(stepped)))[0], wantMax, "max of a flipped stepped view");
+    const empty = gpu("f32", [0, 3], []);
+    assert.strictEqual((await read(kernels.sum(empty)))[0], 0, "empty sum is 0");
+    assert.throws(() => kernels.min(empty), /compute\.kernels\.min: cannot reduce an empty array/);
+    assert.throws(() => kernels.max(empty), /compute\.kernels\.max: cannot reduce an empty array/);
+}
+
+// 7) argmin/argmax skip NaN, resolve ties to the lowest C-order index, and return 0xFFFFFFFF for all-NaN input.
+{
+    const a = gpu("f32", [7], [3.0, -2.5, NaN, 8.0, 1.25, -2.5, 8.0]);
+    const outMin = kernels.argmin(a);
+    assert.ok(outMin.ndim === 0 && outMin.dtype === "u32", "arg-reductions return 0-d u32 indices");
+    assert.strictEqual((await read(outMin))[0], 1, "argmin index with NaN and ties");
+    assert.strictEqual((await read(kernels.argmax(a)))[0], 3, "argmax index with NaN and ties");
+    assert.strictEqual((await read(kernels.argmin(gpu("f32", [3], [NaN, 4, NaN]))))[0], 1, "argmin skips leading NaN");
+    for (const n of [3, 512]) assert.strictEqual((await read(kernels.argmax(gpu("f32", [n], new Float32Array(n).fill(NaN)))))[0], 0xFFFFFFFF, `all-NaN sentinel (n=${n})`);
+    assert.strictEqual((await read(kernels.argmin(gpu("f32", [3], [Infinity, NaN, Infinity]))))[0], 0, "argmin of infinities");
+    assert.strictEqual((await read(kernels.argmax(gpu("f32", [2], [-Infinity, -Infinity]))))[0], 0, "argmax of negative infinities");
+    const n = 513 * 3;
+    const values = makeRandomF32Array(n);
+    values[1000] = -100;
+    const big = gpu("f32", [3, 513], values);
+    assert.strictEqual((await read(kernels.argmin(big)))[0], 1000, "multipass argmin");
+    assert.strictEqual((await read(kernels.argmin(nd.transpose(big))))[0], (1000 % 513) * 3 + Math.floor(1000 / 513), "argmin of a transposed view");
+    assert.throws(() => kernels.argmin(gpu("f32", [0], [])), /compute\.kernels\.argmin: cannot reduce an empty array/);
+}
+
+// 8) Exclusive scan around the 1,024-element block geometry.
+{
+    for (const n of [1, 17, 1023, 1024, 1025, 4096 + 13]) {
+        const input = makeRandomU32Array(n, 7);
+        const got = await read(kernels.scanExclusive(gpu("u32", [n], input)));
+        const expected = new Uint32Array(n);
+        for (let i = 1; i < n; i++) expected[i] = (expected[i - 1] + input[i - 1]) >>> 0;
+        arraysEqualU32(got, expected, `scanExclusive n=${n}`);
     }
-    const gotSum = (await outSum.readAs(Uint32Array))[0] >>> 0;
-    const gotMin = (await outMin.readAs(Uint32Array))[0] >>> 0;
-    const gotMax = (await outMax.readAs(Uint32Array))[0] >>> 0;
-    assert.strictEqual(gotSum, sum, "sumU32 mismatch");
-    assert.strictEqual(gotMin, mn, "minU32 mismatch");
-    assert.strictEqual(gotMax, mx, "maxU32 mismatch");
+    assert.deepStrictEqual(kernels.scanExclusive(gpu("u32", [0], [])).shape, [0], "empty scan");
+    assert.throws(() => kernels.scanExclusive(gpu("u32", [2, 2], [1, 2, 3, 4])), /compute\.kernels\.scanExclusive: a must be 1-D \(got shape \[2,2\]\); use compute\.ndarray\.reshape\(\)/);
 }
 
-// 3) Reduction kernels f32.
+// 9) Histograms, including shader clearing without COPY_DST and clear: false accumulation.
 {
-    const n = 8192 + 37;
-    const a = new Float32Array(n);
-    for (let i = 0; i < n; i++) a[i] = 1.0;
-    const bufA = compute.createStorageBuffer({ label: "reduce:f32:in", data: a, copySrc: false });
-    const outSum = kernels.sumF32(bufA);
-    const outMin = kernels.minF32(bufA);
-    const outMax = kernels.maxF32(bufA);
-    const gotSum = (await outSum.readAs(Float32Array))[0];
-    const gotMin = (await outMin.readAs(Float32Array))[0];
-    const gotMax = (await outMax.readAs(Float32Array))[0];
-    numberApproxEqual(gotSum, n, 1e-3, "sumF32 mismatch");
-    numberApproxEqual(gotMin, 1.0, 1e-6, "minF32 mismatch");
-    numberApproxEqual(gotMax, 1.0, 1e-6, "maxF32 mismatch");
-}
-
-// 4) Argmin / argmax f32.
-{
-    const a = new Float32Array([3.0, -2.5, 8.0, 1.25, -2.5, 7.0]);
-    const bufA = compute.createStorageBuffer({ label: "argreduce:f32:in", data: a, copySrc: false });
-    const outMin = kernels.argminF32(bufA);
-    const outMax = kernels.argmaxF32(bufA);
-    const minBytes = await outMin.read(0, 8);
-    const maxBytes = await outMax.read(0, 8);
-    const dvMin = new DataView(minBytes);
-    const dvMax = new DataView(maxBytes);
-    const minVal = dvMin.getFloat32(0, true);
-    const minIdx = dvMin.getUint32(4, true);
-    const maxVal = dvMax.getFloat32(0, true);
-    const maxIdx = dvMax.getUint32(4, true);
-    numberApproxEqual(minVal, -2.5, 1e-6, "argminF32 value mismatch");
-    assert.strictEqual(minIdx, 1, "argminF32 index mismatch");
-    numberApproxEqual(maxVal, 8.0, 1e-6, "argmaxF32 value mismatch");
-    assert.strictEqual(maxIdx, 2, "argmaxF32 index mismatch");
-}
-
-// 5) Exclusive scan u32.
-{
-    const n = 4096 + 13;
-    const a = makeRandomU32Array(n, 7);
-    const bufA = compute.createStorageBuffer({ label: "scan:u32:in", data: a, copySrc: false });
-    const out = kernels.scanExclusiveU32(bufA);
-    const got = await out.readAs(Uint32Array);
-    const expected = new Uint32Array(n);
-    let acc = 0 >>> 0;
-    for (let i = 0; i < n; i++) {
-        expected[i] = acc;
-        acc = (acc + (a[i] >>> 0)) >>> 0;
-    }
-    arraysEqualU32(got, expected, "scanExclusiveU32 mismatch");
-}
-
-// 6) Histogram u32 keys.
-{
-    const bins = 32;
-    const n = 20000;
+    const bins = 32, n = 20000;
     const keys = new Uint32Array(n);
     for (let i = 0; i < n; i++) keys[i] = (Math.floor(random() * bins) >>> 0);
-    const bufKeys = compute.createStorageBuffer({ label: "hist:u32:keys", data: keys, copySrc: false });
-    const outBins = kernels.histogramU32(bufKeys, bins, { clear: true });
-    const got = await outBins.readAs(Uint32Array);
     const expected = new Uint32Array(bins);
     for (let i = 0; i < n; i++) expected[keys[i]]++;
-    arraysEqualU32(got, expected, "histogramU32 mismatch");
-}
+    const counts = kernels.histogram(gpu("u32", [n], keys), { bins });
+    assert.deepStrictEqual(counts.shape, [bins], "histogram shape");
+    arraysEqualU32(await read(counts), expected, "histogram");
 
-// 7) Scan covers one-block, exact-block, and empty workloads around the 1,024-element geometry.
-{
-    for (const n of [1, 17, 1023, 1024, 1025]) {
-        const input = new Uint32Array(n);
-        input.fill(1);
-        const src = compute.createStorageBuffer({ data: input, copySrc: false });
-        const out = kernels.scanExclusiveU32(src);
-        const got = await out.readAs(Uint32Array);
-        for (let i = 0; i < n; i++) assert.strictEqual(got[i], i, `scan boundary mismatch for n=${n} at ${i}`);
-    }
-    const empty = compute.createStorageBuffer({ byteLength: 0, copySrc: false });
-    assert.strictEqual(kernels.scanExclusiveU32(empty).byteLength, 0);
-}
-
-// 8) Generic histogram fallback preserves shader clearing without COPY_DST and clear:false accumulation.
-{
     const binCount = 300;
-    const keys = new Uint32Array([0, 1, 1, 255, 256, 299, 300]);
-    const bufKeys = compute.createStorageBuffer({ data: keys, copySrc: false });
-    const bins = compute.createStorageBuffer({ data: new Uint32Array(binCount).fill(99), copySrc: true, copyDst: false });
-    kernels.histogramU32(bufKeys, binCount, { bins, clear: true });
-    kernels.histogramU32(bufKeys, binCount, { bins, clear: false });
-    const got = await bins.readAs(Uint32Array);
-    assert.strictEqual(got[0], 2);
-    assert.strictEqual(got[1], 4);
-    assert.strictEqual(got[255], 2);
-    assert.strictEqual(got[256], 2);
-    assert.strictEqual(got[299], 2);
-    assert.strictEqual(got[2], 0);
+    const fallbackKeys = gpu("u32", [7], [0, 1, 1, 255, 256, 299, 300]);
+    const out = gpu("u32", [binCount], new Uint32Array(binCount).fill(99), { copyDst: false });
+    kernels.histogram(fallbackKeys, { bins: binCount, out });
+    kernels.histogram(fallbackKeys, { bins: binCount, out, clear: false });
+    const got = await read(out);
+    assert.deepStrictEqual([got[0], got[1], got[2], got[255], got[256], got[299]], [2, 4, 0, 2, 2, 2], "histogram fallback clear and accumulation");
+    assert.throws(() => kernels.histogram(fallbackKeys, { bins: 1.5 }), /compute\.kernels\.histogram: bins must be an integer >= 0/);
 }
 
-// 9) Compaction u32.
+// 10) Compaction keeps the count on the GPU as a 0-d u32 array.
 {
-    const n = 4096 + 17;
-    const input = makeRandomU32Array(n, 1000);
-    const flags = new Uint32Array(n);
-    for (let i = 0; i < n; i++) flags[i] = (random() < 0.35) ? 1 : 0;
-    const bufIn = compute.createStorageBuffer({ label: "compact:u32:in", data: input, copySrc: false });
-    const bufFlags = compute.createStorageBuffer({ label: "compact:u32:flags", data: flags, copySrc: false });
-    const { output, count } = kernels.compactU32(bufIn, bufFlags);
-    const gotCount = (await count.readAs(Uint32Array))[0] >>> 0;
-    const gotOut = await output.readAs(Uint32Array);
-    const expected = [];
-    for (let i = 0; i < n; i++) if (flags[i] !== 0) expected.push(input[i] >>> 0);
-    assert.strictEqual(gotCount, expected.length >>> 0, "compactU32 count mismatch");
-    for (let i = 0; i < expected.length; i++) assert.strictEqual(gotOut[i] >>> 0, expected[i] >>> 0, `compactU32 output mismatch at index ${i}`);
+    for (const [dtype, n] of [["u32", 4096 + 17], ["f32", 2048 + 9]]) {
+        const input = dtype === "u32" ? makeRandomU32Array(n, 1000) : makeRandomF32Array(n, -5, 5);
+        const flags = new Uint32Array(n);
+        for (let i = 0; i < n; i++) flags[i] = (random() < 0.4) ? 1 : 0;
+        const { values, count } = kernels.compact(gpu(dtype, [n], input), gpu("u32", [n], flags));
+        assert.ok(count instanceof GPUndarray && count.ndim === 0 && count.dtype === "u32", "compact count is a 0-d u32 GPUndarray");
+        assert.deepStrictEqual(values.shape, [n], "compact values keep the input capacity");
+        const expected = Array.from(input).filter((_, i) => flags[i] !== 0);
+        assert.strictEqual(await compute.readback.readScalarU32(count.buffer), expected.length, `compact ${dtype} count`);
+        arraysApproxEqual((await read(values)).subarray(0, expected.length), expected, 0, `compact ${dtype} values`);
+    }
+    const result = kernels.compact(gpu("u32", [3], [10, 20, 30]), gpu("u32", [3], [2, 0, 3]));
+    assert.strictEqual((await read(result.count))[0], 5, "arbitrary flag count");
+    const out = await read(result.values);
+    assert.deepStrictEqual([out[0], out[2]], [10, 30], "arbitrary flag scatter");
+    assert.throws(() => kernels.compact(gpu("f32", [3], [1, 2, 3]), gpu("u32", [2], [1, 0])), /values and flags must have the same length/);
 }
 
-// 10) Compaction f32.
-{
-    const n = 2048 + 9;
-    const input = makeRandomF32Array(n, -5, 5);
-    const flags = new Uint32Array(n);
-    for (let i = 0; i < n; i++) flags[i] = (random() < 0.5) ? 1 : 0;
-    const bufIn = compute.createStorageBuffer({ label: "compact:f32:in", data: input, copySrc: false });
-    const bufFlags = compute.createStorageBuffer({ label: "compact:f32:flags", data: flags, copySrc: false });
-    const { output, count } = kernels.compactF32(bufIn, bufFlags);
-    const gotCount = (await count.readAs(Uint32Array))[0] >>> 0;
-    const gotOut = await output.readAs(Float32Array);
-    const expected = [];
-    for (let i = 0; i < n; i++) if (flags[i] !== 0) expected.push(input[i]);
-    assert.strictEqual(gotCount, expected.length >>> 0, "compactF32 count mismatch");
-    for (let i = 0; i < expected.length; i++) numberApproxEqual(gotOut[i], expected[i], 1e-5, `compactF32 output mismatch at index ${i}`);
-}
-
-// 11) Compaction count preserves the scan's existing arbitrary-u32 flag semantics.
-{
-    const input = compute.createStorageBuffer({ data: new Uint32Array([10, 20, 30]), copySrc: false });
-    const flags = compute.createStorageBuffer({ data: new Uint32Array([2, 0, 3]), copySrc: false });
-    const result = kernels.compactU32(input, flags);
-    assert.strictEqual((await result.count.readAs(Uint32Array))[0], 5);
-    const output = await result.output.readAs(Uint32Array);
-    assert.strictEqual(output[0], 10);
-    assert.strictEqual(output[2], 30);
-}
-
-// 12) Radix sort u32 keys.
+// 11) Radix sorts of keys and stable key-value pairs, in place through the outputs.
 {
     const n = 10000 + 3;
-    const keys = makeRandomU32Array(n, 0xFFFFFFFF >>> 0);
-    const bufKeys = compute.createStorageBuffer({ label: "radix:u32:keys", data: keys, copySrc: false });
-    const out = kernels.radixSortKeysU32(bufKeys, { inPlace: false });
-    const got = await out.readAs(Uint32Array);
-    const expected = Array.from(keys, (x) => x >>> 0).sort((a, b) => a - b);
-    for (let i = 0; i < n; i++) assert.strictEqual(got[i] >>> 0, expected[i] >>> 0, `radixSortKeysU32 mismatch at index ${i}`);
+    const keys = makeRandomU32Array(n, 0xFFFFFFFF);
+    const expected = Array.from(keys).sort((a, b) => a - b);
+    arraysEqualU32(await read(kernels.sort(gpu("u32", [n], keys))), Uint32Array.from(expected), "sort");
+    const inPlace = gpu("u32", [n], keys);
+    assert.strictEqual(kernels.sort(inPlace, { out: inPlace }), inPlace, "sort in place returns keys");
+    arraysEqualU32(await read(inPlace), Uint32Array.from(expected), "sort in place");
+
+    const pairs = kernels.sortPairs(gpu("u32", [8], [5, 1, 5, 3, 1, 0, 5, 3]), gpu("f32", [8], [50, 10, 51, 30, 11, 0, 52, 31]));
+    arraysEqualU32(await read(pairs.keys), new Uint32Array([0, 1, 1, 3, 3, 5, 5, 5]), "sortPairs keys");
+    arraysApproxEqual(await read(pairs.values), new Float32Array([0, 10, 11, 30, 31, 50, 51, 52]), 0, "sortPairs f32 values move bitwise and stably");
+    const k = gpu("u32", [6], [7, 4, 9, 4, 8, 2]), v = gpu("u32", [6], [70, 40, 90, 41, 80, 20]);
+    const result = kernels.sortPairs(k, v, { outKeys: k, outValues: v });
+    assert.ok(result.keys === k && result.values === v, "sortPairs in place returns the inputs");
+    arraysEqualU32(await read(k), new Uint32Array([2, 4, 4, 7, 8, 9]), "sortPairs in place keys");
+    arraysEqualU32(await read(v), new Uint32Array([20, 40, 41, 70, 80, 90]), "sortPairs in place values");
+
+    const m = 4099;
+    const dup = Uint32Array.from({ length: m }, (_, i) => Math.imul(i, 17) & 31);
+    const stable = kernels.sortPairs(gpu("u32", [m], dup), gpu("u32", [m], Uint32Array.from({ length: m }, (_, i) => i)));
+    const order = Array.from({ length: m }, (_, i) => i).sort((a, b) => (dup[a] - dup[b]) || (a - b));
+    arraysEqualU32(await read(stable.values), Uint32Array.from(order), "sortPairs stability across blocks");
+    const shared = gpu("u32", [8], new Uint32Array(8));
+    assert.throws(() => kernels.sortPairs(k, v, { outKeys: nd.slice(shared, [[0, 6]]), outValues: nd.slice(shared, [[2, 8]]) }), /outKeys and outValues must not overlap/);
 }
 
-// 13) Radix sort u32 key-value pairs.
+const luFactorCPUPivoted = (aFlat, n) => {
+    const A = Float32Array.from(aFlat);
+    const ipiv = new Uint32Array(n);
+    for (let k = 0; k < n; k++) {
+        let piv = k;
+        let maxv = Math.abs(A[k * n + k]);
+        for (let i = k + 1; i < n; i++) {
+            const v = Math.abs(A[i * n + k]);
+            if (v > maxv || (v === maxv && i < piv)) {
+                maxv = v;
+                piv = i;
+            }
+        }
+        ipiv[k] = piv >>> 0;
+        if (piv !== k) {
+            for (let j = 0; j < n; j++) {
+                const t = A[k * n + j];
+                A[k * n + j] = A[piv * n + j];
+                A[piv * n + j] = t;
+            }
+        }
+        const dia = A[k * n + k];
+        for (let i = k + 1; i < n; i++) A[i * n + k] /= dia;
+        for (let i = k + 1; i < n; i++) {
+            const lik = A[i * n + k];
+            for (let j = k + 1; j < n; j++) A[i * n + j] -= lik * A[k * n + j];
+        }
+    }
+    return { A, ipiv };
+};
+
+const cxMul = (ar, ai, br, bi) => [ar * br - ai * bi, ar * bi + ai * br];
+
+const luFactorCPUPivotedComplex = (aFlat2, n) => {
+    const A = Float32Array.from(aFlat2);
+    const ipiv = new Uint32Array(n);
+    for (let k = 0; k < n; k++) {
+        let piv = k;
+        let maxv = -1;
+        for (let i = k; i < n; i++) {
+            const t = (i * n + k) * 2;
+            const ms = A[t] * A[t] + A[t + 1] * A[t + 1];
+            if (ms > maxv || (ms === maxv && i < piv)) {
+                maxv = ms;
+                piv = i;
+            }
+        }
+        ipiv[k] = piv >>> 0;
+        if (piv !== k) {
+            for (let j = 0; j < 2 * n; j++) {
+                const t = A[2 * k * n + j];
+                A[2 * k * n + j] = A[2 * piv * n + j];
+                A[2 * piv * n + j] = t;
+            }
+        }
+        const pk = (k * n + k) * 2;
+        const d = A[pk] * A[pk] + A[pk + 1] * A[pk + 1];
+        for (let i = k + 1; i < n; i++) {
+            const t = (i * n + k) * 2;
+            const re = (A[t] * A[pk] + A[t + 1] * A[pk + 1]) / d;
+            const im = (A[t + 1] * A[pk] - A[t] * A[pk + 1]) / d;
+            A[t] = re;
+            A[t + 1] = im;
+        }
+        for (let i = k + 1; i < n; i++) {
+            const lr = A[(i * n + k) * 2], li = A[(i * n + k) * 2 + 1];
+            for (let j = k + 1; j < n; j++) {
+                const [mr, mi] = cxMul(lr, li, A[(k * n + j) * 2], A[(k * n + j) * 2 + 1]);
+                A[(i * n + j) * 2] -= mr;
+                A[(i * n + j) * 2 + 1] -= mi;
+            }
+        }
+    }
+    return { A, ipiv };
+};
+
+const luResidual = (a, x, b, batch, n, complex) => {
+    let worst = 0;
+    for (let k = 0; k < batch; k++) {
+        let bMax = 0, resMax = 0;
+        for (let i = 0; i < n; i++) {
+            let re = 0, im = 0;
+            for (let j = 0; j < n; j++) {
+                if (complex) {
+                    const t = (k * n * n + i * n + j) * 2, s = (k * n + j) * 2;
+                    const [mr, mi] = cxMul(a[t], a[t + 1], x[s], x[s + 1]);
+                    re += mr;
+                    im += mi;
+                } else re += a[k * n * n + i * n + j] * x[k * n + j];
+            }
+            const r = (k * n + i) * (complex ? 2 : 1);
+            resMax = Math.max(resMax, complex ? Math.hypot(re - b[r], im - b[r + 1]) : Math.abs(re - b[r]));
+            bMax = Math.max(bMax, complex ? Math.hypot(b[r], b[r + 1]) : Math.abs(b[r]));
+        }
+        worst = Math.max(worst, resMax / Math.max(bMax, 1e-30));
+    }
+    return worst;
+};
+
+// 12) Batched LU factor and solve (partial pivoting; ipiv holds 0-based row indices) for f32 and complex.
 {
-    assert.strictEqual(typeof kernels.radixSortPairsU32, "function", "Missing kernel: radixSortPairsU32");
-
-    {
-        const keys = new Uint32Array([5, 1, 5, 3, 1, 0, 5, 3]);
-        const values = new Uint32Array([50, 10, 51, 30, 11, 0, 52, 31]);
-        const bufKeys = compute.createStorageBuffer({ label: "radix:pairs:keys", data: keys, copySrc: false });
-        const bufValues = compute.createStorageBuffer({ label: "radix:pairs:values", data: values, copySrc: false });
-        const outKeys = compute.createStorageBuffer({ label: "radix:pairs:outKeys", byteLength: keys.byteLength, copySrc: true });
-        const outValues = compute.createStorageBuffer({ label: "radix:pairs:outValues", byteLength: values.byteLength, copySrc: true });
-        const result = kernels.radixSortPairsU32(bufKeys, bufValues, { outKeys, outValues });
-        assert.strictEqual(result.keys, outKeys, "Expected radixSortPairsU32 to return provided outKeys");
-        assert.strictEqual(result.values, outValues, "Expected radixSortPairsU32 to return provided outValues");
-        arraysEqualU32(await result.keys.readAs(Uint32Array), new Uint32Array([0, 1, 1, 3, 3, 5, 5, 5]), "radixSortPairsU32 keys mismatch");
-        arraysEqualU32(await result.values.readAs(Uint32Array), new Uint32Array([0, 10, 11, 30, 31, 50, 51, 52]), "radixSortPairsU32 values mismatch");
-    }
-
-    {
-        const keys = new Uint32Array([7, 4, 9, 4, 8, 2]);
-        const values = new Uint32Array([70, 40, 90, 41, 80, 20]);
-        const bufKeys = compute.createStorageBuffer({ label: "radix:pairs:keys:inPlace", data: keys, copySrc: true });
-        const bufValues = compute.createStorageBuffer({ label: "radix:pairs:values:inPlace", data: values, copySrc: true });
-        const result = kernels.radixSortPairsU32(bufKeys, bufValues, { inPlace: true });
-        assert.strictEqual(result.keys, bufKeys, "Expected in-place radixSortPairsU32 to return the input keys buffer");
-        assert.strictEqual(result.values, bufValues, "Expected in-place radixSortPairsU32 to return the input values buffer");
-        arraysEqualU32(await bufKeys.readAs(Uint32Array), new Uint32Array([2, 4, 4, 7, 8, 9]), "radixSortPairsU32 in-place keys mismatch");
-        arraysEqualU32(await bufValues.readAs(Uint32Array), new Uint32Array([20, 40, 41, 70, 80, 90]), "radixSortPairsU32 in-place values mismatch");
-    }
-
-    {
-        const keys = new Uint32Array([9, 3, 1, 8, 2, 7]);
-        const values = new Uint32Array([90, 30, 10, 80, 20, 70]);
-        const bufKeys = compute.createStorageBuffer({ label: "radix:pairs:keys:partial", data: keys, copySrc: false });
-        const bufValues = compute.createStorageBuffer({ label: "radix:pairs:values:partial", data: values, copySrc: false });
-        const result = kernels.radixSortPairsU32(bufKeys, bufValues, { count: 4 });
-        arraysEqualU32(await result.keys.readAs(Uint32Array), new Uint32Array([1, 3, 8, 9]), "radixSortPairsU32 partial keys mismatch");
-        arraysEqualU32(await result.values.readAs(Uint32Array), new Uint32Array([10, 30, 80, 90]), "radixSortPairsU32 partial values mismatch");
-    }
-
-    {
-        const n = 4099;
-        const keys = new Uint32Array(n);
-        const values = new Uint32Array(n);
-        for (let i = 0; i < n; i++) { keys[i] = Math.imul(i, 17) & 31; values[i] = i; }
-        const bufKeys = compute.createStorageBuffer({ data: keys, copySrc: false });
-        const bufValues = compute.createStorageBuffer({ data: values, copySrc: false });
-        const result = kernels.radixSortPairsU32(bufKeys, bufValues);
-        const gotKeys = await result.keys.readAs(Uint32Array);
-        const gotValues = await result.values.readAs(Uint32Array);
-        const expected = Array.from({ length: n }, (_, i) => i).sort((a, b) => (keys[a] - keys[b]) || (a - b));
-        for (let i = 0; i < n; i++) {
-            assert.strictEqual(gotKeys[i], keys[expected[i]], `radix pairs recursive key mismatch at ${i}`);
-            assert.strictEqual(gotValues[i], expected[i], `radix pairs recursive stability mismatch at ${i}`);
-        }
-    }
-
-    {
-        const shared = compute.createStorageBuffer({ label: "radix:pairs:shared", data: new Uint32Array([1, 0]), copySrc: false });
-        assert.throws(() => kernels.radixSortPairsU32(shared, shared), /keys and values must be distinct/, "Expected radixSortPairsU32 to reject aliased key/value buffers");
-    }
-
-    {
-        const keys = compute.createStorageBuffer({ label: "radix:pairs:alias:keys", data: new Uint32Array([2, 1]), copySrc: true });
-        const values = compute.createStorageBuffer({ label: "radix:pairs:alias:values", data: new Uint32Array([20, 10]), copySrc: true });
-        const outValues = compute.createStorageBuffer({ label: "radix:pairs:alias:outValues", byteLength: 8, copySrc: true });
-        assert.throws(() => kernels.radixSortPairsU32(keys, values, { outKeys: keys, outValues }), /output buffers must be distinct from input buffers/, "Expected radixSortPairsU32 to reject aliased output buffers");
-    }
-}
-
-// 14) Batched LU f32 (partial pivot: factor + solve).
-{
-    assert.strictEqual(typeof kernels.luFactorF32Batched, "function", "Missing kernel: luFactorF32Batched");
-    assert.strictEqual(typeof kernels.luSolveF32Batched, "function", "Missing kernel: luSolveF32Batched");
-
-    const luFactorCpuPivoted = (aFlat, n) => {
-        const A = Float32Array.from(aFlat);
-        const ipiv = new Uint32Array(n);
-        for (let k = 0; k < n; k++) {
-            let piv = k;
-            let maxv = Math.abs(A[k * n + k]);
-            for (let i = k + 1; i < n; i++) {
-                const v = Math.abs(A[i * n + k]);
-                if (v > maxv || (v === maxv && i < piv)) {
-                    maxv = v;
-                    piv = i;
-                }
-            }
-            ipiv[k] = piv >>> 0;
-            if (piv !== k) {
-                for (let j = 0; j < n; j++) {
-                    const t = A[k * n + j];
-                    A[k * n + j] = A[piv * n + j];
-                    A[piv * n + j] = t;
-                }
-            }
-            const dia = A[k * n + k];
-            for (let i = k + 1; i < n; i++) A[i * n + k] /= dia;
-            for (let i = k + 1; i < n; i++) {
-                const lik = A[i * n + k];
-                for (let j = k + 1; j < n; j++) A[i * n + j] -= lik * A[k * n + j];
-            }
-        }
-        return { A, ipiv };
-    };
-
-    const luSolveCpuPivoted = (LU, ipiv, n, b) => {
-        const x = new Float32Array(n);
-        for (let i = 0; i < n; i++) x[i] = b[i];
-        for (let k = 0; k < n - 1; k++) {
-            const p = ipiv[k] >>> 0;
-            if (p !== k) {
-                const t = x[k];
-                x[k] = x[p];
-                x[p] = t;
-            }
-        }
-        for (let i = 0; i < n; i++) {
-            let s = x[i];
-            for (let j = 0; j < i; j++) s -= LU[i * n + j] * x[j];
-            x[i] = s;
-        }
-        for (let i = n - 1; i >= 0; i--) {
-            let s = x[i];
-            for (let j = i + 1; j < n; j++) s -= LU[i * n + j] * x[j];
-            x[i] = s / LU[i * n + i];
-        }
-        return x;
-    };
-
-    const batch = 3;
-    const n = 4;
-    const elems = batch * n * n;
-    const a = new Float32Array(elems);
-    const rhs = new Float32Array(batch * n);
-    for (let b = 0; b < batch; b++) {
-        const off = b * n * n;
-        for (let i = 0; i < n; i++) {
-            for (let j = 0; j < n; j++) a[off + i * n + j] = (i === j) ? (4 + b + i) : (0.1 * (i + 1) - 0.07 * (j + 1) + 0.02 * b);
-        }
-        for (let i = 0; i < n; i++) rhs[b * n + i] = 0.5 + 0.1 * i + 0.03 * b;
-    }
-
-    const bufA = compute.createStorageBuffer({ label: "lu:f32:A", data: a, copySrc: true });
-    const bufIpiv = compute.createStorageBuffer({ label: "lu:f32:ipiv", byteLength: batch * n * 4, copySrc: true });
-    const bufRhs = compute.createStorageBuffer({ label: "lu:f32:rhs", data: rhs, copySrc: true });
-    const bufX = compute.createStorageBuffer({ label: "lu:f32:x", byteLength: batch * n * 4, copySrc: true });
-
-    kernels.luFactorF32Batched(bufA, bufIpiv, batch, n);
-    kernels.luSolveF32Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
-
-    const gotLu = await bufA.readAs(Float32Array);
-    const gotIpiv = await bufIpiv.readAs(Uint32Array);
-    const gotX = await bufX.readAs(Float32Array);
-
-    for (let b = 0; b < batch; b++) {
-        const slice = new Float32Array(n * n);
-        for (let t = 0; t < n * n; t++) slice[t] = a[b * n * n + t];
-        const { A: wantLu, ipiv: wantIpiv } = luFactorCpuPivoted(slice, n);
-        for (let t = 0; t < n * n; t++) {
-            numberApproxEqual(gotLu[b * n * n + t], wantLu[t], 2e-4, `LU factor batch ${b} index ${t}`);
-        }
-        for (let k = 0; k < n; k++) {
-            assert.strictEqual(gotIpiv[b * n + k] >>> 0, wantIpiv[k] >>> 0, `ipiv batch ${b} k=${k}`);
-        }
-        const bRhs = rhs.subarray(b * n, (b + 1) * n);
-        const wantX = luSolveCpuPivoted(wantLu, wantIpiv, n, bRhs);
-        for (let i = 0; i < n; i++) {
-            numberApproxEqual(gotX[b * n + i], wantX[i], 2e-3, `LU solve batch ${b} row ${i}`);
-        }
-        for (let i = 0; i < n; i++) {
-            let ax = 0;
-            for (let j = 0; j < n; j++) ax += slice[i * n + j] * wantX[j];
-            numberApproxEqual(ax, bRhs[i], 2e-3, `residual batch ${b} row ${i}`);
-        }
-    }
-}
-
-// 15) Batched LU c64 (partial pivot by |a|^2: factor + solve).
-{
-    assert.strictEqual(typeof kernels.luFactorC64Batched, "function", "Missing kernel: luFactorC64Batched");
-    assert.strictEqual(typeof kernels.luSolveC64Batched, "function", "Missing kernel: luSolveC64Batched");
-
-    const cxMul = (ar, ai, br, bi) => [ar * br - ai * bi, ar * bi + ai * br];
-    const cxDiv = (ar, ai, br, bi) => { const d = br * br + bi * bi; return [(ar * br + ai * bi) / d, (ai * br - ar * bi) / d]; };
-
-    const luFactorCpuPivotedComplex = (aFlat2, n) => {
-        const A = Float32Array.from(aFlat2);
-        const ipiv = new Uint32Array(n);
-        for (let k = 0; k < n; k++) {
-            let piv = k;
-            let maxv = -1;
-            for (let i = k; i < n; i++) {
-                const t = (i * n + k) * 2;
-                const ms = A[t] * A[t] + A[t + 1] * A[t + 1];
-                if (ms > maxv || (ms === maxv && i < piv)) {
-                    maxv = ms;
-                    piv = i;
-                }
-            }
-            ipiv[k] = piv >>> 0;
-            if (piv !== k) {
-                for (let j = 0; j < n; j++) {
-                    const ta = (k * n + j) * 2;
-                    const tb = (piv * n + j) * 2;
-                    let tmp = A[ta];
-                    A[ta] = A[tb];
-                    A[tb] = tmp;
-                    tmp = A[ta + 1];
-                    A[ta + 1] = A[tb + 1];
-                    A[tb + 1] = tmp;
-                }
-            }
-            const pk = (k * n + k) * 2;
-            const diaR = A[pk];
-            const diaI = A[pk + 1];
-            for (let i = k + 1; i < n; i++) {
-                const tik = (i * n + k) * 2;
-                const [dr, di] = cxDiv(A[tik], A[tik + 1], diaR, diaI);
-                A[tik] = dr;
-                A[tik + 1] = di;
-            }
-            for (let i = k + 1; i < n; i++) {
-                const likR = A[(i * n + k) * 2];
-                const likI = A[(i * n + k) * 2 + 1];
-                for (let j = k + 1; j < n; j++) {
-                    const tkj = (k * n + j) * 2;
-                    const tij = (i * n + j) * 2;
-                    const [mr, mi] = cxMul(likR, likI, A[tkj], A[tkj + 1]);
-                    A[tij] -= mr;
-                    A[tij + 1] -= mi;
-                }
-            }
-        }
-        return { A, ipiv };
-    };
-
-    const luSolveCpuPivotedComplex = (LU, ipiv, n, b2) => {
-        const x = new Float32Array(2 * n);
-        for (let i = 0; i < n; i++) {
-            x[2 * i] = b2[2 * i];
-            x[2 * i + 1] = b2[2 * i + 1];
-        }
-        for (let k = 0; k < n - 1; k++) {
-            const p = ipiv[k] >>> 0;
-            if (p !== k) {
-                const tk = 2 * k;
-                const tp = 2 * p;
-                let t0 = x[tk];
-                let t1 = x[tk + 1];
-                x[tk] = x[tp];
-                x[tk + 1] = x[tp + 1];
-                x[tp] = t0;
-                x[tp + 1] = t1;
-            }
-        }
-        for (let i = 0; i < n; i++) {
-            let sr = x[2 * i];
-            let si = x[2 * i + 1];
-            for (let j = 0; j < i; j++) {
-                const Lr = LU[(i * n + j) * 2];
-                const Li = LU[(i * n + j) * 2 + 1];
-                const [mr, mi] = cxMul(Lr, Li, x[2 * j], x[2 * j + 1]);
-                sr -= mr;
-                si -= mi;
-            }
-            x[2 * i] = sr;
-            x[2 * i + 1] = si;
-        }
-        for (let i = n - 1; i >= 0; i--) {
-            let sr = x[2 * i];
-            let si = x[2 * i + 1];
-            for (let j = i + 1; j < n; j++) {
-                const Ur = LU[(i * n + j) * 2];
-                const Ui = LU[(i * n + j) * 2 + 1];
-                const [mr, mi] = cxMul(Ur, Ui, x[2 * j], x[2 * j + 1]);
-                sr -= mr;
-                si -= mi;
-            }
-            const [xr, xi] = cxDiv(sr, si, LU[(i * n + i) * 2], LU[(i * n + i) * 2 + 1]);
-            x[2 * i] = xr;
-            x[2 * i + 1] = xi;
-        }
-        return x;
-    };
-
-    const batch = 3;
-    const n = 4;
-    const cells = batch * n * n;
-    const a = new Float32Array(cells * 2);
-    const rhs = new Float32Array(batch * n * 2);
+    const batch = 3, n = 4;
+    const a = new Float32Array(batch * n * n), rhs = new Float32Array(batch * n);
+    const ac = new Float32Array(batch * n * n * 2), rhsc = new Float32Array(batch * n * 2);
     for (let b = 0; b < batch; b++) {
         for (let i = 0; i < n; i++) {
             for (let j = 0; j < n; j++) {
-                const t = ((b * n * n + i * n + j) * 2);
-                const dre = (i === j) ? (4 + b + i) : (0.1 * (i + 1) - 0.07 * (j + 1) + 0.02 * b);
-                const dim = (i === j) ? 0.15 : (0.05 * (i - j) + 0.01 * b);
-                a[t] = dre;
-                a[t + 1] = dim;
+                const t = b * n * n + i * n + j;
+                a[t] = (i === j) ? (4 + b + i) : (0.1 * (i + 1) - 0.07 * (j + 1) + 0.02 * b);
+                ac[2 * t] = a[t];
+                ac[2 * t + 1] = (i === j) ? 0.15 : (0.05 * (i - j) + 0.01 * b);
             }
-        }
-        for (let i = 0; i < n; i++) {
-            const t = (b * n + i) * 2;
-            rhs[t] = 0.5 + 0.1 * i + 0.03 * b;
-            rhs[t + 1] = 0.2 - 0.05 * i + 0.02 * b;
+            rhs[b * n + i] = 0.5 + 0.1 * i + 0.03 * b;
+            rhsc[2 * (b * n + i)] = rhs[b * n + i];
+            rhsc[2 * (b * n + i) + 1] = 0.2 - 0.05 * i + 0.02 * b;
         }
     }
-
-    const bufA = compute.createStorageBuffer({ label: "lu:c64:A", data: a, copySrc: true });
-    const bufIpiv = compute.createStorageBuffer({ label: "lu:c64:ipiv", byteLength: batch * n * 4, copySrc: true });
-    const bufRhs = compute.createStorageBuffer({ label: "lu:c64:rhs", data: rhs, copySrc: true });
-    const bufX = compute.createStorageBuffer({ label: "lu:c64:x", byteLength: batch * n * 8, copySrc: true });
-
-    kernels.luFactorC64Batched(bufA, bufIpiv, batch, n);
-    kernels.luSolveC64Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
-
-    const gotLu = await bufA.readAs(Float32Array);
-    const gotIpiv = await bufIpiv.readAs(Uint32Array);
-    const gotX = await bufX.readAs(Float32Array);
-
-    for (let b = 0; b < batch; b++) {
-        const slice = new Float32Array(n * n * 2);
-        for (let t = 0; t < n * n * 2; t++) slice[t] = a[b * n * n * 2 + t];
-        const { A: wantLu, ipiv: wantIpiv } = luFactorCpuPivotedComplex(slice, n);
-        for (let t = 0; t < n * n * 2; t++) numberApproxEqual(gotLu[b * n * n * 2 + t], wantLu[t], 5e-4, `LU c64 factor batch ${b} index ${t}`);
-        for (let k = 0; k < n; k++) assert.strictEqual(gotIpiv[b * n + k] >>> 0, wantIpiv[k] >>> 0, `ipiv c64 batch ${b} k=${k}`);
-        const bRhs = rhs.subarray(b * n * 2, (b + 1) * n * 2);
-        const wantX = luSolveCpuPivotedComplex(wantLu, wantIpiv, n, bRhs);
-        for (let i = 0; i < n; i++) {
-            numberApproxEqual(gotX[b * n * 2 + 2 * i], wantX[2 * i], 3e-3, `LU c64 solve batch ${b} row ${i} re`);
-            numberApproxEqual(gotX[b * n * 2 + 2 * i + 1], wantX[2 * i + 1], 3e-3, `LU c64 solve batch ${b} row ${i} im`);
+    for (const complex of [false, true]) {
+        const w = complex ? 2 : 1, data = complex ? ac : a, b = complex ? rhsc : rhs;
+        const input = gpu("f32", complex ? [batch, n, n, 2] : [batch, n, n], data);
+        const { lu, ipiv } = kernels.luFactor(input, { complex });
+        assert.deepStrictEqual(ipiv.shape, [batch, n], "ipiv shape");
+        arraysApproxEqual(await read(input), data, 0, "luFactor leaves a untouched without overwrite");
+        const gotLu = await read(lu), gotIpiv = await read(ipiv);
+        for (let k = 0; k < batch; k++) {
+            const slice = data.subarray(k * n * n * w, (k + 1) * n * n * w);
+            const want = complex ? luFactorCPUPivotedComplex(slice, n) : luFactorCPUPivoted(slice, n);
+            arraysApproxEqual(gotLu.subarray(k * n * n * w, (k + 1) * n * n * w), want.A, 5e-4, `LU factor ${complex ? "complex" : "f32"} batch ${k}`);
+            arraysEqualU32(gotIpiv.subarray(k * n, (k + 1) * n), want.ipiv, `ipiv ${complex ? "complex" : "f32"} batch ${k}`);
         }
-        for (let i = 0; i < n; i++) {
-            let axr = 0;
-            let axi = 0;
-            for (let j = 0; j < n; j++) {
-                const t = (i * n + j) * 2;
-                const [mr, mi] = cxMul(slice[t], slice[t + 1], wantX[2 * j], wantX[2 * j + 1]);
-                axr += mr;
-                axi += mi;
-            }
-            numberApproxEqual(axr, bRhs[2 * i], 3e-3, `residual c64 batch ${b} row ${i} re`);
-            numberApproxEqual(axi, bRhs[2 * i + 1], 3e-3, `residual c64 batch ${b} row ${i} im`);
-        }
+        const x = kernels.luSolve(lu, ipiv, gpu("f32", complex ? [batch, n, 2] : [batch, n], b), { complex });
+        assert.ok(luResidual(data, await read(x), b, batch, n, complex) < 3e-3, `LU solve residual ${complex ? "complex" : "f32"}`);
+
+        const stored = new Float32Array(data.length);
+        for (let t = 0; t < batch * n * n; t++) { const k = Math.floor(t / (n * n)), i = Math.floor(t / n) % n, j = t % n; for (let c = 0; c < w; c++) stored[(k * n * n + j * n + i) * w + c] = data[t * w + c]; }
+        const view = nd.swapAxes(gpu("f32", complex ? [batch, n, n, 2] : [batch, n, n], stored), 1, 2);
+        const factored = kernels.luFactor(view, { overwrite: true, complex });
+        assert.strictEqual(factored.lu, view, "overwrite returns a");
+        arraysApproxEqual(await read(view), gotLu, 1e-6, `overwrite through a transposed view ${complex ? "complex" : "f32"}`);
+        arraysEqualU32(await read(factored.ipiv), gotIpiv, "overwrite ipiv");
     }
+    assert.throws(() => kernels.luFactor(gpu("f32", [2, 3], new Float32Array(6))), /compute\.kernels\.luFactor: a must hold square matrices/);
+    assert.throws(() => kernels.luSolve(gpu("f32", [2, 2], [1, 0, 0, 1]), gpu("u32", [2], [0, 1]), gpu("f32", [3, 2], new Float32Array(6))), /batch dimensions are not broadcast/);
 }
 
-// 16) F32 solve fallback path for n > 512 (identity LU should return rhs unchanged).
+// 13) LU solve fallback for n > 512 and the blocked factorization at n >= 160.
 {
-    const batch = 1;
     const n = 513;
-    const lu = new Float32Array(batch * n * n);
-    const ipiv = new Uint32Array(batch * n);
-    const rhs = new Float32Array(batch * n);
-    for (let i = 0; i < n; i++) {
-        lu[i * n + i] = 1;
-        ipiv[i] = i >>> 0;
-        rhs[i] = Math.sin(i * 0.17);
+    for (const complex of [false, true]) {
+        const w = complex ? 2 : 1;
+        const lu = new Float32Array(n * n * w), rhs = new Float32Array(n * w);
+        for (let i = 0; i < n; i++) { lu[(i * n + i) * w] = 1; rhs[i * w] = Math.sin(i * 0.17); if (complex) rhs[2 * i + 1] = Math.cos(i * 0.11); }
+        const ipiv = gpu("u32", [n], Uint32Array.from({ length: n }, (_, i) => i));
+        const x = kernels.luSolve(gpu("f32", complex ? [n, n, 2] : [n, n], lu), ipiv, gpu("f32", complex ? [n, 2] : [n], rhs), { complex });
+        arraysApproxEqual(await read(x), rhs, 1e-5, `LU ${complex ? "complex" : "f32"} large solve`);
     }
-
-    const bufLu = compute.createStorageBuffer({ label: "lu:f32:large:lu", data: lu, copySrc: false });
-    const bufIpiv = compute.createStorageBuffer({ label: "lu:f32:large:ipiv", data: ipiv, copySrc: false });
-    const bufRhs = compute.createStorageBuffer({ label: "lu:f32:large:rhs", data: rhs, copySrc: false });
-    const bufX = compute.createStorageBuffer({ label: "lu:f32:large:x", byteLength: batch * n * 4, copySrc: true });
-
-    kernels.luSolveF32Batched(bufLu, bufIpiv, bufRhs, bufX, batch, n);
-
-    const gotX = await bufX.readAs(Float32Array);
-    arraysApproxEqual(gotX, rhs, 1e-5, "LU f32 large solve mismatch");
-}
-
-// 17) C64 solve fallback path for n > 512 (identity LU should return rhs unchanged).
-{
-    const batch = 1;
-    const n = 513;
-    const lu = new Float32Array(batch * n * n * 2);
-    const ipiv = new Uint32Array(batch * n);
-    const rhs = new Float32Array(batch * n * 2);
-    for (let i = 0; i < n; i++) {
-        const diag = (i * n + i) * 2;
-        lu[diag] = 1;
-        ipiv[i] = i >>> 0;
-        rhs[2 * i] = Math.sin(i * 0.17);
-        rhs[2 * i + 1] = Math.cos(i * 0.11);
-    }
-
-    const bufLu = compute.createStorageBuffer({ label: "lu:c64:large:lu", data: lu, copySrc: false });
-    const bufIpiv = compute.createStorageBuffer({ label: "lu:c64:large:ipiv", data: ipiv, copySrc: false });
-    const bufRhs = compute.createStorageBuffer({ label: "lu:c64:large:rhs", data: rhs, copySrc: false });
-    const bufX = compute.createStorageBuffer({ label: "lu:c64:large:x", byteLength: batch * n * 8, copySrc: true });
-
-    kernels.luSolveC64Batched(bufLu, bufIpiv, bufRhs, bufX, batch, n);
-
-    const gotX = await bufX.readAs(Float32Array);
-    arraysApproxEqual(gotX, rhs, 1e-5, "LU c64 large solve mismatch");
-}
-
-// 18) Blocked-path regression for f32 LU at n >= 160 (covers lead/upper/trailing kernels).
-{
-    const n = 192;
-    const batch = 2;
-    const a = new Float32Array(batch * n * n);
-    const rhs = new Float32Array(batch * n);
-    // Diagonally dominant random matrix to keep f32 well-conditioned.
     let seed = 0x9e3779b1 >>> 0;
     const rand = () => {
         seed = ((seed + 0x6D2B79F5) >>> 0);
@@ -666,325 +424,195 @@ assert.ok(kernels, "Kernels not available. Expected compute.kernels or exported 
         t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
         return (((t ^ (t >>> 14)) >>> 0) / 4294967296);
     };
-    for (let b = 0; b < batch; b++) {
-        for (let i = 0; i < n; i++) {
-            let rowMag = 0;
-            for (let j = 0; j < n; j++) {
-                const v = (rand() - 0.5) * (1.0 / n);
-                a[b * n * n + i * n + j] = v;
-                rowMag += Math.abs(v);
+    const m = 192, batch = 2;
+    for (const complex of [false, true]) {
+        const w = complex ? 2 : 1;
+        const a = new Float32Array(batch * m * m * w), rhs = new Float32Array(batch * m * w);
+        for (let b = 0; b < batch; b++) {
+            for (let i = 0; i < m; i++) {
+                let rowMag = 0;
+                for (let j = 0; j < m * w; j++) { const v = (rand() - 0.5) / m; a[(b * m * m + i * m) * w + j] = v; rowMag += Math.abs(v); }
+                a[(b * m * m + i * m + i) * w] = rowMag + 1 + b * 0.25;
+                for (let c = 0; c < w; c++) rhs[(b * m + i) * w + c] = rand();
             }
-            a[b * n * n + i * n + i] = rowMag + 1 + b * 0.25;
-            rhs[b * n + i] = rand();
         }
-    }
-
-    const bufA = compute.createStorageBuffer({ label: "lu:f32:blk:A", data: a, copySrc: true });
-    const bufIpiv = compute.createStorageBuffer({ label: "lu:f32:blk:ipiv", byteLength: batch * n * 4, copySrc: true });
-    const bufRhs = compute.createStorageBuffer({ label: "lu:f32:blk:rhs", data: rhs, copySrc: false });
-    const bufX = compute.createStorageBuffer({ label: "lu:f32:blk:x", byteLength: batch * n * 4, copySrc: true });
-
-    kernels.luFactorF32Batched(bufA, bufIpiv, batch, n);
-    kernels.luSolveF32Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
-    const gotX = await bufX.readAs(Float32Array);
-
-    // Validate by computing the residual ||A x - b||_inf / ||b||_inf with the original A.
-    for (let b = 0; b < batch; b++) {
-        let bMax = 0;
-        for (let i = 0; i < n; i++) bMax = Math.max(bMax, Math.abs(rhs[b * n + i]));
-        let resMax = 0;
-        for (let i = 0; i < n; i++) {
-            let ax = 0;
-            for (let j = 0; j < n; j++) ax += a[b * n * n + i * n + j] * gotX[b * n + j];
-            resMax = Math.max(resMax, Math.abs(ax - rhs[b * n + i]));
-        }
-        assert.ok(resMax / Math.max(bMax, 1e-30) < 1e-3, `f32 blocked LU residual too large: batch ${b} -> ${resMax}/${bMax}`);
+        const { lu, ipiv } = kernels.luFactor(gpu("f32", complex ? [batch, m, m, 2] : [batch, m, m], a), { complex });
+        const x = kernels.luSolve(lu, ipiv, gpu("f32", complex ? [batch, m, 2] : [batch, m], rhs), { complex });
+        assert.ok(luResidual(a, await read(x), rhs, batch, m, complex) < 1e-3, `${complex ? "complex" : "f32"} blocked LU residual`);
     }
 }
 
-// 19) Blocked-path regression for c64 LU at n >= 160 (covers lead/upper/trailing kernels).
+// 14) matmul with alpha/beta, k = 0, rectangular products, native strides, and NumPy 1-D promotion.
 {
-    const n = 192;
-    const batch = 2;
-    const a = new Float32Array(batch * n * n * 2);
-    const rhs = new Float32Array(batch * n * 2);
-    let seed = 0x12345678 >>> 0;
-    const rand = () => {
-        seed = ((seed + 0x6D2B79F5) >>> 0);
-        let t = seed;
-        t = Math.imul(t ^ (t >>> 15), t | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return (((t ^ (t >>> 14)) >>> 0) / 4294967296);
-    };
-    for (let b = 0; b < batch; b++) {
-        for (let i = 0; i < n; i++) {
-            let rowMag = 0;
-            for (let j = 0; j < n; j++) {
-                const re = (rand() - 0.5) * (1.0 / n);
-                const im = (rand() - 0.5) * (1.0 / n);
-                const t = (b * n * n + i * n + j) * 2;
-                a[t] = re;
-                a[t + 1] = im;
-                rowMag += Math.hypot(re, im);
-            }
-            const td = (b * n * n + i * n + i) * 2;
-            a[td] = rowMag + 1 + b * 0.25;
-            a[td + 1] = 0.5;
-            const tr = (b * n + i) * 2;
-            rhs[tr] = rand();
-            rhs[tr + 1] = rand();
-        }
-    }
+    const af = gpu("f32", [2, 3], [1, 2, 3, 4, 5, 6]), bf = gpu("f32", [3, 2], [1, 2, 3, 4, 5, 6]);
+    const cf = gpu("f32", [2, 2], [1, 1, 1, 1]);
+    assert.strictEqual(kernels.matmul(af, bf, { out: cf, alpha: 2, beta: 3 }), cf, "matmul returns out");
+    arraysApproxEqual(await read(cf), new Float32Array([47, 59, 101, 131]), 1e-5, "matmul f32 alpha/beta");
+    const c0 = gpu("f32", [1, 2], [2, -3]);
+    kernels.matmul(gpu("f32", [1, 0], []), gpu("f32", [0, 2], []), { out: c0, beta: -2 });
+    arraysApproxEqual(await read(c0), new Float32Array([-4, 6]), 1e-6, "matmul f32 k=0");
+    const cu = gpu("u32", [2, 2], [1, 1, 1, 1]);
+    kernels.matmul(gpu("u32", [2, 3], [1, 2, 3, 4, 5, 6]), gpu("u32", [3, 2], [1, 2, 3, 4, 5, 6]), { out: cu, alpha: 2, beta: 3 });
+    arraysEqualU32(await read(cu), new Uint32Array([47, 59, 101, 131]), "matmul u32 alpha/beta");
+    const cc = gpu("f32", [1, 1, 2], [2, -1]);
+    kernels.matmul(gpu("f32", [1, 2, 2], [1, 1, 2, -1]), gpu("f32", [2, 1, 2], [3, 2, -1, 4]), { complex: true, out: cc, alpha: [2, -1], beta: [-1, 0.5] });
+    arraysApproxEqual(await read(cc), new Float32Array([18.5, 27]), 1e-5, "matmul complex alpha/beta");
+    assert.throws(() => kernels.matmul(af, bf, { beta: 1 }), /compute\.kernels\.matmul: beta != 0 requires out/);
 
-    const bufA = compute.createStorageBuffer({ label: "lu:c64:blk:A", data: a, copySrc: true });
-    const bufIpiv = compute.createStorageBuffer({ label: "lu:c64:blk:ipiv", byteLength: batch * n * 4, copySrc: true });
-    const bufRhs = compute.createStorageBuffer({ label: "lu:c64:blk:rhs", data: rhs, copySrc: false });
-    const bufX = compute.createStorageBuffer({ label: "lu:c64:blk:x", byteLength: batch * n * 8, copySrc: true });
+    // A rectangular, non-tile-aligned product for every dtype.
+    const rectA = new Float32Array(3 * 5), rectB = new Float32Array(5 * 7);
+    for (let i = 0; i < rectA.length; i++) rectA[i] = (i % 5) - 2;
+    for (let i = 0; i < rectB.length; i++) rectB[i] = (i % 7) * 0.25 - 0.5;
+    const want = new Float32Array(21);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 7; j++) for (let q = 0; q < 5; q++) want[i * 7 + j] += rectA[i * 5 + q] * rectB[q * 7 + j];
+    arraysApproxEqual(await read(kernels.matmul(gpu("f32", [3, 5], rectA), gpu("f32", [5, 7], rectB))), want, 1e-5, "rectangular matmul f32");
+    const rectAU = Uint32Array.from(rectA, (x) => (x + 2) >>> 0), rectBU = Uint32Array.from(rectB, (x) => Math.round((x + 0.5) * 4) >>> 0);
+    const wantU = new Uint32Array(21);
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 7; j++) for (let q = 0; q < 5; q++) wantU[i * 7 + j] = (wantU[i * 7 + j] + Math.imul(rectAU[i * 5 + q], rectBU[q * 7 + j])) >>> 0;
+    arraysEqualU32(await read(kernels.matmul(gpu("u32", [3, 5], rectAU), gpu("u32", [5, 7], rectBU))), wantU, "rectangular matmul u32");
+    const rectAC = new Float32Array(30), rectBC = new Float32Array(70), wantC = new Float32Array(42);
+    for (let i = 0; i < 15; i++) { rectAC[2 * i] = rectA[i]; rectAC[2 * i + 1] = (i % 3) - 1; }
+    for (let i = 0; i < 35; i++) { rectBC[2 * i] = rectB[i]; rectBC[2 * i + 1] = (i % 2) * 0.5; }
+    for (let i = 0; i < 3; i++) for (let j = 0; j < 7; j++) for (let q = 0; q < 5; q++) { const ai = 2 * (i * 5 + q), bi = 2 * (q * 7 + j), ci = 2 * (i * 7 + j); wantC[ci] += rectAC[ai] * rectBC[bi] - rectAC[ai + 1] * rectBC[bi + 1]; wantC[ci + 1] += rectAC[ai] * rectBC[bi + 1] + rectAC[ai + 1] * rectBC[bi]; }
+    arraysApproxEqual(await read(kernels.matmul(gpu("f32", [3, 5, 2], rectAC), gpu("f32", [5, 7, 2], rectBC), { complex: true })), wantC, 1e-4, "rectangular matmul complex");
 
-    kernels.luFactorC64Batched(bufA, bufIpiv, batch, n);
-    kernels.luSolveC64Batched(bufA, bufIpiv, bufRhs, bufX, batch, n);
-    const gotX = await bufX.readAs(Float32Array);
+    // A transposed operand is read through its strides; the result matches the CPU product of the logical views.
+    const at = gpu("f32", [5, 3], Float32Array.from({ length: 15 }, (_, i) => rectA[(i % 3) * 5 + Math.floor(i / 3)]));
+    arraysApproxEqual(await read(kernels.matmul(nd.transpose(at), gpu("f32", [5, 7], rectB))), want, 1e-5, "matmul of a transposed operand");
 
-    for (let b = 0; b < batch; b++) {
-        let bMax = 0;
-        for (let i = 0; i < n; i++) {
-            bMax = Math.max(bMax, Math.hypot(rhs[(b * n + i) * 2], rhs[(b * n + i) * 2 + 1]));
-        }
-        let resMax = 0;
-        for (let i = 0; i < n; i++) {
-            let axr = 0;
-            let axi = 0;
-            for (let j = 0; j < n; j++) {
-                const ta = (b * n * n + i * n + j) * 2;
-                const tx = (b * n + j) * 2;
-                const ar = a[ta];
-                const ai = a[ta + 1];
-                const xr = gotX[tx];
-                const xi = gotX[tx + 1];
-                axr += ar * xr - ai * xi;
-                axi += ar * xi + ai * xr;
-            }
-            const tr = (b * n + i) * 2;
-            resMax = Math.max(resMax, Math.hypot(axr - rhs[tr], axi - rhs[tr + 1]));
-        }
-        assert.ok(resMax / Math.max(bMax, 1e-30) < 1e-3, `c64 blocked LU residual too large: batch ${b} -> ${resMax}/${bMax}`);
-    }
+    // 1-D promotion: [k] @ [k, n] -> [n], [m, k] @ [k] -> [m], [k] @ [k] -> [].
+    const v = gpu("f32", [3], [1, -1, 2]);
+    const left = kernels.matmul(v, bf), right = kernels.matmul(af, v), inner = kernels.matmul(v, v);
+    assert.deepStrictEqual([left.shape, right.shape, inner.shape], [[2], [2], []], "1-D promotion shapes");
+    arraysApproxEqual(await read(left), new Float32Array([8, 10]), 1e-6, "[k] @ [k, n]");
+    arraysApproxEqual(await read(right), new Float32Array([5, 11]), 1e-6, "[m, k] @ [k]");
+    arraysApproxEqual(await read(inner), new Float32Array([6]), 1e-6, "[k] @ [k]");
+    assert.throws(() => kernels.matmul(af, af), /compute\.kernels\.matmul: shapes \[2,3\] and \[2,3\] are not aligned/);
 }
 
-// 20) Explicit f32/u32/c64 vector arithmetic methods.
+// 15) Scale kernels read strided sources natively.
 {
-    for (const name of ["addF32", "subF32", "mulF32", "sclF32", "dotF32", "axpyF32", "gemmF32", "addU32", "subU32", "mulU32", "sclU32", "dotU32", "axpyU32", "gemmU32", "addC64", "subC64", "mulC64", "sclC64", "dotC64", "axpyC64", "gemmC64"]) assert.strictEqual(typeof kernels[name], "function", `Missing kernel: ${name}`);
+    const raw = new Float32Array([9, 1, 2, NaN, 9, 3, 4, 0, 9, 5, Infinity, 1]);
+    const src = nd.wrap(compute.createStorageBuffer({ data: raw }), "f32", { shape: [3, 2], stridesBytes: [16, 4], offsetBytes: 4 });
+    const component = kernels.scaleExtract(src, { componentIndex: 1 });
+    arraysApproxEqual(await read(component.values), new Float32Array([2, 4, 0]), 0, "scaleExtract component");
+    arraysEqualU32(await read(component.flags), new Uint32Array([1, 1, 0]), "scaleExtract flags");
+    const magnitude = kernels.scaleExtract(src, { valueMode: "magnitude" });
+    arraysApproxEqual(await read(magnitude.values), new Float32Array([Math.hypot(1, 2), 5, 0]), 1e-6, "scaleExtract magnitude");
+    arraysEqualU32(await read(magnitude.flags), new Uint32Array([1, 1, 0]), "scaleExtract magnitude flags");
 
-    const af = compute.createStorageBuffer({ data: new Float32Array([1, -2, 3]) });
-    const bf = compute.createStorageBuffer({ data: new Float32Array([4, 5, -6]) });
-    arraysApproxEqual(await kernels.addF32(af, bf).readAs(Float32Array), new Float32Array([5, 3, -3]), 1e-6, "addF32");
-    arraysApproxEqual(await kernels.subF32(af, bf).readAs(Float32Array), new Float32Array([-3, -7, 9]), 1e-6, "subF32");
-    arraysApproxEqual(await kernels.mulF32(af, bf).readAs(Float32Array), new Float32Array([4, -10, -18]), 1e-6, "mulF32");
-    arraysApproxEqual(await kernels.sclF32(af, -2).readAs(Float32Array), new Float32Array([-2, 4, -6]), 1e-6, "sclF32");
-    arraysApproxEqual(await kernels.axpyF32(af, bf, 2).readAs(Float32Array), new Float32Array([6, 1, 0]), 1e-6, "axpyF32");
-
-    const au = compute.createStorageBuffer({ data: new Uint32Array([1, 7, 0xFFFFFFFF]) });
-    const bu = compute.createStorageBuffer({ data: new Uint32Array([4, 3, 2]) });
-    arraysEqualU32(await kernels.addU32(au, bu).readAs(Uint32Array), new Uint32Array([5, 10, 1]), "addU32");
-    arraysEqualU32(await kernels.subU32(au, bu).readAs(Uint32Array), new Uint32Array([0xFFFFFFFD, 4, 0xFFFFFFFD]), "subU32");
-    arraysEqualU32(await kernels.mulU32(au, bu).readAs(Uint32Array), new Uint32Array([4, 21, 0xFFFFFFFE]), "mulU32");
-    arraysEqualU32(await kernels.sclU32(au, 3).readAs(Uint32Array), new Uint32Array([3, 21, 0xFFFFFFFD]), "sclU32");
-    arraysEqualU32(await kernels.axpyU32(au, bu, 2).readAs(Uint32Array), new Uint32Array([6, 17, 0]), "axpyU32");
-
-    const ac = compute.createStorageBuffer({ data: new Float32Array([1, 2, -3, 4, 0.5, -1]) });
-    const bc = compute.createStorageBuffer({ data: new Float32Array([3, -1, 2, 5, -2, 4]) });
-    arraysApproxEqual(await kernels.addC64(ac, bc).readAs(Float32Array), new Float32Array([4, 1, -1, 9, -1.5, 3]), 1e-6, "addC64");
-    arraysApproxEqual(await kernels.subC64(ac, bc).readAs(Float32Array), new Float32Array([-2, 3, -5, -1, 2.5, -5]), 1e-6, "subC64");
-    arraysApproxEqual(await kernels.mulC64(ac, bc).readAs(Float32Array), new Float32Array([5, 5, -26, -7, 3, 4]), 1e-6, "mulC64");
-    arraysApproxEqual(await kernels.sclC64(ac, [2, -1]).readAs(Float32Array), new Float32Array([4, 3, -2, 11, 0, -2.5]), 1e-6, "sclC64");
-    arraysApproxEqual(await kernels.axpyC64(ac, bc, [2, -1]).readAs(Float32Array), new Float32Array([7, 2, 0, 16, -2, 1.5]), 1e-6, "axpyC64");
-
-    const prefix = kernels.addF32(af, bf, { count: 2 });
-    assert.strictEqual(prefix.byteLength, 8, "prefix output logical size");
-    arraysApproxEqual(await prefix.readAs(Float32Array), new Float32Array([5, 3]), 1e-6, "prefix addF32");
-    assert.throws(() => kernels.addF32(compute.createStorageBuffer({ data: new Float32Array([1]) }), bf, { count: 2 }), /insufficient capacity/);
-    assert.throws(() => kernels.addF32(af, compute.createStorageBuffer({ data: new Float32Array([1]) })), /logical lengths must match/);
-    assert.throws(() => kernels.addF32(af, bf, { out: compute.createStorageBuffer({ byteLength: 4 }) }), /insufficient capacity/);
-    assert.throws(() => kernels.addF32(af, bf, { out: af }), /distinct/);
-    assert.throws(() => kernels.addF32(compute.createStorageBuffer({ byteLength: 5 }), bf, { count: 0 }), /divisible/);
-    const empty = kernels.mulC64(ac, bc, { count: 0 });
-    assert.strictEqual(empty.byteLength, 0, "zero-count c64 output logical size");
+    const values = gpu("f32", [6], [0, 0.5, 1, 2, 3.9, 9]);
+    arraysEqualU32(await read(kernels.scaleHistogram(values, { bins: 4, minValue: 0, maxValue: 4 })), new Uint32Array([2, 1, 1, 2]), "scaleHistogram clamps into edge bins");
+    const kept = gpu("u32", [2], [5, 5]);
+    kernels.scaleHistogram(values, { bins: 2, minValue: 1, maxValue: 1, out: kept });
+    arraysEqualU32(await read(kept), new Uint32Array([0, 0]), "scaleHistogram with an empty range only clears");
+    const transform = { mode: "log", clampMode: "range", clampMin: 0.1, clampMax: 10, domainMin: 0.1, domainMax: 10, logBase: 10 };
+    const remapped = kernels.scaleRemap(gpu("f32", [2, 2], [0.1, 1, 10, 100]), { transform });
+    assert.deepStrictEqual(remapped.shape, [2, 2], "scaleRemap keeps the input shape");
+    arraysApproxEqual(await read(remapped), new Float32Array([0, 0.5, 1, 1]), 1e-5, "scaleRemap log");
 }
 
-// 21) Dot products, including u32 wrap, non-conjugating c64, and zero count.
+// 16) Inputs must be live f32/u32 GPUndarrays on this device; kernels never promote or transfer.
 {
-    const af = compute.createStorageBuffer({ data: new Float32Array([1.5, -2, 4]) });
-    const bf = compute.createStorageBuffer({ data: new Float32Array([2, 3, -0.5]) });
-    numberApproxEqual((await kernels.dotF32(af, bf).readAs(Float32Array))[0], -5, 1e-5, "dotF32");
-    const au = compute.createStorageBuffer({ data: new Uint32Array([0xFFFFFFFF, 2]) });
-    const bu = compute.createStorageBuffer({ data: new Uint32Array([2, 3]) });
-    assert.strictEqual((await kernels.dotU32(au, bu).readAs(Uint32Array))[0], 4, "dotU32 wrap");
-    const ac = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, -1]) });
-    const bc = compute.createStorageBuffer({ data: new Float32Array([2, 1, -4, 2]) });
-    const dotc = await kernels.dotC64(ac, bc).readAs(Float32Array);
-    arraysApproxEqual(dotc, new Float32Array([-10, 15]), 1e-5, "dotC64 non-conjugating");
-    const manyF = new Float32Array(1025); manyF.fill(1.25);
-    const manyFBuffer = compute.createStorageBuffer({ data: manyF });
-    numberApproxEqual((await kernels.dotF32(manyFBuffer, manyFBuffer).readAs(Float32Array))[0], 1025 * 1.25 * 1.25, 1e-3, "dotF32 multipass");
-    const manyC = new Float32Array(513 * 2);
-    for (let i = 0; i < 513; i++) { manyC[2 * i] = 1; manyC[2 * i + 1] = 1; }
-    const manyCBuffer = compute.createStorageBuffer({ data: manyC });
-    arraysApproxEqual(await kernels.dotC64(manyCBuffer, manyCBuffer).readAs(Float32Array), new Float32Array([0, 1026]), 1e-3, "dotC64 multipass");
-    arraysApproxEqual(await kernels.dotC64(ac, bc, { count: 0 }).readAs(Float32Array), new Float32Array([0, 0]), 1e-6, "dotC64 zero");
-    assert.strictEqual((await kernels.dotU32(au, bu, { count: 0 }).readAs(Uint32Array))[0], 0, "dotU32 zero");
+    const a = gpu("f32", [2], [1, 2]);
+    assert.throws(() => kernels.add(a, gpu("u32", [2], [1, 2])), /compute\.kernels\.add: a and b must have the same dtype \(got f32 and u32\); kernels never promote/);
+    assert.throws(() => kernels.sum(gpu("i32", [2], [1, 2])), /compute\.kernels\.sum: a has dtype i32, but compute\.kernels\.sum supports f32 and u32; convert it with compute\.ndarray\.cast\(\) first/);
+    assert.throws(() => kernels.sum(gpu("f64", [2], [1, 2])), /a has dtype f64/);
+    const cpu = nd.fromArray("f32", [2], [1, 2]);
+    assert.throws(() => kernels.sum(cpu), /compute\.kernels\.sum: a must be a GPUndarray; use compute\.ndarray\.toGPU\(\) first/);
+    cpu.destroy();
+    assert.throws(() => kernels.add(a, a, { out: gpu("f32", [3], [0, 0, 0]) }), /compute\.kernels\.add: out must have shape \[2\]/);
+    assert.throws(() => kernels.add(a, a, { out: nd.slice(gpu("f32", [4], [0, 0, 0, 0]), [[0, 4, 2]]) }), /compute\.kernels\.add: out must be C-contiguous/);
+    assert.throws(() => kernels.add(a, a, { out: gpu("f32", [2], [0, 0]), usage: GPUBufferUsage.VERTEX }), /copySrc, copyDst, and usage apply only to newly created outputs/);
+    const dead = gpu("f32", [2], [1, 2]);
+    dead.destroy();
+    assert.throws(() => kernels.sum(dead), /destroyed/);
 }
 
-// 22) Kernel parameters and temporaries stay isolated across caller encoders and self-submitted calls.
+// 17) Kernel parameters and temporaries stay isolated across caller encoders and self-submitted calls.
 {
-    const a = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, 4]) });
-    const b = compute.createStorageBuffer({ data: new Float32Array([10, 20, 30, 40]) });
-    const c = compute.createStorageBuffer({ data: new Float32Array([100, 200, 300, 400]) });
+    const a = gpu("f32", [4], [1, 2, 3, 4]);
+    const b = gpu("f32", [4], [10, 20, 30, 40]);
+    const c = gpu("f32", [4], [100, 200, 300, 400]);
     const pending = device.createCommandEncoder();
-    const sa = kernels.sclF32(a, 2, { encoder: pending });
-    const sb = kernels.sclF32(b, 5);
-    const sc = kernels.sclF32(c, 3, { encoder: pending });
+    const sa = kernels.scl(a, 2, { encoder: pending });
+    const sb = kernels.scl(b, 5);
+    const sc = kernels.scl(c, 3, { encoder: pending });
     device.queue.submit([pending.finish()]);
-    assert.deepStrictEqual(Array.from(await sa.readAs(Float32Array)), [2, 4, 6, 8], "encoder parameters survive an intervening self-submitted call");
-    assert.deepStrictEqual(Array.from(await sb.readAs(Float32Array)), [50, 100, 150, 200], "intervening self-submitted scalar");
-    assert.deepStrictEqual(Array.from(await sc.readAs(Float32Array)), [300, 600, 900, 1200], "second encoder scalar");
+    assert.deepStrictEqual(Array.from(await read(sa)), [2, 4, 6, 8], "encoder parameters survive an intervening self-submitted call");
+    assert.deepStrictEqual(Array.from(await read(sb)), [50, 100, 150, 200], "intervening self-submitted scalar");
+    assert.deepStrictEqual(Array.from(await read(sc)), [300, 600, 900, 1200], "second encoder scalar");
 
-    const input = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3]) });
-    const outA = compute.createStorageBuffer({ byteLength: 12, copySrc: true });
-    const outB = compute.createStorageBuffer({ byteLength: 12, copySrc: true });
+    // Several kernels and staged inputs recorded into one caller encoder, interleaved with compute.ndarray calls.
     const encoder = device.createCommandEncoder();
-    kernels.sclF32(input, 2, { out: outA, encoder });
-    kernels.sclF32(input, -3, { out: outB, encoder });
+    const m = gpu("f32", [4, 4], Float32Array.from({ length: 16 }, (_, i) => i));
+    const product = kernels.matmul(nd.transpose(m), m, { encoder });
+    const flat = nd.contiguous(nd.flip(product), { encoder });
+    const total = kernels.sum(nd.slice(nd.reshape(flat, [16]), [[1, 16, 2]]), { encoder });
+    const order = kernels.argmax(nd.reshape(flat, [16]), { encoder });
+    const sorted = kernels.sort(kernels.scanExclusive(gpu("u32", [5], [3, 1, 4, 1, 5]), { encoder }), { encoder });
     device.queue.submit([encoder.finish()]);
-    arraysApproxEqual(await outA.readAs(Float32Array), new Float32Array([2, 4, 6]), 1e-6, "shared encoder first scalar");
-    arraysApproxEqual(await outB.readAs(Float32Array), new Float32Array([-3, -6, -9]), 1e-6, "shared encoder second scalar");
+    const want = new Float32Array(16);
+    for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) for (let q = 0; q < 4; q++) want[i * 4 + j] += (q * 4 + i) * (q * 4 + j);
+    const flipped = Array.from(want).reverse();
+    arraysApproxEqual(await read(product), want, 1e-4, "encoder matmul of a transposed view");
+    numberApproxEqual((await read(total))[0], flipped.filter((_, i) => i % 2 === 1).reduce((s, x) => s + x, 0), 1e-2, "encoder sum of a stepped slice");
+    assert.strictEqual((await read(order))[0], 0, "encoder argmax");
+    arraysEqualU32(await read(sorted), new Uint32Array([0, 3, 4, 8, 9]), "encoder scan then sort");
 
-    const empty = compute.createStorageBuffer({ byteLength: 0 });
-    const prior = compute.createStorageBuffer({ data: new Float32Array([7, 8]) });
+    const empty = gpu("f32", [0], []);
     for (const [label, run, bits] of [
-        ["sumF32", (out, enc) => kernels.sumF32(empty, { out, encoder: enc }), [0]],
-        ["minF32", (out, enc) => kernels.minF32(empty, { out, encoder: enc }), [0x7F800000]],
-        ["argminF32", (out, enc) => kernels.argminF32(empty, { out, encoder: enc }), [0x7F800000, 0xFFFFFFFF]]
+        ["sum", (out, enc) => kernels.sum(empty, { out, encoder: enc }), [0]],
+        ["dot", (out, enc) => kernels.dot(empty, empty, { out, encoder: enc }), [0]]
     ]) {
-        const out = compute.createStorageBuffer({ byteLength: bits.length * 4, copySrc: true });
+        const out = gpu("f32", [], [7]);
         const enc = device.createCommandEncoder();
-        kernels.copyF32(prior, { out, count: bits.length, encoder: enc });
+        kernels.scl(gpu("f32", [], [3]), 2, { out, encoder: enc });
         run(out, enc);
         device.queue.submit([enc.finish()]);
-        arraysEqualU32(await out.readAs(Uint32Array), new Uint32Array(bits), `${label} identity must follow earlier encoder commands`);
+        arraysEqualU32(new Uint32Array((await read(out)).buffer), new Uint32Array(bits), `${label} identity must follow earlier encoder commands`);
     }
 
     const n = 160;
     const lu = new Float32Array(n * n);
     for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) lu[i * n + j] = (i === j ? n : 0) + ((i * 7 + j * 13) % 17) / 17 - 0.5;
-    const rhs = compute.createStorageBuffer({ data: makeRandomF32Array(n, -1, 1) });
+    const rhs = gpu("f32", [n], makeRandomF32Array(n, -1, 1));
     const solveLU = async (opts) => {
-        const m = compute.createStorageBuffer({ data: lu, copySrc: true });
-        const ipiv = compute.createStorageBuffer({ byteLength: n * 4, copySrc: true });
-        const x = compute.createStorageBuffer({ byteLength: n * 4, copySrc: true });
-        kernels.luFactorF32Batched(m, ipiv, 1, n, opts);
-        kernels.luSolveF32Batched(m, ipiv, rhs, x, 1, n, opts);
+        const factored = kernels.luFactor(gpu("f32", [n, n], lu), opts);
+        const x = kernels.luSolve(factored.lu, factored.ipiv, rhs, opts);
         if (opts.encoder) device.queue.submit([opts.encoder.finish()]);
-        return [await m.readAs(Uint32Array), await x.readAs(Uint32Array)];
+        return [new Uint32Array((await read(factored.lu)).buffer), new Uint32Array((await read(x)).buffer)];
     };
     const [selfLU, selfX] = await solveLU({});
     const [encLU, encX] = await solveLU({ encoder: device.createCommandEncoder() });
     arraysEqualU32(encLU, selfLU, "encoder blocked LU factors must match self-submitted factors");
     arraysEqualU32(encX, selfX, "encoder blocked LU solution must match self-submitted solution");
-    const scaleIn = compute.createStorageBuffer({ data: new Float32Array([0.1, 0.5, 1, 2, 10]) });
-    const transform = { mode: "log", clampMode: "range", clampMin: 0.1, clampMax: 10, domainMin: 0.1, domainMax: 10, logBase: 10 };
-    const remapSelf = await kernels.remapScaleF32(scaleIn, { transform }).readAs(Uint32Array);
-    const remapEncoder = device.createCommandEncoder();
-    const remapOut = kernels.remapScaleF32(scaleIn, { transform, encoder: remapEncoder });
-    device.queue.submit([remapEncoder.finish()]);
-    arraysEqualU32(await remapOut.readAs(Uint32Array), remapSelf, "encoder remapScaleF32 must match self-submitted remap");
 
-    const many = compute.createStorageBuffer({ data: new Float32Array(1025).fill(1) });
-    const sclOut = compute.createStorageBuffer({ byteLength: 16, copySrc: true });
-    const dotOut = compute.createStorageBuffer({ byteLength: 4, copySrc: true });
+    const many = gpu("f32", [1025], new Float32Array(1025).fill(1));
+    const sclOut = gpu("f32", [4], [0, 0, 0, 0]);
+    const dotOut = gpu("f32", [], [0]);
     const calls = 64;
     const createBuffer = device.createBuffer;
     let created = 0;
     const countCreated = (run) => { created = 0; device.createBuffer = function (descriptor) { created++; return createBuffer.call(this, descriptor); }; try { run(); } finally { device.createBuffer = createBuffer; } return created; };
-    kernels.sclF32(a, 2, { out: sclOut });
-    assert.strictEqual(countCreated(() => { for (let i = 0; i < calls; i++) kernels.sclF32(a, i, { out: sclOut }); }), 0, "self-submitted calls must reuse their parameter block");
+    kernels.scl(a, 2, { out: sclOut });
+    assert.strictEqual(countCreated(() => { for (let i = 0; i < calls; i++) kernels.scl(a, i, { out: sclOut }); }), 0, "self-submitted calls must reuse their parameter block");
     const dotEncoder = device.createCommandEncoder();
-    kernels.dotF32(many, many, { out: dotOut, encoder: dotEncoder });
-    assert.strictEqual(countCreated(() => { for (let i = 0; i < calls; i++) kernels.dotF32(many, many, { out: dotOut, encoder: dotEncoder }); }), 0, "encoder-only calls must reuse pooled temporaries");
+    kernels.dot(many, many, { out: dotOut, encoder: dotEncoder });
+    assert.strictEqual(countCreated(() => { for (let i = 0; i < calls; i++) kernels.dot(many, many, { out: dotOut, encoder: dotEncoder }); }), 0, "encoder-only calls must reuse pooled temporaries");
     device.queue.submit([dotEncoder.finish()]);
-    numberApproxEqual((await dotOut.readAs(Float32Array))[0], 1025, 1e-3, "encoder-only dotF32");
+    numberApproxEqual((await read(dotOut))[0], 1025, 1e-3, "encoder-only dot");
     const alignment = Math.max(device.limits.minStorageBufferOffsetAlignment, device.limits.minUniformBufferOffsetAlignment);
     let blocks = 0;
     for (let regions = 0, size = 4096; regions < calls; size = Math.min(2 * size, 65536)) { regions += Math.floor(size / alignment); blocks++; }
     const sclEncoder = device.createCommandEncoder();
-    const encoderBlocks = countCreated(() => { for (let i = 0; i < calls; i++) kernels.sclF32(a, i, { out: sclOut, encoder: sclEncoder }); });
+    const encoderBlocks = countCreated(() => { for (let i = 0; i < calls; i++) kernels.scl(a, i, { out: sclOut, encoder: sclEncoder }); });
     assert.ok(encoderBlocks >= 1 && encoderBlocks <= blocks, `encoder parameters must use at most ${blocks} blocks for ${calls} calls (got ${encoderBlocks})`);
     device.queue.submit([sclEncoder.finish()]);
-    assert.deepStrictEqual(Array.from(await sclOut.readAs(Float32Array)), [calls - 1, 2 * (calls - 1), 3 * (calls - 1), 4 * (calls - 1)], "last encoder scalar wins");
+    assert.deepStrictEqual(Array.from(await read(sclOut)), [calls - 1, 2 * (calls - 1), 3 * (calls - 1), 4 * (calls - 1)], "last encoder scalar wins");
 }
 
-// 23) Tiled row-major GEMM for f32, u32, and c64, including alpha/beta and k=0.
-{
-    const af = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, 4, 5, 6]) });
-    const bf = compute.createStorageBuffer({ data: new Float32Array([1, 2, 3, 4, 5, 6]) });
-    const cf = compute.createStorageBuffer({ data: new Float32Array([1, 1, 1, 1]), copySrc: true });
-    arraysApproxEqual(await kernels.gemmF32(af, bf, 2, 2, 3, { out: cf, alpha: 2, beta: 3 }).readAs(Float32Array), new Float32Array([47, 59, 101, 131]), 1e-5, "gemmF32 alpha/beta");
-    const zeroF = compute.createStorageBuffer({ byteLength: 0 });
-    const c0f = compute.createStorageBuffer({ data: new Float32Array([2, -3]), copySrc: true });
-    arraysApproxEqual(await kernels.gemmF32(zeroF, zeroF, 1, 2, 0, { out: c0f, beta: -2 }).readAs(Float32Array), new Float32Array([-4, 6]), 1e-6, "gemmF32 k=0");
-
-    const au = compute.createStorageBuffer({ data: new Uint32Array([1, 2, 3, 4, 5, 6]) });
-    const bu = compute.createStorageBuffer({ data: new Uint32Array([1, 2, 3, 4, 5, 6]) });
-    const cu = compute.createStorageBuffer({ data: new Uint32Array([1, 1, 1, 1]), copySrc: true });
-    arraysEqualU32(await kernels.gemmU32(au, bu, 2, 2, 3, { out: cu, alpha: 2, beta: 3 }).readAs(Uint32Array), new Uint32Array([47, 59, 101, 131]), "gemmU32 alpha/beta");
-    const zeroU = compute.createStorageBuffer({ byteLength: 0 });
-    const c0u = compute.createStorageBuffer({ data: new Uint32Array([2, 3]), copySrc: true });
-    arraysEqualU32(await kernels.gemmU32(zeroU, zeroU, 1, 2, 0, { out: c0u, beta: 4 }).readAs(Uint32Array), new Uint32Array([8, 12]), "gemmU32 k=0");
-
-    const ac = compute.createStorageBuffer({ data: new Float32Array([1, 1, 2, -1]) });
-    const bc = compute.createStorageBuffer({ data: new Float32Array([3, 2, -1, 4]) });
-    const cc = compute.createStorageBuffer({ data: new Float32Array([2, -1]), copySrc: true });
-    arraysApproxEqual(await kernels.gemmC64(ac, bc, 1, 1, 2, { out: cc, alpha: [2, -1], beta: [-1, 0.5] }).readAs(Float32Array), new Float32Array([18.5, 27]), 1e-5, "gemmC64 alpha/beta");
-    const zeroC = compute.createStorageBuffer({ byteLength: 0 });
-    const c0c = compute.createStorageBuffer({ data: new Float32Array([2, 3]), copySrc: true });
-    arraysApproxEqual(await kernels.gemmC64(zeroC, zeroC, 1, 1, 0, { out: c0c, beta: [0, 2] }).readAs(Float32Array), new Float32Array([-6, 4]), 1e-6, "gemmC64 k=0");
-
-    // A rectangular, non-tile-aligned product for every dtype.
-    const rectA = new Float32Array(3 * 5); const rectB = new Float32Array(5 * 7);
-    for (let i = 0; i < rectA.length; i++) rectA[i] = (i % 5) - 2;
-    for (let i = 0; i < rectB.length; i++) rectB[i] = (i % 7) * 0.25 - 0.5;
-    const want = new Float32Array(21);
-    for (let i = 0; i < 3; i++) for (let j = 0; j < 7; j++) for (let q = 0; q < 5; q++) want[i * 7 + j] += rectA[i * 5 + q] * rectB[q * 7 + j];
-    arraysApproxEqual(await kernels.gemmF32(compute.createStorageBuffer({ data: rectA }), compute.createStorageBuffer({ data: rectB }), 3, 7, 5).readAs(Float32Array), want, 1e-5, "rectangular gemmF32");
-    const rectAU = Uint32Array.from(rectA, x => (x + 2) >>> 0); const rectBU = Uint32Array.from(rectB, x => Math.round((x + 0.5) * 4) >>> 0);
-    const wantU = new Uint32Array(21);
-    for (let i = 0; i < 3; i++) for (let j = 0; j < 7; j++) for (let q = 0; q < 5; q++) wantU[i * 7 + j] = (wantU[i * 7 + j] + Math.imul(rectAU[i * 5 + q], rectBU[q * 7 + j])) >>> 0;
-    arraysEqualU32(await kernels.gemmU32(compute.createStorageBuffer({ data: rectAU }), compute.createStorageBuffer({ data: rectBU }), 3, 7, 5).readAs(Uint32Array), wantU, "rectangular gemmU32");
-    const rectAC = new Float32Array(30); const rectBC = new Float32Array(70); const wantC = new Float32Array(42);
-    for (let i = 0; i < 15; i++) { rectAC[2 * i] = rectA[i]; rectAC[2 * i + 1] = (i % 3) - 1; }
-    for (let i = 0; i < 35; i++) { rectBC[2 * i] = rectB[i]; rectBC[2 * i + 1] = (i % 2) * 0.5; }
-    for (let i = 0; i < 3; i++) for (let j = 0; j < 7; j++) for (let q = 0; q < 5; q++) { const ai = 2 * (i * 5 + q); const bi = 2 * (q * 7 + j); const ci = 2 * (i * 7 + j); wantC[ci] += rectAC[ai] * rectBC[bi] - rectAC[ai + 1] * rectBC[bi + 1]; wantC[ci + 1] += rectAC[ai] * rectBC[bi + 1] + rectAC[ai + 1] * rectBC[bi]; }
-    arraysApproxEqual(await kernels.gemmC64(compute.createStorageBuffer({ data: rectAC }), compute.createStorageBuffer({ data: rectBC }), 3, 7, 5).readAs(Float32Array), wantC, 1e-4, "rectangular gemmC64");
-
-    assert.throws(() => kernels.gemmF32(af, bf, -1, 2, 3), /m must/);
-    assert.throws(() => kernels.gemmF32(af, bf, 1.5, 2, 3), /m must/);
-    assert.throws(() => kernels.gemmF32(compute.createStorageBuffer({ byteLength: 4 }), bf, 2, 2, 3), /a has insufficient/);
-    assert.throws(() => kernels.gemmF32(af, compute.createStorageBuffer({ byteLength: 4 }), 2, 2, 3), /b has insufficient/);
-    assert.throws(() => kernels.gemmF32(af, bf, 2, 2, 3, { out: compute.createStorageBuffer({ byteLength: 4 }) }), /out has insufficient/);
-    assert.throws(() => kernels.gemmU32(au, bu, 2, -1, 3), /n must/);
-    assert.throws(() => kernels.gemmU32(compute.createStorageBuffer({ byteLength: 4 }), bu, 2, 2, 3), /a has insufficient/);
-    assert.throws(() => kernels.gemmU32(au, compute.createStorageBuffer({ byteLength: 4 }), 2, 2, 3), /b has insufficient/);
-    assert.throws(() => kernels.gemmU32(au, bu, 2, 2, 3, { out: compute.createStorageBuffer({ byteLength: 4 }) }), /out has insufficient/);
-    assert.throws(() => kernels.gemmC64(ac, bc, 1, 1, 1.5), /k must/);
-    assert.throws(() => kernels.gemmC64(compute.createStorageBuffer({ byteLength: 8 }), bc, 1, 1, 2), /a has insufficient/);
-    assert.throws(() => kernels.gemmC64(ac, compute.createStorageBuffer({ byteLength: 8 }), 1, 1, 2), /b has insufficient/);
-    assert.throws(() => kernels.gemmC64(ac, bc, 1, 1, 2, { out: compute.createStorageBuffer({ byteLength: 4 }) }), /divisible|insufficient/);
-    assert.throws(() => kernels.gemmF32(af, bf, 2, 2, 3, { out: af }), /distinct/);
-    assert.throws(() => kernels.gemmU32(au, bu, 2, 2, 3, { out: bu }), /distinct/);
-    assert.throws(() => kernels.gemmC64(ac, bc, 1, 1, 2, { out: bc }), /distinct/);
-    assert.strictEqual(kernels.gemmF32(zeroF, compute.createStorageBuffer({ byteLength: 21 * 4 }), 0, 7, 3).byteLength, 0, "gemm m=0 output");
-}
-
-// 24) Cleanup releases the shared compute context before its browser GPU device.
+// 18) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

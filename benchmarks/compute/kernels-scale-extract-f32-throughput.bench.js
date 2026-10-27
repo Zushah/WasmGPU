@@ -11,18 +11,18 @@ export default {
     subsystem: "compute",
     type: "throughput",
     unit: "elements/s",
-    description: "Steady-state ComputeKernels.extractScaleValuesF32 component extraction excluding readback and including GPU completion.",
+    description: "Steady-state ComputeKernels.scaleExtract component extraction excluding readback and including GPU completion.",
     sizes: { quick: [65_536, 1_048_576], full: [65_536, 1_048_576, 8_388_608] },
     gpu: true,
     setup({ compute }, size) {
         return {
-            input: compute.createStorageBuffer({ data: makeF32(size * 4) }),
-            values: compute.createStorageBuffer({ byteLength: size * 4 }),
-            flags: compute.createStorageBuffer({ byteLength: size * 4 })
+            input: compute.ndarray.fromArray("f32", [size, 4], makeF32(size * 4), { residency: "gpu" }),
+            values: compute.ndarray.empty("f32", { shape: [size] }, { residency: "gpu" }),
+            flags: compute.ndarray.empty("u32", { shape: [size] }, { residency: "gpu" })
         };
     },
-    run(state, { compute }, size) {
-        compute.kernels.extractScaleValuesF32(state.input, { count: size, componentCount: 4, componentIndex: 3, stride: 4, values: state.values, flags: state.flags });
+    run(state, { compute }) {
+        compute.kernels.scaleExtract(state.input, { componentIndex: 3, outValues: state.values, outFlags: state.flags });
     },
     operations(size) { return size; },
     workload(size) { return { elements: size, componentCount: 4, componentIndex: 3, stride: 4 }; },
