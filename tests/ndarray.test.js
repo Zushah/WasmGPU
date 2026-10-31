@@ -393,7 +393,7 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     halves.destroy();
 }
 
-// 18) resize reproduces PyTorch's bilinear and nearest-exact conventions on CPU and GPU.
+// 18) resize reproduces PyTorch's bilinear, bicubic, antialiased, and nearest-exact conventions on CPU and GPU.
 {
     const { arraysApproxEqual } = createApproxHelpers(1e-12);
     const x = compute.ndarray.fromArray("f64", [2, 3], [1, 2, 4, 8, 16, 32]);
@@ -417,8 +417,92 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     const infinite = compute.ndarray.fromArray("f32", [1, 3], [Infinity, 2, -Infinity]);
     assert.deepStrictEqual([Array.from(compute.ndarray.resize(infinite, { axes: [0, 1], size: [1, 3] }).data()), await readGPU(compute.ndarray.resize(compute.ndarray.toGPU(infinite), { axes: [0, 1], size: [1, 3] }))], [[Infinity, 2, -Infinity], [Infinity, 2, -Infinity]], "Same-size linear resizes must reproduce infinities exactly on CPU and GPU");
     assert.throws(() => compute.ndarray.resize(x, { axes: [0, 1], size: [2, 2], method: "nearest", alignCorners: true }), /alignCorners applies only/);
-    x.destroy();
-    g.destroy();
+
+    // Keys cubic convolution and antialiasing: torch.nn.functional.interpolate(x[None, None], ...) in float64 (PyTorch 2.15.0).
+    const y = compute.ndarray.fromArray("f64", [6, 7], [-5, -2, 1, 4, -4, -1, 2, 2.25, 5.25, -2.75, 0.25, 3.25, -4.75, -1.75, -1.5, 1.5, 4.5, -3.5, -0.5, 2.5, 5.5, 5.75, -2.25, 0.75, 3.75, -4.25, -1.25, 1.75, 2, 5, -3, 0, 3, 6, -2, -1.75, 1.25, 4.25, -3.75, -0.75, 2.25, 5.25]);
+    const gy = compute.ndarray.toGPU(compute.ndarray.cast(y, "f32"));
+    const pil = { antialias: true, cubicCoefficient: -0.5, boundary: "renormalize" };
+    const cases = [
+        // mode="bicubic", align_corners=False
+        [x, g, { size: [4, 5], method: "cubic" }, [0.23659374999999988, 0.3255781249999993, 0.5234375, 0.8626249999999995, 1.0971250000000001, 2.3376874999999986, 3.2169062499999934, 5.171875, 8.523249999999996, 10.840250000000003, 5.798312499999996, 7.979093749999984, 12.828125, 21.140749999999986, 26.887750000000004, 7.899406249999996, 10.87042187499998, 17.4765625, 28.801374999999982, 36.63087500000001]],
+        // mode="bicubic", align_corners=True
+        [x, g, { size: [4, 5], method: "cubic", alignCorners: true }, [1, 1.3125, 2, 3.09375, 4, 3.203703703703705, 4.2048611111111125, 6.40740740740741, 9.911458333333337, 12.81481481481482, 5.796296296296296, 7.607638888888888, 11.592592592592592, 17.932291666666664, 23.185185185185183, 8, 10.5, 16, 24.75, 32]],
+        // mode="bilinear", antialias=True
+        [y, gy, { size: [3, 4], method: "linear", antialias: true, boundary: "renormalize" }, [-0.04591836734693887, 0.6357142857142855, -0.2557142857142858, -0.45408163265306134, 1.6011904761904763, 0.8849999999999996, -0.35999999999999993, 1.3988095238095237, 1.5272108843537415, 0.5057142857142857, 0.5571428571428572, 2.316326530612245]],
+        // mode="bicubic", antialias=True (shrinking, mixed shrinking and growing, and growing)
+        [y, gy, { size: [3, 4], method: "cubic", ...pil }, [-0.21213034140727394, 0.7781414634230026, -0.2687336706003044, -0.7522300722759209, 1.8011447399143412, 0.9072768685702122, -0.608531371573258, 1.577350579208486, 1.674737104161587, 0.3228722245381452, 0.5403854038540389, 2.579408462177283]],
+        [y, gy, { size: [2, 9], method: "cubic", ...pil }, [-0.3500856431018373, 0.9468984962406017, 1.139276947512815, 0.5280394917334489, 0.769736842105263, -0.2727330156667386, -1.3686105696339605, -0.5808270676691739, 1.6617486764247904, 1.7716054188726251, 1.8078007518796988, 1.4101418670132115, 0.5227330156667387, -0.519736842105263, -0.5407100570355938, 1.5140693812721093, 2.6527255639097747, 1.779391155403301]],
+        [x, g, { size: [4, 5], method: "cubic", ...pil }, [0.35349611542730275, 0.48222124670763805, 0.7647058823529409, 1.2783143107989463, 1.5871254162042172, 2.265094339622641, 3.089925373134328, 4.9, 8.191044776119405, 10.169811320754716, 6.055660377358489, 8.260820895522386, 13.1, 21.89850746268657, 27.188679245283016, 7.9672586015538265, 10.868525021949075, 17.235294117647058, 28.811237928007028, 35.771365149833514]],
+        // WasmGPU semantics without an external reference: antialiased cubic with edge boundaries and a = -0.75, and cubic constant and reflect boundaries.
+        [y, gy, { size: [3, 4], method: "cubic", antialias: true }, [-0.5900795351324429, 1.0259885338889903, -0.4138512730728705, -0.5895200605075008, 2.1802194027712667, 0.7502216434582966, -0.5687136386843749, 1.5005623233773508, 1.58731217564919, 0.3458480926264374, 0.38310126656889043, 2.632468665758321]],
+        [x, g, { size: [4, 5], method: "cubic", boundary: "constant", value: -2 }, [-0.69978125, -0.23853124999999986, -0.3828125, -0.1549999999999998, -0.6027499999999999, 2.0438437499999997, 4.54665625, 6.2265625, 11.6096875, 10.248375, 5.189031249999999, 10.38771875, 14.8671875, 27.7158125, 25.317625, 4.316593749999999, 9.07759375, 13.3984375, 25.53325, 23.43175]],
+        [x, g, { size: [4, 5], method: "cubic", boundary: "reflect" }, [2.16075, 2.3785000000000003, 4.1875, 7.353249999999999, 8.090250000000001, 2.16075, 2.3785000000000003, 4.1875, 7.353249999999999, 8.090250000000001, 7.12725, 7.845500000000001, 13.8125, 24.254749999999998, 26.685750000000006, 7.12725, 7.845500000000001, 13.8125, 24.254749999999998, 26.685750000000006]]
+    ];
+    for (const [cpu, gpu, options, expected] of cases) {
+        arraysApproxEqual(Array.from(compute.ndarray.resize(cpu, { axes: [0, 1], ...options }).data()), expected, 1e-12, `CPU resize ${JSON.stringify(options)}`);
+        arraysApproxEqual(await readGPU(compute.ndarray.resize(gpu, { axes: [0, 1], ...options })), expected, 1e-5, `GPU resize ${JSON.stringify(options)}`);
+    }
+
+    for (const a of [y, gy]) assert.deepStrictEqual(compute.ndarray.resize(a, { axes: [0, 1], size: [3, 0], method: "cubic", antialias: true }).shape, [3, 0], `${a.residency} antialiased resizing to an empty axis`);
+
+    // Exact samples pass through bit-exactly, cubic overshoot saturates integer outputs, and float outputs are not clamped.
+    const exact = compute.ndarray.fromArray("f32", [1, 4], [Infinity, -0, 2, -Infinity]);
+    const same = { axes: [0, 1], size: [1, 4], method: "cubic" };
+    for (const values of [Array.from(compute.ndarray.resize(exact, same).data()), await readGPU(compute.ndarray.resize(compute.ndarray.toGPU(exact), same))]) assert.ok(values.length === 4 && values.every((v, i) => Object.is(v, [Infinity, -0, 2, -Infinity][i])), `Same-size cubic resizes must reproduce samples exactly (got ${values})`);
+    const ramp = compute.ndarray.fromArray("f64", [1, 3], [Math.PI, -Math.E, 1 + 2 ** -52]);
+    const corner = Array.from(compute.ndarray.resize(ramp, { axes: [0, 1], size: [1, 5], method: "cubic", alignCorners: true }).data());
+    assert.deepStrictEqual([corner[0], corner[2], corner[4]], [Math.PI, -Math.E, 1 + 2 ** -52], "Corner-aligned cubic outputs on samples reproduce them exactly");
+    const step = compute.ndarray.fromArray("u8", [1, 6], [0, 0, 0, 255, 255, 255]);
+    const overshoot = { axes: [0, 1], size: [1, 8], method: "cubic" };
+    assert.deepStrictEqual(Array.from(compute.ndarray.resize(step, overshoot).data()), [0, 0, 0, 27, 228, 255, 255, 255], "Cubic overshoot saturates u8 outputs");
+    assert.deepStrictEqual(await readGPU(compute.ndarray.resize(compute.ndarray.toGPU(step), overshoot)), [0, 0, 0, 27, 228, 255, 255, 255]);
+    assert.deepStrictEqual(Array.from(compute.ndarray.resize(step, { ...overshoot, dtype: "f64" }).data()), [0, 0, -16.80908203125, 26.6455078125, 228.3544921875, 271.80908203125, 255, 255], "Float outputs keep cubic overshoot");
+
+    // Resizing is separable: one call equals resizing x and then y, bitwise on the CPU, including the two-pass path of wide filters.
+    const field = compute.ndarray.fromArray("f64", [64, 64], Array.from({ length: 4096 }, (_, i) => Math.sin(0.37 * i) * 10 + (i % 7)));
+    const fieldGPU = compute.ndarray.toGPU(compute.ndarray.cast(field, "f32"));
+    for (const [a, ga, size, options] of [[x, g, [4, 5], { method: "cubic", boundary: "constant", value: 3 }], [y, gy, [4, 9], { method: "linear", boundary: "reflect" }], [field, fieldGPU, [5, 5], { method: "cubic", antialias: true }]]) {
+        const once = Array.from(compute.ndarray.resize(a, { axes: [0, 1], size, ...options }).data());
+        const twice = Array.from(compute.ndarray.resize(compute.ndarray.resize(a, { axes: [0, 1], size: [a.shape[0], size[1]], ...options }), { axes: [0, 1], size, ...options }).data());
+        assert.ok(once.every((v, i) => Object.is(v, twice[i])), `CPU resize ${JSON.stringify(options)} must equal its separable composition bitwise`);
+        arraysApproxEqual(await readGPU(compute.ndarray.resize(ga, { axes: [0, 1], size, ...options })), once, 1e-5, `GPU resize ${JSON.stringify(options)}`);
+    }
+
+    // Complex arrays resize componentwise with real weights; real inputs may produce complex outputs with +0 imaginary parts.
+    const c = compute.ndarray.fromArray("c128", [2, 3], [1, -6, 2.5, 5, -3, 4, 4, -3, 5, 2, -6, 1]);
+    const complexOptions = { axes: [0, 1], size: [3, 4], method: "cubic", boundary: "constant" };
+    const both = valuesOf(compute.ndarray.resize(c, { ...complexOptions, value: [1, -2] }));
+    const parts = [valuesOf(compute.ndarray.resize(compute.ndarray.real(c), { ...complexOptions, value: 1 })), valuesOf(compute.ndarray.resize(compute.ndarray.imag(c), { ...complexOptions, value: -2 }))];
+    assert.ok(both.every(([re, im], i) => Object.is(re, parts[0][i]) && Object.is(im, parts[1][i])), "c128 resizing equals separate resizes of its real and imaginary parts");
+    const c64 = compute.ndarray.cast(c, "c64"), c64GPU = compute.ndarray.toGPU(c64);
+    arraysApproxEqual((await readGPU(compute.ndarray.resize(c64GPU, { ...complexOptions, value: [1, -2] }))).flat(), valuesOf(compute.ndarray.resize(c64, { ...complexOptions, value: [1, -2] })).flat(), 1e-5, "GPU c64 resize must stay within f32 tolerance");
+    const promoted = [valuesOf(compute.ndarray.resize(exact, { axes: [0, 1], size: [2, 3], dtype: "c64" })), await readGPU(compute.ndarray.resize(compute.ndarray.toGPU(compute.ndarray.slice(exact, [null, [1, 3]])), { axes: [0, 1], size: [2, 3], method: "cubic", dtype: "c64" }))];
+    assert.ok(promoted.every((values) => values.every(([, im]) => Object.is(im, 0))), "Real inputs resized into c64 have +0 imaginary parts on the CPU and GPU");
+    const nearestOptions = { axes: [0, 1], size: [3, 5], method: "nearest" };
+    assert.deepStrictEqual(await bytesOf(compute.ndarray.resize(c64GPU, nearestOptions)), await bytesOf(compute.ndarray.resize(c64, nearestOptions)), "c64 nearest resizing is bit-identical on the CPU and GPU");
+    const wide = compute.ndarray.fromArray("c128", [2, 2], [Math.PI, -Math.E, 1e300, -0, NaN, Infinity, 1 + 2 ** -52, Number.MIN_VALUE]);
+    for (const a of [wide, ramp]) assert.deepStrictEqual(await bytesOf(compute.ndarray.resize(compute.ndarray.toGPU(a), nearestOptions)), await bytesOf(compute.ndarray.resize(a, nearestOptions)), `GPU ${a.dtype} nearest resizing is a lossless gather`);
+    assert.throws(() => compute.ndarray.resize(c64, { axes: [0, 1], size: [3, 3], dtype: "f32" }), /compute\.ndarray\.resize: resizing c64 into f32 would discard imaginary parts; resize compute\.ndarray\.real\(\) or compute\.ndarray\.imag\(\) views instead/);
+    assert.throws(() => compute.ndarray.resize(compute.ndarray.toGPU(wide), { axes: [0, 1], size: [3, 3] }), /GPU linear and cubic resizing computes in f32 and does not support f64 or c128 inputs or outputs; use method "nearest" or a CPU array/);
+    assert.throws(() => compute.ndarray.resize(compute.ndarray.toGPU(step), { ...nearestOptions, dtype: "c128" }), /compute\.ndarray\.resize: c128 <-> integer casts are not supported on the GPU/, "GPU nearest resizing follows the GPU cast dtype rules");
+
+    // Validation follows the documented order and messages.
+    const invalid = [
+        [{ method: "bicubic" }, /method must be "nearest", "linear", or "cubic" \(got bicubic\)/],
+        [{ method: "nearest", alignCorners: true }, /alignCorners applies only to methods "linear" and "cubic"/],
+        [{ antialias: 1 }, /antialias must be a boolean/],
+        [{ method: "nearest", antialias: true }, /antialias applies only to methods "linear" and "cubic"/],
+        [{ antialias: true, alignCorners: true }, /antialias cannot be combined with alignCorners/],
+        [{ cubicCoefficient: -0.5 }, /cubicCoefficient applies only to method "cubic"/],
+        [{ method: "cubic", cubicCoefficient: NaN }, /cubicCoefficient must be a finite number \(got NaN\)/],
+        [{ boundary: "clamp" }, /boundary must be "edge", "constant", "reflect", "symmetric", "wrap", or "renormalize" \(got clamp\)/],
+        [{ boundary: "renormalize", value: 1 }, /value applies only to boundary "constant"/],
+        [{ boundary: "constant", value: [1, 2] }, /a \[re, im\] value requires a complex input \(got f64\)/],
+        [{ boundary: "constant", value: "1" }, /value must be a number/]
+    ];
+    for (const [options, message] of invalid) assert.throws(() => compute.ndarray.resize(x, { axes: [0, 1], size: [3, 3], ...options }), message, JSON.stringify(options));
+    assert.throws(() => compute.ndarray.resize(c, { axes: [0, 1], size: [3, 3], boundary: "constant", value: [1, 2, 3] }), /a c128 value must be a number or a \[re, im\] tuple of numbers/);
+    for (const a of [x, g, y, gy, exact, ramp, step, field, fieldGPU, c, c64, c64GPU, wide]) a.destroy();
     hwc.destroy();
     infinite.destroy();
 }
@@ -427,10 +511,13 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
 {
     const bitsOf = async (a) => { const cpu = await compute.ndarray.toCPU(a); try { return Array.from(new Uint8Array(cpu.data().buffer, cpu.data().byteOffset, cpu.data().byteLength)); } finally { cpu.destroy(); } };
     const g = compute.ndarray.fromArray("f32", [3, 4], [0.5, -1.5, 2.5, 300.7, -7, 8.25, NaN, Infinity, 1e-3, -0, 42, -42], { residency: "gpu" });
+    const field = compute.ndarray.fromArray("f32", [32, 32], Array.from({ length: 1024 }, (_, i) => Math.cos(0.11 * i) * (i % 13)), { residency: "gpu" });
     const ops = [
         (options) => compute.ndarray.cast(compute.ndarray.transpose(g), "i16", options),
         (options) => compute.ndarray.pad(g, { width: [[1, 0], [2, 1]], mode: "reflect", ...options }),
-        (options) => compute.ndarray.resize(g, { axes: [0, 1], size: [5, 7], ...options })
+        (options) => compute.ndarray.resize(g, { axes: [0, 1], size: [5, 7], ...options }),
+        // Antialiased cubic 32 -> 5 and 32 -> 3 gathers up to 26 x 32 taps per output, so it runs as two passes through a scratch temporary.
+        (options) => compute.ndarray.resize(field, { axes: [0, 1], size: [5, 3], method: "cubic", antialias: true, ...options })
     ];
     const expected = [];
     for (const op of ops) expected.push(await bitsOf(op({})));
@@ -467,6 +554,7 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     device.queue.submit([repeat.finish()]);
     assert.deepStrictEqual(await bitsOf(out), expected[0], "repeated encoder-mode cast");
     g.destroy();
+    field.destroy();
     shared.destroy();
     out.destroy();
     kernelIn.destroy();
@@ -651,16 +739,18 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     broadcast.destroy();
 }
 
-// 25) normalize and resize reject complex inputs and outputs before validating their other parameters.
+// 25) normalize rejects complex inputs and outputs before validating its other parameters, and resize rejects complex-to-real outputs.
 {
     const c = compute.ndarray.zeros("c64", { shape: [2, 2] });
     const r = compute.ndarray.zeros("f32", { shape: [2, 2] }, { residency: "gpu" });
     assert.throws(() => compute.ndarray.normalize(c, { scale: 2 }), /compute\.ndarray\.normalize: complex dtypes \(c64, c128\) are not supported$/);
     assert.throws(() => compute.ndarray.normalize(r, { mean: [1, 2, 3], std: 1, dtype: "c128" }), /compute\.ndarray\.normalize: complex dtypes \(c64, c128\) are not supported$/);
-    assert.throws(() => compute.ndarray.resize(c, { axes: [0, 1], size: [3, 3] }), /compute\.ndarray\.resize: complex dtypes \(c64, c128\) are not supported yet/);
-    assert.throws(() => compute.ndarray.resize(r, { axes: [0, 0], size: [3, 3], dtype: "c64" }), /compute\.ndarray\.resize: complex dtypes \(c64, c128\) are not supported yet/);
+    const gc = compute.ndarray.toGPU(c);
+    assert.throws(() => compute.ndarray.resize(c, { axes: [0, 1], size: [3, 3], dtype: "u8" }), /compute\.ndarray\.resize: resizing c64 into u8 would discard imaginary parts/);
+    assert.throws(() => compute.ndarray.resize(gc, { axes: [0, 1], size: [3, 3], method: "nearest", dtype: "f64" }), /compute\.ndarray\.resize: resizing c64 into f64 would discard imaginary parts/);
     c.destroy();
     r.destroy();
+    gc.destroy();
 }
 
 // 26) Cleanup releases the shared compute context before its browser GPU device.

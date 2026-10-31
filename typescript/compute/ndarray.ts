@@ -782,15 +782,19 @@ export type NdarrayNormalizeOptions = NdarrayOperationOptions & ({ scale?: Ndarr
     dtype?: DType;
 };
 
-export type NdarrayResizeMethod = "nearest" | "linear";
+export type NdarrayResizeMethod = "nearest" | "linear" | "cubic";
+
+export type NdarrayResizeBoundary = NdarrayPadMode | "renormalize";
 
 export type NdarrayResizeOptions = NdarrayOperationOptions & {
     axes: readonly [number, number];
     size: readonly [number, number];
     method?: NdarrayResizeMethod;
     alignCorners?: boolean;
-    boundary?: NdarrayPadMode;
-    value?: number;
+    antialias?: boolean;
+    cubicCoefficient?: number;
+    boundary?: NdarrayResizeBoundary;
+    value?: number | ComplexScalar;
     dtype?: DType;
 };
 
@@ -844,7 +848,8 @@ class WasmScratch {
         assert(ptr !== 0, `compute.ndarray: WebAssembly scratch allocation failed (${n} u32 words)`);
         this.releases.push(() => wasm.freeU32(ptr, n));
         const view = wasm.u32view(ptr, values.length);
-        for (let i = 0; i < values.length; i++) view[i] = values[i]! >>> 0;
+        if (ArrayBuffer.isView(values)) view.set(values);
+        else for (let i = 0; i < values.length; i++) view[i] = values[i]! >>> 0;
         return ptr;
     }
 
@@ -853,7 +858,7 @@ class WasmScratch {
         const ptr = wasm.allocF64(n);
         assert(ptr !== 0, `compute.ndarray: WebAssembly scratch allocation failed (${n} f64 values)`);
         this.releases.push(() => wasm.freeF64(ptr, n));
-        wasm.f64view(ptr, values.length).set(Array.from(values));
+        wasm.f64view(ptr, values.length).set(values);
         return ptr;
     }
 
@@ -916,47 +921,207 @@ const cpuAffine = (dst: CPUndarray, src: CPUndarray, axis: number, a: ReadonlyAr
     });
 };
 
-type ResizeTable = { i0: Int32Array; i1: Int32Array; w0: Float64Array; w1: Float64Array };
+type ResizeAxisSpec = { method: NdarrayResizeMethod; alignCorners: boolean; antialias: boolean; cubicCoefficient: number; boundary: NdarrayResizeBoundary };
 
-const cpuResize = (dst: CPUndarray, src: CPUndarray, axes: readonly [number, number], tables: readonly [ResizeTable, ResizeTable], linear: boolean, value: number, op: string): void => {
+type ResizeTable = { offsets: Int32Array; index: Int32Array; weight: Float64Array | Float32Array; maxTaps: number; words?: Uint32Array };
+
+const RESIZE_BOUNDARIES: ReadonlyArray<string> = ["edge", "constant", "reflect", "symmetric", "wrap", "renormalize"];
+
+const nearestResizeIndex = (d: number, nIn: number, nOut: number): number => {
+    const product = (2 * d + 1) * nIn, divisor = 2 * nOut;
+    const quotient = Math.floor(product / divisor);
+    const index = Number.isSafeInteger(product) ? ((quotient * divisor > product) ? quotient - 1 : quotient) : Number((BigInt(2 * d + 1) * BigInt(nIn)) / BigInt(divisor));
+    return Math.min(index, nIn - 1);
+};
+
+const resizeCoordinate = (d: number, nIn: number, nOut: number, alignCorners: boolean): { i: number; t: number } => {
+    if (alignCorners && nOut === 1) return { i: 0, t: 0 };
+    const den = alignCorners ? nOut - 1 : 2 * nOut;
+    const product = alignCorners ? d * (nIn - 1) : (2 * d + 1) * nIn;
+    if (Number.isSafeInteger(product) && product + den <= Number.MAX_SAFE_INTEGER) {
+        const num = alignCorners ? product : product - nOut;
+        let i = Math.floor(num / den), r = num - i * den;
+        if (r < 0) { i--; r += den; } else if (r >= den) { i++; r -= den; }
+        return { i, t: r / den };
+    }
+    const num = alignCorners ? BigInt(d) * BigInt(nIn - 1) : BigInt(2 * d + 1) * BigInt(nIn) - BigInt(nOut), wide = BigInt(den);
+    let i = num / wide, r = num - i * wide;
+    if (r < 0n) { i -= 1n; r += wide; }
+    return { i: Number(i), t: Number(r) / den };
+};
+
+const linearWeight = (x: number): number => { x = Math.abs(x); return (x < 1) ? 1 - x : 0; };
+
+const cubicWeight = (x: number, a: number): number => {
+    x = Math.abs(x);
+    if (x <= 1) return (x - 1) * ((a + 2) * x * x - x - 1);
+    if (x < 2) return a * (x - 1) * (x - 2) * (x - 2);
+    return 0;
+};
+
+const resizeTaps = (i: number, t: number, fs: number, cubic: boolean, a: number, ks: Float64Array, ws: Float64Array): number => {
+    const support = cubic ? 2 : 1;
+    let n = 0;
+    if (fs === 1) {
+        if (t === 0) { ks[0] = i; ws[0] = 1; return 1; }
+        for (let k = i - support + 1; k <= i + support; k++, n++) { const x = (k - i) - t; ks[n] = k; ws[n] = cubic ? cubicWeight(x, a) : linearWeight(x); }
+        return n;
+    }
+    const center = i + t, reach = support * fs;
+    for (let k = Math.ceil(center - reach), end = Math.floor(center + reach); k <= end; k++, n++) { const x = ((k - i) - t) / fs; ks[n] = k; ws[n] = cubic ? cubicWeight(x, a) : linearWeight(x); }
+    return n;
+};
+
+class ResizeTableWriter {
+    private readonly n: number;
+    private readonly f32: boolean;
+    private capacity: number = 0;
+    private words: Uint32Array | undefined;
+    private offsets: Int32Array;
+    private index: Int32Array = new Int32Array(0);
+    private weight: Float64Array | Float32Array = new Float64Array(0);
+    private count: number = 0;
+    private rows: number = 0;
+    private maxTaps: number = 0;
+
+    constructor(n: number, capacity: number, f32: boolean) {
+        this.n = n;
+        this.f32 = f32;
+        this.offsets = new Int32Array(f32 ? 0 : n + 1);
+        this.grow(Math.max(capacity, 1));
+    }
+
+    private grow(capacity: number): void {
+        const { offsets, index, weight, count, n } = this;
+        if (this.f32) {
+            const words = new Uint32Array(n + 1 + 2 * capacity);
+            words.set(offsets.subarray(0, this.rows + 1));
+            this.words = words;
+            this.offsets = new Int32Array(words.buffer, 0, n + 1);
+            this.index = new Int32Array(words.buffer, 4 * (n + 1), capacity);
+            this.weight = new Float32Array(words.buffer, 4 * (n + 1 + capacity), capacity);
+        } else {
+            this.index = new Int32Array(capacity);
+            this.weight = new Float64Array(capacity);
+        }
+        this.index.set(index.subarray(0, count));
+        this.weight.set(weight.subarray(0, count));
+        this.capacity = capacity;
+    }
+
+    row(index: Int32Array, weight: Float64Array, taps: number): void {
+        if (this.count + taps > this.capacity) this.grow(Math.max(2 * this.capacity, this.count + taps));
+        const start = this.count;
+        for (let j = 0; j < taps; j++) {
+            const w = this.f32 ? Math.fround(weight[j]!) : weight[j]!;
+            if (w === 0 && taps > 1) continue;
+            this.index[this.count] = index[j]!;
+            this.weight[this.count++] = w;
+        }
+        if (this.count - start === 1) this.weight[start] = 1;
+        this.offsets[++this.rows] = this.count;
+        this.maxTaps = Math.max(this.maxTaps, this.count - start);
+    }
+
+    finish(): ResizeTable {
+        const { n, count, maxTaps } = this;
+        if (!this.words) return { offsets: this.offsets, index: this.index.subarray(0, count), weight: this.weight.subarray(0, count), maxTaps };
+        this.words.copyWithin(n + 1 + count, n + 1 + this.capacity, n + 1 + this.capacity + count);
+        const words = this.words.subarray(0, n + 1 + 2 * count);
+        return { offsets: this.offsets, index: this.index.subarray(0, count), weight: new Float32Array(words.buffer, 4 * (n + 1 + count), count), maxTaps, words };
+    }
+}
+
+const buildResizeTable = (nIn: number, nOut: number, axis: ResizeAxisSpec, f32: boolean = false): ResizeTable => {
+    const nearest = axis.method === "nearest", cubic = axis.method === "cubic", support = cubic ? 2 : 1, a = axis.cubicCoefficient;
+    const fs = (axis.antialias && nIn > nOut && nOut > 0) ? nIn / nOut : 1;
+    const renormalize = axis.boundary === "renormalize", mode = axis.boundary as NdarrayPadMode;
+    const perRow = nearest ? 1 : (fs > 1) ? Math.floor(2 * support * fs) + 2 : 2 * support;
+    const table = new ResizeTableWriter(nOut, Math.min(nOut * perRow, 1 << 20), f32);
+    const ks = new Float64Array(perRow), ws = new Float64Array(perRow), ri = new Int32Array(perRow), rw = new Float64Array(perRow), slots = new Map<number, number>();
+    for (let d = 0; d < nOut; d++) {
+        let taps = 0;
+        if (nearest) { ri[0] = nearestResizeIndex(d, nIn, nOut); rw[0] = 1; table.row(ri, rw, 1); continue; }
+        const { i, t } = resizeCoordinate(d, nIn, nOut, axis.alignCorners);
+        if (fs === 1 && t === 0) {
+            ri[0] = i;
+            rw[0] = 1;
+            table.row(ri, rw, 1);
+            continue;
+        }
+        if (fs === 1 && i - support + 1 >= 0 && i + support < nIn) {
+            for (let k = i - support + 1; k <= i + support; k++) {
+                const x = (k - i) - t, w = cubic ? cubicWeight(x, a) : linearWeight(x);
+                if (w !== 0) { ri[taps] = k; rw[taps++] = w; }
+            }
+        } else {
+            const raw = resizeTaps(i, t, fs, cubic, a, ks, ws), inside = ks[0]! >= 0 && ks[raw - 1]! < nIn, small = raw <= 16;
+            if (!inside && !small) slots.clear();
+            for (let j = 0; j < raw; j++) {
+                const w = ws[j]!;
+                if (w === 0) continue;
+                let k = ks[j]!;
+                if (!inside) {
+                    if (renormalize) { if (k < 0 || k >= nIn) continue; }
+                    else k = padSourceIndex(k, nIn, mode);
+                    let slot = -1;
+                    if (small) { for (let p = 0; p < taps; p++) if (ri[p] === k) { slot = p; break; } }
+                    else slot = slots.get(k) ?? -1;
+                    if (slot >= 0) { rw[slot]! += w; continue; }
+                    if (!small) slots.set(k, taps);
+                }
+                ri[taps] = k;
+                rw[taps++] = w;
+            }
+            let kept = 0;
+            for (let p = 0; p < taps; p++) if (rw[p] !== 0) { ri[kept] = ri[p]!; rw[kept++] = rw[p]!; }
+            taps = kept;
+        }
+        if (taps !== 1) {
+            let sum = 0;
+            for (let p = 0; p < taps; p++) sum += rw[p]!;
+            assert(taps > 1 && Number.isFinite(sum) && sum > 0, "internal error: degenerate resize tap row");
+            for (let p = 0; p < taps; p++) rw[p]! /= sum;
+        }
+        table.row(ri, rw, taps);
+    }
+    return table.finish();
+};
+
+const identityResizeTable = (n: number, f32: boolean = false): ResizeTable => buildResizeTable(n, n, { method: "nearest", alignCorners: false, antialias: false, cubicCoefficient: 0, boundary: "edge" }, f32);
+
+const resizeTwoPass = (ty: { maxTaps: number }, tx: { maxTaps: number }): boolean => ty.maxTaps > 1 && tx.maxTaps > 1 && ty.maxTaps * tx.maxTaps > 64;
+
+const cpuResize = (dst: CPUndarray, src: CPUndarray, axes: readonly [number, number], ty: ResizeTable, tx: ResizeTable, weighted: boolean, value: ComplexScalar, op: string): void => {
     if (dst.numel === 0) return;
     const keep = dst.shape.map((_, i) => i === axes[0] || i === axes[1]);
     const c = coalesceDims(dst.shape, [src.stridesBytes, dst.stridesBytes], keep);
     assertRank(c.shape.length, CPU_MAX_RANK, "CPU", op);
-    const [ty, tx] = tables;
+    const rows = ty.offsets.length + tx.offsets.length, taps = ty.index.length + tx.index.length;
+    const index = new Int32Array(rows + taps), weight = new Float64Array(taps + 2);
+    index.set(ty.offsets, 0);
+    index.set(tx.offsets, ty.offsets.length);
+    index.set(ty.index, rows);
+    index.set(tx.index, rows + ty.index.length);
+    weight.set(ty.weight, 0);
+    weight.set(tx.weight, ty.weight.length);
+    weight[taps] = value[0];
+    weight[taps + 1] = value[1];
     withWasmScratch((scratch) => {
-        const layout = scratch.u32([dst.offsetBytes, src.offsetBytes, c.axes[axes[0]]!, c.axes[axes[1]]!, src.shape[axes[0]]!, src.shape[axes[1]]!, ...c.shape, ...c.strides[0]!, ...c.strides[1]!]);
-        const index = scratch.u32([...ty.i0, ...ty.i1, ...tx.i0, ...tx.i1]);
-        const weight = scratch.f64([...ty.w0, ...ty.w1, ...tx.w0, ...tx.w1, value]);
+        const layout = scratch.u32([dst.offsetBytes, src.offsetBytes, c.axes[axes[0]]!, c.axes[axes[1]]!, src.shape[axes[0]]!, src.shape[axes[1]]!, ty.index.length, tx.index.length, ...c.shape, ...c.strides[0]!, ...c.strides[1]!]);
         const srcLength = src.numel === 0 ? 0 : src.byteLength;
-        checkWasmStatus(ndarrayf.resize(dst.basePtrBytes, dst.byteLength, srcLength === 0 ? 0 : src.basePtrBytes, srcLength, layout, c.shape.length, DTYPE_CODE[dst.dtype] | (DTYPE_CODE[src.dtype] << 4) | (linear ? 0x100 : 0), index, weight), op);
+        checkWasmStatus(ndarrayf.resize(dst.basePtrBytes, dst.byteLength, srcLength === 0 ? 0 : src.basePtrBytes, srcLength, layout, c.shape.length, DTYPE_CODE[dst.dtype] | (DTYPE_CODE[src.dtype] << 4) | (weighted ? 0x100 : 0), scratch.u32(index), scratch.f64(weight)), op);
     });
 };
 
-const buildResizeTable = (nIn: number, nOut: number, method: NdarrayResizeMethod, alignCorners: boolean, boundary: NdarrayPadMode): ResizeTable => {
-    const table: ResizeTable = { i0: new Int32Array(nOut), i1: new Int32Array(nOut), w0: new Float64Array(nOut), w1: new Float64Array(nOut) };
-    for (let d = 0; d < nOut; d++) {
-        if (method === "nearest") {
-            const product = (2 * d + 1) * nIn, divisor = 2 * nOut;
-            const quotient = Math.floor(product / divisor);
-            const index = Number.isSafeInteger(product) ? ((quotient * divisor > product) ? quotient - 1 : quotient) : Number((BigInt(2 * d + 1) * BigInt(nIn)) / BigInt(divisor));
-            table.i0[d] = table.i1[d] = Math.min(index, nIn - 1);
-            table.w0[d] = 1;
-            continue;
-        }
-        const src = alignCorners ? ((nOut === 1) ? 0 : d * (nIn - 1) / (nOut - 1)) : (d + 0.5) * nIn / nOut - 0.5;
-        const i0 = Math.floor(src);
-        const w1 = src - i0;
-        const i1 = (w1 === 0) ? i0 : i0 + 1;
-        table.i0[d] = padSourceIndex(i0, nIn, boundary);
-        table.i1[d] = padSourceIndex(i1, nIn, boundary);
-        table.w0[d] = 1 - w1;
-        table.w1[d] = w1;
-    }
-    return table;
-};
+const PARAM_WORDS_RETAINED = 262144;
 
-const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, P_VALUE_LO = 5, P_VALUE_HI = 6, P_PARAM_AXIS = 7, P_PARAM_LEN = 8, P_AXIS_Y = 9, P_AXIS_X = 10, P_TABLE = 11, P_VALUE_2 = 12, P_VALUE_3 = 13, P_SHAPE = 16, P_SRC_STRIDE = 24, P_DST_STRIDE = 32, P_SRC_SHAPE = 40, P_BEFORE = 48, P_HEADER_WORDS = 56;
+const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, P_VALUE_LO = 5, P_VALUE_HI = 6, P_PARAM_AXIS = 7, P_PARAM_LEN = 8, P_AXIS_Y = 9, P_AXIS_X = 10, P_TABLE = 11, P_VALUE_2 = 12, P_VALUE_3 = 13, P_TABLE_X = 14, P_SHAPE = 16, P_SRC_STRIDE = 24, P_DST_STRIDE = 32, P_SRC_SHAPE = 40, P_BEFORE = 48, P_HEADER_WORDS = 56;
+
+const assertResizeParams = (words: number, limit: number, op: string): void => {
+    const bytes = (P_HEADER_WORDS + words) * 4;
+    assert(bytes <= limit, `${opName(op)}: a ${bytes}-byte resize parameter table exceeds device.limits.maxStorageBufferBindingSize (${limit}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
+};
 
 type GPUGather = {
     dst: GPUndarray;
@@ -971,6 +1136,7 @@ type GPUGather = {
     resizeAxes?: readonly [number, number];
     valueBits?: ArrayLike<number>;
     table?: Uint32Array;
+    tableX?: Uint32Array;
     paramLen?: number;
 };
 
@@ -982,6 +1148,7 @@ export class NdarrayGPUEngine {
     private readonly alignment: number;
     private readonly maxBindingBytes: number;
     private empty: StorageBuffer | null = null;
+    private words: Uint32Array<ArrayBuffer> = new Uint32Array(P_HEADER_WORDS);
 
     constructor(device: GPUDevice, queue: GPUQueue, scratch: ScratchAllocator) {
         this.device = device;
@@ -1094,8 +1261,11 @@ export class NdarrayGPUEngine {
         const size = dst.bytesPerElement;
         const dstOffset = dstBinding.delta + dst.offsetBytes;
         const count = (size < 4) ? Math.floor((dstOffset + dst.numel * size - 1) / 4) - Math.floor(dstOffset / 4) + 1 : dst.numel;
-        const table = spec.table ?? new Uint32Array(0);
-        const words = new Uint32Array(P_HEADER_WORDS + table.length);
+        const table = spec.table ?? new Uint32Array(0), tableX = spec.tableX ?? new Uint32Array(0);
+        const length = P_HEADER_WORDS + table.length + tableX.length;
+        if (length > this.words.length && length <= PARAM_WORDS_RETAINED) this.words = new Uint32Array(Math.max(length, 2 * this.words.length));
+        const words = (length <= this.words.length) ? this.words.subarray(0, length) : new Uint32Array(length);
+        words.fill(0, 0, P_HEADER_WORDS);
         words[P_COUNT] = count;
         words[P_NDIM] = c.shape.length;
         words[P_NUMEL] = dst.numel;
@@ -1110,6 +1280,7 @@ export class NdarrayGPUEngine {
         words[P_AXIS_Y] = spec.resizeAxes ? c.axes[spec.resizeAxes[0]]! : 0;
         words[P_AXIS_X] = spec.resizeAxes ? c.axes[spec.resizeAxes[1]]! : 0;
         words[P_TABLE] = P_HEADER_WORDS;
+        words[P_TABLE_X] = P_HEADER_WORDS + table.length;
         for (let i = 0; i < c.shape.length; i++) {
             const axis = kept.get(i);
             words[P_SHAPE + i] = c.shape[i]!;
@@ -1119,6 +1290,7 @@ export class NdarrayGPUEngine {
             words[P_BEFORE + i] = (axis !== undefined && spec.before) ? spec.before[axis]! : 0;
         }
         words.set(table, P_HEADER_WORDS);
+        words.set(tableX, P_HEADER_WORDS + table.length);
         const params = this.scratch.params(words, encoder);
         const pipeline = this.pipeline(spec.entryPoint, spec.constants);
         const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: params }, `${qualifiedName(op)}:bg`);
@@ -1145,8 +1317,8 @@ const assertCast = (src: DType, dst: DType, residency: NdarrayResidency, op: str
     assert(!((src === "c128") !== (dst === "c128") && integers), `${opName(op)}: c128 <-> integer casts are not supported on the GPU; cast through f32 or c64, or use a CPU array`);
 };
 
-const assertRealOperation = (dtypes: ReadonlyArray<DType>, op: string, suffix: string): void => {
-    assert(!dtypes.some(isComplexDType), `${opName(op)}: complex dtypes (c64, c128) are not supported${suffix}`);
+const assertRealOperation = (dtypes: ReadonlyArray<DType>, op: string): void => {
+    assert(!dtypes.some(isComplexDType), `${opName(op)}: complex dtypes (c64, c128) are not supported`);
 };
 
 const assertCPUOptions = (options: NdarrayGPUOptions & { encoder?: unknown; out?: unknown }, op: string): void => {
@@ -1343,7 +1515,7 @@ export class NdarrayNamespace {
         this.assertAlive(op);
         assertNdarray(a, op);
         assert(typeof options === "object" && options !== null, `${opName(op)}: options are required`);
-        assertRealOperation([a.dtype, options.dtype ?? a.dtype], op, "");
+        assertRealOperation([a.dtype, options.dtype ?? a.dtype], op);
         const meanStd = options.mean !== undefined || options.std !== undefined;
         const scaleOffset = options.scale !== undefined || options.offset !== undefined;
         assert(!(meanStd && scaleOffset), `${opName(op)}: use either { scale, offset } or { mean, std }, not both`);
@@ -1381,53 +1553,84 @@ export class NdarrayNamespace {
         this.assertAlive(op);
         assertNdarray(a, op);
         assert(typeof options === "object" && options !== null, `${opName(op)}: options with axes and size are required`);
-        assertRealOperation([a.dtype, options.dtype ?? a.dtype], op, " yet");
         assert(Array.isArray(options.axes) && options.axes.length === 2, `${opName(op)}: axes must be two axes`);
         const axes = normalizeAxes(options.axes, a.ndim, opName(op)) as unknown as readonly [number, number];
         assert(Array.isArray(options.size) && options.size.length === 2, `${opName(op)}: size must be two integers`);
         for (const n of options.size) assert(Number.isInteger(n) && n >= 0 && n <= 0xFFFFFFFF, `${opName(op)}: size entries must be integers >= 0 that fit in u32 (got ${n})`);
         const method = options.method ?? "linear";
-        assert(method === "nearest" || method === "linear", `${opName(op)}: method must be "nearest" or "linear" (got ${String(method)})`);
+        assert(method === "nearest" || method === "linear" || method === "cubic", `${opName(op)}: method must be "nearest", "linear", or "cubic" (got ${String(method)})`);
+        const weighted = method !== "nearest";
         const alignCorners = options.alignCorners ?? false;
         assert(typeof alignCorners === "boolean", `${opName(op)}: alignCorners must be a boolean`);
-        assert(!(alignCorners && method === "nearest"), `${opName(op)}: alignCorners applies only to method "linear"`);
+        assert(!(alignCorners && !weighted), `${opName(op)}: alignCorners applies only to methods "linear" and "cubic"`);
+        const antialias = options.antialias ?? false;
+        assert(typeof antialias === "boolean", `${opName(op)}: antialias must be a boolean`);
+        assert(!(antialias && !weighted), `${opName(op)}: antialias applies only to methods "linear" and "cubic"`);
+        assert(!(antialias && alignCorners), `${opName(op)}: antialias cannot be combined with alignCorners`);
+        assert(options.cubicCoefficient === undefined || method === "cubic", `${opName(op)}: cubicCoefficient applies only to method "cubic"`);
+        const cubicCoefficient = options.cubicCoefficient ?? -0.75;
+        assert(typeof cubicCoefficient === "number" && Number.isFinite(cubicCoefficient), `${opName(op)}: cubicCoefficient must be a finite number (got ${String(cubicCoefficient)})`);
         const boundary = options.boundary ?? "edge";
-        assert(PAD_MODE_CODE[boundary] !== undefined, `${opName(op)}: boundary must be "edge", "constant", "reflect", "symmetric", or "wrap" (got ${String(boundary)})`);
+        assert(RESIZE_BOUNDARIES.includes(boundary), `${opName(op)}: boundary must be "edge", "constant", "reflect", "symmetric", "wrap", or "renormalize" (got ${String(boundary)})`);
         assert(boundary === "constant" || options.value === undefined, `${opName(op)}: value applies only to boundary "constant"`);
-        const value = options.value ?? 0;
-        assert(typeof value === "number", `${opName(op)}: value must be a number`);
+        const complex = isComplexDType(a.dtype);
+        const raw = options.value ?? 0;
+        if (complex) validateElementValue(a.dtype, raw, op);
+        else {
+            assert(!Array.isArray(raw), `${opName(op)}: a [re, im] value requires a complex input (got ${a.dtype})`);
+            assert(typeof raw === "number", `${opName(op)}: value must be a number`);
+        }
+        const value: ComplexScalar = (typeof raw === "number") ? [raw, 0] : [raw[0], raw[1]];
         const shape = a.shape.slice();
         for (let k = 0; k < 2; k++) {
             const axis = axes[k]!;
             assert(a.shape[axis]! > 0 || options.size[k] === 0, `${opName(op)}: cannot resize empty axis ${axis} to ${options.size[k]}`);
+            assert(a.shape[axis]! <= 0x7FFFFFFF, `${opName(op)}: resized axes support at most 2^31 - 1 input elements (axis ${axis} has ${a.shape[axis]})`);
             shape[axis] = options.size[k]!;
         }
         assert(numelFromShape(shape) <= 0xFFFFFFFF, `${opName(op)}: the number of output elements must fit in u32`);
         const dtype = options.dtype ?? a.dtype;
         dtypeInfo(dtype);
-        const tables = [0, 1].map((k) => buildResizeTable(a.shape[axes[k]!]!, shape[axes[k]!]!, method, alignCorners, boundary)) as unknown as readonly [ResizeTable, ResizeTable];
+        assert(!complex || isComplexDType(dtype), `${opName(op)}: resizing ${a.dtype} into ${dtype} would discard imaginary parts; resize compute.ndarray.real() or compute.ndarray.imag() views instead`);
+        if (a instanceof CPUndarray) { assertCPUOptions(options, op); a[ndarrayAssertAlive](); }
+        else if (weighted) assert(a.dtype !== "f64" && a.dtype !== "c128" && dtype !== "f64" && dtype !== "c128", `${opName(op)}: GPU linear and cubic resizing computes in f32 and does not support f64 or c128 inputs or outputs; use method "nearest" or a CPU array`);
+        else assertCast(a.dtype, dtype, "gpu", op);
+        const nInY = a.shape[axes[0]]!, nInX = a.shape[axes[1]]!, nOutY = shape[axes[0]]!, nOutX = shape[axes[1]]!, gpu = a instanceof GPUndarray;
+        if (gpu) assertResizeParams(3 * (nOutY + nOutX) + 2, this.device.limits.maxStorageBufferBindingSize, op);
+        const spec: ResizeAxisSpec = { method, alignCorners, antialias, cubicCoefficient, boundary };
+        const ty = buildResizeTable(nInY, nOutY, spec, gpu), tx = buildResizeTable(nInX, nOutX, spec, gpu);
+        const midShape = a.shape.slice();
+        midShape[axes[1]] = nOutX;
         if (a instanceof CPUndarray) {
-            assertCPUOptions(options, op);
-            a[ndarrayAssertAlive]();
             const out = CPUndarray.empty(dtype, { shape });
-            try { cpuResize(out, a, axes, tables, method === "linear", value, op); return out as T; }
-            catch (error) { out.destroy(); throw error; }
+            try {
+                if (!resizeTwoPass(ty, tx)) cpuResize(out, a, axes, ty, tx, weighted, value, op);
+                else {
+                    const mid = CPUndarray.empty(complex ? "c128" : "f64", { shape: midShape });
+                    try {
+                        cpuResize(mid, a, axes, identityResizeTable(nInY), tx, true, value, op);
+                        cpuResize(out, mid, axes, ty, identityResizeTable(nOutX), true, value, op);
+                    } finally { mid.destroy(); }
+                }
+                return out as T;
+            } catch (error) { out.destroy(); throw error; }
         }
-        assert(a.dtype !== "f64" && dtype !== "f64", `${opName(op)}: GPU resize computes in f32 and does not support f64 inputs or outputs; use a CPU array`);
-        const [ty, tx] = tables;
-        const table = new Uint32Array(4 * (ty.i0.length + tx.i0.length));
-        const asWords = (w: Float64Array): Uint32Array => new Uint32Array(new Float32Array(w).buffer);
-        table.set(new Uint32Array(ty.i0.buffer), 0);
-        table.set(new Uint32Array(ty.i1.buffer), ty.i0.length);
-        table.set(asWords(ty.w0), 2 * ty.i0.length);
-        table.set(asWords(ty.w1), 3 * ty.i0.length);
-        const tx0 = 4 * ty.i0.length;
-        table.set(new Uint32Array(tx.i0.buffer), tx0);
-        table.set(new Uint32Array(tx.i1.buffer), tx0 + tx.i0.length);
-        table.set(asWords(tx.w0), tx0 + 2 * tx.i0.length);
-        table.set(asWords(tx.w1), tx0 + 3 * tx.i0.length);
+        const midDType: DType = complex ? "c64" : "f32";
+        const midNumel = numelFromShape(midShape), midBytes = alignTo(midNumel * dtypeInfo(midDType).bytesPerElement, 4);
+        const split = resizeTwoPass(ty, tx) && numelFromShape(shape) > 0 && midNumel <= 0xFFFFFFFF && midBytes <= Math.min(this.device.limits.maxBufferSize, this.device.limits.maxStorageBufferBindingSize);
+        const passes = split ? [{ table: identityResizeTable(nInY, true).words!, tableX: tx.words! }, { table: ty.words!, tableX: identityResizeTable(nOutX, true).words! }] : [{ table: ty.words!, tableX: tx.words! }];
+        for (const { table, tableX } of passes) assertResizeParams(table.length + tableX.length, this.device.limits.maxStorageBufferBindingSize, op);
+        const valueBits = complex ? elementBits("c64", value) : elementBits("f32", value[0]);
+        const keep = shape.map((_, i) => i === axes[0] || i === axes[1]);
         return this.gpuRun(a as GPUndarray, dtype, shape, options, op, (commands, out, src) => {
-            this.gpu.gather(commands, options.encoder, { dst: out, src, entryPoint: "resize", constants: { SRC_DTYPE: DTYPE_CODE[src.dtype], DST_DTYPE: DTYPE_CODE[dtype], OPERATION: 3, RESIZE_METHOD: method === "linear" ? 1 : 0, OVERFLOW: 1, ROUNDING: 1 }, srcStrides: src.stridesBytes, keep: shape.map((_, i) => i === axes[0] || i === axes[1]), resizeAxes: axes, valueBits: elementBits("f32", value), table }, op);
+            const pass = (dst: GPUndarray, input: GPUndarray, params: { table: Uint32Array; tableX: Uint32Array }): void => {
+                const constants = { SRC_DTYPE: DTYPE_CODE[input.dtype], DST_DTYPE: DTYPE_CODE[dst.dtype], OPERATION: 3, RESIZE_METHOD: weighted ? 1 : 0, OVERFLOW: 1, ROUNDING: 1 };
+                this.gpu.gather(commands, options.encoder, { dst, src: input, entryPoint: "resize", constants, srcStrides: input.stridesBytes, keep, resizeAxes: axes, valueBits, ...params }, op);
+            };
+            if (!split) { pass(out, src, passes[0]!); return; }
+            const mid = this.gpu.temp(midDType, midShape, op);
+            pass(mid, src, passes[0]!);
+            pass(out, mid, passes[1]!);
         }) as T;
     }
 

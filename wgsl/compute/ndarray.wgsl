@@ -17,7 +17,7 @@ override OVERFLOW: u32 = 1u;
 override ROUNDING: u32 = 0u;
 // 0 scale and offset, 1 mean and std.
 override AFFINE_FORM: u32 = 0u;
-// 0 nearest, 1 linear.
+// 0 nearest (one-tap gather), 1 weighted taps (linear or cubic).
 override RESIZE_METHOD: u32 = 1u;
 
 @group(0) @binding(0) var<storage, read> src: array<u32>;
@@ -38,6 +38,7 @@ const P_AXIS_X: u32 = 10u;
 const P_TABLE: u32 = 11u;
 const P_VALUE_2: u32 = 12u;
 const P_VALUE_3: u32 = 13u;
+const P_TABLE_X: u32 = 14u;
 const P_SHAPE: u32 = 16u;
 const P_SRC_STRIDE: u32 = 24u;
 const P_DST_STRIDE: u32 = 32u;
@@ -453,19 +454,43 @@ fn gather_value(w: Walk) -> vec4<u32> {
     return convert_bits(load_bits(w.src_addr));
 }
 
-fn resize_tap(base: u32, iy: i32, ix: i32, sy: u32, sx: u32) -> f32 {
-    if (iy < 0 || ix < 0) {
-        return bitcast<f32>(params[P_VALUE_LO]);
-    }
-    return load_f32(base + u32(iy) * sy + u32(ix) * sx);
+fn resize_constant() -> vec2<f32> {
+    return vec2<f32>(bitcast<f32>(params[P_VALUE_LO]), bitcast<f32>(params[P_VALUE_HI]));
 }
 
-fn resize_row(base: u32, iy: i32, ix0: i32, ix1: i32, wx0: f32, wx1: f32, sy: u32, sx: u32) -> f32 {
-    let v0 = resize_tap(base, iy, ix0, sy, sx);
-    if (wx1 == 0.0) {
-        return v0;
+fn resize_sample(row: u32, ix: i32, sx: u32) -> vec2<f32> {
+    if (ix < 0) {
+        return resize_constant();
     }
-    return v0 * wx0 + resize_tap(base, iy, ix1, sy, sx) * wx1;
+    let addr = row + u32(ix) * sx;
+    if (SRC_DTYPE == 8u) {
+        let i = addr >> 2u;
+        return vec2<f32>(bitcast<f32>(src[i]), bitcast<f32>(src[i + 1u]));
+    }
+    return vec2<f32>(load_f32(addr), 0.0);
+}
+
+fn resize_row(base: u32, iy: i32, q0: u32, q1: u32, xi: u32, xw: u32, sy: u32, sx: u32) -> vec2<f32> {
+    if (iy < 0) {
+        return resize_constant();
+    }
+    let row = base + u32(iy) * sy;
+    let first = resize_sample(row, bitcast<i32>(params[xi + q0]), sx);
+    if (q1 - q0 == 1u) {
+        return first;
+    }
+    var acc = first * bitcast<f32>(params[xw + q0]);
+    for (var q = q0 + 1u; q < q1; q = q + 1u) {
+        acc = acc + resize_sample(row, bitcast<i32>(params[xi + q]), sx) * bitcast<f32>(params[xw + q]);
+    }
+    return acc;
+}
+
+fn resize_encode(acc: vec2<f32>) -> vec4<u32> {
+    if (DST_DTYPE == 8u) {
+        return vec4<u32>(bitcast<u32>(acc.x), select(bitcast<u32>(acc.y), 0u, SRC_DTYPE != 8u), 0u, 0u);
+    }
+    return encode_f32(acc.x);
 }
 
 fn resize_value(e: u32) -> vec4<u32> {
@@ -492,29 +517,29 @@ fn resize_value(e: u32) -> vec4<u32> {
     let ny = params[P_SHAPE + ay];
     let nx = params[P_SHAPE + ax];
     let ty = params[P_TABLE];
-    let tx = ty + 4u * ny;
+    let tx = params[P_TABLE_X];
+    let yi = ty + ny + 1u;
+    let xi = tx + nx + 1u;
+    let p0 = params[ty + oy];
+    let p1 = params[ty + oy + 1u];
+    let q0 = params[tx + ox];
+    let q1 = params[tx + ox + 1u];
     let sy = params[P_SRC_STRIDE + ay];
     let sx = params[P_SRC_STRIDE + ax];
-    let iy0 = bitcast<i32>(params[ty + oy]);
-    let ix0 = bitcast<i32>(params[tx + ox]);
     if (RESIZE_METHOD == 0u) {
-        if (iy0 < 0 || ix0 < 0) {
-            return encode_f32(bitcast<f32>(params[P_VALUE_LO]));
-        }
-        return convert_bits(load_bits(base + u32(iy0) * sy + u32(ix0) * sx));
+        return convert_bits(load_bits(base + params[yi + p0] * sy + params[xi + q0] * sx));
     }
-    let iy1 = bitcast<i32>(params[ty + ny + oy]);
-    let wy0 = bitcast<f32>(params[ty + 2u * ny + oy]);
-    let wy1 = bitcast<f32>(params[ty + 3u * ny + oy]);
-    let ix1 = bitcast<i32>(params[tx + nx + ox]);
-    let wx0 = bitcast<f32>(params[tx + 2u * nx + ox]);
-    let wx1 = bitcast<f32>(params[tx + 3u * nx + ox]);
-    let r0 = resize_row(base, iy0, ix0, ix1, wx0, wx1, sy, sx);
-    if (wy1 == 0.0) {
-        return encode_f32(r0);
+    let yw = yi + params[ty + ny];
+    let xw = xi + params[tx + nx];
+    let first = resize_row(base, bitcast<i32>(params[yi + p0]), q0, q1, xi, xw, sy, sx);
+    if (p1 - p0 == 1u) {
+        return resize_encode(first);
     }
-    let r1 = resize_row(base, iy1, ix0, ix1, wx0, wx1, sy, sx);
-    return encode_f32(r0 * wy0 + r1 * wy1);
+    var acc = first * bitcast<f32>(params[yw + p0]);
+    for (var p = p0 + 1u; p < p1; p = p + 1u) {
+        acc = acc + resize_row(base, bitcast<i32>(params[yi + p]), q0, q1, xi, xw, sy, sx) * bitcast<f32>(params[yw + p]);
+    }
+    return resize_encode(acc);
 }
 
 fn store_element(addr: u32, bits: vec4<u32>) {

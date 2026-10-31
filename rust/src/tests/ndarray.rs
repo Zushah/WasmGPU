@@ -90,6 +90,51 @@ fn src<'a>(bytes: &'a [u8], dtype: DType, offset: u32, strides: &'a [i32]) -> So
     }
 }
 
+struct Csr {
+    off: Vec<i32>,
+    idx: Vec<i32>,
+    w: Vec<f64>,
+}
+
+fn csr(rows: &[&[(i32, f64)]]) -> Csr {
+    let mut table = Csr {
+        off: vec![0],
+        idx: Vec::new(),
+        w: Vec::new(),
+    };
+    for row in rows {
+        for &(i, w) in row.iter() {
+            table.idx.push(i);
+            table.w.push(w);
+        }
+        table.off.push(table.idx.len() as i32);
+    }
+    table
+}
+
+fn tables<'a>(
+    y: &'a Csr,
+    x: &'a Csr,
+    n: (u32, u32),
+    value: [f64; 2],
+    weighted: bool,
+) -> ResizeTables<'a> {
+    ResizeTables {
+        axis_y: 0,
+        axis_x: 1,
+        src_y: n.0,
+        src_x: n.1,
+        off_y: &y.off,
+        idx_y: &y.idx,
+        w_y: &y.w,
+        off_x: &x.off,
+        idx_x: &x.idx,
+        w_x: &x.w,
+        value,
+        weighted,
+    }
+}
+
 fn cast_one(bytes: &[u8], from: DType, to: DType, mode: IntMode) -> Vec<u8> {
     let mut out = vec![0; to.size()];
     let status = copy_cast(dst(&mut out, to, &[]), src(bytes, from, 0, &[]), &[], mode);
@@ -137,16 +182,9 @@ fn validation_reports_status_codes_before_any_access() {
     let empty = src(&[], U8, 0, &[1]);
     let status = pad(dst(&mut out, U8, &[1]), empty, edge, PadMode::Edge, &[0; 8]);
     assert_eq!(status, STATUS_INVALID_SHAPE);
-    let table = ResizeTables {
-        axis_y: 0,
-        axis_x: 1,
-        src_y: 1,
-        src_x: 3,
-        index: &[0, 0, 0, 3, 0, 0],
-        weight: &[1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 0.0],
-        linear: false,
-    };
+    let (ty, tx) = (csr(&[&[(0, 1.0)]]), csr(&[&[(0, 1.0)], &[(3, 1.0)]]));
     let row = src(&[7, 8, 9], U8, 0, &[3, 1]);
+    let table = tables(&ty, &tx, (1, 3), [0.0; 2], false);
     let status = resize(dst(&mut out, U8, &[2, 1]), row, &[1, 2], table);
     assert_eq!(status, STATUS_INVALID_TABLE);
     let params = AffineParams {
@@ -237,38 +275,206 @@ fn affine_uses_separate_f64_operations_and_rounds_integer_outputs() {
 
 #[test]
 fn resize_gathers_tables_with_the_fixed_summation_order() {
-    let (s, mut out) = (le(&[1.0f64, 2.0, 3.0, 4.0]), vec![0; 64]);
-    let tables = ResizeTables {
-        axis_y: 0,
-        axis_x: 1,
-        src_y: 2,
-        src_x: 2,
-        index: &[0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 1, 1],
-        weight: &[
-            1.0, 1.0, 0.0, 0.0, 0.25, 0.75, 0.25, 0.75, 0.75, 0.25, 0.75, 0.25, 0.0,
-        ],
-        linear: true,
-    };
-    let input = src(&s, F64, 0, &[16, 8]);
-    let status = resize(dst(&mut out, F64, &[32, 8]), input, &[2, 4], tables);
-    assert_eq!(
-        (status, out),
-        (0, le(&[1.0, 1.25, 1.75, 2.0, 3.0, 3.25, 3.75, 4.0]))
+    let v = [1.5f64, -2.25, 3.0, 0.125, 5.5, -7.75, 9.0, 0.3, -1.1];
+    let (s, mut out) = (le(&v), vec![0; 72]);
+    let ty = csr(&[
+        &[(0, 1.0)],
+        &[(2, 0.25), (0, 0.75)],
+        &[(1, 0.5), (2, 0.375), (0, 0.125)],
+    ]);
+    let tx = csr(&[
+        &[(1, 1.0)],
+        &[(0, 0.3), (2, 0.7)],
+        &[(2, -0.2), (1, 0.6), (0, 0.6)],
+    ]);
+    let input = src(&s, F64, 0, &[24, 8]);
+    let status = resize(
+        dst(&mut out, F64, &[24, 8]),
+        input,
+        &[3, 3],
+        tables(&ty, &tx, (3, 3), [0.0; 2], true),
     );
-    let values = [f64::INFINITY, -0.0, f64::NAN, f64::NEG_INFINITY];
-    let (s, mut out) = (le(&values), vec![0; 32]);
-    let identity = ResizeTables {
-        axis_y: 0,
-        axis_x: 1,
-        src_y: 1,
-        src_x: 4,
-        index: &[0, 0, 0, 1, 2, 3, 0, 1, 2, 3],
-        weight: &[1.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0],
-        linear: true,
+    let at = |y: usize, x: usize| v[3 * y + x];
+    let row = |y: usize, x: usize| -> f64 {
+        match x {
+            0 => at(y, 1),
+            1 => at(y, 0) * 0.3 + at(y, 2) * 0.7,
+            _ => at(y, 2) * -0.2 + at(y, 1) * 0.6 + at(y, 0) * 0.6,
+        }
     };
+    let expected: Vec<f64> = (0..9)
+        .map(|k| {
+            let x = k % 3;
+            match k / 3 {
+                0 => row(0, x),
+                1 => row(2, x) * 0.25 + row(0, x) * 0.75,
+                _ => row(1, x) * 0.5 + row(2, x) * 0.375 + row(0, x) * 0.125,
+            }
+        })
+        .collect();
+    assert_eq!((status, out), (0, le(&expected)));
+    let (s, mut out) = (le(&[1.0e16f64, 1.0, -1.0e16]), vec![0; 8]);
+    let (ty, tx) = (csr(&[&[(0, 1.0)]]), csr(&[&[(0, 1.0), (1, 1.0), (2, 1.0)]]));
+    let input = src(&s, F64, 0, &[24, 8]);
+    let table = tables(&ty, &tx, (1, 3), [0.0; 2], true);
+    let status = resize(dst(&mut out, F64, &[8, 8]), input, &[1, 1], table);
+    assert_eq!((status, from_le::<f64>(&out)), (0, vec![0.0]));
+    let payload = f64::from_bits(0x7FF0_0000_0000_0001);
+    let values = [f64::INFINITY, -0.0, payload, f64::NEG_INFINITY];
+    let (s, mut out) = (le(&values), vec![0; 32]);
+    let ty = csr(&[&[(0, 1.0)]]);
+    let tx = csr(&[&[(0, 1.0)], &[(1, 1.0)], &[(2, 1.0)], &[(3, 1.0)]]);
     let input = src(&s, F64, 0, &[32, 8]);
-    let status = resize(dst(&mut out, F64, &[32, 8]), input, &[1, 4], identity);
+    let table = tables(&ty, &tx, (1, 4), [0.0; 2], true);
+    let status = resize(dst(&mut out, F64, &[32, 8]), input, &[1, 4], table);
     assert_eq!((status, out), (0, le(&values)));
+}
+
+#[test]
+fn resize_rejects_invalid_tap_tables() {
+    let s = le(&[1.0f32, 2.0, 3.0]);
+    let mut out = vec![0; 8];
+    let check = |ty: &Csr, tx: &Csr, weighted: bool, out: &mut [u8]| {
+        let table = tables(ty, tx, (1, 3), [0.0; 2], weighted);
+        resize(
+            dst(out, F32, &[8, 4]),
+            src(&s, F32, 0, &[12, 4]),
+            &[1, 2],
+            table,
+        )
+    };
+    let ty = csr(&[&[(0, 1.0)]]);
+    let valid = csr(&[&[(0, 0.5), (1, 0.5)], &[(-1, 0.25), (2, 0.75)]]);
+    assert_eq!(check(&ty, &valid, true, &mut out), 0);
+    let edit = |f: &dyn Fn(&mut Csr)| {
+        let mut table = csr(&[&[(0, 0.5), (1, 0.5)], &[(-1, 0.25), (2, 0.75)]]);
+        f(&mut table);
+        table
+    };
+    let cases = [
+        edit(&|t| t.off[0] = 1),
+        edit(&|t| t.off[1] = 0),
+        edit(&|t| t.off[1] = 4),
+        edit(&|t| t.off[2] = 3),
+        edit(&|t| t.off.push(4)),
+        edit(&|t| t.idx[1] = 3),
+        edit(&|t| t.idx[1] = -2),
+        edit(&|t| t.w[0] = 0.0),
+        edit(&|t| t.w[3] = -0.0),
+        edit(&|t| t.w[0] = f64::NAN),
+        edit(&|t| t.w[2] = f64::INFINITY),
+        edit(&|t| {
+            t.idx.pop();
+        }),
+    ];
+    for (k, tx) in cases.iter().enumerate() {
+        let status = check(&ty, tx, true, &mut out);
+        assert_eq!(status, STATUS_INVALID_TABLE, "case {k}");
+    }
+    let two = csr(&[&[(0, 1.0), (1, 1.0)], &[(2, 1.0)]]);
+    let constant = csr(&[&[(0, 1.0)], &[(-1, 1.0)]]);
+    let nearest = csr(&[&[(0, 1.0)], &[(2, 1.0)]]);
+    assert_eq!(check(&ty, &two, false, &mut out), STATUS_INVALID_TABLE);
+    assert_eq!(check(&ty, &constant, false, &mut out), STATUS_INVALID_TABLE);
+    assert_eq!(check(&ty, &nearest, false, &mut out), 0);
+    assert_eq!(from_le::<f32>(&out), [1.0, 3.0]);
+}
+
+#[test]
+fn resize_constant_rows_contribute_exactly_the_value() {
+    let (s, mut out) = (le(&[2.0f64, 4.0]), vec![0; 8]);
+    let ty = csr(&[&[(-1, 0.5), (0, 0.5)]]);
+    let tx = csr(&[&[(0, 0.75), (1, 0.75)]]);
+    let input = src(&s, F64, 0, &[16, 8]);
+    let table = tables(&ty, &tx, (1, 2), [3.0, 0.0], true);
+    let status = resize(dst(&mut out, F64, &[8, 8]), input, &[1, 1], table);
+    assert_eq!(
+        (status, from_le::<f64>(&out)),
+        (0, vec![0.5 * 3.0 + 0.5 * 4.5])
+    );
+}
+
+#[test]
+fn resize_handles_complex_and_raw_nearest_gathers() {
+    let ty = csr(&[&[(0, 1.0)]]);
+    let tx = csr(&[&[(-1, 0.25), (0, 0.25), (1, 0.5)]]);
+    let expected = [
+        10.0 * 0.25 + 0.25 + 3.0 * 0.5,
+        -20.0 * 0.25 - 0.25 + 5.0 * 0.5,
+    ];
+    let (s, mut out) = (le(&[1.0f32, -1.0, 3.0, 5.0]), vec![0; 8]);
+    let table = tables(&ty, &tx, (1, 2), [10.0, -20.0], true);
+    let status = resize(
+        dst(&mut out, C64, &[8, 8]),
+        src(&s, C64, 0, &[16, 8]),
+        &[1, 1],
+        table,
+    );
+    assert_eq!(
+        (status, from_le::<f32>(&out)),
+        (0, expected.map(|v| v as f32).to_vec())
+    );
+    let (s, mut out) = (le(&[1.0f64, -1.0, 3.0, 5.0]), vec![0; 16]);
+    let table = tables(&ty, &tx, (1, 2), [10.0, -20.0], true);
+    let status = resize(
+        dst(&mut out, C128, &[16, 16]),
+        src(&s, C128, 0, &[32, 16]),
+        &[1, 1],
+        table,
+    );
+    assert_eq!((status, from_le::<f64>(&out)), (0, expected.to_vec()));
+    let (s, mut out) = (le(&[2.0f32, 4.0]), vec![0xFF; 8]);
+    let tx = csr(&[&[(0, -0.5), (1, 1.5)]]);
+    let table = tables(&ty, &tx, (1, 2), [0.0; 2], true);
+    let status = resize(
+        dst(&mut out, C64, &[8, 8]),
+        src(&s, F32, 0, &[8, 4]),
+        &[1, 1],
+        table,
+    );
+    assert_eq!((status, out), (0, le(&[5.0f32, 0.0])));
+    let (s, mut out) = (le(&[1.0f32, -1.0]), vec![0; 8]);
+    let tx = csr(&[&[(0, 1.0)]]);
+    for weighted in [true, false] {
+        let table = tables(&ty, &tx, (1, 1), [0.0; 2], weighted);
+        let status = resize(
+            dst(&mut out, F32, &[8, 8]),
+            src(&s, C64, 0, &[8, 8]),
+            &[1, 1],
+            table,
+        );
+        assert_eq!(status, STATUS_INVALID_DTYPE);
+    }
+    let snan = f32::from_bits(0x7FA0_0001);
+    let (s, mut out) = (le(&[snan, 1.0]), vec![0; 12]);
+    let tx = csr(&[&[(0, 1.0)], &[(1, 1.0)], &[(0, 1.0)]]);
+    let table = tables(&ty, &tx, (1, 2), [0.0; 2], false);
+    let status = resize(
+        dst(&mut out, F32, &[12, 4]),
+        src(&s, F32, 0, &[8, 4]),
+        &[1, 3],
+        table,
+    );
+    assert_eq!((status, out), (0, le(&[snan, 1.0, snan])));
+    let (s, mut out) = (le(&[1.5f32, -0.25, 2.0, 8.0]), vec![0; 48]);
+    let table = tables(&ty, &tx, (1, 2), [0.0; 2], false);
+    let status = resize(
+        dst(&mut out, C128, &[48, 16]),
+        src(&s, C64, 0, &[16, 8]),
+        &[1, 3],
+        table,
+    );
+    let widened = le(&[1.5f64, -0.25, 2.0, 8.0, 1.5, -0.25]);
+    assert_eq!((status, out), (0, widened));
+    let (s, mut out) = (le(&[7u8, 200]), vec![0xFF; 24]);
+    let table = tables(&ty, &tx, (1, 2), [0.0; 2], false);
+    let status = resize(
+        dst(&mut out, C64, &[24, 8]),
+        src(&s, U8, 0, &[2, 1]),
+        &[1, 3],
+        table,
+    );
+    assert_eq!((status, out), (0, le(&[7.0f32, 0.0, 200.0, 0.0, 7.0, 0.0])));
 }
 
 #[test]
@@ -369,22 +575,6 @@ fn complex_dtypes_copy_cast_and_pad_by_component() {
         src(&s, F32, 0, &[4]),
         &[1],
         params,
-    );
-    assert_eq!(status, STATUS_INVALID_DTYPE);
-    let table = ResizeTables {
-        axis_y: 0,
-        axis_x: 1,
-        src_y: 1,
-        src_x: 1,
-        index: &[0, 0, 0, 0],
-        weight: &[1.0, 0.0, 1.0, 0.0, 0.0],
-        linear: false,
-    };
-    let status = resize(
-        dst(&mut out, C64, &[8, 8]),
-        src(&s, C64, 0, &[8, 8]),
-        &[1, 1],
-        table,
     );
     assert_eq!(status, STATUS_INVALID_DTYPE);
 }

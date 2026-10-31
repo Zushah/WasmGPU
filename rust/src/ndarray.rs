@@ -906,56 +906,142 @@ pub(crate) struct ResizeTables<'a> {
     pub(crate) axis_x: usize,
     pub(crate) src_y: u32,
     pub(crate) src_x: u32,
-    pub(crate) index: &'a [i32],
-    pub(crate) weight: &'a [f64],
-    pub(crate) linear: bool,
+    pub(crate) off_y: &'a [i32],
+    pub(crate) idx_y: &'a [i32],
+    pub(crate) w_y: &'a [f64],
+    pub(crate) off_x: &'a [i32],
+    pub(crate) idx_x: &'a [i32],
+    pub(crate) w_x: &'a [f64],
+    pub(crate) value: [f64; 2],
+    pub(crate) weighted: bool,
 }
 
-fn resize_impl(dst: Destination, src: Source, out_shape: &[u32], t: &ResizeTables) {
-    let nd = out_shape.len();
-    let (ay, ax, last) = (t.axis_y, t.axis_x, nd - 1);
-    let (ny, nx) = (out_shape[ay] as usize, out_shape[ax] as usize);
-    let (i0y, i1y) = (&t.index[..ny], &t.index[ny..2 * ny]);
-    let (i0x, i1x) = (&t.index[2 * ny..2 * ny + nx], &t.index[2 * ny + nx..]);
-    let (w0y, w1y) = (&t.weight[..ny], &t.weight[ny..2 * ny]);
-    let (w0x, w1x) = (
-        &t.weight[2 * ny..2 * ny + nx],
-        &t.weight[2 * ny + nx..2 * (ny + nx)],
-    );
-    let value = t.weight[2 * (ny + nx)];
-    let (mut ss, mut ds) = ([0i64; MAX_RANK], [0i64; MAX_RANK]);
-    widen(src.strides, &mut ss);
-    widen(dst.strides, &mut ds);
-    let (sy, sx, s_last) = (ss[ay], ss[ax], ss[last]);
-    let mut batch = ss;
-    batch[ay] = 0;
-    batch[ax] = 0;
+fn valid_taps(off: &[i32], idx: &[i32], w: &[f64], n: usize, src: u32, weighted: bool) -> bool {
+    if off.len().checked_sub(1) != Some(n) || idx.len() != w.len() || off[0] != 0 {
+        return false;
+    }
+    let rows_valid = off
+        .windows(2)
+        .all(|p| p[0] < p[1] && (weighted || p[1] - p[0] == 1));
+    let low = if weighted { -1 } else { 0 };
+    rows_valid
+        && off[n] as usize == idx.len()
+        && idx.iter().all(|&i| i >= low && (i < 0 || (i as u32) < src))
+        && w.iter().all(|&v| v.is_finite() && v != 0.0)
+}
+
+#[inline(always)]
+fn row_taps<'a>(off: &[i32], idx: &'a [i32], w: &'a [f64], o: usize) -> (&'a [i32], &'a [f64]) {
+    let (start, end) = (off[o] as usize, off[o + 1] as usize);
+    (&idx[start..end], &w[start..end])
+}
+
+struct ResizeWalk {
+    ay: usize,
+    ax: usize,
+    last: usize,
+    sy: i64,
+    sx: i64,
+    s_last: i64,
+    d_last: i64,
+    n: usize,
+    batch: [i64; MAX_RANK],
+    ds: [i64; MAX_RANK],
+}
+
+impl ResizeWalk {
+    fn new(src: &Source, dst: &Destination, out_shape: &[u32], t: &ResizeTables) -> ResizeWalk {
+        let last = out_shape.len() - 1;
+        let (mut ss, mut ds) = ([0i64; MAX_RANK], [0i64; MAX_RANK]);
+        widen(src.strides, &mut ss);
+        widen(dst.strides, &mut ds);
+        let mut batch = ss;
+        batch[t.axis_y] = 0;
+        batch[t.axis_x] = 0;
+        ResizeWalk {
+            ay: t.axis_y,
+            ax: t.axis_x,
+            last,
+            sy: ss[t.axis_y],
+            sx: ss[t.axis_x],
+            s_last: ss[last],
+            d_last: ds[last],
+            n: out_shape[last] as usize,
+            batch,
+            ds,
+        }
+    }
+
+    #[inline(always)]
+    fn point(&self, index: &[u32], s: i64, o: usize) -> (usize, usize, i64) {
+        let oy = if self.last == self.ay {
+            o
+        } else {
+            index[self.ay] as usize
+        };
+        let ox = if self.last == self.ax {
+            o
+        } else {
+            index[self.ax] as usize
+        };
+        let base = if self.last == self.ay || self.last == self.ax {
+            s
+        } else {
+            s + o as i64 * self.s_last
+        };
+        (oy, ox, base)
+    }
+}
+
+fn resize_weighted(dst: Destination, src: Source, out_shape: &[u32], t: &ResizeTables, value: f64) {
+    let walk = ResizeWalk::new(&src, &dst, out_shape, t);
+    let (sy, sx) = (walk.sy, walk.sx);
     let input = src.bytes;
     let load = loader_for(src.dtype);
-    let tap = |base: i64, iy: i32, ix: i32| -> f64 {
-        if iy < 0 || ix < 0 {
-            value
-        } else {
-            load(input, (base + iy as i64 * sy + ix as i64 * sx) as usize)
+    let row = |at: i64, xs: &[i32], wxs: &[f64]| -> f64 {
+        let sample = |ix: i32| {
+            if ix < 0 {
+                value
+            } else {
+                load(input, (at + ix as i64 * sx) as usize)
+            }
+        };
+        if xs.len() == 1 {
+            return sample(xs[0]);
         }
+        let mut acc = sample(xs[0]) * wxs[0];
+        for (&ix, &w) in xs[1..].iter().zip(&wxs[1..]) {
+            acc += sample(ix) * w;
+        }
+        acc
     };
-    let row = |base: i64, iy: i32, ox: usize| -> f64 {
-        let v0 = tap(base, iy, i0x[ox]);
-        if w1x[ox] == 0.0 {
-            v0
-        } else {
-            v0 * w0x[ox] + tap(base, iy, i1x[ox]) * w1x[ox]
+    let element = |base: i64, oy: usize, ox: usize| -> f64 {
+        let (ys, wys) = row_taps(t.off_y, t.idx_y, t.w_y, oy);
+        let (xs, wxs) = row_taps(t.off_x, t.idx_x, t.w_x, ox);
+        let r = |iy: i32| {
+            if iy < 0 {
+                value
+            } else {
+                row(base + iy as i64 * sy, xs, wxs)
+            }
+        };
+        if ys.len() == 1 {
+            return r(ys[0]);
         }
+        let mut acc = r(ys[0]) * wys[0];
+        for (&iy, &w) in ys[1..].iter().zip(&wys[1..]) {
+            acc += r(iy) * w;
+        }
+        acc
     };
     let write = writer_for(dst.dtype, ARITHMETIC_MODE);
     let out = dst.bytes;
-    let n = out_shape[last] as usize;
-    let d_last = ds[last];
+    let (n, d_last) = (walk.n, walk.d_last);
     let mut buffer = [0f64; CHUNK];
     for_each_outer(
         out_shape,
-        &batch,
-        &ds,
+        &walk.batch,
+        &walk.ds,
         src.offset as i64,
         dst.offset as i64,
         |index, s, d| {
@@ -963,24 +1049,8 @@ fn resize_impl(dst: Destination, src: Source, out_shape: &[u32], t: &ResizeTable
             while done < n {
                 let k = CHUNK.min(n - done);
                 for (j, slot) in buffer[..k].iter_mut().enumerate() {
-                    let o = done + j;
-                    let oy = if last == ay { o } else { index[ay] as usize };
-                    let ox = if last == ax { o } else { index[ax] as usize };
-                    let base = if last == ay || last == ax {
-                        s
-                    } else {
-                        s + o as i64 * s_last
-                    };
-                    *slot = if t.linear {
-                        let r0 = row(base, i0y[oy], ox);
-                        if w1y[oy] == 0.0 {
-                            r0
-                        } else {
-                            r0 * w0y[oy] + row(base, i1y[oy], ox) * w1y[oy]
-                        }
-                    } else {
-                        tap(base, i0y[oy], i0x[ox])
-                    };
+                    let (oy, ox, base) = walk.point(index, s, done + j);
+                    *slot = element(base, oy, ox);
                 }
                 write(
                     out,
@@ -994,13 +1064,105 @@ fn resize_impl(dst: Destination, src: Source, out_shape: &[u32], t: &ResizeTable
     );
 }
 
+fn resize_nearest(dst: Destination, src: Source, out_shape: &[u32], t: &ResizeTables) {
+    let walk = ResizeWalk::new(&src, &dst, out_shape, t);
+    let input = src.bytes;
+    let at = |index: &[u32], s: i64, o: usize| -> usize {
+        let (oy, ox, base) = walk.point(index, s, o);
+        let iy = t.idx_y[t.off_y[oy] as usize] as i64;
+        let ix = t.idx_x[t.off_x[ox] as usize] as i64;
+        (base + iy * walk.sy + ix * walk.sx) as usize
+    };
+    let out = dst.bytes;
+    let (n, d_last) = (walk.n, walk.d_last);
+    if src.dtype == dst.dtype {
+        let size = src.dtype.size();
+        for_each_outer(
+            out_shape,
+            &walk.batch,
+            &walk.ds,
+            src.offset as i64,
+            dst.offset as i64,
+            |index, s, d| {
+                for o in 0..n {
+                    let (su, du) = (at(index, s, o), (d + o as i64 * d_last) as usize);
+                    out[du..du + size].copy_from_slice(&input[su..su + size]);
+                }
+            },
+        );
+        return;
+    }
+    let load = loader_for(src.dtype);
+    let write = writer_for(dst.dtype, ARITHMETIC_MODE);
+    let mut buffer = [0f64; CHUNK];
+    for_each_outer(
+        out_shape,
+        &walk.batch,
+        &walk.ds,
+        src.offset as i64,
+        dst.offset as i64,
+        |index, s, d| {
+            let mut done = 0;
+            while done < n {
+                let k = CHUNK.min(n - done);
+                for (j, slot) in buffer[..k].iter_mut().enumerate() {
+                    *slot = load(input, at(index, s, done + j));
+                }
+                write(
+                    out,
+                    (d + done as i64 * d_last) as usize,
+                    d_last,
+                    &buffer[..k],
+                );
+                done += k;
+            }
+        },
+    );
+}
+
+fn resize_part(dst: Destination, src: Source, out_shape: &[u32], t: &ResizeTables, value: f64) {
+    if t.weighted {
+        resize_weighted(dst, src, out_shape, t, value);
+    } else {
+        resize_nearest(dst, src, out_shape, t);
+    }
+}
+
+fn resize_complex(dst: Destination, src: Source, out_shape: &[u32], t: &ResizeTables) -> u32 {
+    let (dst_part, src_part) = (dst.dtype.component(), src.dtype.component());
+    let parts = if src.dtype.is_complex() { 2 } else { 1 };
+    for part in 0..2 {
+        let target = Destination {
+            bytes: &mut *dst.bytes,
+            dtype: dst_part,
+            offset: dst.offset + part * dst_part.size() as u32,
+            strides: dst.strides,
+        };
+        if part < parts {
+            let source = Source {
+                bytes: src.bytes,
+                dtype: src_part,
+                offset: src.offset + part * src_part.size() as u32,
+                strides: src.strides,
+            };
+            resize_part(target, source, out_shape, t, t.value[part as usize]);
+        } else {
+            let status = zero_fill(target, out_shape);
+            if status != STATUS_OK {
+                return status;
+            }
+        }
+    }
+    STATUS_OK
+}
+
 pub(crate) fn resize(
     dst: Destination,
     src: Source,
     out_shape: &[u32],
     tables: ResizeTables,
 ) -> u32 {
-    if src.dtype.is_complex() || dst.dtype.is_complex() {
+    if src.dtype.is_complex() && !dst.dtype.is_complex() {
         return STATUS_INVALID_DTYPE;
     }
     let nd = out_shape.len();
@@ -1012,16 +1174,9 @@ pub(crate) fn resize(
         return STATUS_INVALID_PARAMETERS;
     }
     let (ny, nx) = (out_shape[ay] as usize, out_shape[ax] as usize);
-    if tables.index.len() != 2 * (ny + nx) || tables.weight.len() != 2 * (ny + nx) + 1 {
-        return STATUS_INVALID_TABLE;
-    }
-    let in_range = |i: i32, n: u32| i == -1 || (i >= 0 && (i as u32) < n);
-    if !tables.index[..2 * ny]
-        .iter()
-        .all(|&i| in_range(i, tables.src_y))
-        || !tables.index[2 * ny..]
-            .iter()
-            .all(|&i| in_range(i, tables.src_x))
+    let t = &tables;
+    if !valid_taps(t.off_y, t.idx_y, t.w_y, ny, t.src_y, t.weighted)
+        || !valid_taps(t.off_x, t.idx_x, t.w_x, nx, t.src_x, t.weighted)
     {
         return STATUS_INVALID_TABLE;
     }
@@ -1052,7 +1207,10 @@ pub(crate) fn resize(
     ) {
         return STATUS_DESTINATION_BOUNDS;
     }
-    resize_impl(dst, src, out_shape, &tables);
+    if dst.dtype.is_complex() && (t.weighted || src.dtype != dst.dtype) {
+        return resize_complex(dst, src, out_shape, t);
+    }
+    resize_part(dst, src, out_shape, t, t.value[0]);
     STATUS_OK
 }
 
@@ -1391,7 +1549,7 @@ pub unsafe extern "C" fn ndarray_resize(
         Ok(v) => v,
         Err(status) => return status,
     };
-    let words = 6 + 3 * nd;
+    let words = 8 + 3 * nd;
     if !valid_descriptor(layout_ptr, words * 4, 4, dst_ptr, dst_len) {
         return STATUS_INVALID_POINTER;
     }
@@ -1402,21 +1560,32 @@ pub unsafe extern "C" fn ndarray_resize(
             return STATUS_INVALID_PARAMETERS;
         }
         let (mut shape, mut ss, mut ds) = ([0u32; MAX_RANK], [0i32; MAX_RANK], [0i32; MAX_RANK]);
-        read_axes(layout, 6, nd, &mut shape);
-        read_strides(layout, 6 + nd, nd, &mut ss);
-        read_strides(layout, 6 + 2 * nd, nd, &mut ds);
-        let taps = 2 * (shape[ay] as usize + shape[ax] as usize);
-        if !valid_descriptor(index_ptr, taps * 4, 4, dst_ptr, dst_len)
-            || !valid_descriptor(weight_ptr, (taps + 1) * 8, 8, dst_ptr, dst_len)
+        read_axes(layout, 8, nd, &mut shape);
+        read_strides(layout, 8 + nd, nd, &mut ss);
+        read_strides(layout, 8 + 2 * nd, nd, &mut ds);
+        let (ny, nx) = (shape[ay] as usize, shape[ax] as usize);
+        let (ty, tx) = (layout[6] as usize, layout[7] as usize);
+        let lengths = || {
+            let index = ny.checked_add(nx)?.checked_add(2)?.checked_add(ty)?;
+            let index = index.checked_add(tx)?;
+            let weight = ty.checked_add(tx)?.checked_add(2)?;
+            Some((index, index.checked_mul(4)?, weight, weight.checked_mul(8)?))
+        };
+        let Some((index_len, index_bytes, weight_len, weight_bytes)) = lengths() else {
+            return STATUS_INVALID_TABLE;
+        };
+        if !valid_descriptor(index_ptr, index_bytes, 4, dst_ptr, dst_len)
+            || !valid_descriptor(weight_ptr, weight_bytes, 8, dst_ptr, dst_len)
         {
             return STATUS_INVALID_POINTER;
         }
-        let index = if taps == 0 {
-            &[][..]
-        } else {
-            unsafe { i32_slice(call, index_ptr, taps) }
-        };
-        let weight = unsafe { f64_slice(call, weight_ptr, taps + 1) };
+        let index = unsafe { i32_slice(call, index_ptr, index_len) };
+        let weight = unsafe { f64_slice(call, weight_ptr, weight_len) };
+        let (off_y, index) = index.split_at(ny + 1);
+        let (off_x, index) = index.split_at(nx + 1);
+        let (idx_y, idx_x) = index.split_at(ty);
+        let (w_y, weight) = weight.split_at(ty);
+        let (w_x, value) = weight.split_at(tx);
         let (dst, src) = match unsafe { borrow_pair(call, dst_ptr, dst_len, src_ptr, src_len) } {
             Ok(v) => v,
             Err(status) => return status,
@@ -1440,9 +1609,14 @@ pub unsafe extern "C" fn ndarray_resize(
                 axis_x: ax,
                 src_y: layout[4],
                 src_x: layout[5],
-                index,
-                weight,
-                linear: method == 1,
+                off_y,
+                idx_y,
+                w_y,
+                off_x,
+                idx_x,
+                w_x,
+                value: [value[0], value[1]],
+                weighted: method == 1,
             },
         )
     })

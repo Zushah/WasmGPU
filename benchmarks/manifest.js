@@ -42,6 +42,8 @@ import ndarrayContiguousCPU from "./compute/ndarray-contiguous-cpu-f32-throughpu
 import ndarrayCastGPU from "./compute/ndarray-cast-gpu-u8-f32-throughput.bench.js";
 import ndarrayResizeGPU from "./compute/ndarray-resize-gpu-linear-f32-throughput.bench.js";
 import ndarrayResizeCPU from "./compute/ndarray-resize-cpu-linear-f32-throughput.bench.js";
+import ndarrayResizeCubicAntialiasGPU from "./compute/ndarray-resize-gpu-cubic-antialias-f32-throughput.bench.js";
+import ndarrayResizeCubicAntialiasCPU from "./compute/ndarray-resize-cpu-cubic-antialias-f32-throughput.bench.js";
 import math from "./math/mat4-mul-throughput.bench.js";
 import mathF32 from "./math/mat4f-mul-throughput.bench.js";
 import mathF64 from "./math/mat4d-mul-throughput.bench.js";
@@ -118,6 +120,8 @@ export const benchmarks = [
     ndarrayCastGPU,
     ndarrayResizeGPU,
     ndarrayResizeCPU,
+    ndarrayResizeCubicAntialiasGPU,
+    ndarrayResizeCubicAntialiasCPU,
     pointcloud,
     glyphfield,
     nodelink,
