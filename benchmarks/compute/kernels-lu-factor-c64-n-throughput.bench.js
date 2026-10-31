@@ -19,8 +19,8 @@ export default {
     setup({ compute }, size) {
         const matrices = makeMatricesC64(BATCH_COUNT, size);
         return {
-            source: compute.ndarray.fromArray("f32", [BATCH_COUNT, size, size, 2], matrices, { residency: "gpu", label: "bench:lu-factor-c64-n:source", copyDst: false, copySrc: true }),
-            matrices: compute.ndarray.empty("f32", { shape: [BATCH_COUNT, size, size, 2] }, { residency: "gpu", label: "bench:lu-factor-c64-n:matrices" }),
+            source: compute.ndarray.fromArray("c64", [BATCH_COUNT, size, size], matrices, { residency: "gpu", label: "bench:lu-factor-c64-n:source", copyDst: false, copySrc: true }),
+            matrices: compute.ndarray.empty("c64", { shape: [BATCH_COUNT, size, size] }, { residency: "gpu", label: "bench:lu-factor-c64-n:matrices" }),
             ipiv: compute.ndarray.empty("u32", { shape: [BATCH_COUNT, size] }, { residency: "gpu", label: "bench:lu-factor-c64-n:ipiv" })
         };
     },
@@ -28,7 +28,7 @@ export default {
         const encoder = device.createCommandEncoder();
         encoder.copyBufferToBuffer(state.source.buffer.buffer, 0, state.matrices.buffer.buffer, 0, state.source.byteLength);
         queue.submit([encoder.finish()]);
-        compute.kernels.luFactor(state.matrices, { overwrite: true, ipiv: state.ipiv, complex: true });
+        compute.kernels.luFactor(state.matrices, { overwrite: true, ipiv: state.ipiv });
     },
     operations(size) { return BATCH_COUNT * (8 / 3) * size * size * size / 1e9; },
     workload(size) { return { n: size, batchCount: BATCH_COUNT, matrices: BATCH_COUNT, complexElements: BATCH_COUNT * size * size, scalarElements: BATCH_COUNT * size * size * 2, dtype: "c64", includesGpuReset: true }; },

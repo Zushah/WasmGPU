@@ -6,7 +6,7 @@
 
 // 0 add, 1 sub, 2 mul, 3 axpy (alpha * a + b).
 override OPERATION: u32 = 0u;
-// 0 f32, 1 u32, 2 complex f32 pairs.
+// 0 f32, 1 u32, 2 c64.
 override KIND: u32 = 0u;
 
 @group(0) @binding(0) var<storage, read> a: array<u32>;
@@ -15,6 +15,7 @@ override KIND: u32 = 0u;
 @group(0) @binding(3) var<storage, read> params: array<u32>;
 
 // Offsets and strides are in bytes, while negative strides are stored as wrapping u32 values, like the ndarray gather.
+// P_A_PAIR and P_B_PAIR hold the byte offset of a c64 imaginary part (always 4).
 const P_COUNT: u32 = 0u;
 const P_NDIM: u32 = 1u;
 const P_A_OFFSET: u32 = 2u;

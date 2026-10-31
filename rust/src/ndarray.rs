@@ -110,6 +110,8 @@ pub(crate) enum DType {
     U32,
     F32,
     F64,
+    C64,
+    C128,
 }
 
 impl DType {
@@ -123,6 +125,8 @@ impl DType {
             5 => Some(DType::U32),
             6 => Some(DType::F32),
             7 => Some(DType::F64),
+            8 => Some(DType::C64),
+            9 => Some(DType::C128),
             _ => None,
         }
     }
@@ -132,7 +136,20 @@ impl DType {
             DType::I8 | DType::U8 => 1,
             DType::I16 | DType::U16 => 2,
             DType::I32 | DType::U32 | DType::F32 => 4,
-            DType::F64 => 8,
+            DType::F64 | DType::C64 => 8,
+            DType::C128 => 16,
+        }
+    }
+
+    pub(crate) fn is_complex(self) -> bool {
+        matches!(self, DType::C64 | DType::C128)
+    }
+
+    pub(crate) fn component(self) -> DType {
+        match self {
+            DType::C64 => DType::F32,
+            DType::C128 => DType::F64,
+            real => real,
         }
     }
 }
@@ -327,6 +344,7 @@ fn loader_for(dtype: DType) -> Loader {
         DType::U32 => load_one::<u32>,
         DType::F32 => load_one::<f32>,
         DType::F64 => load_one::<f64>,
+        DType::C64 | DType::C128 => unreachable!("complex dtypes have no scalar loader"),
     }
 }
 
@@ -340,6 +358,7 @@ pub(crate) fn reader_for(dtype: DType) -> Reader {
         DType::U32 => read_run::<u32>,
         DType::F32 => read_run::<f32>,
         DType::F64 => read_run::<f64>,
+        DType::C64 | DType::C128 => unreachable!("complex dtypes have no scalar reader"),
     }
 }
 
@@ -364,6 +383,7 @@ pub(crate) fn writer_for(dtype: DType, mode: IntMode) -> Writer {
         DType::U32 => int_writer!(u32, mode),
         DType::F32 => write_f32_run,
         DType::F64 => write_f64_run,
+        DType::C64 | DType::C128 => unreachable!("complex dtypes have no scalar writer"),
     }
 }
 
@@ -486,6 +506,9 @@ pub(crate) fn copy_cast(dst: Destination, src: Source, shape: &[u32], mode: IntM
     ) {
         return STATUS_DESTINATION_BOUNDS;
     }
+    if src.dtype != dst.dtype && (src.dtype.is_complex() || dst.dtype.is_complex()) {
+        return copy_complex(dst, src, shape, mode);
+    }
     let (mut ss, mut ds) = ([0i64; MAX_RANK], [0i64; MAX_RANK]);
     widen(src.strides, &mut ss);
     widen(dst.strides, &mut ds);
@@ -533,6 +556,56 @@ pub(crate) fn copy_cast(dst: Destination, src: Source, shape: &[u32], mode: IntM
             }
         },
     );
+    STATUS_OK
+}
+
+fn copy_complex(dst: Destination, src: Source, shape: &[u32], mode: IntMode) -> u32 {
+    if !dst.dtype.is_complex() {
+        return STATUS_INVALID_DTYPE;
+    }
+    let (dst_part, src_part) = (dst.dtype.component(), src.dtype.component());
+    let parts = if src.dtype.is_complex() { 2 } else { 1 };
+    for part in 0..2 {
+        let target = Destination {
+            bytes: &mut *dst.bytes,
+            dtype: dst_part,
+            offset: dst.offset + part * dst_part.size() as u32,
+            strides: dst.strides,
+        };
+        let status = if part < parts {
+            let source = Source {
+                bytes: src.bytes,
+                dtype: src_part,
+                offset: src.offset + part * src_part.size() as u32,
+                strides: src.strides,
+            };
+            copy_cast(target, source, shape, mode)
+        } else {
+            zero_fill(target, shape)
+        };
+        if status != STATUS_OK {
+            return status;
+        }
+    }
+    STATUS_OK
+}
+
+fn zero_fill(dst: Destination, shape: &[u32]) -> u32 {
+    let size = dst.dtype.size();
+    if !layout_within(dst.bytes.len(), shape, dst.strides, dst.offset, size) {
+        return STATUS_DESTINATION_BOUNDS;
+    }
+    let mut ds = [0i64; MAX_RANK];
+    widen(dst.strides, &mut ds);
+    let (n, _, d_inner) = inner(shape, &ds, &ds);
+    let out = dst.bytes;
+    for_each_outer(shape, &ds, &ds, 0, dst.offset as i64, |_, _, d| {
+        let mut at = d;
+        for _ in 0..n {
+            out[at as usize..at as usize + size].fill(0);
+            at += d_inner;
+        }
+    });
     STATUS_OK
 }
 
@@ -602,7 +675,9 @@ fn copy_strided(
         1 => copy_elements::<1>(dst, dst_at, dst_stride, src, src_at, src_stride, count),
         2 => copy_elements::<2>(dst, dst_at, dst_stride, src, src_at, src_stride, count),
         4 => copy_elements::<4>(dst, dst_at, dst_stride, src, src_at, src_stride, count),
-        _ => copy_elements::<8>(dst, dst_at, dst_stride, src, src_at, src_stride, count),
+        8 => copy_elements::<8>(dst, dst_at, dst_stride, src, src_at, src_stride, count),
+        16 => copy_elements::<16>(dst, dst_at, dst_stride, src, src_at, src_stride, count),
+        _ => unreachable!("DType::size() returns 1, 2, 4, 8, or 16 bytes"),
     }
 }
 
@@ -739,6 +814,9 @@ pub(crate) fn affine_value(x: f64, a: f64, b: f64, form: AffineForm) -> f64 {
 }
 
 pub(crate) fn affine(dst: Destination, src: Source, shape: &[u32], params: AffineParams) -> u32 {
+    if src.dtype.is_complex() || dst.dtype.is_complex() {
+        return STATUS_INVALID_DTYPE;
+    }
     let nd = shape.len();
     if nd > MAX_RANK || src.strides.len() != nd || dst.strides.len() != nd {
         return STATUS_INVALID_RANK;
@@ -922,6 +1000,9 @@ pub(crate) fn resize(
     out_shape: &[u32],
     tables: ResizeTables,
 ) -> u32 {
+    if src.dtype.is_complex() || dst.dtype.is_complex() {
+        return STATUS_INVALID_DTYPE;
+    }
     let nd = out_shape.len();
     if nd > MAX_RANK || src.strides.len() != nd || dst.strides.len() != nd {
         return STATUS_INVALID_RANK;
@@ -1168,14 +1249,15 @@ pub unsafe extern "C" fn ndarray_pad(
         _ => return STATUS_INVALID_MODE,
     };
     let words = 2 + 5 * nd;
+    let size = dtype.size();
     if !valid_descriptor(layout_ptr, words * 4, 4, dst_ptr, dst_len)
-        || !valid_descriptor(value_ptr, 8, 1, dst_ptr, dst_len)
+        || !valid_descriptor(value_ptr, size, 1, dst_ptr, dst_len)
     {
         return STATUS_INVALID_POINTER;
     }
     with_driver_call(|call| {
         let layout = unsafe { u32_slice(call, layout_ptr, words) };
-        let value = unsafe { u8_slice(call, value_ptr, 8) };
+        let value = unsafe { u8_slice(call, value_ptr, size) };
         let (mut out_shape, mut src_shape, mut before) =
             ([0u32; MAX_RANK], [0u32; MAX_RANK], [0u32; MAX_RANK]);
         let (mut ss, mut ds) = ([0i32; MAX_RANK], [0i32; MAX_RANK]);

@@ -11,18 +11,18 @@ export default {
     subsystem: "compute",
     type: "throughput",
     unit: "GFLOP/s",
-    description: "Steady-state tiled square matmul throughput for complex f32 pairs with caller-provided output.",
+    description: "Steady-state tiled square matmul throughput for c64 arrays with caller-provided output.",
     sizes: { quick: [128, 256], full: [128, 256, 512] },
     gpu: true,
     setup({ compute }, size) {
         return {
-            a: compute.ndarray.fromArray("f32", [size, size, 2], makeF32(size * size * 2), { residency: "gpu" }),
-            b: compute.ndarray.fromArray("f32", [size, size, 2], makeF32(size * size * 2), { residency: "gpu" }),
-            out: compute.ndarray.empty("f32", { shape: [size, size, 2] }, { residency: "gpu" })
+            a: compute.ndarray.fromArray("c64", [size, size], makeF32(size * size * 2), { residency: "gpu" }),
+            b: compute.ndarray.fromArray("c64", [size, size], makeF32(size * size * 2), { residency: "gpu" }),
+            out: compute.ndarray.empty("c64", { shape: [size, size] }, { residency: "gpu" })
         };
     },
     run(s, { compute }) {
-        compute.kernels.matmul(s.a, s.b, { out: s.out, complex: true });
+        compute.kernels.matmul(s.a, s.b, { out: s.out });
     },
     operations(size) { return 8 * size * size * size / 1e9; },
     workload(size) { return { m: size, n: size, k: size, complexElements: size * size }; },

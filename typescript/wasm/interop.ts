@@ -5,7 +5,7 @@
  */
 
 import { assert } from "../utils";
-import { dtypeInfo, type DType, type NumberTypedArray } from "../compute/ndarray";
+import { dtypeInfo, type RealDType, type NumberTypedArray } from "../compute/ndarray";
 
 export type WasmExportsLike = Record<string, unknown>;
 
@@ -41,7 +41,7 @@ export type WasmViewDescriptor = {
     memory?: WasmMemorySource;
     ptr: WasmValueDescriptor;
     length: WasmValueDescriptor;
-    dtype: DType;
+    dtype: RealDType;
     byteOffset?: number;
     name?: string;
 };
@@ -75,7 +75,7 @@ export const assertWasmMemoryView = <T extends NumberTypedArray = NumberTypedArr
     return source as WasmMemoryView<T>;
 };
 
-export const assertWasmViewDType = <T extends NumberTypedArray = NumberTypedArray>(source: unknown, dtype: DType, label: string): WasmMemoryView<T> => {
+export const assertWasmViewDType = <T extends NumberTypedArray = NumberTypedArray>(source: unknown, dtype: RealDType, label: string): WasmMemoryView<T> => {
     const view = assertWasmMemoryView<T>(source, label);
     assert(view.dtype === dtype, `${label} dtype must be '${dtype}'.`);
     return view;
@@ -149,7 +149,7 @@ type ResolvedViewState = {
     ptr: number;
     length: number;
     byteLength: number;
-    dtype: DType;
+    dtype: RealDType;
     name: string | null;
 };
 
@@ -212,8 +212,9 @@ const checkedMul = (a: number, b: number, label: string): number => {
     return out;
 };
 
-const resolveTypedArrayCtor = (dtype: DType): (new(buffer: ArrayBufferLike, byteOffset: number, length: number) => NumberTypedArray) => {
+const resolveTypedArrayCtor = (dtype: RealDType): (new(buffer: ArrayBufferLike, byteOffset: number, length: number) => NumberTypedArray) => {
     const info = dtypeInfo(dtype);
+    assert(info.components === 1, `WasmMemoryView dtype '${dtype}' is not supported; external WebAssembly views are real-only, so view complex data as its f32 or f64 components.`);
     return info.ctor as unknown as (new(buffer: ArrayBufferLike, byteOffset: number, length: number) => NumberTypedArray);
 };
 
@@ -312,6 +313,7 @@ export class WasmModule {
         const name = normalizeName(descriptor.name);
         const label = describeLabel("WasmMemoryView", name);
         const dtype = descriptor.dtype;
+        resolveTypedArrayCtor(dtype);
         const bytesPerElement = dtypeInfo(dtype).bytesPerElement >>> 0;
         const length = this.resolveValue(descriptor.length, `${label} length`);
         const byteLength = checkedMul(length, bytesPerElement, `${label} byteLength`);
@@ -413,7 +415,7 @@ export class WasmMemoryView<T extends NumberTypedArray = NumberTypedArray> {
         return this.state.byteLength >>> 0;
     }
 
-    get dtype(): DType {
+    get dtype(): RealDType {
         return this.state.dtype;
     }
 

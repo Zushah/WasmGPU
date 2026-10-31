@@ -27,17 +27,17 @@ export default {
             }
         }
         const state = {
-            lu: compute.ndarray.fromArray("f32", [size, MATRIX_ORDER, MATRIX_ORDER, 2], matrices, { residency: "gpu", label: "bench:lu-solve-c64-batch:lu" }),
+            lu: compute.ndarray.fromArray("c64", [size, MATRIX_ORDER, MATRIX_ORDER], matrices, { residency: "gpu", label: "bench:lu-solve-c64-batch:lu" }),
             ipiv: compute.ndarray.empty("u32", { shape: [size, MATRIX_ORDER] }, { residency: "gpu", label: "bench:lu-solve-c64-batch:ipiv" }),
-            rhs: compute.ndarray.fromArray("f32", [size, MATRIX_ORDER, 2], rhs, { residency: "gpu", label: "bench:lu-solve-c64-batch:rhs" }),
-            outX: compute.ndarray.empty("f32", { shape: [size, MATRIX_ORDER, 2] }, { residency: "gpu", label: "bench:lu-solve-c64-batch:outX" })
+            rhs: compute.ndarray.fromArray("c64", [size, MATRIX_ORDER], rhs, { residency: "gpu", label: "bench:lu-solve-c64-batch:rhs" }),
+            outX: compute.ndarray.empty("c64", { shape: [size, MATRIX_ORDER] }, { residency: "gpu", label: "bench:lu-solve-c64-batch:outX" })
         };
-        compute.kernels.luFactor(state.lu, { overwrite: true, ipiv: state.ipiv, complex: true });
+        compute.kernels.luFactor(state.lu, { overwrite: true, ipiv: state.ipiv });
         await queue.onSubmittedWorkDone();
         return state;
     },
     run(state, { compute }, size) {
-        compute.kernels.luSolve(state.lu, state.ipiv, state.rhs, { out: state.outX, complex: true });
+        compute.kernels.luSolve(state.lu, state.ipiv, state.rhs, { out: state.outX });
     },
     operations(size) { return size * 8 * MATRIX_ORDER * MATRIX_ORDER / 1e9; },
     workload(size) { return { n: MATRIX_ORDER, batchCount: size, matrices: size, complexElements: size * (MATRIX_ORDER * MATRIX_ORDER + MATRIX_ORDER), matrixComplexElements: size * MATRIX_ORDER * MATRIX_ORDER, rhsComplexElements: size * MATRIX_ORDER, scalarElements: size * (MATRIX_ORDER * MATRIX_ORDER + MATRIX_ORDER) * 2, dtype: "c64", factorizationTimed: false }; },

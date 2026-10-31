@@ -15,7 +15,15 @@ import type { ReadbackRing } from "./readback";
 import { ScratchAllocator } from "./scratch";
 import ndarrayWGSL from "../../wgsl/compute/ndarray.wgsl";
 
-export type DType = "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "f32" | "f64";
+export type RealDType = "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "f32" | "f64";
+
+export type ComplexDType = "c64" | "c128";
+
+export type DType = RealDType | ComplexDType;
+
+export type DTypeKind = "int" | "uint" | "float" | "complex";
+
+export type ComplexScalar = readonly [re: number, im: number];
 
 export type NdarrayResidency = "cpu" | "gpu";
 
@@ -28,20 +36,25 @@ export interface NumberTypedArrayConstructor<T extends NumberTypedArray> {
 
 export type DTypeInfo<T extends NumberTypedArray = NumberTypedArray> = {
     readonly dtype: DType;
+    readonly kind: DTypeKind;
     readonly ctor: NumberTypedArrayConstructor<T>;
+    readonly components: 1 | 2;
+    readonly componentDType: RealDType;
     readonly bytesPerElement: number;
-    readonly wgslScalarType: "i32" | "u32" | "f32" | null;
+    readonly wgslElementType: "i32" | "u32" | "f32" | "vec2<f32>" | null;
 };
 
 const DTYPE_TABLE: Record<DType, DTypeInfo> = {
-    i8: { dtype: "i8", ctor: Int8Array, bytesPerElement: 1, wgslScalarType: null },
-    u8: { dtype: "u8", ctor: Uint8Array, bytesPerElement: 1, wgslScalarType: null },
-    i16: { dtype: "i16", ctor: Int16Array, bytesPerElement: 2, wgslScalarType: null },
-    u16: { dtype: "u16", ctor: Uint16Array, bytesPerElement: 2, wgslScalarType: null },
-    i32: { dtype: "i32", ctor: Int32Array, bytesPerElement: 4, wgslScalarType: "i32" },
-    u32: { dtype: "u32", ctor: Uint32Array, bytesPerElement: 4, wgslScalarType: "u32" },
-    f32: { dtype: "f32", ctor: Float32Array, bytesPerElement: 4, wgslScalarType: "f32" },
-    f64: { dtype: "f64", ctor: Float64Array, bytesPerElement: 8, wgslScalarType: null }
+    i8: { dtype: "i8", kind: "int", ctor: Int8Array, components: 1, componentDType: "i8", bytesPerElement: 1, wgslElementType: null },
+    u8: { dtype: "u8", kind: "uint", ctor: Uint8Array, components: 1, componentDType: "u8", bytesPerElement: 1, wgslElementType: null },
+    i16: { dtype: "i16", kind: "int", ctor: Int16Array, components: 1, componentDType: "i16", bytesPerElement: 2, wgslElementType: null },
+    u16: { dtype: "u16", kind: "uint", ctor: Uint16Array, components: 1, componentDType: "u16", bytesPerElement: 2, wgslElementType: null },
+    i32: { dtype: "i32", kind: "int", ctor: Int32Array, components: 1, componentDType: "i32", bytesPerElement: 4, wgslElementType: "i32" },
+    u32: { dtype: "u32", kind: "uint", ctor: Uint32Array, components: 1, componentDType: "u32", bytesPerElement: 4, wgslElementType: "u32" },
+    f32: { dtype: "f32", kind: "float", ctor: Float32Array, components: 1, componentDType: "f32", bytesPerElement: 4, wgslElementType: "f32" },
+    f64: { dtype: "f64", kind: "float", ctor: Float64Array, components: 1, componentDType: "f64", bytesPerElement: 8, wgslElementType: null },
+    c64: { dtype: "c64", kind: "complex", ctor: Float32Array, components: 2, componentDType: "f32", bytesPerElement: 8, wgslElementType: "vec2<f32>" },
+    c128: { dtype: "c128", kind: "complex", ctor: Float64Array, components: 2, componentDType: "f64", bytesPerElement: 16, wgslElementType: null }
 };
 
 export const dtypeInfo = (dtype: DType): DTypeInfo => {
@@ -147,11 +160,20 @@ const isContiguousRowMajor = (shape: ReadonlyArray<number>, stridesBytes: Readon
     return true;
 };
 
-const DTYPE_CODE: Record<DType, number> = { i8: 0, u8: 1, i16: 2, u16: 3, i32: 4, u32: 5, f32: 6, f64: 7 };
+const DTYPE_CODE: Record<DType, number> = { i8: 0, u8: 1, i16: 2, u16: 3, i32: 4, u32: 5, f32: 6, f64: 7, c64: 8, c128: 9 };
 
-const INTEGER_RANGE: Record<DType, readonly [number, number] | null> = { i8: [-128, 127], u8: [0, 255], i16: [-32768, 32767], u16: [0, 65535], i32: [-2147483648, 2147483647], u32: [0, 4294967295], f32: null, f64: null };
+const INTEGER_RANGE: Record<DType, readonly [number, number] | null> = { i8: [-128, 127], u8: [0, 255], i16: [-32768, 32767], u16: [0, 65535], i32: [-2147483648, 2147483647], u32: [0, 4294967295], f32: null, f64: null, c64: null, c128: null };
 
 const isFloatDType = (dtype: DType): boolean => dtype === "f32" || dtype === "f64";
+
+const isComplexDType = (dtype: DType): dtype is ComplexDType => dtype === "c64" || dtype === "c128";
+
+const assertSourceLength = (dtype: DType, numel: number, length: number): number => {
+    const components = dtypeInfo(dtype).components;
+    if (components === 1) assert(length >= numel, `source length (${length}) must be >= numel (${numel})`);
+    else assert(length >= numel * components, `source length (${length}) must be >= ${numel * components} (${components} interleaved [re, im] components for each of the ${numel} ${dtype} elements)`);
+    return numel * components;
+};
 
 export const sameShape = (a: ReadonlyArray<number>, b: ReadonlyArray<number>): boolean => a.length === b.length && a.every((dim, i) => dim === b[i]);
 
@@ -327,12 +349,12 @@ const ndarrayBase = Symbol("Ndarray.base");
 const ndarrayView = Symbol("Ndarray.view");
 const ndarrayAssertAlive = Symbol("Ndarray.assertAlive");
 
-const placeView = (parent: Ndarray, shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, offsetBytes: number, granularity: number): { offsetBytes: number; byteLength: number; shiftBytes: number } => {
+const placeView = (parent: Ndarray, shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, offsetBytes: number, bytesPerElement: number, granularity: number): { offsetBytes: number; byteLength: number; shiftBytes: number } => {
     const extent = byteExtent(shape, stridesBytes, offsetBytes);
     if (!extent) return { offsetBytes: 0, byteLength: 0, shiftBytes: 0 };
-    assert(extent.min >= 0 && extent.max + parent.bytesPerElement <= parent.byteLength, "internal error: ndarray view escapes its base storage");
+    assert(extent.min >= 0 && extent.max + bytesPerElement <= parent.byteLength, "internal error: ndarray view escapes its base storage");
     const shiftBytes = extent.min - (extent.min % granularity);
-    return { offsetBytes: offsetBytes - shiftBytes, byteLength: extent.max + parent.bytesPerElement - shiftBytes, shiftBytes };
+    return { offsetBytes: offsetBytes - shiftBytes, byteLength: extent.max + bytesPerElement - shiftBytes, shiftBytes };
 };
 
 export abstract class Ndarray {
@@ -359,8 +381,8 @@ export abstract class Ndarray {
         return this.shape.length;
     }
 
-    get wgslScalarType(): DTypeInfo["wgslScalarType"] {
-        return dtypeInfo(this.dtype).wgslScalarType;
+    get wgslElementType(): DTypeInfo["wgslElementType"] {
+        return dtypeInfo(this.dtype).wgslElementType;
     }
 
     get isContiguousC(): boolean {
@@ -381,7 +403,7 @@ export abstract class Ndarray {
 
     abstract [ndarrayAssertAlive](): void;
 
-    abstract [ndarrayView](shape: number[], stridesBytes: number[], offsetBytes: number): Ndarray;
+    abstract [ndarrayView](shape: number[], stridesBytes: number[], offsetBytes: number, dtype?: DType): Ndarray;
 }
 
 export class CPUndarray extends Ndarray {
@@ -393,9 +415,14 @@ export class CPUndarray extends Ndarray {
     private _destroyed: boolean = false;
     private _buf: ArrayBuffer | null = null;
     private _all: NumberTypedArray | null = null;
+    private readonly _components: number;
+    private readonly _componentBytes: number;
 
     private constructor(dtype: DType, shape: number[], stridesBytes: number[], offsetBytes: number, byteLength: number, basePtrBytes: WasmPtr, shapePtr: WasmPtr, stridesPtr: WasmPtr, pointers: boolean) {
         super(dtype, shape, stridesBytes, offsetBytes, byteLength);
+        const info = dtypeInfo(dtype);
+        this._components = info.components;
+        this._componentBytes = info.ctor.BYTES_PER_ELEMENT;
         this._basePtrBytes = basePtrBytes;
         this._shapePtr = shapePtr;
         this._stridesPtr = stridesPtr;
@@ -449,9 +476,9 @@ export class CPUndarray extends Ndarray {
         const dst = CPUndarray.empty(dtype, { shape });
         try {
             assert(dst.isContiguousC, "CPUndarray.fromArray currently requires a contiguous row-major layout");
-            assert(src.length >= dst.numel, `source length (${src.length}) must be >= numel (${dst.numel})`);
+            const count = assertSourceLength(dtype, dst.numel, src.length);
             const data = dst.data();
-            for (let i = 0; i < dst.numel; i++) data[i] = src[i] as number;
+            for (let i = 0; i < count; i++) data[i] = src[i] as number;
             return dst;
         } catch (error) {
             dst.destroy();
@@ -538,12 +565,9 @@ export class CPUndarray extends Ndarray {
     data(): NumberTypedArray {
         this.assertAlive();
         assert(this.isContiguousC, "CPUndarray.data() requires a contiguous row-major layout (use backingBytes() for raw backing storage)");
-        if (this.numel === 0) {
-            const buf = wasm.memory().buffer as unknown as ArrayBuffer;
-            const ctor = dtypeInfo(this.dtype).ctor;
-            return new ctor(buf, 0, 0) as NumberTypedArray;
-        }
-        return new (dtypeInfo(this.dtype).ctor)(wasm.memory().buffer as unknown as ArrayBuffer, (this._basePtrBytes + this.offsetBytes) >>> 0, this.numel >>> 0) as NumberTypedArray;
+        const ctor = dtypeInfo(this.dtype).ctor;
+        if (this.numel === 0) return new ctor(wasm.memory().buffer as unknown as ArrayBuffer, 0, 0) as NumberTypedArray;
+        return new ctor(wasm.memory().buffer as unknown as ArrayBuffer, (this._basePtrBytes + this.offsetBytes) >>> 0, (this.numel * this._components) >>> 0) as NumberTypedArray;
     }
 
     private offsetBytesAt(indices: ReadonlyArray<number>): number {
@@ -563,22 +587,31 @@ export class CPUndarray extends Ndarray {
         return off;
     }
 
-    get(...indices: number[]): number {
+    get(...indices: number[]): number | ComplexScalar {
         const off = this.offsetBytesAt(indices);
         const abs = (this._basePtrBytes + off) >>> 0;
-        assert((abs % this.bytesPerElement) === 0, "internal error: misaligned element address");
-        const i = abs / this.bytesPerElement;
+        assert((abs % this._componentBytes) === 0, "internal error: misaligned element address");
+        const i = abs / this._componentBytes;
         const all = this.ensureAllView() as any;
-        return all[i] as number;
+        if (this._components === 1) return all[i] as number;
+        return [all[i] as number, all[i + 1] as number];
     }
 
-    set(value: number, ...indices: number[]): void {
+    set(value: number | ComplexScalar, ...indices: number[]): void {
         const off = this.offsetBytesAt(indices);
         const abs = (this._basePtrBytes + off) >>> 0;
-        assert((abs % this.bytesPerElement) === 0, "internal error: misaligned element address");
-        const i = abs / this.bytesPerElement;
+        assert((abs % this._componentBytes) === 0, "internal error: misaligned element address");
+        const i = abs / this._componentBytes;
         const all = this.ensureAllView() as any;
-        all[i] = value;
+        if (this._components === 1) {
+            assert(!Array.isArray(value), () => `CPUndarray.set(): a [re, im] value requires a complex dtype (got ${this.dtype})`);
+            all[i] = value;
+            return;
+        }
+        if (typeof value === "number") { all[i] = value; all[i + 1] = 0; return; }
+        assert(Array.isArray(value) && value.length === 2, () => `CPUndarray.set(): ${this.dtype} values must be numbers or [re, im] tuples`);
+        all[i] = value[0];
+        all[i + 1] = value[1];
     }
 
     zero_(): void {
@@ -590,10 +623,10 @@ export class CPUndarray extends Ndarray {
         forEachElementOffset(this.shape, this.stridesBytes, this.offsetBytes, (off) => bytes.fill(0, off, off + this.bytesPerElement));
     }
 
-    [ndarrayView](shape: number[], stridesBytes: number[], offsetBytes: number): CPUndarray {
+    [ndarrayView](shape: number[], stridesBytes: number[], offsetBytes: number, dtype: DType = this.dtype): CPUndarray {
         this.assertAlive();
-        const place = placeView(this, shape, stridesBytes, offsetBytes, 1);
-        const view = new CPUndarray(this.dtype, shape, stridesBytes, place.offsetBytes, place.byteLength, (this._basePtrBytes + place.shiftBytes) >>> 0, 0, 0, false);
+        const place = placeView(this, shape, stridesBytes, offsetBytes, dtypeInfo(dtype).bytesPerElement, 1);
+        const view = new CPUndarray(dtype, shape, stridesBytes, place.offsetBytes, place.byteLength, (this._basePtrBytes + place.shiftBytes) >>> 0, 0, 0, false);
         view[ndarrayBase] = this[ndarrayBase] ?? this;
         return view;
     }
@@ -677,10 +710,10 @@ export class GPUndarray extends Ndarray {
         return { buffer: this.buffer, offset: this.baseOffsetBytes, size: alignTo(this.byteLength, 4) };
     }
 
-    [ndarrayView](shape: number[], stridesBytes: number[], offsetBytes: number): GPUndarray {
+    [ndarrayView](shape: number[], stridesBytes: number[], offsetBytes: number, dtype: DType = this.dtype): GPUndarray {
         this[ndarrayAssertAlive]();
-        const place = placeView(this, shape, stridesBytes, offsetBytes, 4);
-        const view = new GPUndarray(this.dtype, shape, stridesBytes, place.offsetBytes, place.byteLength, this.buffer, this.baseOffsetBytes + place.shiftBytes, false);
+        const place = placeView(this, shape, stridesBytes, offsetBytes, dtypeInfo(dtype).bytesPerElement, 4);
+        const view = new GPUndarray(dtype, shape, stridesBytes, place.offsetBytes, place.byteLength, this.buffer, this.baseOffsetBytes + place.shiftBytes, false);
         view[ndarrayBase] = this[ndarrayBase] ?? this;
         return view;
     }
@@ -739,7 +772,7 @@ export type NdarrayPadWidth = number | readonly [number, number] | ReadonlyArray
 export type NdarrayPadOptions = NdarrayOperationOptions & {
     width: NdarrayPadWidth;
     mode?: NdarrayPadMode;
-    value?: number;
+    value?: number | ComplexScalar;
 };
 
 export type NdarrayParameter = number | ArrayLike<number>;
@@ -771,13 +804,20 @@ const resolveIntMode = (src: DType, options: { overflow?: NdarrayOverflowMode; r
     return { saturate: (options.overflow ?? (isFloatDType(src) ? "saturate" : "wrap")) === "saturate", nearest: options.rounding === "nearest-even" };
 };
 
-const elementBits = (dtype: DType, value: number): Uint32Array => {
-    const buffer = new ArrayBuffer(8);
-    new (dtypeInfo(dtype).ctor)(buffer)[0] = value;
+const elementBits = (dtype: DType, value: number | ComplexScalar): Uint32Array => {
+    const buffer = new ArrayBuffer(16);
+    const components = new (dtypeInfo(dtype).ctor)(buffer);
+    if (typeof value === "number") components[0] = value;
+    else { components[0] = value[0]; components[1] = value[1]; }
     return new Uint32Array(buffer);
 };
 
-const validateElementValue = (dtype: DType, value: number, op: string): void => {
+const validateElementValue = (dtype: DType, value: unknown, op: string): void => {
+    if (isComplexDType(dtype)) {
+        assert(typeof value === "number" || (Array.isArray(value) && value.length === 2 && typeof value[0] === "number" && typeof value[1] === "number"), `${opName(op)}: a ${dtype} value must be a number or a [re, im] tuple of numbers (got ${String(value)})`);
+        return;
+    }
+    assert(!Array.isArray(value), `${opName(op)}: a [re, im] value requires a complex dtype (got ${dtype})`);
     assert(typeof value === "number", `${opName(op)}: value must be a number (got ${String(value)})`);
     const range = INTEGER_RANGE[dtype];
     if (range) assert(Number.isInteger(value) && value >= range[0] && value <= range[1], `${opName(op)}: value ${value} is not exactly representable as ${dtype}`);
@@ -916,7 +956,7 @@ const buildResizeTable = (nIn: number, nOut: number, method: NdarrayResizeMethod
     return table;
 };
 
-const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, P_VALUE_LO = 5, P_VALUE_HI = 6, P_PARAM_AXIS = 7, P_PARAM_LEN = 8, P_AXIS_Y = 9, P_AXIS_X = 10, P_TABLE = 11, P_SHAPE = 16, P_SRC_STRIDE = 24, P_DST_STRIDE = 32, P_SRC_SHAPE = 40, P_BEFORE = 48, P_HEADER_WORDS = 56;
+const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, P_VALUE_LO = 5, P_VALUE_HI = 6, P_PARAM_AXIS = 7, P_PARAM_LEN = 8, P_AXIS_Y = 9, P_AXIS_X = 10, P_TABLE = 11, P_VALUE_2 = 12, P_VALUE_3 = 13, P_SHAPE = 16, P_SRC_STRIDE = 24, P_DST_STRIDE = 32, P_SRC_SHAPE = 40, P_BEFORE = 48, P_HEADER_WORDS = 56;
 
 type GPUGather = {
     dst: GPUndarray;
@@ -1063,6 +1103,8 @@ export class NdarrayGPUEngine {
         words[P_DST_OFFSET] = dstOffset;
         words[P_VALUE_LO] = spec.valueBits?.[0] ?? 0;
         words[P_VALUE_HI] = spec.valueBits?.[1] ?? 0;
+        words[P_VALUE_2] = spec.valueBits?.[2] ?? 0;
+        words[P_VALUE_3] = spec.valueBits?.[3] ?? 0;
         words[P_PARAM_AXIS] = (spec.paramAxis !== undefined && spec.paramAxis >= 0) ? c.axes[spec.paramAxis]! : 0xFFFFFFFF;
         words[P_PARAM_LEN] = spec.paramLen ?? 1;
         words[P_AXIS_Y] = spec.resizeAxes ? c.axes[spec.resizeAxes[0]]! : 0;
@@ -1095,8 +1137,16 @@ const castConstants = (src: DType, dst: DType, mode: IntMode): Record<string, nu
     return { SRC_DTYPE: DTYPE_CODE[src], DST_DTYPE: DTYPE_CODE[dst], OPERATION: 0, OVERFLOW: integerDestination && !mode.saturate ? 0 : 1, ROUNDING: integerDestination && mode.nearest ? 1 : 0 };
 };
 
-const assertGPUCast = (src: DType, dst: DType, op: string): void => {
-    assert(!((src === "f64") !== (dst === "f64") && (INTEGER_RANGE[src] !== null || INTEGER_RANGE[dst] !== null)), `${opName(op)}: f64 <-> integer casts are not supported on the GPU; cast through f32 or use a CPU array`);
+const assertCast = (src: DType, dst: DType, residency: NdarrayResidency, op: string): void => {
+    assert(!isComplexDType(src) || isComplexDType(dst), `${opName(op)}: casting ${src} to ${dst} would discard imaginary parts; take compute.ndarray.real() or compute.ndarray.imag() first, then cast()`);
+    if (residency === "cpu") return;
+    const integers = INTEGER_RANGE[src] !== null || INTEGER_RANGE[dst] !== null;
+    assert(!((src === "f64") !== (dst === "f64") && integers), `${opName(op)}: f64 <-> integer casts are not supported on the GPU; cast through f32 or use a CPU array`);
+    assert(!((src === "c128") !== (dst === "c128") && integers), `${opName(op)}: c128 <-> integer casts are not supported on the GPU; cast through f32 or c64, or use a CPU array`);
+};
+
+const assertRealOperation = (dtypes: ReadonlyArray<DType>, op: string, suffix: string): void => {
+    assert(!dtypes.some(isComplexDType), `${opName(op)}: complex dtypes (c64, c128) are not supported${suffix}`);
 };
 
 const assertCPUOptions = (options: NdarrayGPUOptions & { encoder?: unknown; out?: unknown }, op: string): void => {
@@ -1195,6 +1245,7 @@ export class NdarrayNamespace {
         this.assertAlive(op);
         assertNdarray(a, op);
         dtypeInfo(dtype);
+        assertCast(a.dtype, dtype, a.residency, op);
         const mode = resolveIntMode(a.dtype, options, op);
         if (a instanceof CPUndarray) {
             assertCPUOptions(options, op);
@@ -1203,7 +1254,6 @@ export class NdarrayNamespace {
             try { cpuCopy(out, a, a.stridesBytes, mode, op); return out as T; }
             catch (error) { out.destroy(); throw error; }
         }
-        assertGPUCast(a.dtype, dtype, op);
         return this.gpuRun(a as GPUndarray, dtype, a.shape, options, op, (commands, out, src) => {
             this.gpu.gather(commands, options.encoder, { dst: out, src, entryPoint: "gather", constants: castConstants(src.dtype, dtype, mode), srcStrides: src.stridesBytes }, op);
         }) as T;
@@ -1227,6 +1277,7 @@ export class NdarrayNamespace {
         assert(dst.residency === src.residency, `${opName(op)}: destination and source must have the same residency (got ${dst.residency} and ${src.residency}); use compute.ndarray.toGPU() or compute.ndarray.toCPU() first`);
         const srcStrides = broadcastStrides(src.shape, src.stridesBytes, dst.shape, opName(op));
         assert(!mayAddressTwice(dst.shape, dst.stridesBytes, dst.bytesPerElement), `${opName(op)}: the destination may address the same memory more than once (broadcast or overlapping strides)`);
+        assertCast(src.dtype, dst.dtype, dst.residency, op);
         const mode = resolveIntMode(src.dtype, options, op);
         if (dst instanceof CPUndarray) {
             assert(options.encoder === undefined && options.label === undefined, `${opName(op)}: GPU options (encoder, label) are not supported for CPU arrays`);
@@ -1244,7 +1295,6 @@ export class NdarrayNamespace {
         const source = src as GPUndarray;
         this.assertGPUArray(target, op, "destination");
         this.assertGPUArray(source, op, "source");
-        assertGPUCast(source.dtype, target.dtype, op);
         assert(target.bytesPerElement >= 4 || target.isContiguousC, `${opName(op)}: GPU destinations with 8-bit or 16-bit dtypes must be C-contiguous`);
         if (target.numel === 0) return;
         const commands: ComputeDispatchCommand[] = [];
@@ -1293,6 +1343,7 @@ export class NdarrayNamespace {
         this.assertAlive(op);
         assertNdarray(a, op);
         assert(typeof options === "object" && options !== null, `${opName(op)}: options are required`);
+        assertRealOperation([a.dtype, options.dtype ?? a.dtype], op, "");
         const meanStd = options.mean !== undefined || options.std !== undefined;
         const scaleOffset = options.scale !== undefined || options.offset !== undefined;
         assert(!(meanStd && scaleOffset), `${opName(op)}: use either { scale, offset } or { mean, std }, not both`);
@@ -1330,6 +1381,7 @@ export class NdarrayNamespace {
         this.assertAlive(op);
         assertNdarray(a, op);
         assert(typeof options === "object" && options !== null, `${opName(op)}: options with axes and size are required`);
+        assertRealOperation([a.dtype, options.dtype ?? a.dtype], op, " yet");
         assert(Array.isArray(options.axes) && options.axes.length === 2, `${opName(op)}: axes must be two axes`);
         const axes = normalizeAxes(options.axes, a.ndim, opName(op)) as unknown as readonly [number, number];
         assert(Array.isArray(options.size) && options.size.length === 2, `${opName(op)}: size must be two integers`);
@@ -1422,10 +1474,9 @@ export class NdarrayNamespace {
         const dims = validateShape(shape);
         const stridesBytes = defaultRowMajorStridesBytes(dims, info.bytesPerElement);
         const byteLength = requiredBackingBytes(dims, stridesBytes, 0, info.bytesPerElement);
-        const numel = numelFromShape(dims);
-        assert(src.length >= numel, `source length (${src.length}) must be >= numel (${numel})`);
+        const count = assertSourceLength(dtype, numelFromShape(dims), src.length);
         const data = new info.ctor(new ArrayBuffer(byteLength));
-        for (let i = 0; i < numel; i++) data[i] = src[i] as number;
+        for (let i = 0; i < count; i++) data[i] = src[i] as number;
         const sb = new StorageBuffer(this.device, this.queue, { ...this.gpuDescriptor(options), data: data as unknown as BufferSource });
         return new GPUndarray(dtype, dims, stridesBytes, 0, byteLength, sb, 0, true);
     }
@@ -1608,5 +1659,55 @@ export class NdarrayNamespace {
         const target = validateShape(shape, `${opName(op)}: `);
         assert(numelFromShape(target) <= 0xFFFFFFFF, `${opName(op)}: the number of elements of [${target}] must fit in u32`);
         return a[ndarrayView](target, broadcastStrides(a.shape, a.stridesBytes, target, opName(op)), a.offsetBytes) as T;
+    }
+
+    real<T extends AnyNdarray>(a: T): T {
+        const info = this.complexInput(a, "real");
+        return a[ndarrayView](a.shape.slice(), a.stridesBytes.slice(), a.offsetBytes, info.componentDType) as T;
+    }
+
+    imag<T extends AnyNdarray>(a: T): T {
+        const info = this.complexInput(a, "imag");
+        return a[ndarrayView](a.shape.slice(), a.stridesBytes.slice(), a.offsetBytes + info.ctor.BYTES_PER_ELEMENT, info.componentDType) as T;
+    }
+
+    viewAsReal<T extends AnyNdarray>(a: T): T {
+        const info = this.complexInput(a, "viewAsReal");
+        return a[ndarrayView]([...a.shape, 2], [...a.stridesBytes, info.ctor.BYTES_PER_ELEMENT], a.offsetBytes, info.componentDType) as T;
+    }
+
+    viewAsComplex<T extends AnyNdarray>(a: T): T {
+        const op = "viewAsComplex";
+        this.assertAlive(op);
+        assertNdarray(a, op);
+        assert(a.dtype === "f32" || a.dtype === "f64", `${opName(op)}: expected an f32 or f64 array (got ${a.dtype})`);
+        const dtype: ComplexDType = (a.dtype === "f32") ? "c64" : "c128";
+        const size = dtypeInfo(dtype).bytesPerElement;
+        const hint = "; call compute.ndarray.contiguous() first";
+        assert(a.ndim >= 1 && a.shape[a.ndim - 1] === 2, `${opName(op)}: the last axis must have length 2 (got shape [${a.shape}])`);
+        assert(a.stridesBytes[a.ndim - 1] === a.bytesPerElement, `${opName(op)}: the last axis must have a stride of ${a.bytesPerElement} bytes (got ${a.stridesBytes[a.ndim - 1]})${hint}`);
+        const shape = a.shape.slice(0, -1);
+        const strides = a.stridesBytes.slice(0, -1);
+        for (let i = shape.length - 1; i >= 0; i--) {
+            if (shape[i]! > 1) {
+                assert(strides[i]! % size === 0, `${opName(op)}: the stride of axis ${i} (${strides[i]} bytes) must be a multiple of the ${dtype} element size (${size} bytes)${hint}`);
+                continue;
+            }
+            if (strides[i]! % size === 0) continue;
+            const stride = (i === shape.length - 1) ? size : strides[i + 1]! * Math.max(shape[i + 1]!, 1);
+            strides[i] = (stride >= -0x80000000 && stride <= 0x7FFFFFFF && stride !== 0) ? stride : size;
+        }
+        if (numelFromShape(shape) > 0) {
+            const address = (a instanceof CPUndarray) ? a.basePtrBytes + a.offsetBytes : (a as GPUndarray).buffer.offsetBytes + (a as GPUndarray).baseOffsetBytes + a.offsetBytes;
+            assert(address % size === 0, `${opName(op)}: the first element must be aligned to the ${dtype} element size (${size} bytes)${hint}`);
+        }
+        return a[ndarrayView](shape, validateStridesBytes(strides, shape.length, size, `${opName(op)}: `), a.offsetBytes, dtype) as T;
+    }
+
+    private complexInput(a: AnyNdarray, op: string): DTypeInfo {
+        this.assertAlive(op);
+        assertNdarray(a, op);
+        assert(isComplexDType(a.dtype), `${opName(op)}: expected a c64 or c128 array (got ${a.dtype})`);
+        return dtypeInfo(a.dtype);
     }
 }

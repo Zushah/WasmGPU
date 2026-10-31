@@ -45,11 +45,13 @@ def _dtype_name(dtype: Any) -> str:
         np.dtype("uint32"): "u32",
         np.dtype("float32"): "f32",
         np.dtype("float64"): "f64",
+        np.dtype("complex64"): "c64",
+        np.dtype("complex128"): "c128",
     }
     try:
         return names[value]
     except KeyError as error:
-        raise WasmGPUInteropError(f"Unsupported dtype {value!r}; expected int8, uint8, int16, uint16, int32, uint32, float32, or float64.") from error
+        raise WasmGPUInteropError(f"Unsupported dtype {value!r}; expected int8, uint8, int16, uint16, int32, uint32, float32, float64, complex64, or complex128.") from error
 
 def _numpy_dtype(dtype: Any) -> Any:
     np = _require_numpy()
@@ -62,6 +64,8 @@ def _numpy_dtype(dtype: Any) -> Any:
         "u32": "uint32",
         "f32": "float32",
         "f64": "float64",
+        "c64": "complex64",
+        "c128": "complex128",
     }
     return np.dtype(aliases.get(dtype, dtype))
 
@@ -136,7 +140,11 @@ class WasmGPUInterop:
             raise WasmGPUInteropError("from_cpu() requires a C-contiguous CPUndarray.")
         view = src.data()
         value = view.to_py() if hasattr(view, "to_py") else view
-        out = np.array(value, dtype=_numpy_dtype(str(src.dtype)), copy=True)
+        dtype = _numpy_dtype(str(src.dtype))
+        if dtype.kind == "c":
+            component = np.float32 if dtype == np.complex64 else np.float64
+            return np.array(value, dtype=component, copy=True).view(dtype).reshape(_shape_tuple(src.shape))
+        out = np.array(value, dtype=dtype, copy=True)
         return out.reshape(_shape_tuple(src.shape))
 
     async def from_gpu(self, src: Any) -> Any:

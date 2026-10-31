@@ -13,6 +13,12 @@ const compute = new Compute(device, device.queue);
 
 const valuesOf = (a) => { const out = []; const visit = (index) => { if (index.length === a.ndim) { out.push(a.get(...index)); return; } for (let i = 0; i < a.shape[index.length]; i++) visit([...index, i]); }; visit([]); return out; };
 const readGPU = async (a) => { const cpu = await compute.ndarray.toCPU(a); try { return valuesOf(cpu); } finally { cpu.destroy(); } };
+const bytesOf = async (a) => {
+    const cpu = (a.residency === "gpu") ? await compute.ndarray.toCPU(a) : a;
+    const dense = compute.ndarray.contiguous(cpu);
+    try { const data = dense.data(); return Array.from(new Uint8Array(data.buffer, data.byteOffset, data.byteLength)); } finally { dense.destroy(); if (cpu !== a) cpu.destroy(); }
+};
+const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtype, { shape }); const data = a.data(); new Uint32Array(data.buffer, data.byteOffset, words.length).set(words); return a; };
 
 // 1) CPU: contiguous row-major.
 {
@@ -166,7 +172,7 @@ const readGPU = async (a) => { const cpu = await compute.ndarray.toCPU(a); try {
     const values = new Float64Array([Math.PI, 1 + Number.EPSILON, -Math.E, Number.MIN_VALUE]);
     const a = compute.ndarray.fromArray("f64", [2, 2], values);
     assert.ok(a.data() instanceof Float64Array, "f64 CPU ndarrays must expose Float64Array data");
-    assert.strictEqual(a.wgslScalarType, null, "f64 storage must not claim a native WGSL scalar type");
+    assert.strictEqual(a.wgslElementType, null, "f64 storage must not claim a native WGSL element type");
     const ga = compute.ndarray.toGPU(a, { label: "ndarray_roundtrip_f64_storage" });
     const b = await compute.ndarray.toCPU(ga);
     assert.ok(b.data() instanceof Float64Array);
@@ -466,7 +472,198 @@ const readGPU = async (a) => { const cpu = await compute.ndarray.toCPU(a); try {
     kernelIn.destroy();
 }
 
-// 20) Cleanup releases the shared compute context before its browser GPU device.
+// 20) Complex dtypes store interleaved [re, im] components and read and write scalars as tuples.
+{
+    const a = compute.ndarray.fromArray("c64", [2, 2], [1, -1, 2, -2, 3, -3, 4, -4]);
+    assert.deepStrictEqual([a.bytesPerElement, a.numel, a.stridesBytes, a.wgslElementType], [8, 4, [16, 8], "vec2<f32>"]);
+    assert.ok(a.data() instanceof Float32Array && a.data().length === 8, "c64 data() exposes interleaved f32 components");
+    assert.deepStrictEqual(a.get(1, 0), [3, -3]);
+    a.set(5, 0, 1);
+    a.set([0.5, -0.25], 1, 1);
+    assert.deepStrictEqual(Array.from(a.data()), [1, -1, 5, 0, 3, -3, 0.5, -0.25], "A number sets (value, +0) and a tuple sets both components");
+    assert.deepStrictEqual(valuesOf(compute.ndarray.transpose(a)), [[1, -1], [3, -3], [5, 0], [0.5, -0.25]]);
+    assert.throws(() => compute.ndarray.fromArray("c64", [2], [1, 2, 3]), /source length \(3\) must be >= 4/);
+    assert.throws(() => a.set([1, 2, 3], 0, 0), /c64 values must be numbers or \[re, im\] tuples/);
+    const real = compute.ndarray.zeros("f32", { shape: [2] });
+    assert.throws(() => real.set([1, 2], 0), /a \[re, im\] value requires a complex dtype \(got f32\)/);
+    const z = compute.ndarray.zeros("c128", { shape: [] });
+    assert.deepStrictEqual([z.bytesPerElement, z.wgslElementType, z.data() instanceof Float64Array, z.get()], [16, null, true, [0, 0]]);
+    z.set([Math.PI, -Math.E]);
+    assert.deepStrictEqual(z.get(), [Math.PI, -Math.E]);
+    const g = compute.ndarray.fromArray("c128", [2], [1, 2, 3, 4], { residency: "gpu" });
+    assert.deepStrictEqual([g.byteLength, await readGPU(g)], [32, [[1, 2], [3, 4]]]);
+    a.destroy();
+    real.destroy();
+    z.destroy();
+    g.destroy();
+}
+
+// 21) real, imag, viewAsReal, and viewAsComplex view the interleaved components of the same storage.
+{
+    const a = compute.ndarray.fromArray("c64", [2, 3], [0, 10, 1, 11, 2, 12, 3, 13, 4, 14, 5, 15]);
+    const re = compute.ndarray.real(a), im = compute.ndarray.imag(a);
+    assert.deepStrictEqual([re.dtype, re.shape, re.stridesBytes, re.base === a, re.isContiguousC], ["f32", [2, 3], [24, 8], true, false]);
+    assert.deepStrictEqual([valuesOf(re), valuesOf(im)], [[0, 1, 2, 3, 4, 5], [10, 11, 12, 13, 14, 15]]);
+    assert.throws(() => re.data(), /contiguous row-major/);
+    assert.strictEqual(compute.ndarray.imag(compute.ndarray.slice(a, [1, 2])).get(), 15, "imag() of the last element stays inside its base");
+    im.set(-1, 1, 2);
+    assert.deepStrictEqual(a.get(1, 2), [5, -1], "Writes through imag() reach the root");
+    const pairs = compute.ndarray.viewAsReal(a);
+    assert.deepStrictEqual([pairs.dtype, pairs.shape, pairs.stridesBytes, pairs.isContiguousC], ["f32", [2, 3, 2], [24, 8, 4], true]);
+    assert.deepStrictEqual(Array.from(pairs.data()), [0, 10, 1, 11, 2, 12, 3, 13, 4, 14, 5, -1]);
+    const back = compute.ndarray.viewAsComplex(pairs);
+    assert.deepStrictEqual([back.dtype, back.shape, back.stridesBytes, back.base === a], ["c64", [2, 3], [24, 8], true]);
+    back.set([7, 8], 0, 0);
+    assert.deepStrictEqual(a.get(0, 0), [7, 8], "Writes through viewAsComplex() reach the root");
+    const swapped = compute.ndarray.viewAsComplex(compute.ndarray.swapAxes(pairs, 0, 1));
+    assert.deepStrictEqual([swapped.shape, swapped.stridesBytes, valuesOf(swapped)], [[3, 2], [8, 24], valuesOf(compute.ndarray.transpose(a))]);
+    const unit = compute.ndarray.empty("f32", { shape: [1, 2], stridesBytes: [12, 4] });
+    assert.deepStrictEqual(compute.ndarray.viewAsComplex(unit).stridesBytes, [8], "Size-1 axes get valid c64 strides");
+    const odd = compute.ndarray.fromArray("f32", [3, 2], [1, 2, 3, 4, 5, 6]);
+    assert.throws(() => compute.ndarray.real(odd), /compute\.ndarray\.real: expected a c64 or c128 array \(got f32\)/);
+    assert.throws(() => compute.ndarray.imag(odd), /expected a c64 or c128 array/);
+    assert.throws(() => compute.ndarray.viewAsReal(odd), /expected a c64 or c128 array/);
+    assert.throws(() => compute.ndarray.viewAsComplex(a), /compute\.ndarray\.viewAsComplex: expected an f32 or f64 array \(got c64\)/);
+    const ints = compute.ndarray.cast(odd, "i32");
+    assert.throws(() => compute.ndarray.viewAsComplex(ints), /expected an f32 or f64 array \(got i32\)/);
+    assert.throws(() => compute.ndarray.viewAsComplex(compute.ndarray.slice(odd, [0, 0])), /last axis must have length 2/);
+    assert.throws(() => compute.ndarray.viewAsComplex(compute.ndarray.reshape(odd, [2, 3])), /last axis must have length 2/);
+    assert.throws(() => compute.ndarray.viewAsComplex(compute.ndarray.transpose(compute.ndarray.slice(odd, [[0, 2]]))), /last axis must have a stride of 4 bytes \(got 8\); call compute\.ndarray\.contiguous\(\) first/);
+    const gapped = compute.ndarray.empty("f32", { shape: [2, 2], stridesBytes: [12, 4] });
+    assert.throws(() => compute.ndarray.viewAsComplex(gapped), /stride of axis 0 \(12 bytes\) must be a multiple of the c64 element size \(8 bytes\)/);
+    assert.throws(() => compute.ndarray.viewAsComplex(compute.ndarray.reshape(compute.ndarray.slice(compute.ndarray.reshape(odd, [6]), [[1, 5]]), [2, 2])), /first element must be aligned to the c64 element size/);
+    const g = compute.ndarray.fromArray("f64", [5, 2], Array.from({ length: 10 }, (_, i) => i), { residency: "gpu" });
+    assert.throws(() => compute.ndarray.viewAsComplex(compute.ndarray.reshape(compute.ndarray.slice(compute.ndarray.reshape(g, [10]), [[1, 9]]), [4, 2])), /first element must be aligned to the c128 element size \(16 bytes\)/);
+    const gc = compute.ndarray.viewAsComplex(g);
+    assert.deepStrictEqual([gc.residency, gc.dtype, gc.shape, gc.base === g], ["gpu", "c128", [5], true]);
+    assert.deepStrictEqual(await readGPU(compute.ndarray.imag(compute.ndarray.slice(gc, [[3, null]]))), [7, 9], "GPU imag() of trailing elements");
+    assert.deepStrictEqual(await readGPU(compute.ndarray.real(compute.ndarray.flip(gc))), [8, 6, 4, 2, 0]);
+    for (const residency of ["cpu", "gpu"]) {
+        const z = compute.ndarray.fromArray("c128", [3], [1, 2, 3, 4, 5, 6], { residency });
+        compute.ndarray.copyInto(compute.ndarray.real(z), compute.ndarray.imag(z));
+        assert.deepStrictEqual((residency === "gpu") ? await readGPU(z) : valuesOf(z), [[2, 2], [4, 4], [6, 6]], `${residency} copies between real() and imag() of one root stage their overlapping source`);
+        z.destroy();
+    }
+    a.destroy();
+    assert.throws(() => back.get(0, 0), /destroyed/);
+    unit.destroy();
+    odd.destroy();
+    ints.destroy();
+    gapped.destroy();
+    g.destroy();
+    await assert.rejects(() => compute.ndarray.toCPU(compute.ndarray.real(gc)), /destroyed/);
+}
+
+// 22) Layout operations on c64 and c128 arrays are bit-identical on the CPU and GPU.
+{
+    for (const dtype of ["c64", "c128"]) {
+        const values = [1.5, -0, NaN, Infinity, -2.25, 1e-40, 3, 0.1, -Infinity, 4, 2.5, -7];
+        const a = compute.ndarray.fromArray(dtype, [2, 3], values);
+        const g = compute.ndarray.toGPU(a);
+        const [cpuT, gpuT] = [compute.ndarray.contiguous(compute.ndarray.transpose(a)), compute.ndarray.contiguous(compute.ndarray.transpose(g))];
+        assert.deepStrictEqual(await bytesOf(gpuT), await bytesOf(cpuT), `${dtype} transposed contiguous()`);
+        const round = (dtype === "c64") ? Math.fround : (v) => v;
+        assert.deepStrictEqual(valuesOf(cpuT).flat(), [0, 1, 6, 7, 2, 3, 8, 9, 4, 5, 10, 11].map((i) => round(values[i])), `${dtype} transposed values`);
+        const destinations = [compute.ndarray.zeros(dtype, { shape: [3, 3, 2] }), compute.ndarray.zeros(dtype, { shape: [3, 3, 2] }, { residency: "gpu" })];
+        for (const [dst, src] of [[destinations[0], a], [destinations[1], g]]) compute.ndarray.copyInto(compute.ndarray.flip(compute.ndarray.transpose(dst, [0, 2, 1]), 2), compute.ndarray.flip(src, 0));
+        assert.deepStrictEqual(await bytesOf(destinations[1]), await bytesOf(destinations[0]), `${dtype} broadcast copyInto() into a transposed, flipped destination`);
+        const expected = valuesOf(compute.ndarray.flip(compute.ndarray.transpose(a)));
+        assert.deepStrictEqual(valuesOf(destinations[0]), [...expected, ...expected, ...expected], `${dtype} broadcast copyInto() values`);
+        for (const options of [{ width: [[1, 0], [0, 2]], value: [7, -7] }, { width: 1, value: 2 }, { width: [2, 1], mode: "reflect" }, { width: [[0, 1], [3, 0]], mode: "wrap" }]) {
+            const [cpuPad, gpuPad] = [compute.ndarray.pad(a, options), compute.ndarray.pad(g, options)];
+            assert.deepStrictEqual(await bytesOf(gpuPad), await bytesOf(cpuPad), `${dtype} pad(${JSON.stringify(options)})`);
+            if (options.value !== undefined) assert.deepStrictEqual(cpuPad.get(0, 0), (typeof options.value === "number") ? [options.value, 0] : options.value, `${dtype} constant pad value`);
+            cpuPad.destroy();
+            gpuPad.destroy();
+        }
+        assert.throws(() => compute.ndarray.pad(a, { width: 1, value: [1, 2, 3] }), new RegExp(`a ${dtype} value must be a number or a \\[re, im\\] tuple`));
+        assert.throws(() => compute.ndarray.pad(compute.ndarray.real(a), { width: 1, value: [1, 2] }), /a \[re, im\] value requires a complex dtype/);
+        for (const x of [a, g, cpuT, gpuT, ...destinations]) x.destroy();
+    }
+}
+
+// 23) Casts into complex dtypes are bit-exact and identical on the CPU and GPU, and casts out of them are rejected.
+{
+    const bits = [0x7FA00001, 0xFFC12345, 0x80000000, 0x00000001, 0x7F7FFFFF, 0x3F800001];
+    const f32 = fromBits("f32", [6], bits);
+    const f64 = compute.ndarray.fromArray("f64", [6], [1 + 2 ** -24, 1 + 3 * 2 ** -24, 3.5e38, 1.5 * 2 ** -149, -0, NaN]);
+    const i32 = compute.ndarray.fromArray("i32", [6], [16777217, -16777219, 2147483647, -2147483648, 0, 7]);
+    const u8 = compute.ndarray.fromArray("u8", [6], [0, 1, 127, 128, 254, 255]);
+    const c64 = compute.ndarray.fromArray("c64", [3], [1.5, -2.5, NaN, Infinity, 1e-40, -0]);
+    const c128 = compute.ndarray.fromArray("c128", [3], [1 + 2 ** -24, -(1 + 3 * 2 ** -24), 3.5e38, 1.5 * 2 ** -149, NaN, -0]);
+    const sources = { f32, f64, i32, u8, c64, c128 };
+    const gpu = Object.fromEntries(Object.entries(sources).map(([k, v]) => [k, compute.ndarray.toGPU(v)]));
+    for (const [from, to] of [["f32", "c64"], ["f64", "c64"], ["i32", "c64"], ["u8", "c64"], ["c128", "c64"], ["f32", "c128"], ["f64", "c128"], ["c64", "c128"]]) {
+        const cpu = compute.ndarray.cast(sources[from], to);
+        const fromGPU = compute.ndarray.cast(gpu[from], to);
+        assert.deepStrictEqual(await bytesOf(fromGPU), await bytesOf(cpu), `${from} -> ${to} casts must be bit-identical on the CPU and GPU`);
+        const re = compute.ndarray.real(cpu), im = compute.ndarray.imag(cpu);
+        if (from[0] !== "c") assert.ok(valuesOf(im).every((v) => Object.is(v, 0)), `${from} -> ${to} writes +0 imaginary parts`);
+        if (from === "f32") {
+            const dense = compute.ndarray.contiguous(re);
+            const data = dense.data();
+            assert.deepStrictEqual(Array.from(new Uint32Array(data.buffer, data.byteOffset, 1)), (to === "c64") ? [0x7FA00001] : [0x20000000], `${from} -> ${to} keeps the NaN payload`);
+            dense.destroy();
+        }
+        cpu.destroy();
+        fromGPU.destroy();
+    }
+    const widened = compute.ndarray.cast(f32, "f64"), widenedGPU = compute.ndarray.cast(gpu.f32, "f64");
+    assert.deepStrictEqual(await bytesOf(widenedGPU), await bytesOf(widened), "f32 -> f64 casts must be bit-identical on the CPU and GPU");
+    const wideData = widened.data();
+    assert.deepStrictEqual(Array.from(new Uint32Array(wideData.buffer, wideData.byteOffset, 2)), [0x20000000, 0x7FFC0000], "f32 -> f64 casts keep a signaling NaN's payload and set its quiet bit");
+    const intC64 = compute.ndarray.cast(i32, "c64"), narrowed = compute.ndarray.cast(c128, "c64"), intC128 = compute.ndarray.cast(i32, "c128");
+    assert.deepStrictEqual(valuesOf(compute.ndarray.real(intC64)), Array.from(new Float32Array([16777217, -16777219, 2147483647, -2147483648, 0, 7])), "Integer -> c64 rounds like integer -> f32");
+    assert.deepStrictEqual(valuesOf(narrowed).flat(), Array.from(new Float32Array([1 + 2 ** -24, -(1 + 3 * 2 ** -24), 3.5e38, 1.5 * 2 ** -149, NaN, -0])), "c128 -> c64 rounds each component to nearest even");
+    assert.deepStrictEqual(valuesOf(intC128).map((v) => v[0]), [16777217, -16777219, 2147483647, -2147483648, 0, 7], "Integer -> c128 is exact on the CPU");
+    const into = compute.ndarray.zeros("c64", { shape: [2, 3] });
+    const u8_2 = compute.ndarray.fromArray("u8", [3], [1, 2, 3]);
+    compute.ndarray.copyInto(into, u8_2);
+    assert.deepStrictEqual(valuesOf(into), [[1, 0], [2, 0], [3, 0], [1, 0], [2, 0], [3, 0]], "copyInto() broadcasts and casts real sources into complex destinations");
+    for (const [label, array] of [["cpu", c64], ["gpu", gpu.c64]]) {
+        for (const to of ["f32", "f64", "i32", "u8"]) assert.throws(() => compute.ndarray.cast(array, to), /casting c64 to .* would discard imaginary parts; take compute\.ndarray\.real\(\) or compute\.ndarray\.imag\(\) first, then cast\(\)/, `${label} c64 -> ${to}`);
+        assert.throws(() => compute.ndarray.copyInto(compute.ndarray.real(array), array), /would discard imaginary parts/, `${label} copyInto() c64 -> f32`);
+    }
+    assert.throws(() => compute.ndarray.cast(c128, "f64"), /casting c128 to f64 would discard imaginary parts/);
+    assert.throws(() => compute.ndarray.cast(gpu.i32, "c128"), /compute\.ndarray\.cast: c128 <-> integer casts are not supported on the GPU; cast through f32 or c64, or use a CPU array/);
+    const wideGPU = compute.ndarray.zeros("c128", { shape: [6] }, { residency: "gpu" });
+    assert.throws(() => compute.ndarray.copyInto(wideGPU, gpu.u8), /c128 <-> integer casts are not supported on the GPU/);
+    for (const x of [f32, f64, i32, u8, c64, c128, into, u8_2, widened, widenedGPU, intC64, narrowed, intC128, wideGPU, ...Object.values(gpu)]) x.destroy();
+}
+
+// 24) c128 GPU arrays are lossless storage that round-trips, views, and moves without GPU arithmetic.
+{
+    const values = [Math.PI, -Math.E, 1 + Number.EPSILON, Number.MIN_VALUE, -0, 1e300];
+    const a = compute.ndarray.fromArray("c128", [3], values);
+    const g = compute.ndarray.toGPU(a);
+    const back = await compute.ndarray.toCPU(g);
+    assert.deepStrictEqual([back.dtype, Array.from(back.data())], ["c128", values]);
+    const flipped = compute.ndarray.contiguous(compute.ndarray.flip(g));
+    assert.deepStrictEqual(await readGPU(flipped), [[-0, 1e300], [1 + Number.EPSILON, Number.MIN_VALUE], [Math.PI, -Math.E]]);
+    const broadcast = compute.ndarray.contiguous(compute.ndarray.broadcastTo(compute.ndarray.slice(g, [[2, 3]]), [2, 1]));
+    assert.deepStrictEqual(await readGPU(broadcast), [[-0, 1e300], [-0, 1e300]]);
+    assert.deepStrictEqual(await readGPU(compute.ndarray.viewAsReal(compute.ndarray.slice(g, [1]))), [1 + Number.EPSILON, Number.MIN_VALUE]);
+    assert.throws(() => compute.kernels.add(g, g), /compute\.kernels\.add: a has dtype c128, but compute\.kernels\.add supports f32, u32, and c64; convert it with compute\.ndarray\.cast\(\) first/);
+    a.destroy();
+    g.destroy();
+    back.destroy();
+    flipped.destroy();
+    broadcast.destroy();
+}
+
+// 25) normalize and resize reject complex inputs and outputs before validating their other parameters.
+{
+    const c = compute.ndarray.zeros("c64", { shape: [2, 2] });
+    const r = compute.ndarray.zeros("f32", { shape: [2, 2] }, { residency: "gpu" });
+    assert.throws(() => compute.ndarray.normalize(c, { scale: 2 }), /compute\.ndarray\.normalize: complex dtypes \(c64, c128\) are not supported$/);
+    assert.throws(() => compute.ndarray.normalize(r, { mean: [1, 2, 3], std: 1, dtype: "c128" }), /compute\.ndarray\.normalize: complex dtypes \(c64, c128\) are not supported$/);
+    assert.throws(() => compute.ndarray.resize(c, { axes: [0, 1], size: [3, 3] }), /compute\.ndarray\.resize: complex dtypes \(c64, c128\) are not supported yet/);
+    assert.throws(() => compute.ndarray.resize(r, { axes: [0, 0], size: [3, 3], dtype: "c64" }), /compute\.ndarray\.resize: complex dtypes \(c64, c128\) are not supported yet/);
+    c.destroy();
+    r.destroy();
+}
+
+// 26) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

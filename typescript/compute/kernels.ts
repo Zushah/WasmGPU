@@ -13,7 +13,7 @@ import { ceilDiv, makeWorkgroupCounts, workgroupsFolded } from "./workgroups";
 import type { WorkgroupCounts } from "./workgroups";
 import { ScratchAllocator } from "./scratch";
 import { CPUndarray, GPU_MAX_RANK, GPUndarray, NdarrayGPUEngine, broadcastStrides, coalesceDims, mayAddressTwice, sameShape } from "./ndarray";
-import type { DType, NdarrayGPUOptions } from "./ndarray";
+import type { ComplexScalar, DType, NdarrayGPUOptions } from "./ndarray";
 import { storageBufferLayout, uniformBufferLayout } from "../wgsl";
 import type { BufferResource } from "../wgsl";
 import reduceMaxF32WGSL from "../../wgsl/compute/reduce-max-f32.wgsl";
@@ -86,17 +86,11 @@ export type KernelOutputOptions = KernelDispatchOptions & NdarrayGPUOptions & {
     out?: GPUndarray;
 };
 
-export type KernelComplexOptions = {
-    complex?: boolean;
-};
+export type KernelScalar = number | ComplexScalar;
 
-export type C64Scalar = readonly [number, number];
+export type ElementwiseOptions = KernelOutputOptions;
 
-export type KernelScalar = number | C64Scalar;
-
-export type ElementwiseOptions = KernelOutputOptions & KernelComplexOptions;
-
-export type MatmulOptions = KernelOutputOptions & KernelComplexOptions & {
+export type MatmulOptions = KernelOutputOptions & {
     alpha?: KernelScalar;
     beta?: KernelScalar;
 };
@@ -126,7 +120,7 @@ export type SortPairsResult = {
     values: GPUndarray;
 };
 
-export type LuFactorOptions = KernelOutputOptions & KernelComplexOptions & {
+export type LuFactorOptions = KernelOutputOptions & {
     overwrite?: boolean;
     ipiv?: GPUndarray;
 };
@@ -136,7 +130,7 @@ export type LuFactorResult = {
     ipiv: GPUndarray;
 };
 
-export type LuSolveOptions = KernelOutputOptions & KernelComplexOptions;
+export type LuSolveOptions = KernelOutputOptions;
 
 export type ScaleExtractOptions = KernelDispatchOptions & NdarrayGPUOptions & {
     componentIndex?: number;
@@ -177,7 +171,7 @@ type KernelBinding = { buffer: BufferResource; offset: number; size?: number };
 
 type KernelResource = BufferResource | KernelBinding;
 
-type KernelInput = { array: GPUndarray; dtype: ReduceType; kind: KernelKind; shape: number[] };
+type KernelInput = { array: GPUndarray; dtype: KernelKind; shape: number[] };
 
 type KernelTarget = { array: GPUndarray; binding: KernelBinding; temp: GPUndarray | null };
 
@@ -185,9 +179,11 @@ type KernelBatch = { commands: ComputeDispatchCommand[]; transfers: Array<{ at: 
 
 type MatmulLayout = { binding: KernelBinding; origin: number; rs: number; cs: number };
 
-const REAL: ReadonlyArray<ReduceType> = ["f32", "u32"];
-const F32: ReadonlyArray<ReduceType> = ["f32"];
-const U32: ReadonlyArray<ReduceType> = ["u32"];
+const ARITHMETIC: ReadonlyArray<KernelKind> = ["f32", "u32", "c64"];
+const REAL: ReadonlyArray<KernelKind> = ["f32", "u32"];
+const LU: ReadonlyArray<KernelKind> = ["f32", "c64"];
+const F32: ReadonlyArray<KernelKind> = ["f32"];
+const U32: ReadonlyArray<KernelKind> = ["u32"];
 
 const kindKeys = (prefix: string): Record<KernelKind, string> => ({ f32: `${prefix}:f32`, u32: `${prefix}:u32`, c64: `${prefix}:c64` });
 const ELEMENTWISE_KEYS: Record<ElementwiseOp, Record<KernelKind, string>> = { add: kindKeys("kernels:add"), sub: kindKeys("kernels:sub"), mul: kindKeys("kernels:mul") };
@@ -240,13 +236,8 @@ const overlaps = (a: GPUndarray, b: GPUndarray): boolean => {
     return startA < endB && startB < endA;
 };
 
-const complexShape = (a: GPUndarray, op: string, label: string): number[] => {
-    assert(a.dtype === "f32", () => `${op}: complex: true requires ${label} to be an f32 array whose last axis holds [re, im] pairs (got dtype ${a.dtype})`);
-    assert(a.ndim >= 1 && a.shape[a.ndim - 1] === 2, () => `${op}: complex: true requires ${label} to have a last axis of length 2 (got shape [${a.shape}])`);
-    return a.shape.slice(0, -1);
-};
-const complexFlag = (value: unknown, op: string): boolean => { assert(value === undefined || typeof value === "boolean", () => `${op}: complex must be a boolean`); return value === true; };
-const fullShape = (shape: ReadonlyArray<number>, kind: KernelKind): ReadonlyArray<number> => (kind === "c64") ? [...shape, 2] : shape;
+const dtypeList = (dtypes: ReadonlyArray<string>): string => (dtypes.length <= 2) ? dtypes.join(" and ") : `${dtypes.slice(0, -1).join(", ")}, and ${dtypes[dtypes.length - 1]}`;
+const assertOrdered = (a: unknown, op: string, label: string): void => assert(!(a instanceof GPUndarray && a.dtype === "c64"), () => `${op}: ${label} has dtype c64, but complex values have no ordering; reduce compute.ndarray.real() or compute.ndarray.imag() views instead`);
 const scalarWords = (value: KernelScalar | undefined, fallback: number, kind: KernelKind, op: string, label: string): number[] => {
     const v = value ?? fallback;
     if (kind === "c64") {
@@ -254,7 +245,7 @@ const scalarWords = (value: KernelScalar | undefined, fallback: number, kind: Ke
         assert(Array.isArray(v) && v.length === 2 && typeof v[0] === "number" && typeof v[1] === "number", () => `${op}: ${label} must be a number or a [real, imaginary] tuple`);
         return [v[0], v[1]];
     }
-    assert(!Array.isArray(v), () => `${op}: ${label} is a [real, imaginary] tuple, which requires complex: true and f32 [..., 2] arrays`);
+    assert(!Array.isArray(v), () => `${op}: ${label} is a [real, imaginary] tuple, which requires c64 arrays`);
     assert(typeof v === "number", () => `${op}: ${label} must be a number (got ${String(v)})`);
     if (kind === "u32") assert(Number.isInteger(v) && v >= 0 && v <= 0xFFFFFFFF, () => `${op}: ${label} must be a u32 integer for u32 arrays (got ${v})`);
     return [v];
@@ -333,15 +324,14 @@ export class ComputeKernels {
         return workgroups;
     }
 
-    private input(a: unknown, op: string, label: string, dtypes: ReadonlyArray<ReduceType>, complex: boolean = false): KernelInput {
+    private input(a: unknown, op: string, label: string, dtypes: ReadonlyArray<KernelKind>): KernelInput {
         assert(!(a instanceof CPUndarray), () => `${op}: ${label} must be a GPUndarray; use compute.ndarray.toGPU() first`);
         assert(a instanceof GPUndarray, () => `${op}: ${label} must be a GPUndarray`);
         this.engine.assertArray(a, op, label);
         this.assertBindingBytes(alignTo(a.numel * a.bytesPerElement, 4), op);
-        if (complex) return { array: a, dtype: "f32", kind: "c64", shape: complexShape(a, op, label) };
         const dtype = a.dtype as DType;
-        assert((dtypes as ReadonlyArray<DType>).includes(dtype), () => `${op}: ${label} has dtype ${dtype}, but ${op} supports ${dtypes.join(" and ")}; convert it with compute.ndarray.cast() first`);
-        return { array: a, dtype: dtype as ReduceType, kind: dtype as ReduceType, shape: a.shape };
+        assert((dtypes as ReadonlyArray<DType>).includes(dtype), () => `${op}: ${label} has dtype ${dtype}, but ${op} supports ${dtypeList(dtypes)}; convert it with compute.ndarray.cast() first`);
+        return { array: a, dtype: dtype as KernelKind, shape: a.shape };
     }
 
     private assertBindingBytes(bytes: number, op: string): void {
@@ -512,6 +502,34 @@ export class ComputeKernels {
                 bindGroups: [bg],
                 workgroups: this.workgroups(n, 512),
                 label: `${labelPrefix}:reduce:${pass}`
+            });
+            if (isFinal) break;
+            inRes = outRes;
+            n = outCount;
+            pass++;
+        }
+    }
+
+    private encodeReduceC64(commands: ComputeDispatchCommand[], input: KernelResource, inputCount: number, out: KernelResource, labelPrefix: string, firstPass: number = 0): void {
+        assert(Number.isInteger(inputCount) && inputCount > 0, "encodeReduceC64 expects inputCount > 0");
+        let inRes: KernelResource = input;
+        let n = inputCount;
+        let pass = firstPass;
+        while (true) {
+            const outCount = ceilDiv(n, 512);
+            const isFinal = outCount <= 1;
+            const outRes: KernelResource = isFinal ? out : this.scratch.acquire(outCount * 8, `${labelPrefix}:partial:${pass}`);
+            const pipeline = this.getDotPipeline("c64", true);
+            const bg = pipeline.createBindGroup(0, {
+                0: this.bindSized(inRes, n * 8),
+                1: this.bindSized(inRes, n * 8),
+                2: this.bindSized(outRes, outCount * 8)
+            }, `${labelPrefix}:${pass}:bg`);
+            commands.push({
+                pipeline,
+                bindGroups: [bg],
+                workgroups: this.workgroups(n, 512),
+                label: `${labelPrefix}:${pass}`
             });
             if (isFinal) break;
             inRes = outRes;
@@ -1383,12 +1401,12 @@ export class ComputeKernels {
     }
 
     private matmulLayout(a: GPUndarray, rowAxis: number, colAxis: number, kind: KernelKind, op: string): MatmulLayout | null {
-        const elem = (kind === "c64") ? 8 : 4;
+        const elem = a.bytesPerElement;
         const { resource, delta } = this.engine.binding(a, op);
         const originBytes = delta + a.offsetBytes;
         const rs = (rowAxis >= 0 && a.shape[rowAxis] !== 1) ? a.stridesBytes[rowAxis]! : 0;
         const cs = (colAxis >= 0 && a.shape[colAxis] !== 1) ? a.stridesBytes[colAxis]! : 0;
-        if (kind === "c64" && (a.stridesBytes[a.ndim - 1] !== 4 || (originBytes % 8) !== 0 || (rs % 8) !== 0 || (cs % 8) !== 0)) return null;
+        if (kind === "c64" && (originBytes % 8) !== 0) return null;
         assert(resource.size / elem <= 0x7FFFFFFF, () => `${op}: a ${resource.size}-byte matmul binding exceeds the i32 element-index range`);
         return { binding: resource, origin: originBytes / elem, rs: rs / elem, cs: cs / elem };
     }
@@ -1402,23 +1420,22 @@ export class ComputeKernels {
 
     private encodeStrided(commands: ComputeDispatchCommand[], name: StridedOp, kind: KernelKind, a: GPUndarray, b: GPUndarray, out: GPUndarray, alpha: ReadonlyArray<number> | null, encoder: GPUCommandEncoder | undefined, op: string): void {
         const shape = out.shape;
-        const logical = (kind === "c64") ? shape.slice(0, -1) : shape;
         const sa = broadcastStrides(a.shape, a.stridesBytes, shape, op), sb = broadcastStrides(b.shape, b.stridesBytes, shape, op);
-        const so = new Array<number>(logical.length);
-        for (let d = logical.length - 1, stride = (kind === "c64") ? 8 : 4; d >= 0; d--) { so[d] = stride; stride *= logical[d]!; }
-        const c = coalesceDims(logical, [sa.slice(0, logical.length), sb.slice(0, logical.length), so]);
+        const so = new Array<number>(shape.length);
+        for (let d = shape.length - 1, stride = out.bytesPerElement; d >= 0; d--) { so[d] = stride; stride *= shape[d]!; }
+        const c = coalesceDims(shape, [sa, sb, so]);
         assert(c.shape.length <= GPU_MAX_RANK, () => `${op}: strided operands support at most ${GPU_MAX_RANK} dimensions after coalescing (got ${c.shape.length})`);
         const ba = this.engine.binding(a, op), bb = this.engine.binding(b, op);
         const t = this.target(commands, out, [ba.resource, bb.resource], encoder, op);
-        const count = (kind === "c64") ? out.numel / 2 : out.numel;
+        const count = out.numel;
         const words = this.stridedParamsData;
         words.fill(0);
         words[0] = count;
         words[1] = c.shape.length;
         words[2] = ba.delta + a.offsetBytes;
         words[3] = bb.delta + b.offsetBytes;
-        words[4] = (kind === "c64") ? sa[shape.length - 1]! >>> 0 : 0;
-        words[5] = (kind === "c64") ? sb[shape.length - 1]! >>> 0 : 0;
+        words[4] = (kind === "c64") ? 4 : 0;
+        words[5] = (kind === "c64") ? 4 : 0;
         if (alpha && kind === "u32") words[6] = alpha[0]!;
         else if (alpha) this.stridedAlpha.set(alpha);
         for (let d = 0; d < c.shape.length; d++) {
@@ -1428,7 +1445,7 @@ export class ComputeKernels {
         }
         const params = this.scratch.params(words, encoder);
         const pipeline = this.getStridedPipeline(name, kind);
-        const bg = pipeline.createBindGroup(0, { 0: ba.resource, 1: bb.resource, 2: this.bindSized(t.binding, out.numel * 4), 3: params }, `${op}:bg`);
+        const bg = pipeline.createBindGroup(0, { 0: ba.resource, 1: bb.resource, 2: this.bindSized(t.binding, out.numel * out.bytesPerElement), 3: params }, `${op}:bg`);
         commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 256), label: op });
         this.finish(commands, t, encoder, op);
     }
@@ -1451,23 +1468,22 @@ export class ComputeKernels {
 
     private elementwise(name: ElementwiseOp, a: GPUndarray, b: GPUndarray, opts: ElementwiseOptions): GPUndarray {
         const op = kernelOp(name);
-        const complex = complexFlag(opts.complex, op);
-        const x = this.input(a, op, "a", REAL, complex);
-        const y = this.input(b, op, "b", REAL, complex);
+        const x = this.input(a, op, "a", ARITHMETIC);
+        const y = this.input(b, op, "b", ARITHMETIC);
         this.sameDType(x, y, op, "a and b");
-        const shape = fullShape(broadcastShapes(x.shape, y.shape, op), x.kind);
+        const shape = broadcastShapes(x.shape, y.shape, op);
         const owned: GPUndarray[] = [];
         return this.run(opts, owned, ({ commands }) => {
             const out = this.output(opts.out, x.dtype, shape, opts, op, owned);
             if (out.numel === 0) return out;
-            if (!this.dense(a, b, shape)) { this.encodeStrided(commands, name, x.kind, a, b, out, null, opts.encoder, op); return out; }
+            if (!this.dense(a, b, shape)) { this.encodeStrided(commands, name, x.dtype, a, b, out, null, opts.encoder, op); return out; }
             const ab = this.engine.direct(a);
             const bb = this.engine.direct(b);
             const t = this.target(commands, out, [ab, bb], opts.encoder, op);
-            const bytes = out.numel * 4;
-            const pipeline = this.getElementwisePipeline(name, x.kind);
+            const bytes = out.numel * out.bytesPerElement;
+            const pipeline = this.getElementwisePipeline(name, x.dtype);
             const bg = pipeline.createBindGroup(0, { 0: this.bindSized(ab, bytes), 1: this.bindSized(bb, bytes), 2: this.bindSized(t.binding, bytes) }, `${op}:bg`);
-            commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups((x.kind === "c64") ? out.numel / 2 : out.numel, 256), label: op });
+            commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(out.numel, 256), label: op });
             this.finish(commands, t, opts.encoder, op);
             return out;
         });
@@ -1475,21 +1491,20 @@ export class ComputeKernels {
 
     scl(x: GPUndarray, alpha: KernelScalar, opts: ElementwiseOptions = {}): GPUndarray {
         const op = kernelOp("scl");
-        const complex = complexFlag(opts.complex, op);
-        const input = this.input(x, op, "x", REAL, complex);
+        const input = this.input(x, op, "x", ARITHMETIC);
         assert(alpha !== undefined, () => `${op}: alpha is required`);
-        const scalar = scalarWords(alpha, 1, input.kind, op, "alpha");
+        const scalar = scalarWords(alpha, 1, input.dtype, op, "alpha");
         const owned: GPUndarray[] = [];
         return this.run(opts, owned, ({ commands }) => {
             const out = this.output(opts.out, input.dtype, x.shape, opts, op, owned);
             if (out.numel === 0) return out;
             const xb = this.operand(commands, x, opts.encoder, op);
             const t = this.target(commands, out, [xb], opts.encoder, op);
-            const bytes = out.numel * 4;
-            const params = this.scratch.params((input.kind === "u32") ? new Uint32Array(scalar) : new Float32Array(scalar), opts.encoder);
-            const pipeline = this.getSclPipeline(input.kind);
+            const bytes = out.numel * out.bytesPerElement;
+            const params = this.scratch.params((input.dtype === "u32") ? new Uint32Array(scalar) : new Float32Array(scalar), opts.encoder);
+            const pipeline = this.getSclPipeline(input.dtype);
             const bg = pipeline.createBindGroup(0, { 0: this.bindSized(xb, bytes), 1: this.bindSized(t.binding, bytes), 2: params }, `${op}:bg`);
-            commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups((input.kind === "c64") ? out.numel / 2 : out.numel, 256), label: op });
+            commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(out.numel, 256), label: op });
             this.finish(commands, t, opts.encoder, op);
             return out;
         });
@@ -1497,26 +1512,25 @@ export class ComputeKernels {
 
     axpy(x: GPUndarray, y: GPUndarray, alpha: KernelScalar, opts: ElementwiseOptions = {}): GPUndarray {
         const op = kernelOp("axpy");
-        const complex = complexFlag(opts.complex, op);
-        const xi = this.input(x, op, "x", REAL, complex);
-        const yi = this.input(y, op, "y", REAL, complex);
+        const xi = this.input(x, op, "x", ARITHMETIC);
+        const yi = this.input(y, op, "y", ARITHMETIC);
         this.sameDType(xi, yi, op, "x and y");
         assert(alpha !== undefined, () => `${op}: alpha is required`);
-        const scalar = scalarWords(alpha, 1, xi.kind, op, "alpha");
-        const shape = fullShape(broadcastShapes(xi.shape, yi.shape, op), xi.kind);
+        const scalar = scalarWords(alpha, 1, xi.dtype, op, "alpha");
+        const shape = broadcastShapes(xi.shape, yi.shape, op);
         const owned: GPUndarray[] = [];
         return this.run(opts, owned, ({ commands }) => {
             const out = this.output(opts.out, xi.dtype, shape, opts, op, owned);
             if (out.numel === 0) return out;
-            if (!this.dense(x, y, shape)) { this.encodeStrided(commands, "axpy", xi.kind, x, y, out, scalar, opts.encoder, op); return out; }
+            if (!this.dense(x, y, shape)) { this.encodeStrided(commands, "axpy", xi.dtype, x, y, out, scalar, opts.encoder, op); return out; }
             const xb = this.engine.direct(x);
             const yb = this.engine.direct(y);
             const t = this.target(commands, out, [xb, yb], opts.encoder, op);
-            const bytes = out.numel * 4;
-            const params = this.scratch.params((xi.kind === "u32") ? new Uint32Array(scalar) : new Float32Array(scalar), opts.encoder);
-            const pipeline = this.getAxpyPipeline(xi.kind);
+            const bytes = out.numel * out.bytesPerElement;
+            const params = this.scratch.params((xi.dtype === "u32") ? new Uint32Array(scalar) : new Float32Array(scalar), opts.encoder);
+            const pipeline = this.getAxpyPipeline(xi.dtype);
             const bg = pipeline.createBindGroup(0, { 0: this.bindSized(xb, bytes), 1: this.bindSized(yb, bytes), 2: this.bindSized(t.binding, bytes), 3: params }, `${op}:bg`);
-            commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups((xi.kind === "c64") ? out.numel / 2 : out.numel, 256), label: op });
+            commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(out.numel, 256), label: op });
             this.finish(commands, t, opts.encoder, op);
             return out;
         });
@@ -1524,36 +1538,28 @@ export class ComputeKernels {
 
     dot(a: GPUndarray, b: GPUndarray, opts: ElementwiseOptions = {}): GPUndarray {
         const op = kernelOp("dot");
-        const complex = complexFlag(opts.complex, op);
-        const x = this.input(a, op, "a", REAL, complex);
-        const y = this.input(b, op, "b", REAL, complex);
+        const x = this.input(a, op, "a", ARITHMETIC);
+        const y = this.input(b, op, "b", ARITHMETIC);
         this.sameDType(x, y, op, "a and b");
         const n = this.oneDimensional(x, op, "a");
         assert(this.oneDimensional(y, op, "b") === n, () => `${op}: a and b must have the same length (got ${n} and ${y.shape[0]})`);
-        const elemBytes = (x.kind === "c64") ? 8 : 4;
+        const elemBytes = a.bytesPerElement;
         const owned: GPUndarray[] = [];
         return this.run(opts, owned, (batch) => {
             const { commands } = batch;
-            const out = this.output(opts.out, x.dtype, fullShape([], x.kind), opts, op, owned);
+            const out = this.output(opts.out, x.dtype, [], opts, op, owned);
             if (n === 0) { this.zero(batch, out, owned, opts.encoder, op); return out; }
             const ab = this.operand(commands, a, opts.encoder, op);
             const bb = this.operand(commands, b, opts.encoder, op);
             const t = this.target(commands, out, [ab, bb], opts.encoder, op);
-            let count = n;
-            let input: KernelResource = ab;
-            let pass = 0;
-            while (true) {
-                const partialCount = ceilDiv(count, 512);
-                const partial: KernelResource = (partialCount === 1) ? t.binding : this.scratch.acquire(partialCount * elemBytes, `${op}:partial:${pass}`);
-                const pipeline = this.getDotPipeline(x.kind, pass > 0);
-                const second: KernelResource = (pass === 0) ? bb : input;
-                const bg = pipeline.createBindGroup(0, { 0: this.bindSized(input, count * elemBytes), 1: this.bindSized(second, count * elemBytes), 2: this.bindSized(partial, partialCount * elemBytes) }, `${op}:${pass}:bg`);
-                commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(count, 512), label: `${op}:${pass}` });
-                if (partialCount === 1) break;
-                if (x.kind !== "c64") { this.encodeReduceScalar(commands, x.dtype, "sum", partial, partialCount, t.binding, op); break; }
-                input = partial;
-                count = partialCount;
-                pass++;
+            const partialCount = ceilDiv(n, 512);
+            const partial: KernelResource = (partialCount === 1) ? t.binding : this.scratch.acquire(partialCount * elemBytes, `${op}:partial:0`);
+            const pipeline = this.getDotPipeline(x.dtype);
+            const bg = pipeline.createBindGroup(0, { 0: this.bindSized(ab, n * elemBytes), 1: this.bindSized(bb, n * elemBytes), 2: this.bindSized(partial, partialCount * elemBytes) }, `${op}:0:bg`);
+            commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(n, 512), label: `${op}:0` });
+            if (partialCount > 1) {
+                if (x.dtype === "c64") this.encodeReduceC64(commands, partial, partialCount, t.binding, op, 1);
+                else this.encodeReduceScalar(commands, x.dtype as ReduceType, "sum", partial, partialCount, t.binding, op);
             }
             this.finish(commands, t, opts.encoder, op);
             return out;
@@ -1562,21 +1568,20 @@ export class ComputeKernels {
 
     matmul(a: GPUndarray, b: GPUndarray, opts: MatmulOptions = {}): GPUndarray {
         const op = kernelOp("matmul");
-        const complex = complexFlag(opts.complex, op);
-        const x = this.input(a, op, "a", REAL, complex);
-        const y = this.input(b, op, "b", REAL, complex);
+        const x = this.input(a, op, "a", ARITHMETIC);
+        const y = this.input(b, op, "b", ARITHMETIC);
         this.sameDType(x, y, op, "a and b");
         const as = x.shape, bs = y.shape;
-        assert(as.length >= 1 && as.length <= 2 && bs.length >= 1 && bs.length <= 2, () => `${op}: a and b must be 1-D or 2-D${complex ? " in their logical shapes" : ""} (got [${as}] and [${bs}]); batched matmul is not supported`);
+        assert(as.length >= 1 && as.length <= 2 && bs.length >= 1 && bs.length <= 2, () => `${op}: a and b must be 1-D or 2-D (got [${as}] and [${bs}]); batched matmul is not supported`);
         const m = (as.length === 2) ? as[0]! : 1;
         const k = as[as.length - 1]!;
         const n = (bs.length === 2) ? bs[1]! : 1;
         assert(bs[0] === k, () => `${op}: shapes [${as}] and [${bs}] are not aligned (${k} != ${bs[0]})`);
-        const alpha = scalarWords(opts.alpha, 1, x.kind, op, "alpha");
-        const beta = scalarWords(opts.beta, 0, x.kind, op, "beta");
+        const alpha = scalarWords(opts.alpha, 1, x.dtype, op, "alpha");
+        const beta = scalarWords(opts.beta, 0, x.dtype, op, "beta");
         const accumulate = beta.some((v) => v !== 0);
         assert(!accumulate || opts.out !== undefined, () => `${op}: beta != 0 requires out, since a new output starts as zeros`);
-        const shape = fullShape([...((as.length === 2) ? [m] : []), ...((bs.length === 2) ? [n] : [])], x.kind);
+        const shape = [...((as.length === 2) ? [m] : []), ...((bs.length === 2) ? [n] : [])];
         const workgroups = makeWorkgroupCounts(ceilDiv(n, 16), ceilDiv(m, 16), 1);
         const maxWorkgroups = this.device.limits.maxComputeWorkgroupsPerDimension;
         assert(workgroups[0] <= maxWorkgroups && workgroups[1] <= maxWorkgroups, () => `${op}: a [${m}, ${n}] result needs ${workgroups[0]}x${workgroups[1]} workgroups, which exceeds device.limits.maxComputeWorkgroupsPerDimension (${maxWorkgroups})`);
@@ -1584,18 +1589,18 @@ export class ComputeKernels {
         return this.run(opts, owned, ({ commands }) => {
             const out = this.output(opts.out, x.dtype, shape, opts, op, owned);
             if (m === 0 || n === 0) return out;
-            let la = this.matmulOperand(commands, a, (as.length === 2) ? 0 : -1, as.length - 1, x.kind, opts.encoder, op);
-            let lb = this.matmulOperand(commands, b, 0, (bs.length === 2) ? 1 : -1, x.kind, opts.encoder, op);
+            let la = this.matmulOperand(commands, a, (as.length === 2) ? 0 : -1, as.length - 1, x.dtype, opts.encoder, op);
+            let lb = this.matmulOperand(commands, b, 0, (bs.length === 2) ? 1 : -1, x.dtype, opts.encoder, op);
             if (m * n * k >= 2 ** 27 && k > 1 && n > 1 && Math.abs(la.cs) !== 1 && Math.abs(lb.cs) !== 1) {
-                la = this.matmulLayout(this.engine.stage(a, commands, opts.encoder, op), (as.length === 2) ? 0 : -1, as.length - 1, x.kind, op)!;
-                lb = this.matmulLayout(this.engine.stage(b, commands, opts.encoder, op), 0, (bs.length === 2) ? 1 : -1, x.kind, op)!;
+                la = this.matmulLayout(this.engine.stage(a, commands, opts.encoder, op), (as.length === 2) ? 0 : -1, as.length - 1, x.dtype, op)!;
+                lb = this.matmulLayout(this.engine.stage(b, commands, opts.encoder, op), 0, (bs.length === 2) ? 1 : -1, x.dtype, op)!;
             }
             const outRow = (as.length === 2) ? 0 : -1;
             const outCol = (bs.length === 2) ? ((as.length === 2) ? 1 : 0) : -1;
             const aliased = out.buffer.buffer === rawBuffer(la.binding) || out.buffer.buffer === rawBuffer(lb.binding);
-            const native = aliased ? null : this.matmulLayout(out, outRow, outCol, x.kind, op);
+            const native = aliased ? null : this.matmulLayout(out, outRow, outCol, x.dtype, op);
             const temp = native ? null : (accumulate ? this.engine.stage(out, commands, opts.encoder, op) : this.engine.temp(out.dtype, out.shape, op));
-            const lc = native ?? this.matmulLayout(temp!, outRow, outCol, x.kind, op)!;
+            const lc = native ?? this.matmulLayout(temp!, outRow, outCol, x.dtype, op)!;
             const view = this.matmulParamsView;
             view.setUint32(0, m, true);
             view.setUint32(4, n, true);
@@ -1603,14 +1608,14 @@ export class ComputeKernels {
             for (let i = 3; i < 8; i++) view.setUint32(4 * i, 0, true);
             const scalars = [...alpha, ...beta];
             for (let i = 0; i < scalars.length; i++) {
-                if (x.kind === "u32") view.setUint32(12 + 4 * i, scalars[i]!, true);
+                if (x.dtype === "u32") view.setUint32(12 + 4 * i, scalars[i]!, true);
                 else view.setFloat32(12 + 4 * i, scalars[i]!, true);
             }
             const layout = [la.origin, la.rs, la.cs, lb.origin, lb.rs, lb.cs, lc.origin, lc.rs, lc.cs];
             for (let i = 0; i < layout.length; i++) view.setInt32(32 + 4 * i, layout[i]!, true);
             for (let i = 17; i < 20; i++) view.setUint32(4 * i, 0, true);
             const params = this.scratch.params(this.matmulParamsData, opts.encoder);
-            const pipeline = this.getMatmulPipeline(x.kind);
+            const pipeline = this.getMatmulPipeline(x.dtype);
             const bg = pipeline.createBindGroup(0, { 0: la.binding, 1: lb.binding, 2: lc.binding, 3: params }, `${op}:bg`);
             commands.push({ pipeline, bindGroups: [bg], workgroups, label: op });
             if (temp) this.engine.copy(temp, out, commands, opts.encoder, op);
@@ -1632,7 +1637,8 @@ export class ComputeKernels {
 
     private reduce(name: ReduceOp, a: GPUndarray, opts: KernelOutputOptions): GPUndarray {
         const op = kernelOp(name);
-        const x = this.input(a, op, "a", REAL);
+        if (name !== "sum") assertOrdered(a, op, "a");
+        const x = this.input(a, op, "a", (name === "sum") ? ARITHMETIC : REAL);
         assert(name === "sum" || a.numel > 0, () => `${op}: cannot reduce an empty array because ${name} has no identity`);
         const owned: GPUndarray[] = [];
         return this.run(opts, owned, (batch) => {
@@ -1641,7 +1647,8 @@ export class ComputeKernels {
             if (a.numel === 0) { this.zero(batch, out, owned, opts.encoder, op); return out; }
             const ab = this.operand(commands, a, opts.encoder, op);
             const t = this.target(commands, out, [ab], opts.encoder, op);
-            this.encodeReduceScalar(commands, x.dtype, name, ab, a.numel, t.binding, op);
+            if (x.dtype === "c64") this.encodeReduceC64(commands, ab, a.numel, t.binding, op);
+            else this.encodeReduceScalar(commands, x.dtype as ReduceType, name, ab, a.numel, t.binding, op);
             this.finish(commands, t, opts.encoder, op);
             return out;
         });
@@ -1657,6 +1664,7 @@ export class ComputeKernels {
 
     private argReduce(name: ArgReduceOp, a: GPUndarray, opts: KernelOutputOptions): GPUndarray {
         const op = kernelOp(name);
+        assertOrdered(a, op, "a");
         this.input(a, op, "a", F32);
         assert(a.numel > 0, () => `${op}: cannot reduce an empty array because ${name} has no identity`);
         const owned: GPUndarray[] = [];
@@ -1746,7 +1754,7 @@ export class ComputeKernels {
             this.encodeScanExclusiveU32Into(commands, fb, n, prefix, `${op}:scan`);
             const tv = this.target(commands, out, [vb, fb], opts.encoder, op, !owned.includes(out));
             const tc = this.target(commands, count, [vb, fb], opts.encoder, op);
-            const pipeline = this.getCompactPipeline(v.dtype);
+            const pipeline = this.getCompactPipeline(v.dtype as ReduceType);
             const bg = pipeline.createBindGroup(0, {
                 0: this.bindSized(vb, n * 4),
                 1: this.bindSized(fb, n * 4),
@@ -1810,7 +1818,7 @@ export class ComputeKernels {
 
     private squareMatrices(a: KernelInput, op: string, label: string): { n: number; batchShape: number[]; batchCount: number } {
         const shape = a.shape;
-        assert(shape.length >= 2 && shape[shape.length - 1] === shape[shape.length - 2], () => `${op}: ${label} must hold square matrices in its last two${(a.kind === "c64") ? " logical" : ""} axes (got shape [${a.array.shape}])`);
+        assert(shape.length >= 2 && shape[shape.length - 1] === shape[shape.length - 2], () => `${op}: ${label} must hold square matrices in its last two axes (got shape [${a.array.shape}])`);
         const n = shape[shape.length - 1]!;
         const batchShape = shape.slice(0, -2);
         assert(n * n <= 0xFFFFFFFF, () => `${op}: n*n overflow`);
@@ -1819,8 +1827,7 @@ export class ComputeKernels {
 
     luFactor(a: GPUndarray, opts: LuFactorOptions = {}): LuFactorResult {
         const op = kernelOp("luFactor");
-        const complex = complexFlag(opts.complex, op);
-        const x = this.input(a, op, "a", F32, complex);
+        const x = this.input(a, op, "a", LU);
         const { n, batchShape, batchCount } = this.squareMatrices(x, op, "a");
         const overwrite = opts.overwrite ?? false;
         assert(typeof overwrite === "boolean", () => `${op}: overwrite must be a boolean`);
@@ -1828,7 +1835,7 @@ export class ComputeKernels {
         assert(!overwrite || !mayAddressTwice(a.shape, a.stridesBytes, a.bytesPerElement), () => `${op}: overwrite: true requires a to address each element once (not a broadcast or overlapping view)`);
         const owned: GPUndarray[] = [];
         return this.run(opts, owned, ({ commands }) => {
-            const lu = overwrite ? a : this.output(opts.out, "f32", a.shape, opts, op, owned, "out", ":lu");
+            const lu = overwrite ? a : this.output(opts.out, x.dtype, a.shape, opts, op, owned, "out", ":lu");
             const ipiv = this.output(opts.ipiv, "u32", [...batchShape, n], opts, op, owned, "ipiv", ":ipiv");
             assert(!overlaps(lu, ipiv), () => `${op}: ipiv must not overlap the factored matrices`);
             if (lu.numel === 0) return { lu, ipiv };
@@ -1841,7 +1848,7 @@ export class ComputeKernels {
                 matrices = { array: lu, binding: this.engine.direct(temp), temp };
             }
             const pivots = this.target(commands, ipiv, [], opts.encoder, op);
-            this.encodeLuFactor(commands, x.kind, matrices.binding, pivots.binding, batchCount, n, opts.encoder, op);
+            this.encodeLuFactor(commands, x.dtype, matrices.binding, pivots.binding, batchCount, n, opts.encoder, op);
             this.finish(commands, matrices, opts.encoder, op);
             this.finish(commands, pivots, opts.encoder, op);
             return { lu, ipiv };
@@ -1850,23 +1857,23 @@ export class ComputeKernels {
 
     luSolve(lu: GPUndarray, ipiv: GPUndarray, b: GPUndarray, opts: LuSolveOptions = {}): GPUndarray {
         const op = kernelOp("luSolve");
-        const complex = complexFlag(opts.complex, op);
-        const l = this.input(lu, op, "lu", F32, complex);
+        const l = this.input(lu, op, "lu", LU);
         const p = this.input(ipiv, op, "ipiv", U32);
-        const r = this.input(b, op, "b", F32, complex);
+        const r = this.input(b, op, "b", LU);
+        this.sameDType(l, r, op, "lu and b");
         const { n, batchShape, batchCount } = this.squareMatrices(l, op, "lu");
         const vectors = [...batchShape, n];
         assert(sameShape(p.shape, vectors), () => `${op}: ipiv must have shape [${vectors}] (got [${p.shape}])`);
-        assert(sameShape(r.shape, vectors), () => `${op}: b must have${complex ? " logical" : ""} shape [${vectors}] to match lu (got [${r.shape}]); batch dimensions are not broadcast`);
+        assert(sameShape(r.shape, vectors), () => `${op}: b must have shape [${vectors}] to match lu (got [${r.shape}]); batch dimensions are not broadcast`);
         const owned: GPUndarray[] = [];
         return this.run(opts, owned, ({ commands }) => {
-            const out = this.output(opts.out, "f32", b.shape, opts, op, owned);
+            const out = this.output(opts.out, r.dtype, b.shape, opts, op, owned);
             if (out.numel === 0) return out;
             const lb = this.operand(commands, lu, opts.encoder, op);
             const pb = this.operand(commands, ipiv, opts.encoder, op);
             const bb = this.operand(commands, b, opts.encoder, op);
             const t = this.target(commands, out, [lb, pb, bb], opts.encoder, op);
-            this.encodeLuSolve(commands, l.kind, lb, pb, bb, t.binding, batchCount, n, opts.encoder, op);
+            this.encodeLuSolve(commands, l.dtype, lb, pb, bb, t.binding, batchCount, n, opts.encoder, op);
             this.finish(commands, t, opts.encoder, op);
             return out;
         });

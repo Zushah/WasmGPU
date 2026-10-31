@@ -519,6 +519,10 @@ const makeFixture = () => {
     const gatherSourcePtr = generatedWasm.wasmgpu_alloc(24);
     const gatherOutputPtr = generatedWasm.wasmgpu_alloc(24);
     const gatherLayoutPtr = generatedWasm.wasmgpu_alloc_u32(8);
+    const complexSourcePtr = generatedWasm.wasmgpu_alloc(48);
+    const complexOutputPtr = generatedWasm.wasmgpu_alloc(48);
+    const complexLayoutPtr = generatedWasm.wasmgpu_alloc_u32(7);
+    const complexValuePtr = generatedWasm.wasmgpu_alloc_f64(2);
     try {
         generatedWasm.u32view(shapePtr, 3).set([2, 3, 4]);
         assert.strictEqual(generatedWasm.ndarray_numel(shapePtr, 3), 24);
@@ -529,6 +533,25 @@ const makeFixture = () => {
         assert.deepStrictEqual(Array.from(generatedWasm.i32view(gatherOutputPtr, 6)), [0, 3, 1, 4, 2, 5], "Strided gather must transpose through byte strides");
         assert.strictEqual(generatedWasm.ndarray_copy(gatherSourcePtr, 24, gatherSourcePtr, 24, gatherLayoutPtr, 2, 0x44), 5, "Overlapping source and destination ranges must be rejected");
         assert.strictEqual(generatedWasm.ndarray_copy(gatherOutputPtr, 20, gatherSourcePtr, 24, gatherLayoutPtr, 2, 0x44), 7, "Destination layouts outside their byte range must be rejected");
+
+        generatedWasm.f32view(complexSourcePtr, 4).set([1, 2, 3, 4]);
+        generatedWasm.u32view(complexLayoutPtr, 5).set([0, 8, 2, -8 >>> 0, 8]);
+        assert.strictEqual(generatedWasm.ndarray_copy(complexOutputPtr, 16, complexSourcePtr, 16, complexLayoutPtr, 1, 0x88), 0, "Reversed c64 copies must succeed");
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(complexOutputPtr, 4)), [3, 4, 1, 2], "c64 copies must move whole 8-byte elements");
+        generatedWasm.u32view(complexLayoutPtr, 5).set([0, 0, 2, 4, 8]);
+        assert.strictEqual(generatedWasm.ndarray_copy(complexOutputPtr, 16, complexSourcePtr, 8, complexLayoutPtr, 1, 0x68), 0, "f32 -> c64 casts must succeed");
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(complexOutputPtr, 4)), [1, 0, 2, 0], "f32 -> c64 casts must write +0 imaginary parts");
+        generatedWasm.u32view(complexLayoutPtr, 5).set([0, 0, 2, 8, 4]);
+        assert.strictEqual(generatedWasm.ndarray_copy(complexOutputPtr, 8, complexSourcePtr, 16, complexLayoutPtr, 1, 0x86), 1, "c64 -> f32 casts must be rejected as an invalid dtype");
+        assert.strictEqual(generatedWasm.ndarray_copy(complexOutputPtr, 8, complexSourcePtr, 16, complexLayoutPtr, 1, 0x0A), 1, "Dtype code 10 must be rejected");
+        generatedWasm.f64view(complexSourcePtr, 2).set([1.5, -2.5]);
+        generatedWasm.f64view(complexValuePtr, 2).set([7, -7]);
+        generatedWasm.u32view(complexLayoutPtr, 7).set([0, 0, 3, 1, 1, 16, 16]);
+        assert.strictEqual(generatedWasm.ndarray_pad(complexOutputPtr, 48, complexSourcePtr, 16, complexLayoutPtr, 1, 0x09, complexValuePtr), 0, "c128 constant padding must succeed");
+        assert.deepStrictEqual(Array.from(generatedWasm.f64view(complexOutputPtr, 6)), [7, -7, 1.5, -2.5, 7, -7], "c128 padding must read a 16-byte constant");
+        generatedWasm.u32view(complexLayoutPtr, 7).set([0, 0, 0xFFFFFFFF, 1, 1, 8, 8]);
+        generatedWasm.f64view(complexValuePtr, 2).set([1, 0]);
+        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, complexLayoutPtr, 1, 0x68, complexValuePtr), 1, "Affine maps must reject complex dtypes");
 
         generatedWasm.mat4f_identity(matrixPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(matrixPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
@@ -591,6 +614,10 @@ const makeFixture = () => {
         generatedWasm.wasmgpu_free(gatherSourcePtr, 24);
         generatedWasm.wasmgpu_free(gatherOutputPtr, 24);
         generatedWasm.wasmgpu_free_u32(gatherLayoutPtr, 8);
+        generatedWasm.wasmgpu_free(complexSourcePtr, 48);
+        generatedWasm.wasmgpu_free(complexOutputPtr, 48);
+        generatedWasm.wasmgpu_free_u32(complexLayoutPtr, 7);
+        generatedWasm.wasmgpu_free_f64(complexValuePtr, 2);
     }
 }
 

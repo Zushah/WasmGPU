@@ -87,12 +87,36 @@ const contiguousStridesBytes = (shape: ReadonlyArray<number>, bytesPerElement: n
     return strides;
 };
 
+const SUPPORTED_DTYPES = "i8, u8, i16, u16, i32, u32, f32, f64, c64, or c128";
+
+const formatDType = (format: string, itemsize: number | undefined): DType => {
+    let code = format;
+    if (code.length > 0 && "@=<>!".includes(code[0]!)) {
+        assert(code[0] !== ">" && code[0] !== "!", `Unsupported Python buffer format '${format}': big-endian data is not supported, convert it to native byte order before importing`);
+        code = code.slice(1);
+    }
+    assert(code !== "?", "Unsupported Python buffer dtype bool, cast to uint8 before importing");
+    const signed = code.length === 1 && "bhilqn".includes(code), unsigned = code.length === 1 && "BHILQNP".includes(code);
+    if (signed || unsigned) {
+        const integers: Record<number, DType> = signed ? { 1: "i8", 2: "i16", 4: "i32" } : { 1: "u8", 2: "u16", 4: "u32" };
+        const dtype = (itemsize !== undefined) ? integers[itemsize] : undefined;
+        assert(dtype !== undefined, `Unsupported Python buffer format '${format}' with itemsize ${String(itemsize)}, expected ${SUPPORTED_DTYPES}`);
+        return dtype;
+    }
+    const named: Record<string, DType> = { f: "f32", d: "f64", Zf: "c64", Zd: "c128" };
+    const dtype = Object.hasOwn(named, code) ? named[code] : undefined;
+    assert(dtype !== undefined, `Unsupported Python buffer format '${format}', expected ${SUPPORTED_DTYPES}`);
+    return dtype;
+};
+
 const resolveBuffer = (buffer: PyBufferLike): ResolvedSource => {
     assert(!(buffer.data instanceof DataView), "Python buffer DataView sources are not supported");
-    const dtype = dtypeOfTypedArray(buffer.data);
-    assert(dtype !== null, "Unsupported Python buffer dtype, expected i8, u8, i16, u16, i32, u32, f32, or f64");
-    if (buffer.format !== undefined) assert(buffer.format.slice(-1) !== "?", "Unsupported Python buffer dtype bool, cast to uint8 before importing");
+    const typed = dtypeOfTypedArray(buffer.data);
+    assert(typed !== null, `Unsupported Python buffer dtype, expected ${SUPPORTED_DTYPES}`);
+    const dtype = (buffer.format !== undefined) ? formatDType(buffer.format, buffer.itemsize) : typed;
     const info = dtypeInfo(dtype);
+    if (buffer.format !== undefined) assert(buffer.data instanceof Uint8Array || buffer.data instanceof info.ctor, `Python buffer data for format '${buffer.format}' must be a Uint8Array or ${info.ctor.name}`);
+    const unit = (buffer.data as NumberTypedArray).BYTES_PER_ELEMENT;
     const shape = validateShape(buffer.shape);
     assert(buffer.strides.length === shape.length, "Python buffer strides/shape rank mismatch");
     if (buffer.ndim !== undefined) assert(Number.isSafeInteger(buffer.ndim) && buffer.ndim === shape.length, "Python buffer ndim does not match shape rank");
@@ -102,29 +126,28 @@ const resolveBuffer = (buffer: PyBufferLike): ResolvedSource => {
     const byteLength = numel * info.bytesPerElement;
     assert(Number.isSafeInteger(byteLength), "Python buffer byte length exceeds JavaScript's safe integer range");
     if (buffer.nbytes !== undefined) assert(Number.isSafeInteger(buffer.nbytes) && buffer.nbytes === byteLength, "Python buffer nbytes does not match shape and dtype");
-    let expectedStride = 1;
+    let expectedStride = info.bytesPerElement;
     for (let i = shape.length - 1; i >= 0; i--) {
         const stride = buffer.strides[i];
         assert(Number.isSafeInteger(stride), `Python buffer strides[${i}] must be a safe integer`);
-        if (numel !== 0 && shape[i] > 1) assert(stride === expectedStride, "Python buffer must be C-contiguous");
+        if (numel !== 0 && shape[i] > 1) assert(stride * unit === expectedStride, "Python buffer must be C-contiguous");
         expectedStride *= shape[i];
         assert(Number.isSafeInteger(expectedStride), "Python buffer stride calculation overflowed");
     }
     const offset = buffer.offset ?? 0;
     assert(Number.isSafeInteger(offset) && offset >= 0, "Python buffer offset must be a non-negative safe integer");
-    const byteOffset = buffer.data.byteOffset + offset * info.bytesPerElement;
+    const byteOffset = buffer.data.byteOffset + offset * unit;
     const byteEnd = byteOffset + byteLength;
     assert(Number.isSafeInteger(byteOffset) && Number.isSafeInteger(byteEnd), "Python buffer range arithmetic overflowed");
     assert(byteOffset >= buffer.data.byteOffset && byteEnd <= buffer.data.byteOffset + buffer.data.byteLength, "Python buffer offset/range is outside its typed data view");
-    assert((byteOffset % info.bytesPerElement) === 0, "Python buffer offset is not aligned for its dtype");
-    const ctor = dtypeInfo(dtype).ctor;
-    const data = new ctor(buffer.data.buffer, byteOffset, numel) as NumberTypedArray;
+    assert((byteOffset % info.ctor.BYTES_PER_ELEMENT) === 0, "Python buffer offset is not aligned for its dtype");
+    const data = new info.ctor(buffer.data.buffer, byteOffset, numel * info.components) as NumberTypedArray;
     return { dtype, shape, data, byteLength };
 };
 
 const withResolvedSource = <T>(src: PythonArraySource, operation: (resolved: ResolvedSource) => T): T => {
     const acquired = isPyProxyLike(src);
-    const buffer = acquired ? src.getBuffer() : src;
+    const buffer = acquired ? src.getBuffer("u8") : src;
     let operationError: unknown;
     try {
         assert(isPyBufferLike(buffer), "Expected a Pyodide proxy with getBuffer() or a PyBufferLike object");

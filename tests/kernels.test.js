@@ -71,22 +71,28 @@ const read = async (array) => { const c = nd.contiguous(array); try { return awa
     arraysApproxEqual(await read(kernels.add(nd.transpose(t), unaligned)), want, 1e-6, "transposed + unaligned slice");
 }
 
-// 3) Complex arithmetic uses f32 [..., 2] pair arrays with complex: true.
+// 3) Complex arithmetic infers c64 from the dtype, broadcasts plain shapes, and reads strided operands in place.
 {
-    const ac = gpu("f32", [3, 2], [1, 2, -3, 4, 0.5, -1]), bc = gpu("f32", [3, 2], [3, -1, 2, 5, -2, 4]);
-    arraysApproxEqual(await read(kernels.add(ac, bc, { complex: true })), new Float32Array([4, 1, -1, 9, -1.5, 3]), 1e-6, "add complex");
-    arraysApproxEqual(await read(kernels.sub(ac, bc, { complex: true })), new Float32Array([-2, 3, -5, -1, 2.5, -5]), 1e-6, "sub complex");
-    arraysApproxEqual(await read(kernels.mul(ac, bc, { complex: true })), new Float32Array([5, 5, -26, -7, 3, 4]), 1e-6, "mul complex");
-    arraysApproxEqual(await read(kernels.mul(ac, bc)), new Float32Array([3, -2, -6, 20, -1, -4]), 1e-6, "without complex: true, pair arrays multiply componentwise");
-    arraysApproxEqual(await read(kernels.scl(ac, [2, -1], { complex: true })), new Float32Array([4, 3, -2, 11, 0, -2.5]), 1e-6, "scl complex");
-    arraysApproxEqual(await read(kernels.scl(ac, 2, { complex: true })), new Float32Array([2, 4, -6, 8, 1, -2]), 1e-6, "scl complex with a real number");
-    arraysApproxEqual(await read(kernels.axpy(ac, bc, [2, -1], { complex: true })), new Float32Array([7, 2, 0, 16, -2, 1.5]), 1e-6, "axpy complex");
-    const col = kernels.mul(gpu("f32", [2, 1, 2], [1, 1, 0, 2]), gpu("f32", [3, 2], [1, 0, 0, 1, 2, 2]), { complex: true });
-    assert.deepStrictEqual(col.shape, [2, 3, 2], "complex broadcasting applies to logical shapes");
-    arraysApproxEqual(await read(col), new Float32Array([1, 1, -1, 1, 0, 4, 0, 2, -2, 0, -4, 4]), 1e-6, "complex broadcast mul");
-    assert.throws(() => kernels.mul(gpu("u32", [1, 2], [1, 2]), gpu("u32", [1, 2], [1, 2]), { complex: true }), /compute\.kernels\.mul: complex: true requires a to be an f32 array/);
-    assert.throws(() => kernels.add(gpu("f32", [2, 3], new Float32Array(6)), gpu("f32", [2, 3], new Float32Array(6)), { complex: true }), /last axis of length 2/);
-    assert.throws(() => kernels.scl(ac, [1, 2]), /alpha is a \[real, imaginary\] tuple, which requires complex: true/);
+    const ac = gpu("c64", [3], [1, 2, -3, 4, 0.5, -1]), bc = gpu("c64", [3], [3, -1, 2, 5, -2, 4]);
+    const sum = kernels.add(ac, bc);
+    assert.deepStrictEqual([sum.dtype, sum.shape], ["c64", [3]], "complex outputs keep the c64 dtype and shape");
+    arraysApproxEqual(await read(sum), new Float32Array([4, 1, -1, 9, -1.5, 3]), 1e-6, "add c64");
+    arraysApproxEqual(await read(kernels.sub(ac, bc)), new Float32Array([-2, 3, -5, -1, 2.5, -5]), 1e-6, "sub c64");
+    arraysApproxEqual(await read(kernels.mul(ac, bc)), new Float32Array([5, 5, -26, -7, 3, 4]), 1e-6, "mul c64");
+    arraysApproxEqual(await read(kernels.mul(nd.viewAsReal(ac), nd.viewAsReal(bc))), new Float32Array([3, -2, -6, 20, -1, -4]), 1e-6, "viewAsReal() operands multiply componentwise");
+    arraysApproxEqual(await read(kernels.scl(ac, [2, -1])), new Float32Array([4, 3, -2, 11, 0, -2.5]), 1e-6, "scl c64");
+    arraysApproxEqual(await read(kernels.scl(ac, 2)), new Float32Array([2, 4, -6, 8, 1, -2]), 1e-6, "scl c64 with a real number");
+    arraysApproxEqual(await read(kernels.axpy(ac, bc, [2, -1])), new Float32Array([7, 2, 0, 16, -2, 1.5]), 1e-6, "axpy c64");
+    const col = kernels.mul(gpu("c64", [2, 1], [1, 1, 0, 2]), gpu("c64", [3], [1, 0, 0, 1, 2, 2]));
+    assert.deepStrictEqual(col.shape, [2, 3], "complex broadcasting applies to plain shapes");
+    arraysApproxEqual(await read(col), new Float32Array([1, 1, -1, 1, 0, 4, 0, 2, -2, 0, -4, 4]), 1e-6, "c64 broadcast mul");
+    arraysApproxEqual(await read(kernels.add(nd.flip(ac), bc)), new Float32Array([3.5, -2, -1, 9, -1, 6]), 1e-6, "negatively strided c64 operand");
+    const wide = gpu("c64", [6], [1, 2, 9, 9, 3, 4, 9, 9, 5, 6, 9, 9]);
+    arraysApproxEqual(await read(kernels.axpy(nd.slice(wide, [[null, null, 2]]), nd.flip(ac), [0, 1])), new Float32Array([-1.5, 0, -7, 7, -5, 7]), 1e-6, "stepped and flipped c64 operands through the strided path");
+    const m = gpu("c64", [2, 3], [1, 0, 2, 0, 3, 0, 0, 1, 0, 2, 0, 3]);
+    arraysApproxEqual(await read(kernels.mul(nd.transpose(m), gpu("c64", [2], [0, 1, 2, 0]))), new Float32Array([0, 1, 0, 2, 0, 2, 0, 4, 0, 3, 0, 6]), 1e-6, "transposed c64 operand");
+    assert.throws(() => kernels.scl(gpu("f32", [2], [1, 2]), [1, 2]), /compute\.kernels\.scl: alpha is a \[real, imaginary\] tuple, which requires c64 arrays/);
+    assert.throws(() => kernels.add(ac, gpu("f32", [3], [1, 2, 3])), /compute\.kernels\.add: a and b must have the same dtype \(got c64 and f32\)/);
 }
 
 // 4) scl and axpy, including in-place axpy through out: y.
@@ -107,22 +113,22 @@ const read = async (array) => { const c = nd.contiguous(array); try { return awa
     arraysApproxEqual(await read(row), new Float32Array([103, 206, 109, 212]), 1e-6, "axpy broadcasts y");
 }
 
-// 5) Dot products, including u32 wrap, non-conjugating complex, multipass, and empty inputs.
+// 5) Dot products, including u32 wrap, non-conjugating c64, multipass, and empty inputs.
 {
     const out = kernels.dot(gpu("f32", [3], [1.5, -2, 4]), gpu("f32", [3], [2, 3, -0.5]));
     assert.strictEqual(out.ndim, 0, "dot returns a 0-d array");
     numberApproxEqual((await read(out))[0], -5, 1e-5, "dot f32");
     assert.strictEqual((await read(kernels.dot(gpu("u32", [2], [0xFFFFFFFF, 2]), gpu("u32", [2], [2, 3]))))[0], 4, "dot u32 wrap");
-    const dotc = kernels.dot(gpu("f32", [2, 2], [1, 2, 3, -1]), gpu("f32", [2, 2], [2, 1, -4, 2]), { complex: true });
-    assert.deepStrictEqual(dotc.shape, [2], "complex dot returns one pair");
+    const dotc = kernels.dot(gpu("c64", [2], [1, 2, 3, -1]), gpu("c64", [2], [2, 1, -4, 2]));
+    assert.deepStrictEqual([dotc.dtype, dotc.shape], ["c64", []], "c64 dot returns a 0-d c64 array");
     arraysApproxEqual(await read(dotc), new Float32Array([-10, 15]), 1e-5, "dot complex non-conjugating");
     const many = gpu("f32", [1025], new Float32Array(1025).fill(1.25));
     numberApproxEqual((await read(kernels.dot(many, many)))[0], 1025 * 1.25 * 1.25, 1e-3, "dot multipass");
-    const manyC = gpu("f32", [513, 2], new Float32Array(1026).fill(1));
-    arraysApproxEqual(await read(kernels.dot(manyC, manyC, { complex: true })), new Float32Array([0, 1026]), 1e-3, "dot complex multipass");
-    const stale = gpu("f32", [2], [7, 7]);
-    kernels.dot(gpu("f32", [0, 2], []), gpu("f32", [0, 2], []), { complex: true, out: stale });
-    arraysApproxEqual(await read(stale), new Float32Array([0, 0]), 0, "empty complex dot writes zero into out");
+    const manyC = gpu("c64", [513], new Float32Array(1026).fill(1));
+    arraysApproxEqual(await read(kernels.dot(manyC, manyC)), new Float32Array([0, 1026]), 1e-3, "dot c64 multipass");
+    const stale = gpu("c64", [], [7, 7]);
+    kernels.dot(gpu("c64", [0], []), gpu("c64", [0], []), { out: stale });
+    arraysApproxEqual(await read(stale), new Float32Array([0, 0]), 0, "empty c64 dot writes zero into out");
     assert.strictEqual((await read(kernels.dot(gpu("u32", [0], []), gpu("u32", [0], []))))[0], 0, "empty dot");
     assert.throws(() => kernels.dot(gpu("f32", [2, 2], new Float32Array(4)), gpu("f32", [2, 2], new Float32Array(4))), /compute\.kernels\.dot: a must be 1-D/);
 }
@@ -156,6 +162,20 @@ const read = async (array) => { const c = nd.contiguous(array); try { return awa
     assert.strictEqual((await read(kernels.sum(empty)))[0], 0, "empty sum is 0");
     assert.throws(() => kernels.min(empty), /compute\.kernels\.min: cannot reduce an empty array/);
     assert.throws(() => kernels.max(empty), /compute\.kernels\.max: cannot reduce an empty array/);
+
+    // c64 sums reduce both components in one, several, or zero passes.
+    const small = kernels.sum(gpu("c64", [2, 2], [1, 2, 3, 4, 5, 6, 7, 8]));
+    assert.deepStrictEqual([small.dtype, small.shape], ["c64", []], "c64 sum returns a 0-d c64 array");
+    arraysApproxEqual(await read(small), new Float32Array([16, 20]), 1e-6, "single-pass c64 sum");
+    const zc = makeRandomF32Array(2 * 300000, -1, 1);
+    let re = 0, im = 0, reStep = 0, imStep = 0;
+    for (let i = 0; i < 300000; i++) { re += zc[2 * i]; im += zc[2 * i + 1]; if (i % 3 === 2) { reStep += zc[2 * i]; imStep += zc[2 * i + 1]; } }
+    const many = gpu("c64", [300000], zc);
+    arraysApproxEqual(await read(kernels.sum(many)), new Float32Array([re, im]), 5e-2, "multipass c64 sum");
+    arraysApproxEqual(await read(kernels.sum(nd.slice(many, [[-1, null, -3]]))), new Float32Array([reStep, imStep]), 5e-2, "c64 sum of a flipped stepped view");
+    const staleSum = gpu("c64", [], [7, 7]);
+    kernels.sum(gpu("c64", [0, 2], []), { out: staleSum });
+    arraysApproxEqual(await read(staleSum), new Float32Array([0, 0]), 0, "empty c64 sum writes zero into out");
 }
 
 // 7) argmin/argmax skip NaN, resolve ties to the lowest C-order index, and return 0xFFFFFFFF for all-NaN input.
@@ -359,7 +379,7 @@ const luResidual = (a, x, b, batch, n, complex) => {
     return worst;
 };
 
-// 12) Batched LU factor and solve (partial pivoting; ipiv holds 0-based row indices) for f32 and complex.
+// 12) Batched LU factor and solve (partial pivoting; ipiv holds 0-based row indices) for f32 and c64.
 {
     const batch = 3, n = 4;
     const a = new Float32Array(batch * n * n), rhs = new Float32Array(batch * n);
@@ -378,9 +398,10 @@ const luResidual = (a, x, b, batch, n, complex) => {
         }
     }
     for (const complex of [false, true]) {
-        const w = complex ? 2 : 1, data = complex ? ac : a, b = complex ? rhsc : rhs;
-        const input = gpu("f32", complex ? [batch, n, n, 2] : [batch, n, n], data);
-        const { lu, ipiv } = kernels.luFactor(input, { complex });
+        const w = complex ? 2 : 1, data = complex ? ac : a, b = complex ? rhsc : rhs, dtype = complex ? "c64" : "f32";
+        const input = gpu(dtype, [batch, n, n], data);
+        const { lu, ipiv } = kernels.luFactor(input);
+        assert.strictEqual(lu.dtype, dtype, "luFactor outputs keep the input dtype");
         assert.deepStrictEqual(ipiv.shape, [batch, n], "ipiv shape");
         arraysApproxEqual(await read(input), data, 0, "luFactor leaves a untouched without overwrite");
         const gotLu = await read(lu), gotIpiv = await read(ipiv);
@@ -390,19 +411,21 @@ const luResidual = (a, x, b, batch, n, complex) => {
             arraysApproxEqual(gotLu.subarray(k * n * n * w, (k + 1) * n * n * w), want.A, 5e-4, `LU factor ${complex ? "complex" : "f32"} batch ${k}`);
             arraysEqualU32(gotIpiv.subarray(k * n, (k + 1) * n), want.ipiv, `ipiv ${complex ? "complex" : "f32"} batch ${k}`);
         }
-        const x = kernels.luSolve(lu, ipiv, gpu("f32", complex ? [batch, n, 2] : [batch, n], b), { complex });
+        const x = kernels.luSolve(lu, ipiv, gpu(dtype, [batch, n], b));
+        assert.strictEqual(x.dtype, dtype, "luSolve outputs keep the operand dtype");
         assert.ok(luResidual(data, await read(x), b, batch, n, complex) < 3e-3, `LU solve residual ${complex ? "complex" : "f32"}`);
 
         const stored = new Float32Array(data.length);
         for (let t = 0; t < batch * n * n; t++) { const k = Math.floor(t / (n * n)), i = Math.floor(t / n) % n, j = t % n; for (let c = 0; c < w; c++) stored[(k * n * n + j * n + i) * w + c] = data[t * w + c]; }
-        const view = nd.swapAxes(gpu("f32", complex ? [batch, n, n, 2] : [batch, n, n], stored), 1, 2);
-        const factored = kernels.luFactor(view, { overwrite: true, complex });
+        const view = nd.swapAxes(gpu(dtype, [batch, n, n], stored), 1, 2);
+        const factored = kernels.luFactor(view, { overwrite: true });
         assert.strictEqual(factored.lu, view, "overwrite returns a");
         arraysApproxEqual(await read(view), gotLu, 1e-6, `overwrite through a transposed view ${complex ? "complex" : "f32"}`);
         arraysEqualU32(await read(factored.ipiv), gotIpiv, "overwrite ipiv");
     }
     assert.throws(() => kernels.luFactor(gpu("f32", [2, 3], new Float32Array(6))), /compute\.kernels\.luFactor: a must hold square matrices/);
     assert.throws(() => kernels.luSolve(gpu("f32", [2, 2], [1, 0, 0, 1]), gpu("u32", [2], [0, 1]), gpu("f32", [3, 2], new Float32Array(6))), /batch dimensions are not broadcast/);
+    assert.throws(() => kernels.luSolve(gpu("c64", [2, 2], [1, 0, 0, 0, 0, 0, 1, 0]), gpu("u32", [2], [0, 1]), gpu("f32", [2], [1, 2])), /compute\.kernels\.luSolve: lu and b must have the same dtype \(got c64 and f32\)/);
 }
 
 // 13) LU solve fallback for n > 512 and the blocked factorization at n >= 160.
@@ -413,7 +436,8 @@ const luResidual = (a, x, b, batch, n, complex) => {
         const lu = new Float32Array(n * n * w), rhs = new Float32Array(n * w);
         for (let i = 0; i < n; i++) { lu[(i * n + i) * w] = 1; rhs[i * w] = Math.sin(i * 0.17); if (complex) rhs[2 * i + 1] = Math.cos(i * 0.11); }
         const ipiv = gpu("u32", [n], Uint32Array.from({ length: n }, (_, i) => i));
-        const x = kernels.luSolve(gpu("f32", complex ? [n, n, 2] : [n, n], lu), ipiv, gpu("f32", complex ? [n, 2] : [n], rhs), { complex });
+        const dtype = complex ? "c64" : "f32";
+        const x = kernels.luSolve(gpu(dtype, [n, n], lu), ipiv, gpu(dtype, [n], rhs));
         arraysApproxEqual(await read(x), rhs, 1e-5, `LU ${complex ? "complex" : "f32"} large solve`);
     }
     let seed = 0x9e3779b1 >>> 0;
@@ -436,8 +460,9 @@ const luResidual = (a, x, b, batch, n, complex) => {
                 for (let c = 0; c < w; c++) rhs[(b * m + i) * w + c] = rand();
             }
         }
-        const { lu, ipiv } = kernels.luFactor(gpu("f32", complex ? [batch, m, m, 2] : [batch, m, m], a), { complex });
-        const x = kernels.luSolve(lu, ipiv, gpu("f32", complex ? [batch, m, 2] : [batch, m], rhs), { complex });
+        const dtype = complex ? "c64" : "f32";
+        const { lu, ipiv } = kernels.luFactor(gpu(dtype, [batch, m, m], a));
+        const x = kernels.luSolve(lu, ipiv, gpu(dtype, [batch, m], rhs));
         assert.ok(luResidual(a, await read(x), rhs, batch, m, complex) < 1e-3, `${complex ? "complex" : "f32"} blocked LU residual`);
     }
 }
@@ -454,9 +479,9 @@ const luResidual = (a, x, b, batch, n, complex) => {
     const cu = gpu("u32", [2, 2], [1, 1, 1, 1]);
     kernels.matmul(gpu("u32", [2, 3], [1, 2, 3, 4, 5, 6]), gpu("u32", [3, 2], [1, 2, 3, 4, 5, 6]), { out: cu, alpha: 2, beta: 3 });
     arraysEqualU32(await read(cu), new Uint32Array([47, 59, 101, 131]), "matmul u32 alpha/beta");
-    const cc = gpu("f32", [1, 1, 2], [2, -1]);
-    kernels.matmul(gpu("f32", [1, 2, 2], [1, 1, 2, -1]), gpu("f32", [2, 1, 2], [3, 2, -1, 4]), { complex: true, out: cc, alpha: [2, -1], beta: [-1, 0.5] });
-    arraysApproxEqual(await read(cc), new Float32Array([18.5, 27]), 1e-5, "matmul complex alpha/beta");
+    const cc = gpu("c64", [1, 1], [2, -1]);
+    kernels.matmul(gpu("c64", [1, 2], [1, 1, 2, -1]), gpu("c64", [2, 1], [3, 2, -1, 4]), { out: cc, alpha: [2, -1], beta: [-1, 0.5] });
+    arraysApproxEqual(await read(cc), new Float32Array([18.5, 27]), 1e-5, "matmul c64 alpha/beta");
     assert.throws(() => kernels.matmul(af, bf, { beta: 1 }), /compute\.kernels\.matmul: beta != 0 requires out/);
 
     // A rectangular, non-tile-aligned product for every dtype.
@@ -474,7 +499,11 @@ const luResidual = (a, x, b, batch, n, complex) => {
     for (let i = 0; i < 15; i++) { rectAC[2 * i] = rectA[i]; rectAC[2 * i + 1] = (i % 3) - 1; }
     for (let i = 0; i < 35; i++) { rectBC[2 * i] = rectB[i]; rectBC[2 * i + 1] = (i % 2) * 0.5; }
     for (let i = 0; i < 3; i++) for (let j = 0; j < 7; j++) for (let q = 0; q < 5; q++) { const ai = 2 * (i * 5 + q), bi = 2 * (q * 7 + j), ci = 2 * (i * 7 + j); wantC[ci] += rectAC[ai] * rectBC[bi] - rectAC[ai + 1] * rectBC[bi + 1]; wantC[ci + 1] += rectAC[ai] * rectBC[bi + 1] + rectAC[ai + 1] * rectBC[bi]; }
-    arraysApproxEqual(await read(kernels.matmul(gpu("f32", [3, 5, 2], rectAC), gpu("f32", [5, 7, 2], rectBC), { complex: true })), wantC, 1e-4, "rectangular matmul complex");
+    arraysApproxEqual(await read(kernels.matmul(gpu("c64", [3, 5], rectAC), gpu("c64", [5, 7], rectBC))), wantC, 1e-4, "rectangular matmul c64");
+    const offsetStorage = compute.createStorageBuffer({ data: Float32Array.from([999, ...rectAC]) });
+    const offsetA = nd.wrap(offsetStorage, "c64", { shape: [3, 5] }, 4);
+    arraysApproxEqual(await read(kernels.matmul(offsetA, gpu("c64", [5, 7], rectBC))), wantC, 1e-4, "a c64 operand at a 4-mod-8 offset is staged");
+    arraysApproxEqual(await read(kernels.matmul(nd.transpose(gpu("c64", [5, 3], Float32Array.from({ length: 30 }, (_, i) => rectAC[2 * ((Math.floor(i / 2) % 3) * 5 + Math.floor(i / 6)) + (i % 2)]))), gpu("c64", [5, 7], rectBC))), wantC, 1e-4, "matmul of a transposed c64 operand");
 
     // A transposed operand is read through its strides; the result matches the CPU product of the logical views.
     const at = gpu("f32", [5, 3], Float32Array.from({ length: 15 }, (_, i) => rectA[(i % 3) * 5 + Math.floor(i / 3)]));
@@ -512,11 +541,19 @@ const luResidual = (a, x, b, batch, n, complex) => {
     arraysApproxEqual(await read(remapped), new Float32Array([0, 0.5, 1, 1]), 1e-5, "scaleRemap log");
 }
 
-// 16) Inputs must be live f32/u32 GPUndarrays on this device; kernels never promote or transfer.
+// 16) Inputs must be live f32, u32, or c64 GPUndarrays on this device; kernels never promote or transfer.
 {
     const a = gpu("f32", [2], [1, 2]);
     assert.throws(() => kernels.add(a, gpu("u32", [2], [1, 2])), /compute\.kernels\.add: a and b must have the same dtype \(got f32 and u32\); kernels never promote/);
-    assert.throws(() => kernels.sum(gpu("i32", [2], [1, 2])), /compute\.kernels\.sum: a has dtype i32, but compute\.kernels\.sum supports f32 and u32; convert it with compute\.ndarray\.cast\(\) first/);
+    assert.throws(() => kernels.sum(gpu("i32", [2], [1, 2])), /compute\.kernels\.sum: a has dtype i32, but compute\.kernels\.sum supports f32, u32, and c64; convert it with compute\.ndarray\.cast\(\) first/);
+    assert.throws(() => kernels.max(gpu("i32", [2], [1, 2])), /compute\.kernels\.max supports f32 and u32;/);
+    const c = gpu("c64", [2], [1, 2, 3, 4]);
+    for (const name of ["min", "max", "argmin", "argmax"]) assert.throws(() => kernels[name](c), new RegExp(`compute\\.kernels\\.${name}: a has dtype c64, but complex values have no ordering; reduce compute\\.ndarray\\.real\\(\\) or compute\\.ndarray\\.imag\\(\\) views instead`));
+    assert.throws(() => kernels.sortPairs(gpu("u32", [2], [1, 0]), c), /compute\.kernels\.sortPairs: values has dtype c64, but compute\.kernels\.sortPairs supports f32 and u32; convert it with compute\.ndarray\.cast\(\) first/);
+    assert.throws(() => kernels.compact(c, gpu("u32", [2], [1, 0])), /compute\.kernels\.compact: values has dtype c64, but compute\.kernels\.compact supports f32 and u32/);
+    assert.throws(() => kernels.scanExclusive(c), /a has dtype c64, but compute\.kernels\.scanExclusive supports u32/);
+    const wide = gpu("c128", [2, 2], [1, 0, 0, 0, 0, 0, 1, 0]);
+    for (const run of [() => kernels.add(wide, wide), () => kernels.scl(wide, 2), () => kernels.dot(nd.reshape(wide, [4]), nd.reshape(wide, [4])), () => kernels.matmul(wide, wide), () => kernels.sum(wide), () => kernels.luFactor(wide)]) assert.throws(run, /has dtype c128, but compute\.kernels\.\w+ supports .*c64; convert it with compute\.ndarray\.cast\(\) first/);
     assert.throws(() => kernels.sum(gpu("f64", [2], [1, 2])), /a has dtype f64/);
     const cpu = nd.fromArray("f32", [2], [1, 2]);
     assert.throws(() => kernels.sum(cpu), /compute\.kernels\.sum: a must be a GPUndarray; use compute\.ndarray\.toGPU\(\) first/);

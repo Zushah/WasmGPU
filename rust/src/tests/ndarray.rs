@@ -4,13 +4,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::ndarray::DType::{F32, F64, I8, I32, U8, U32};
+use crate::ndarray::DType::{C64, C128, F32, F64, I8, I32, U8, U32};
 use crate::ndarray::{
     AffineForm, AffineParams, DType, Destination, Element, IntMode, PadAxes, PadMode, ResizeTables,
-    STATUS_DESTINATION_BOUNDS, STATUS_INVALID_PARAMETERS, STATUS_INVALID_RANK,
-    STATUS_INVALID_SHAPE, STATUS_INVALID_TABLE, STATUS_SOURCE_BOUNDS, Source, affine, affine_value,
-    copy_cast, layout_within, numel, offset_bytes, pad, pad_index, resize, strides_row_major,
-    to_int,
+    STATUS_DESTINATION_BOUNDS, STATUS_INVALID_DTYPE, STATUS_INVALID_PARAMETERS,
+    STATUS_INVALID_RANK, STATUS_INVALID_SHAPE, STATUS_INVALID_TABLE, STATUS_SOURCE_BOUNDS, Source,
+    affine, affine_value, copy_cast, layout_within, numel, offset_bytes, pad, pad_index, resize,
+    strides_row_major, to_int,
 };
 
 const ND_ERROR: u32 = u32::MAX;
@@ -269,4 +269,122 @@ fn resize_gathers_tables_with_the_fixed_summation_order() {
     let input = src(&s, F64, 0, &[32, 8]);
     let status = resize(dst(&mut out, F64, &[32, 8]), input, &[1, 4], identity);
     assert_eq!((status, out), (0, le(&values)));
+}
+
+#[test]
+fn complex_dtypes_copy_cast_and_pad_by_component() {
+    assert_eq!(
+        (DType::from_code(8), DType::from_code(9)),
+        (Some(C64), Some(C128))
+    );
+    assert_eq!(DType::from_code(10), None);
+    assert_eq!((C64.size(), C128.size()), (8, 16));
+    let s = le(&[1.0f32, -1.0, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0]);
+    let mut out = vec![0; 32];
+    let transposed = src(&s, C64, 0, &[8, 16]);
+    let status = copy_cast(dst(&mut out, C64, &[16, 8]), transposed, &[2, 2], WRAP);
+    let swapped = le(&[1.0f32, -1.0, 3.0, -3.0, 2.0, -2.0, 4.0, -4.0]);
+    assert_eq!((status, &out), (0, &swapped));
+    let wide = le(&[1.5f64, -0.5, 2.5, 0.25, -7.0, 8.0]);
+    let mut out = vec![0; 48];
+    let reversed = src(&wide, C128, 32, &[-16]);
+    let status = copy_cast(dst(&mut out, C128, &[16]), reversed, &[3], WRAP);
+    let flipped = le(&[-7.0f64, 8.0, 2.5, 0.25, 1.5, -0.5]);
+    assert_eq!((status, out), (0, flipped));
+    let nan = le(&[f32::from_bits(0x7FA0_0001)]);
+    let payload = cast_one(&nan, F32, C64, WRAP);
+    assert_eq!(payload, [nan, vec![0; 4]].concat());
+    let rounded = |bytes: Vec<u8>, from| from_le::<f32>(&cast_one(&bytes, from, C64, WRAP));
+    assert_eq!(rounded(le(&[16_777_217i32]), I32), [16_777_216.0, 0.0]);
+    assert_eq!(rounded(le(&[16_777_217u32]), U32), [16_777_216.0, 0.0]);
+    assert_eq!(rounded(le(&[1.0 + 2f64.powi(-24)]), F64), [1.0, 0.0]);
+    let pair = le(&[0.1f32, -3.0e-45]);
+    let exact = from_le::<f64>(&cast_one(&pair, C64, C128, WRAP));
+    assert_eq!(exact, [0.1f32 as f64, -3.0e-45f32 as f64]);
+    let pair = le(&[1.0 + 2f64.powi(-24), 3.5e38]);
+    assert_eq!(
+        from_le::<f32>(&cast_one(&pair, C128, C64, WRAP)),
+        [1.0, f32::INFINITY]
+    );
+    let int = from_le::<f64>(&cast_one(&le(&[i32::MIN]), I32, C128, WRAP));
+    assert_eq!(int, [i32::MIN as f64, 0.0]);
+    let mut real = vec![0; 4];
+    let status = copy_cast(dst(&mut real, F32, &[]), src(&s, C64, 0, &[]), &[], WRAP);
+    assert_eq!(status, STATUS_INVALID_DTYPE);
+    let (s, mut out) = (le(&[1.0f32, 2.0]), vec![0; 24]);
+    let axes = PadAxes {
+        out_shape: &[3],
+        src_shape: &[1],
+        before: &[1],
+    };
+    let constant = le(&[9.0f32, -9.0]);
+    let status = pad(
+        dst(&mut out, C64, &[8]),
+        src(&s, C64, 0, &[8]),
+        axes,
+        PadMode::Constant,
+        &constant,
+    );
+    assert_eq!((status, out), (0, le(&[9.0f32, -9.0, 1.0, 2.0, 9.0, -9.0])));
+    let (s, mut out) = (le(&[1.0f64, 2.0]), vec![0; 48]);
+    let axes = PadAxes {
+        out_shape: &[3],
+        src_shape: &[1],
+        before: &[0],
+    };
+    let constant = le(&[0.5f64, -0.25]);
+    let short = pad(
+        dst(&mut out, C128, &[16]),
+        src(&s, C128, 0, &[16]),
+        axes,
+        PadMode::Constant,
+        &constant[..8],
+    );
+    assert_eq!(short, STATUS_INVALID_PARAMETERS);
+    let axes = PadAxes {
+        out_shape: &[3],
+        src_shape: &[1],
+        before: &[0],
+    };
+    let status = pad(
+        dst(&mut out, C128, &[16]),
+        src(&s, C128, 0, &[16]),
+        axes,
+        PadMode::Constant,
+        &constant,
+    );
+    assert_eq!(
+        (status, out),
+        (0, le(&[1.0f64, 2.0, 0.5, -0.25, 0.5, -0.25]))
+    );
+    let params = AffineParams {
+        axis: None,
+        a: &[1.0],
+        b: &[0.0],
+        form: AffineForm::ScaleOffset,
+    };
+    let (s, mut out) = (le(&[1.0f32, 2.0]), vec![0; 8]);
+    let status = affine(
+        dst(&mut out, C64, &[8]),
+        src(&s, F32, 0, &[4]),
+        &[1],
+        params,
+    );
+    assert_eq!(status, STATUS_INVALID_DTYPE);
+    let table = ResizeTables {
+        axis_y: 0,
+        axis_x: 1,
+        src_y: 1,
+        src_x: 1,
+        index: &[0, 0, 0, 0],
+        weight: &[1.0, 0.0, 1.0, 0.0, 0.0],
+        linear: false,
+    };
+    let status = resize(
+        dst(&mut out, C64, &[8, 8]),
+        src(&s, C64, 0, &[8, 8]),
+        &[1, 1],
+        table,
+    );
+    assert_eq!(status, STATUS_INVALID_DTYPE);
 }

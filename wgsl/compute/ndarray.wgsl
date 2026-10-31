@@ -4,7 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-// Dtype codes: 0 i8, 1 u8, 2 i16, 3 u16, 4 i32, 5 u32, 6 f32, 7 f64.
+// Dtype codes: 0 i8, 1 u8, 2 i16, 3 u16, 4 i32, 5 u32, 6 f32, 7 f64, 8 c64, 9 c128.
 override SRC_DTYPE: u32 = 6u;
 override DST_DTYPE: u32 = 6u;
 // 0 copy or cast, 1 pad, 2 affine, 3 resize.
@@ -36,6 +36,8 @@ const P_PARAM_LEN: u32 = 8u;
 const P_AXIS_Y: u32 = 9u;
 const P_AXIS_X: u32 = 10u;
 const P_TABLE: u32 = 11u;
+const P_VALUE_2: u32 = 12u;
+const P_VALUE_3: u32 = 13u;
 const P_SHAPE: u32 = 16u;
 const P_SRC_STRIDE: u32 = 24u;
 const P_DST_STRIDE: u32 = 32u;
@@ -52,7 +54,10 @@ fn dtype_size(code: u32) -> u32 {
     if (code <= 6u) {
         return 4u;
     }
-    return 8u;
+    if (code <= 8u) {
+        return 8u;
+    }
+    return 16u;
 }
 
 fn dtype_mask(code: u32) -> u32 {
@@ -73,19 +78,23 @@ fn invocation_index(wid: vec3<u32>, nwg: vec3<u32>, lid: u32) -> u32 {
     return (wid.y * nwg.x + wid.x) * 256u + lid;
 }
 
-fn load_bits(addr: u32) -> vec2<u32> {
+fn load_bits(addr: u32) -> vec4<u32> {
     let size = dtype_size(SRC_DTYPE);
-    let word = src[addr >> 2u];
+    let i = addr >> 2u;
+    let word = src[i];
     if (size == 1u) {
-        return vec2<u32>((word >> ((addr & 3u) * 8u)) & 0xFFu, 0u);
+        return vec4<u32>((word >> ((addr & 3u) * 8u)) & 0xFFu, 0u, 0u, 0u);
     }
     if (size == 2u) {
-        return vec2<u32>((word >> ((addr & 2u) * 8u)) & 0xFFFFu, 0u);
+        return vec4<u32>((word >> ((addr & 2u) * 8u)) & 0xFFFFu, 0u, 0u, 0u);
     }
     if (size == 4u) {
-        return vec2<u32>(word, 0u);
+        return vec4<u32>(word, 0u, 0u, 0u);
     }
-    return vec2<u32>(word, src[(addr >> 2u) + 1u]);
+    if (size == 8u) {
+        return vec4<u32>(word, src[i + 1u], 0u, 0u);
+    }
+    return vec4<u32>(word, src[i + 1u], src[i + 2u], src[i + 3u]);
 }
 
 fn int_pattern(bits: u32) -> u32 {
@@ -125,7 +134,8 @@ fn f32_to_f64_bits(b: u32) -> vec2<u32> {
     let e = (b >> 23u) & 0xFFu;
     let m = b & 0x7FFFFFu;
     if (e == 0xFFu) {
-        return vec2<u32>(m << 29u, sign | 0x7FF00000u | (m >> 3u));
+        let quiet = select(0u, 0x80000u, m != 0u);
+        return vec2<u32>(m << 29u, sign | 0x7FF00000u | quiet | (m >> 3u));
     }
     if (e == 0u) {
         if (m == 0u) {
@@ -297,23 +307,48 @@ fn int_to_int_bits(pattern: u32) -> u32 {
     return min(pattern, hi);
 }
 
-fn convert_bits(bits: vec2<u32>) -> vec2<u32> {
+fn real_to_f32_bits(bits: vec4<u32>) -> u32 {
+    if (SRC_DTYPE == 6u) {
+        return bits.x;
+    }
+    if (SRC_DTYPE == 7u) {
+        return f64_to_f32_bits(bits.x, bits.y);
+    }
+    return int_to_f32_bits(int_pattern(bits.x), dtype_signed(SRC_DTYPE));
+}
+
+fn convert_bits(bits: vec4<u32>) -> vec4<u32> {
     if (SRC_DTYPE == DST_DTYPE) {
         return bits;
     }
+    if (DST_DTYPE == 8u) {
+        if (SRC_DTYPE == 9u) {
+            return vec4<u32>(f64_to_f32_bits(bits.x, bits.y), f64_to_f32_bits(bits.z, bits.w), 0u, 0u);
+        }
+        return vec4<u32>(real_to_f32_bits(bits), 0u, 0u, 0u);
+    }
+    if (DST_DTYPE == 9u) {
+        if (SRC_DTYPE == 8u) {
+            return vec4<u32>(f32_to_f64_bits(bits.x), f32_to_f64_bits(bits.y));
+        }
+        if (SRC_DTYPE == 7u) {
+            return vec4<u32>(bits.x, bits.y, 0u, 0u);
+        }
+        return vec4<u32>(f32_to_f64_bits(bits.x), 0u, 0u);
+    }
     if (DST_DTYPE == 7u) {
-        return f32_to_f64_bits(bits.x);
+        return vec4<u32>(f32_to_f64_bits(bits.x), 0u, 0u);
     }
     if (SRC_DTYPE == 7u) {
-        return vec2<u32>(f64_to_f32_bits(bits.x, bits.y), 0u);
+        return vec4<u32>(f64_to_f32_bits(bits.x, bits.y), 0u, 0u, 0u);
     }
     if (DST_DTYPE == 6u) {
-        return vec2<u32>(int_to_f32_bits(int_pattern(bits.x), dtype_signed(SRC_DTYPE)), 0u);
+        return vec4<u32>(int_to_f32_bits(int_pattern(bits.x), dtype_signed(SRC_DTYPE)), 0u, 0u, 0u);
     }
     if (SRC_DTYPE == 6u) {
-        return vec2<u32>(f32_to_int_bits(bits.x), 0u);
+        return vec4<u32>(f32_to_int_bits(bits.x), 0u, 0u, 0u);
     }
-    return vec2<u32>(int_to_int_bits(int_pattern(bits.x)), 0u);
+    return vec4<u32>(int_to_int_bits(int_pattern(bits.x)), 0u, 0u, 0u);
 }
 
 fn load_f32(addr: u32) -> f32 {
@@ -324,11 +359,11 @@ fn load_f32(addr: u32) -> f32 {
     return bitcast<f32>(int_to_f32_bits(int_pattern(bits), dtype_signed(SRC_DTYPE)));
 }
 
-fn encode_f32(y: f32) -> vec2<u32> {
+fn encode_f32(y: f32) -> vec4<u32> {
     if (DST_DTYPE == 6u) {
-        return vec2<u32>(bitcast<u32>(y), 0u);
+        return vec4<u32>(bitcast<u32>(y), 0u, 0u, 0u);
     }
-    return vec2<u32>(f32_to_int_bits(bitcast<u32>(y)), 0u);
+    return vec4<u32>(f32_to_int_bits(bitcast<u32>(y)), 0u, 0u, 0u);
 }
 
 fn mod_floor(i: i32, p: u32) -> u32 {
@@ -399,9 +434,9 @@ fn walk(e: u32) -> Walk {
     return w;
 }
 
-fn gather_value(w: Walk) -> vec2<u32> {
+fn gather_value(w: Walk) -> vec4<u32> {
     if (OPERATION == 1u && w.constant) {
-        return vec2<u32>(params[P_VALUE_LO], params[P_VALUE_HI]);
+        return vec4<u32>(params[P_VALUE_LO], params[P_VALUE_HI], params[P_VALUE_2], params[P_VALUE_3]);
     }
     if (OPERATION == 2u) {
         let len = params[P_PARAM_LEN];
@@ -433,7 +468,7 @@ fn resize_row(base: u32, iy: i32, ix0: i32, ix1: i32, wx0: f32, wx1: f32, sy: u3
     return v0 * wx0 + resize_tap(base, iy, ix1, sy, sx) * wx1;
 }
 
-fn resize_value(e: u32) -> vec2<u32> {
+fn resize_value(e: u32) -> vec4<u32> {
     let ndim = params[P_NDIM];
     let ay = params[P_AXIS_Y];
     let ax = params[P_AXIS_X];
@@ -482,10 +517,16 @@ fn resize_value(e: u32) -> vec2<u32> {
     return encode_f32(r0 * wy0 + r1 * wy1);
 }
 
-fn store_element(addr: u32, bits: vec2<u32>) {
-    dst[addr >> 2u] = bits.x;
-    if (dtype_size(DST_DTYPE) == 8u) {
-        dst[(addr >> 2u) + 1u] = bits.y;
+fn store_element(addr: u32, bits: vec4<u32>) {
+    let i = addr >> 2u;
+    let words = dtype_size(DST_DTYPE) >> 2u;
+    dst[i] = bits.x;
+    if (words >= 2u) {
+        dst[i + 1u] = bits.y;
+    }
+    if (words == 4u) {
+        dst[i + 2u] = bits.z;
+        dst[i + 3u] = bits.w;
     }
 }
 
