@@ -512,12 +512,16 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     const bitsOf = async (a) => { const cpu = await compute.ndarray.toCPU(a); try { return Array.from(new Uint8Array(cpu.data().buffer, cpu.data().byteOffset, cpu.data().byteLength)); } finally { cpu.destroy(); } };
     const g = compute.ndarray.fromArray("f32", [3, 4], [0.5, -1.5, 2.5, 300.7, -7, 8.25, NaN, Infinity, 1e-3, -0, 42, -42], { residency: "gpu" });
     const field = compute.ndarray.fromArray("f32", [32, 32], Array.from({ length: 1024 }, (_, i) => Math.cos(0.11 * i) * (i % 13)), { residency: "gpu" });
+    const volume = compute.ndarray.fromArray("f32", [12, 10, 10], Array.from({ length: 1200 }, (_, i) => Math.sin(0.23 * i) * (i % 9)), { residency: "gpu" });
     const ops = [
         (options) => compute.ndarray.cast(compute.ndarray.transpose(g), "i16", options),
         (options) => compute.ndarray.pad(g, { width: [[1, 0], [2, 1]], mode: "reflect", ...options }),
         (options) => compute.ndarray.resize(g, { axes: [0, 1], size: [5, 7], ...options }),
         // Antialiased cubic 32 -> 5 and 32 -> 3 gathers up to 26 x 32 taps per output, so it runs as two passes through a scratch temporary.
-        (options) => compute.ndarray.resize(field, { axes: [0, 1], size: [5, 3], method: "cubic", antialias: true, ...options })
+        (options) => compute.ndarray.resize(field, { axes: [0, 1], size: [5, 3], method: "cubic", antialias: true, ...options }),
+        (options) => compute.ndarray.resize(volume, { axes: [0, 1, 2], size: [5, 6, 7], ...options }),
+        // Antialiased cubic shrinking along three axes runs as three passes through two ping-pong scratch temporaries.
+        (options) => compute.ndarray.resample(volume, { axes: [0, 1, 2], size: [3, 2, 2], scale: [4, 5, 5], offset: 1.5, method: "cubic", antialias: true, ...options })
     ];
     const expected = [];
     for (const op of ops) expected.push(await bitsOf(op({})));
@@ -555,6 +559,7 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     assert.deepStrictEqual(await bitsOf(out), expected[0], "repeated encoder-mode cast");
     g.destroy();
     field.destroy();
+    volume.destroy();
     shared.destroy();
     out.destroy();
     kernelIn.destroy();
@@ -753,7 +758,173 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     gc.destroy();
 }
 
-// 26) Cleanup releases the shared compute context before its browser GPU device.
+// 26) resize interpolates along any number of axes in a fixed summation order, bitwise-invariant to the CPU pass grouping.
+{
+    const { arraysApproxEqual } = createApproxHelpers(1e-12);
+    const sameBits = (a, b) => a.length === b.length && a.every((v, i) => v === b[i]);
+    const v = compute.ndarray.fromArray("f64", [2, 2, 3], [1, 2, 4, 8, 16, 32, 3, -5, 7, 0.5, 9, -2]);
+    const gv = compute.ndarray.toGPU(compute.ndarray.cast(v, "f32"));
+    // torch.nn.functional.interpolate(x[None, None], size=(3, 3, 4), mode="trilinear", align_corners=False) in float64 (PyTorch 2.14.0)
+    const trilinear = [1, 1.625, 2.75, 4, 4.5, 7.312499999999999, 12.374999999999998, 18, 8, 13, 22, 32, 1.9999999999999998, -0.1874999999999999, 1.125, 5.5, 3.125, 4.609374999999999, 7.281249999999998, 10.25, 4.25, 9.40625, 13.4375, 15, 3, -2, -0.5, 7, 1.75, 1.9062499999999996, 2.1874999999999996, 2.5, 0.5, 5.8125, 4.875, -2];
+    // torch.nn.functional.interpolate(x[None, None], size=(3, 3, 4), mode="trilinear", align_corners=True) in float64 (PyTorch 2.14.0)
+    const corners = [1, 1.6666666666666665, 2.6666666666666665, 4, 4.5, 7.499999999999999, 12, 18, 8, 13.333333333333332, 21.333333333333332, 32, 2, -0.33333333333333326, 0.8333333333333329, 5.5, 3.125, 4.708333333333333, 7.083333333333333, 10.25, 4.25, 9.75, 13.333333333333332, 15, 3, -2.333333333333333, -1.0000000000000007, 7, 1.75, 1.916666666666667, 2.1666666666666665, 2.5, 0.5, 6.166666666666667, 5.333333333333334, -2];
+    for (const [options, expected] of [[{}, trilinear], [{ alignCorners: true }, corners]]) {
+        arraysApproxEqual(Array.from(compute.ndarray.resize(v, { axes: [0, 1, 2], size: [3, 3, 4], ...options }).data()), expected, 1e-12, `CPU trilinear ${JSON.stringify(options)}`);
+        arraysApproxEqual(await readGPU(compute.ndarray.resize(gv, { axes: [0, 1, 2], size: [3, 3, 4], ...options })), expected, 1e-5, `GPU trilinear ${JSON.stringify(options)}`);
+    }
+
+    // One axis equals two axes with an unchanged second axis, and the listing order of the axes does not matter.
+    const field = compute.ndarray.fromArray("f32", [5, 6, 7], Array.from({ length: 210 }, (_, i) => Math.sin(0.7 * i) * 9 + (i % 5)));
+    const fieldGPU = compute.ndarray.toGPU(field);
+    for (const a of [field, fieldGPU]) for (const method of ["nearest", "linear", "cubic"]) {
+        const one = await bytesOf(compute.ndarray.resize(a, { axes: 1, size: 11, method }));
+        assert.ok(sameBits(one, await bytesOf(compute.ndarray.resize(a, { axes: [1, 2], size: [11, 7], method }))), `${a.residency} ${method}: a 1-axis resize equals a 2-axis resize with an unchanged axis`);
+        const ordered = await bytesOf(compute.ndarray.resize(a, { axes: [0, 1, 2], size: [3, 9, 4], method }));
+        assert.ok(sameBits(ordered, await bytesOf(compute.ndarray.resize(a, { axes: [2, 0, -2], size: [4, 3, 9], method }))), `${a.residency} ${method}: axis order does not matter`);
+    }
+
+    // An affine function of the coordinates is reproduced wherever every axis interpolates between samples.
+    const f = (z, y, x) => 2 * z - 3 * y + 0.5 * x + 1;
+    const ramp = compute.ndarray.fromArray("f64", [4, 5, 6], Array.from({ length: 120 }, (_, i) => f(Math.floor(i / 30), Math.floor(i / 6) % 5, i % 6)));
+    const size = [7, 9, 11], at = (d, k) => (d + 0.5) * ramp.shape[k] / size[k] - 0.5;
+    const results = [Array.from(compute.ndarray.resize(ramp, { axes: [0, 1, 2], size }).data()), await readGPU(compute.ndarray.resize(compute.ndarray.toGPU(compute.ndarray.cast(ramp, "f32")), { axes: [0, 1, 2], size }))];
+    for (const [values, tolerance] of [[results[0], 1e-12], [results[1], 1e-4]]) {
+        for (let e = 0; e < 7 * 9 * 11; e++) {
+            const c = [Math.floor(e / 99), Math.floor(e / 11) % 9, e % 11].map(at);
+            if (c.every((x, k) => x >= 0 && x <= ramp.shape[k] - 1)) assert.ok(Math.abs(values[e] - f(...c)) <= tolerance * 30, `affine interior value ${e}: ${values[e]} vs ${f(...c)}`);
+        }
+    }
+
+    // CPU results equal successive single-axis resizes from the highest axis down, bitwise, for single- and multi-pass plans.
+    const volume = compute.ndarray.fromArray("f64", [24, 20, 18], Array.from({ length: 8640 }, (_, i) => Math.cos(0.013 * i) * 50 + (i % 11)));
+    const volumeGPU = compute.ndarray.toGPU(compute.ndarray.cast(volume, "f32"));
+    // The planner runs the constant-boundary cubic case as passes {1, 2} and {0}, antialiased cubic shrinking (10 to 26 taps per axis) as three
+    // one-axis passes, and the linear case as a single pass over three levels.
+    for (const [shape, options] of [[[30, 7, 25], { method: "cubic", boundary: "constant", value: -1 }], [[3, 4, 5], { method: "cubic", antialias: true }], [[9, 31, 4], { method: "linear", boundary: ["edge", "wrap", "reflect"] }]]) {
+        const once = compute.ndarray.resize(volume, { axes: [0, 1, 2], size: shape, ...options });
+        let composed = volume;
+        for (const axis of [2, 1, 0]) composed = compute.ndarray.resize(composed, { ...options, axes: axis, size: shape[axis], boundary: Array.isArray(options.boundary) ? options.boundary[axis] : options.boundary, dtype: "f64" });
+        assert.ok(sameBits(await bytesOf(once), await bytesOf(composed)), `CPU ${JSON.stringify(options)} must equal its single-axis composition bitwise`);
+        arraysApproxEqual(await readGPU(compute.ndarray.resize(volumeGPU, { axes: [0, 1, 2], size: shape, ...options })), Array.from(once.data()), 1e-4, `GPU ${JSON.stringify(options)}`);
+    }
+    const perAxis = Array.from(compute.ndarray.resize(v, { axes: [1, 2], size: [3, 5], method: "cubic", boundary: ["edge", "wrap"] }).data());
+    const wrapped = compute.ndarray.resize(compute.ndarray.resize(v, { axes: 2, size: 5, method: "cubic", boundary: "wrap" }), { axes: 1, size: 3, method: "cubic", boundary: "edge" });
+    assert.ok(perAxis.every((x, i) => Object.is(x, wrapped.data()[i])), "Per-axis boundaries apply to their own axes");
+
+    // Nearest resizing along three and four axes is a bit-identical gather on the CPU and GPU, including f64 GPU gathers.
+    const wide = compute.ndarray.fromArray("f64", [3, 4, 2, 5], Array.from({ length: 120 }, (_, i) => (i % 3 === 0) ? NaN : Math.PI * i - 1e300 * (i % 7 === 1)));
+    for (const [a, options] of [[wide, { axes: [0, 2, 3], size: [5, 3, 7] }], [wide, { axes: [0, 1, 2, 3], size: [2, 7, 3, 4] }], [compute.ndarray.cast(field, "i16"), { axes: [0, 1, 2], size: [8, 3, 9], dtype: "f32" }]]) {
+        const cpu = compute.ndarray.resize(a, { ...options, method: "nearest" });
+        assert.deepStrictEqual(await bytesOf(compute.ndarray.resize(compute.ndarray.toGPU(a), { ...options, method: "nearest" })), await bytesOf(cpu), `GPU nearest ${JSON.stringify(options)} must be bit-identical`);
+    }
+    const four = compute.ndarray.resize(wide, { axes: [0, 1, 2, 3], size: [5, 2, 3, 4], method: "linear", boundary: "reflect" });
+    let fourComposed = wide;
+    for (const [axis, n] of [[3, 4], [2, 3], [1, 2], [0, 5]]) fourComposed = compute.ndarray.resize(fourComposed, { axes: axis, size: n, method: "linear", boundary: "reflect" });
+    assert.ok(sameBits(await bytesOf(four), await bytesOf(fourComposed)), "A 4-axis CPU resize needs more than one pass (the planner picks {3}, {1, 2}, {0}) and equals its composition bitwise");
+
+    // The CPU intermediate budget changes only the grouping: with no budget, at most three levels run in one pass and a 4-axis resize keeps its
+    // intermediates as small as possible, bitwise identical to the default plans.
+    const frugal = new Compute(device, device.queue, { ndarray: { maxCPUIntermediateBytes: 0 } });
+    for (const [a, options] of [[volume, { axes: [0, 1, 2], size: [30, 7, 25], method: "cubic" }], [wide, { axes: [0, 1, 2, 3], size: [5, 2, 3, 4], method: "linear", boundary: "reflect" }]]) {
+        const source = frugal.ndarray.fromArray(a.dtype, a.shape, a.data().slice());
+        assert.ok(sameBits(await bytesOf(frugal.ndarray.resize(source, options)), await bytesOf(compute.ndarray.resize(a, options))), `maxCPUIntermediateBytes: 0 keeps ${JSON.stringify(options)} bitwise`);
+        source.destroy();
+    }
+    frugal.destroy();
+    assert.throws(() => new Compute(device, device.queue, { ndarray: { maxCPUIntermediateBytes: -1 } }), /ndarray\.maxCPUIntermediateBytes must be a safe integer >= 0 \(got -1\)/);
+
+    // Validation of axes, sizes, and per-axis options.
+    const invalid = [
+        [{ axes: [], size: [] }, /compute\.ndarray\.resize: axes must be a non-empty list of distinct axes/],
+        [{ axes: [0, -3], size: 2 }, /compute\.ndarray\.resize: axes must be distinct/],
+        [{ axes: [0, 3], size: 2 }, /axis 3 is out of bounds for 3 dimensions/],
+        [{ axes: [0, 1], size: [2] }, /size must be a single value or have one entry per axis \(2 axes, got 1 entries\)/],
+        [{ axes: [0, 1], size: [2, 2.5] }, /size entries must be integers >= 0 that fit in u32 \(got 2\.5\)/],
+        [{ axes: [0, 1], size: 2, boundary: ["edge"] }, /boundary must be a single value or have one entry per axis \(2 axes, got 1 entries\)/],
+        [{ axes: [0, 1], size: 2, boundary: ["edge", "clamp"] }, /boundary must be "edge", "constant", "reflect", "symmetric", "wrap", or "renormalize" \(got clamp\)/],
+        [{ axes: [0, 1], size: 2, boundary: ["edge", "wrap"], value: 1 }, /value applies only to boundary "constant"/]
+    ];
+    for (const [options, message] of invalid) assert.throws(() => compute.ndarray.resize(v, options), message, JSON.stringify(options));
+    for (const a of [v, gv, field, fieldGPU, ramp, volume, volumeGPU, wide]) a.destroy();
+}
+
+// 27) resample reads the source at d × scale + offset per axis, with integer coordinates at sample centers.
+{
+    const { arraysApproxEqual } = createApproxHelpers(1e-12);
+    const a = compute.ndarray.fromArray("f32", [3, 5], [1.5, -2, 4, 8, -16, 0.25, 3, -7, 9, 11, -0.5, 6, 2, -3, 5]);
+    const g = compute.ndarray.toGPU(a);
+    for (const x of [a, g]) {
+        // Integer shifts copy samples exactly, so they equal pad() and slice(); a scale of -1 is a flip.
+        const padded = compute.ndarray.slice(compute.ndarray.pad(x, { width: [[1, 0], [0, 2]], value: 9 }), [[0, 4], [2, 7]]);
+        for (const method of ["nearest", "linear", "cubic"]) {
+            assert.deepStrictEqual(await bytesOf(compute.ndarray.resample(x, { axes: [0, 1], size: [4, 5], scale: 1, offset: [-1, 2], method, boundary: "constant", value: 9 })), await bytesOf(padded), `${x.residency} ${method} integer shift`);
+            if (method !== "cubic") assert.deepStrictEqual(await bytesOf(compute.ndarray.resample(x, { axes: -1, size: 5, scale: -1, offset: 4, method })), await bytesOf(compute.ndarray.flip(x, 1)), `${x.residency} ${method} flip`);
+        }
+        // Half-pixel scale and offset match resize up to coordinate rounding.
+        const s = [3 / 4, 5 / 9];
+        const resized = (x === a) ? Array.from(compute.ndarray.resize(x, { axes: [0, 1], size: [4, 9], method: "cubic" }).data()) : await readGPU(compute.ndarray.resize(x, { axes: [0, 1], size: [4, 9], method: "cubic" }));
+        const resampled = compute.ndarray.resample(x, { axes: [0, 1], size: [4, 9], scale: s, offset: s.map((k) => k / 2 - 0.5), method: "cubic" });
+        arraysApproxEqual((x === a) ? Array.from(resampled.data()) : await readGPU(resampled), resized, (x === a) ? 1e-12 : 1e-5, `${x.residency} half-pixel resample`);
+        // Nearest rounds half up at -0.5 and 3.5 (not floor(x + 0.5), which rounds 0.49999999999999994 up), and out-of-range taps read the constant.
+        const row = compute.ndarray.fromArray("f32", [4], [10, 20, 30, 40], { residency: x.residency });
+        const nearest = { axes: 0, size: 4, scale: 1, method: "nearest", boundary: "constant", value: -1 };
+        assert.deepStrictEqual((x === a) ? Array.from(compute.ndarray.resample(row, { ...nearest, offset: -0.5 }).data()) : await readGPU(compute.ndarray.resample(row, { ...nearest, offset: -0.5 })), [10, 20, 30, 40]);
+        assert.deepStrictEqual((x === a) ? Array.from(compute.ndarray.resample(row, { ...nearest, offset: 0.5 }).data()) : await readGPU(compute.ndarray.resample(row, { ...nearest, offset: 0.5 })), [20, 30, 40, -1]);
+        assert.deepStrictEqual(await bytesOf(compute.ndarray.resample(row, { ...nearest, size: 1, offset: 0.49999999999999994 })), Array.from(new Uint8Array(new Float32Array([10]).buffer)));
+        // A renormalize row without in-range taps becomes the constant value.
+        const outside = compute.ndarray.resample(row, { axes: 0, size: 3, scale: 2, offset: 2.5, boundary: "renormalize", value: -3 });
+        assert.deepStrictEqual((x === a) ? Array.from(outside.data()) : await readGPU(outside), [35, -3, -3]);
+        row.destroy();
+    }
+
+    // A renormalize row whose only in-range tap has a non-positive weight (antialiased cubic, 1.5 filter widths away) becomes the constant.
+    for (const residency of ["cpu", "gpu"]) {
+        const single = compute.ndarray.fromArray("f32", [1], [5], { residency });
+        const far = { axes: 0, size: 1, scale: 3, method: "cubic", antialias: true, boundary: "renormalize", value: -1 };
+        const values = async (offset) => { const r = compute.ndarray.resample(single, { ...far, offset }); return (residency === "cpu") ? Array.from(r.data()) : await readGPU(r); };
+        assert.deepStrictEqual([await values(-4.5), await values(-1.5)], [[-1], [5]], `${residency} renormalize rows with one in-range tap`);
+        single.destroy();
+    }
+
+    // Nearest constants are output-dtype bits on both backends, including complex and f64 outputs.
+    for (const [source, options] of [[compute.ndarray.fromArray("u8", [3, 4], [0, 1, 2, 3, 250, 251, 252, 253, 7, 8, 9, 10]), { dtype: "f32", value: 0.1 }], [compute.ndarray.fromArray("c64", [2, 3], [1, -1, 2, -2, 3, -3, 4, -4, 5, -5, 6, -6]), { value: [1.5, -2] }], [compute.ndarray.fromArray("f32", [2, 3], [1, 2, 3, 4, 5, 6]), { dtype: "c128", value: [Math.PI, -0] }], [compute.ndarray.fromArray("f64", [2, 3], [Math.PI, -0, 1e300, NaN, 5, 6]), { value: -Math.E }]]) {
+        const resample = { axes: [0, 1], size: [4, 5], scale: [1, 0.75], offset: [-1, 1.4], method: "nearest", boundary: ["constant", "wrap"], ...options };
+        const cpu = compute.ndarray.resample(source, resample);
+        assert.deepStrictEqual(await bytesOf(compute.ndarray.resample(compute.ndarray.toGPU(source), resample)), await bytesOf(cpu), `GPU nearest constants ${JSON.stringify(options)}`);
+        const constant = compute.ndarray.slice(cpu, [0, 0]).get();
+        assert.deepStrictEqual(constant, isNaN(options.value) ? constant : (Array.isArray(options.value) || cpu.dtype[0] !== "c") ? ((cpu.dtype === "f32") ? Math.fround(options.value) : options.value) : [options.value, 0], `${cpu.dtype} nearest constant value`);
+        source.destroy();
+    }
+
+    // Physical grids: samples at origin + index × spacing map through scale = outSpacing / inSpacing and offset = (outOrigin - inOrigin) / inSpacing.
+    const linear = (y, x) => 3 * x - 0.5 * y + 2;
+    const inSpacing = [3, 2], outSpacing = [1.5, 0.5], inOrigin = [-1, 0], outOrigin = [0.5, 1.25];
+    const grid = compute.ndarray.fromArray("f64", [4, 6], Array.from({ length: 24 }, (_, i) => linear(inOrigin[0] + Math.floor(i / 6) * inSpacing[0], inOrigin[1] + (i % 6) * inSpacing[1])));
+    const physical = { axes: [0, 1], size: [5, 16], scale: outSpacing.map((s, k) => s / inSpacing[k]), offset: outOrigin.map((o, k) => (o - inOrigin[k]) / inSpacing[k]) };
+    const expected = Array.from({ length: 80 }, (_, e) => linear(outOrigin[0] + Math.floor(e / 16) * outSpacing[0], outOrigin[1] + (e % 16) * outSpacing[1]));
+    arraysApproxEqual(Array.from(compute.ndarray.resample(grid, physical).data()), expected, 1e-12, "CPU physical-grid resample of a linear function");
+    arraysApproxEqual(await readGPU(compute.ndarray.resample(compute.ndarray.toGPU(compute.ndarray.cast(grid, "f32")), physical)), expected, 1e-5, "GPU physical-grid resample of a linear function");
+
+    // Validation.
+    const base = { axes: [0, 1], size: [2, 2], scale: 1 };
+    const invalid = [
+        [{ ...base, alignCorners: true }, /compute\.ndarray\.resample: alignCorners is not a resample option; express the alignment through scale and offset/],
+        [{ axes: 0, size: 2 }, /compute\.ndarray\.resample: scale is required/],
+        [{ ...base, scale: [1, NaN] }, /scale values must be finite numbers \(got NaN\)/],
+        [{ ...base, offset: [0, Infinity] }, /offset values must be finite numbers \(got Infinity\)/],
+        [{ ...base, scale: [1, 2, 3] }, /scale must be a single value or have one entry per axis \(2 axes, got 3 entries\)/],
+        [{ ...base, offset: 2 ** 31 }, /compute\.ndarray\.resample: axis 0 samples the source coordinate 2147483648, and \|x\| \+ 1 \(the filter reach\) must stay below 2\^31 - 1/],
+        [{ ...base, scale: 2 ** 30, method: "cubic", antialias: true }, /axis 0 samples the source coordinate 0, and \|x\| \+ 2147483648 \(the filter reach\)/],
+        [{ ...base, value: 1 }, /value applies only to boundaries "constant" and "renormalize"/],
+        [{ ...base, method: "nearest", boundary: "constant", dtype: "u8", value: 300 }, /value 300 is not exactly representable as u8/],
+        [{ ...base, method: "nearest", boundary: "renormalize", value: [1, 2] }, /a \[re, im\] value requires a complex dtype \(got f32\)/],
+        [{ ...base, boundary: "constant", value: [1, 2] }, /a \[re, im\] value requires a complex input \(got f32\)/]
+    ];
+    for (const [options, message] of invalid) assert.throws(() => compute.ndarray.resample(a, options), message, JSON.stringify(options));
+    for (const x of [a, g, grid]) x.destroy();
+}
+
+// 28) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

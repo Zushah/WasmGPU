@@ -19,6 +19,8 @@ override ROUNDING: u32 = 0u;
 override AFFINE_FORM: u32 = 0u;
 // 0 nearest (one-tap gather), 1 weighted taps (linear or cubic).
 override RESIZE_METHOD: u32 = 1u;
+// 1, 2, or 3 resize levels.
+override RESIZE_LEVELS: u32 = 2u;
 
 @group(0) @binding(0) var<storage, read> src: array<u32>;
 @group(0) @binding(1) var<storage, read_write> dst: array<u32>;
@@ -33,17 +35,17 @@ const P_VALUE_LO: u32 = 5u;
 const P_VALUE_HI: u32 = 6u;
 const P_PARAM_AXIS: u32 = 7u;
 const P_PARAM_LEN: u32 = 8u;
-const P_AXIS_Y: u32 = 9u;
-const P_AXIS_X: u32 = 10u;
+const P_LEVEL_COUNT: u32 = 9u;
 const P_TABLE: u32 = 11u;
 const P_VALUE_2: u32 = 12u;
 const P_VALUE_3: u32 = 13u;
-const P_TABLE_X: u32 = 14u;
 const P_SHAPE: u32 = 16u;
 const P_SRC_STRIDE: u32 = 24u;
 const P_DST_STRIDE: u32 = 32u;
 const P_SRC_SHAPE: u32 = 40u;
 const P_BEFORE: u32 = 48u;
+const P_LEVEL_DIM: u32 = 56u;
+const P_LEVEL_TABLE: u32 = 64u;
 
 fn dtype_size(code: u32) -> u32 {
     if (code <= 1u) {
@@ -454,15 +456,40 @@ fn gather_value(w: Walk) -> vec4<u32> {
     return convert_bits(load_bits(w.src_addr));
 }
 
+struct ResizeLevel {
+    index: u32,
+    weight: u32,
+    taps: u32,
+    stride: u32,
+}
+
 fn resize_constant() -> vec2<f32> {
     return vec2<f32>(bitcast<f32>(params[P_VALUE_LO]), bitcast<f32>(params[P_VALUE_HI]));
 }
 
-fn resize_sample(row: u32, ix: i32, sx: u32) -> vec2<f32> {
-    if (ix < 0) {
+fn resize_level(l: u32, o: u32) -> ResizeLevel {
+    let dim = params[P_LEVEL_DIM + l];
+    let table = params[P_LEVEL_TABLE + l];
+    let n = params[P_SHAPE + dim];
+    let start = params[table + o];
+    let index = table + n + 1u;
+    return ResizeLevel(index + start, index + params[table + n] + start, params[table + o + 1u] - start, params[P_SRC_STRIDE + dim]);
+}
+
+fn resize_tap(v: ResizeLevel, j: u32) -> i32 {
+    return bitcast<i32>(params[v.index + j]);
+}
+
+fn resize_weight(v: ResizeLevel, j: u32) -> f32 {
+    return bitcast<f32>(params[v.weight + j]);
+}
+
+fn resize_sample(v: ResizeLevel, base: u32, j: u32) -> vec2<f32> {
+    let k = resize_tap(v, j);
+    if (k < 0) {
         return resize_constant();
     }
-    let addr = row + u32(ix) * sx;
+    let addr = base + u32(k) * v.stride;
     if (SRC_DTYPE == 8u) {
         let i = addr >> 2u;
         return vec2<f32>(bitcast<f32>(src[i]), bitcast<f32>(src[i + 1u]));
@@ -470,18 +497,14 @@ fn resize_sample(row: u32, ix: i32, sx: u32) -> vec2<f32> {
     return vec2<f32>(load_f32(addr), 0.0);
 }
 
-fn resize_row(base: u32, iy: i32, q0: u32, q1: u32, xi: u32, xw: u32, sy: u32, sx: u32) -> vec2<f32> {
-    if (iy < 0) {
-        return resize_constant();
-    }
-    let row = base + u32(iy) * sy;
-    let first = resize_sample(row, bitcast<i32>(params[xi + q0]), sx);
-    if (q1 - q0 == 1u) {
+fn resize_leaf(v: ResizeLevel, base: u32) -> vec2<f32> {
+    let first = resize_sample(v, base, 0u);
+    if (v.taps == 1u) {
         return first;
     }
-    var acc = first * bitcast<f32>(params[xw + q0]);
-    for (var q = q0 + 1u; q < q1; q = q + 1u) {
-        acc = acc + resize_sample(row, bitcast<i32>(params[xi + q]), sx) * bitcast<f32>(params[xw + q]);
+    var acc = first * resize_weight(v, 0u);
+    for (var j = 1u; j < v.taps; j = j + 1u) {
+        acc = acc + resize_sample(v, base, j) * resize_weight(v, j);
     }
     return acc;
 }
@@ -493,53 +516,111 @@ fn resize_encode(acc: vec2<f32>) -> vec4<u32> {
     return encode_f32(acc.x);
 }
 
+fn resize_nearest_constant() -> vec4<u32> {
+    return vec4<u32>(params[P_VALUE_LO], params[P_VALUE_HI], params[P_VALUE_2], params[P_VALUE_3]);
+}
+
+fn resize_mid(v: ResizeLevel, leaf: ResizeLevel, base: u32) -> vec2<f32> {
+    var k = resize_tap(v, 0u);
+    var first = resize_constant();
+    if (k >= 0) {
+        first = resize_leaf(leaf, base + u32(k) * v.stride);
+    }
+    if (v.taps == 1u) {
+        return first;
+    }
+    var acc = first * resize_weight(v, 0u);
+    for (var j = 1u; j < v.taps; j = j + 1u) {
+        k = resize_tap(v, j);
+        var term = resize_constant();
+        if (k >= 0) {
+            term = resize_leaf(leaf, base + u32(k) * v.stride);
+        }
+        acc = acc + term * resize_weight(v, j);
+    }
+    return acc;
+}
+
+fn resize_top(v: ResizeLevel, mid: ResizeLevel, leaf: ResizeLevel, base: u32) -> vec2<f32> {
+    var k = resize_tap(v, 0u);
+    var first = resize_constant();
+    if (k >= 0) {
+        first = resize_mid(mid, leaf, base + u32(k) * v.stride);
+    }
+    if (v.taps == 1u) {
+        return first;
+    }
+    var acc = first * resize_weight(v, 0u);
+    for (var j = 1u; j < v.taps; j = j + 1u) {
+        k = resize_tap(v, j);
+        var term = resize_constant();
+        if (k >= 0) {
+            term = resize_mid(mid, leaf, base + u32(k) * v.stride);
+        }
+        acc = acc + term * resize_weight(v, j);
+    }
+    return acc;
+}
+
 fn resize_value(e: u32) -> vec4<u32> {
     let ndim = params[P_NDIM];
-    let ay = params[P_AXIS_Y];
-    let ax = params[P_AXIS_X];
+    let d0 = params[P_LEVEL_DIM];
+    let d1 = params[P_LEVEL_DIM + 1u];
+    let d2 = params[P_LEVEL_DIM + 2u];
     var base = params[P_SRC_OFFSET];
-    var oy = 0u;
-    var ox = 0u;
+    var o0 = 0u;
+    var o1 = 0u;
+    var o2 = 0u;
     var rem = e;
     for (var k = 0u; k < ndim; k = k + 1u) {
         let d = ndim - 1u - k;
         let n = params[P_SHAPE + d];
         let c = rem % n;
         rem = rem / n;
-        if (d == ay) {
-            oy = c;
-        } else if (d == ax) {
-            ox = c;
+        if (d == d0) {
+            o0 = c;
+        } else if (RESIZE_LEVELS >= 2u && d == d1) {
+            o1 = c;
+        } else if (RESIZE_LEVELS >= 3u && d == d2) {
+            o2 = c;
         } else {
             base = base + c * params[P_SRC_STRIDE + d];
         }
     }
-    let ny = params[P_SHAPE + ay];
-    let nx = params[P_SHAPE + ax];
-    let ty = params[P_TABLE];
-    let tx = params[P_TABLE_X];
-    let yi = ty + ny + 1u;
-    let xi = tx + nx + 1u;
-    let p0 = params[ty + oy];
-    let p1 = params[ty + oy + 1u];
-    let q0 = params[tx + ox];
-    let q1 = params[tx + ox + 1u];
-    let sy = params[P_SRC_STRIDE + ay];
-    let sx = params[P_SRC_STRIDE + ax];
+    let v0 = resize_level(0u, o0);
     if (RESIZE_METHOD == 0u) {
-        return convert_bits(load_bits(base + params[yi + p0] * sy + params[xi + q0] * sx));
+        var addr = base;
+        var k = resize_tap(v0, 0u);
+        if (k < 0) {
+            return resize_nearest_constant();
+        }
+        addr = addr + u32(k) * v0.stride;
+        if (RESIZE_LEVELS >= 2u) {
+            let v1 = resize_level(1u, o1);
+            k = resize_tap(v1, 0u);
+            if (k < 0) {
+                return resize_nearest_constant();
+            }
+            addr = addr + u32(k) * v1.stride;
+        }
+        if (RESIZE_LEVELS >= 3u) {
+            let v2 = resize_level(2u, o2);
+            k = resize_tap(v2, 0u);
+            if (k < 0) {
+                return resize_nearest_constant();
+            }
+            addr = addr + u32(k) * v2.stride;
+        }
+        return convert_bits(load_bits(addr));
     }
-    let yw = yi + params[ty + ny];
-    let xw = xi + params[tx + nx];
-    let first = resize_row(base, bitcast<i32>(params[yi + p0]), q0, q1, xi, xw, sy, sx);
-    if (p1 - p0 == 1u) {
-        return resize_encode(first);
+    if (RESIZE_LEVELS == 1u) {
+        return resize_encode(resize_leaf(v0, base));
     }
-    var acc = first * bitcast<f32>(params[yw + p0]);
-    for (var p = p0 + 1u; p < p1; p = p + 1u) {
-        acc = acc + resize_row(base, bitcast<i32>(params[yi + p]), q0, q1, xi, xw, sy, sx) * bitcast<f32>(params[yw + p]);
+    let v1 = resize_level(1u, o1);
+    if (RESIZE_LEVELS == 2u) {
+        return resize_encode(resize_mid(v0, v1, base));
     }
-    return resize_encode(acc);
+    return resize_encode(resize_top(v0, v1, resize_level(2u, o2), base));
 }
 
 fn store_element(addr: u32, bits: vec4<u32>) {

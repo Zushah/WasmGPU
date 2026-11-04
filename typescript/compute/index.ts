@@ -12,7 +12,7 @@ import { encodeDispatch, encodeDispatchBatchWithLimit, type ComputeDispatchComma
 import { ComputeKernels } from "./kernels";
 import { RGBA8BufferCanvasBlitter, type BlitRGBA8BufferToCanvasOptions, type RGBA8BufferSource } from "./blit";
 import { ReadbackRing, type ReadbackRingDescriptor } from "./readback";
-import { NdarrayGPUEngine, NdarrayNamespace } from "./ndarray";
+import { NdarrayGPUEngine, NdarrayNamespace, type NdarrayDescriptor } from "./ndarray";
 import { ScratchAllocator, type ScratchAllocatorDescriptor } from "./scratch";
 
 export type ComputeDispatchOptions = {
@@ -23,6 +23,7 @@ export type ComputeDispatchOptions = {
 export type ComputeDescriptor = {
     readback?: ReadbackRingDescriptor;
     scratch?: ScratchAllocatorDescriptor;
+    ndarray?: NdarrayDescriptor;
 };
 
 export class Compute {
@@ -42,7 +43,7 @@ export class Compute {
         this.engine = new NdarrayGPUEngine(device, queue, this.scratch);
         this.kernels = new ComputeKernels(device, queue, this.scratch, this.engine);
         this.readback = new ReadbackRing(device, queue, desc.readback);
-        this.ndarray = new NdarrayNamespace(device, queue, this.readback, this.scratch, this.engine);
+        this.ndarray = new NdarrayNamespace(device, queue, this.readback, this.scratch, this.engine, desc.ndarray);
     }
 
     createStorageBuffer(desc: StorageBufferDescriptor): StorageBuffer {
@@ -165,4 +166,4 @@ export { ReadbackRing } from "./readback";
 export type { ReadbackSource, ReadbackRingDescriptor } from "./readback";
 export type { ScratchAllocatorDescriptor } from "./scratch";
 export { Ndarray, CPUndarray, GPUndarray, NdarrayNamespace, dtypeInfo } from "./ndarray";
-export type { DType, RealDType, ComplexDType, DTypeKind, ComplexScalar, NdarrayResidency, NdLayoutDescriptor, DTypeInfo, NumberTypedArray, NumberTypedArrayConstructor, NdarrayGPUOptions, NdarrayCreateOptions, NdarraySliceEntry, NdarraySliceRange, NdarrayPadMode, NdarrayPadWidth, NdarrayPadOptions, NdarrayOperationOptions, NdarrayOverflowMode, NdarrayRoundingMode, NdarrayCastOptions, NdarrayCopyIntoOptions, NdarrayParameter, NdarrayNormalizeOptions, NdarrayResizeMethod, NdarrayResizeBoundary, NdarrayResizeOptions } from "./ndarray";
+export type { DType, RealDType, ComplexDType, DTypeKind, ComplexScalar, NdarrayResidency, NdLayoutDescriptor, DTypeInfo, NumberTypedArray, NumberTypedArrayConstructor, NdarrayGPUOptions, NdarrayCreateOptions, NdarraySliceEntry, NdarraySliceRange, NdarrayPadMode, NdarrayPadWidth, NdarrayPadOptions, NdarrayOperationOptions, NdarrayOverflowMode, NdarrayRoundingMode, NdarrayCastOptions, NdarrayCopyIntoOptions, NdarrayParameter, NdarrayNormalizeOptions, NdarrayResizeMethod, NdarrayResizeBoundary, NdarrayResizeOptions, NdarrayResampleOptions, NdarrayDescriptor } from "./ndarray";

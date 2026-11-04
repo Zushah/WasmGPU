@@ -787,15 +787,32 @@ export type NdarrayResizeMethod = "nearest" | "linear" | "cubic";
 export type NdarrayResizeBoundary = NdarrayPadMode | "renormalize";
 
 export type NdarrayResizeOptions = NdarrayOperationOptions & {
-    axes: readonly [number, number];
-    size: readonly [number, number];
+    axes: number | readonly number[];
+    size: number | readonly number[];
     method?: NdarrayResizeMethod;
     alignCorners?: boolean;
     antialias?: boolean;
     cubicCoefficient?: number;
-    boundary?: NdarrayResizeBoundary;
+    boundary?: NdarrayResizeBoundary | readonly NdarrayResizeBoundary[];
     value?: number | ComplexScalar;
     dtype?: DType;
+};
+
+export type NdarrayResampleOptions = NdarrayOperationOptions & {
+    axes: number | readonly number[];
+    size: number | readonly number[];
+    scale: number | readonly number[];
+    offset?: number | readonly number[];
+    method?: NdarrayResizeMethod;
+    antialias?: boolean;
+    cubicCoefficient?: number;
+    boundary?: NdarrayResizeBoundary | readonly NdarrayResizeBoundary[];
+    value?: number | ComplexScalar;
+    dtype?: DType;
+};
+
+export type NdarrayDescriptor = {
+    maxCPUIntermediateBytes?: number;
 };
 
 type IntMode = { saturate: boolean; nearest: boolean };
@@ -921,11 +938,20 @@ const cpuAffine = (dst: CPUndarray, src: CPUndarray, axis: number, a: ReadonlyAr
     });
 };
 
-type ResizeAxisSpec = { method: NdarrayResizeMethod; alignCorners: boolean; antialias: boolean; cubicCoefficient: number; boundary: NdarrayResizeBoundary };
+type ResizeSampling = { method: NdarrayResizeMethod; antialias: boolean; cubicCoefficient: number };
+
+type ResizeGrid = { alignCorners: boolean } | { scale: number; offset: number };
+
+type ResizeAxis = { axis: number; nIn: number; nOut: number; boundary: NdarrayResizeBoundary; grid: ResizeGrid };
 
 type ResizeTable = { offsets: Int32Array; index: Int32Array; weight: Float64Array | Float32Array; maxTaps: number; words?: Uint32Array };
 
+type ResizeLevel = ResizeAxis & { table: ResizeTable };
+
 const RESIZE_BOUNDARIES: ReadonlyArray<string> = ["edge", "constant", "reflect", "symmetric", "wrap", "renormalize"];
+const MAX_RESIZE_LEVELS = 3;
+const RESIZE_WRITE_COST: Record<NdarrayResidency, number> = { cpu: 0.4, gpu: 6 };
+const CPU_INTERMEDIATE_BYTES = 67_108_864; // 64 * 1024 * 1024
 
 const nearestResizeIndex = (d: number, nIn: number, nOut: number): number => {
     const product = (2 * d + 1) * nIn, divisor = 2 * nOut;
@@ -950,14 +976,13 @@ const resizeCoordinate = (d: number, nIn: number, nOut: number, alignCorners: bo
     return { i: Number(i), t: Number(r) / den };
 };
 
+const resampleCoordinate = (d: number, scale: number, offset: number): { i: number; t: number } => { const x = d * scale + offset, i = Math.floor(x); return { i, t: x - i }; };
+
+const nearestResampleIndex = (d: number, scale: number, offset: number): number => { const { i, t } = resampleCoordinate(d, scale, offset); return (t >= 0.5) ? i + 1 : i; };
+
 const linearWeight = (x: number): number => { x = Math.abs(x); return (x < 1) ? 1 - x : 0; };
 
-const cubicWeight = (x: number, a: number): number => {
-    x = Math.abs(x);
-    if (x <= 1) return (x - 1) * ((a + 2) * x * x - x - 1);
-    if (x < 2) return a * (x - 1) * (x - 2) * (x - 2);
-    return 0;
-};
+const cubicWeight = (x: number, a: number): number => { x = Math.abs(x); if (x <= 1) return (x - 1) * ((a + 2) * x * x - x - 1); if (x < 2) return a * (x - 1) * (x - 2) * (x - 2); return 0; };
 
 const resizeTaps = (i: number, t: number, fs: number, cubic: boolean, a: number, ks: Float64Array, ws: Float64Array): number => {
     const support = cubic ? 2 : 1;
@@ -975,6 +1000,7 @@ const resizeTaps = (i: number, t: number, fs: number, cubic: boolean, a: number,
 class ResizeTableWriter {
     private readonly n: number;
     private readonly f32: boolean;
+    private readonly op: string;
     private capacity: number = 0;
     private words: Uint32Array | undefined;
     private offsets: Int32Array;
@@ -984,9 +1010,10 @@ class ResizeTableWriter {
     private rows: number = 0;
     private maxTaps: number = 0;
 
-    constructor(n: number, capacity: number, f32: boolean) {
+    constructor(n: number, capacity: number, f32: boolean, op: string) {
         this.n = n;
         this.f32 = f32;
+        this.op = op;
         this.offsets = new Int32Array(f32 ? 0 : n + 1);
         this.grow(Math.max(capacity, 1));
     }
@@ -1010,7 +1037,10 @@ class ResizeTableWriter {
     }
 
     row(index: Int32Array, weight: Float64Array, taps: number): void {
-        if (this.count + taps > this.capacity) this.grow(Math.max(2 * this.capacity, this.count + taps));
+        if (this.count + taps > this.capacity) {
+            assert(this.count + taps <= 0x7FFFFFFF, `${opName(this.op)}: a resize tap table needs more than 2^31 - 1 taps`);
+            this.grow(Math.min(Math.max(2 * this.capacity, this.count + taps), 0x7FFFFFFF));
+        }
         const start = this.count;
         for (let j = 0; j < taps; j++) {
             const w = this.f32 ? Math.fround(weight[j]!) : weight[j]!;
@@ -1032,19 +1062,22 @@ class ResizeTableWriter {
     }
 }
 
-const buildResizeTable = (nIn: number, nOut: number, axis: ResizeAxisSpec, f32: boolean = false): ResizeTable => {
-    const nearest = axis.method === "nearest", cubic = axis.method === "cubic", support = cubic ? 2 : 1, a = axis.cubicCoefficient;
-    const fs = (axis.antialias && nIn > nOut && nOut > 0) ? nIn / nOut : 1;
+const buildResizeTable = (axis: ResizeAxis, sampling: ResizeSampling, f32: boolean, op: string): ResizeTable => {
+    const { nIn, nOut, grid } = axis;
+    const nearest = sampling.method === "nearest", cubic = sampling.method === "cubic", support = cubic ? 2 : 1, a = sampling.cubicCoefficient;
+    const resample = "scale" in grid;
+    const fs = !sampling.antialias ? 1 : resample ? Math.max(1, Math.abs(grid.scale)) : (nIn > nOut && nOut > 0) ? nIn / nOut : 1;
     const renormalize = axis.boundary === "renormalize", mode = axis.boundary as NdarrayPadMode;
+    const map = (k: number): number => (k >= 0 && k < nIn) ? k : renormalize ? -1 : padSourceIndex(k, nIn, mode);
     const perRow = nearest ? 1 : (fs > 1) ? Math.floor(2 * support * fs) + 2 : 2 * support;
-    const table = new ResizeTableWriter(nOut, Math.min(nOut * perRow, 1 << 20), f32);
+    const table = new ResizeTableWriter(nOut, Math.min(nOut * perRow, 1 << 20), f32, op);
     const ks = new Float64Array(perRow), ws = new Float64Array(perRow), ri = new Int32Array(perRow), rw = new Float64Array(perRow), slots = new Map<number, number>();
     for (let d = 0; d < nOut; d++) {
         let taps = 0;
-        if (nearest) { ri[0] = nearestResizeIndex(d, nIn, nOut); rw[0] = 1; table.row(ri, rw, 1); continue; }
-        const { i, t } = resizeCoordinate(d, nIn, nOut, axis.alignCorners);
+        if (nearest) { ri[0] = resample ? map(nearestResampleIndex(d, grid.scale, grid.offset)) : nearestResizeIndex(d, nIn, nOut); rw[0] = 1; table.row(ri, rw, 1); continue; }
+        const { i, t } = resample ? resampleCoordinate(d, grid.scale, grid.offset) : resizeCoordinate(d, nIn, nOut, grid.alignCorners);
         if (fs === 1 && t === 0) {
-            ri[0] = i;
+            ri[0] = map(i);
             rw[0] = 1;
             table.row(ri, rw, 1);
             continue;
@@ -1077,9 +1110,10 @@ const buildResizeTable = (nIn: number, nOut: number, axis: ResizeAxisSpec, f32: 
             for (let p = 0; p < taps; p++) if (rw[p] !== 0) { ri[kept] = ri[p]!; rw[kept++] = rw[p]!; }
             taps = kept;
         }
-        if (taps !== 1) {
-            let sum = 0;
-            for (let p = 0; p < taps; p++) sum += rw[p]!;
+        let sum = 0;
+        for (let p = 0; p < taps; p++) sum += rw[p]!;
+        if (renormalize && !(Number.isFinite(sum) && sum > 0)) { ri[0] = -1; rw[0] = 1; taps = 1; }
+        else if (taps !== 1) {
             assert(taps > 1 && Number.isFinite(sum) && sum > 0, "internal error: degenerate resize tap row");
             for (let p = 0; p < taps; p++) rw[p]! /= sum;
         }
@@ -1088,27 +1122,80 @@ const buildResizeTable = (nIn: number, nOut: number, axis: ResizeAxisSpec, f32: 
     return table.finish();
 };
 
-const identityResizeTable = (n: number, f32: boolean = false): ResizeTable => buildResizeTable(n, n, { method: "nearest", alignCorners: false, antialias: false, cubicCoefficient: 0, boundary: "edge" }, f32);
+const isIdentityAxis = (axis: ResizeAxis): boolean => axis.nIn === axis.nOut && (!("scale" in axis.grid) || (axis.grid.scale === 1 && axis.grid.offset === 0));
 
-const resizeTwoPass = (ty: { maxTaps: number }, tx: { maxTaps: number }): boolean => ty.maxTaps > 1 && tx.maxTaps > 1 && ty.maxTaps * tx.maxTaps > 64;
+const isIdentityTable = (table: ResizeTable, nIn: number): boolean => table.offsets.length === nIn + 1 && table.maxTaps === 1 && table.index.every((k, d) => k === d);
 
-const cpuResize = (dst: CPUndarray, src: CPUndarray, axes: readonly [number, number], ty: ResizeTable, tx: ResizeTable, weighted: boolean, value: ComplexScalar, op: string): void => {
+const resizeShapes = (shape: ReadonlyArray<number>, passes: ReadonlyArray<ReadonlyArray<ResizeLevel>>): number[][] => {
+    const out: number[][] = [];
+    let current = shape.slice();
+    for (const levels of passes) {
+        current = current.slice();
+        for (const level of levels) current[level.axis] = level.nOut;
+        out.push(current);
+    }
+    return out;
+};
+
+type ResizePlan = { passes: ResizeLevel[][] } | { blocked: number[] };
+
+const planResize = (levels: ReadonlyArray<ResizeLevel>, shape: ReadonlyArray<number>, writeCost: number, elementBytes: number, fits: (shape: ReadonlyArray<number>) => boolean, budget: number = Infinity): ResizePlan => {
+    const n = levels.length, taps = levels.map((level) => level.table.index.length / level.nOut);
+    const shapes = new Array<number[]>(n + 1);
+    shapes[n] = shape.slice();
+    for (let i = n - 1; i >= 0; i--) { shapes[i] = shapes[i + 1]!.slice(); shapes[i]![levels[i]!.axis] = levels[i]!.nOut; }
+    const out = shapes.map((s) => numelFromShape(s));
+    const usable = shapes.map((s, i) => i === 0 || i === n || fits(s));
+    const bytes = out.map((count, i) => (i === 0 || i === n) ? 0 : count * elementBytes);
+    const peak = new Array<number>(n + 1).fill(Infinity);
+    peak[n] = 0;
+    for (let i = n - 1; i >= 0; i--) {
+        if (!usable[i]) continue;
+        for (let k = 1; k <= Math.min(MAX_RESIZE_LEVELS, n - i); k++) peak[i] = Math.min(peak[i]!, Math.max(bytes[i]! + bytes[i + k]!, peak[i + k]!));
+    }
+    if (peak[0] === Infinity) {
+        let i = 1;
+        while (usable.slice(i, i + MAX_RESIZE_LEVELS).some((u) => u)) i++;
+        const run = shapes.slice(i, i + MAX_RESIZE_LEVELS);
+        return { blocked: run.reduce((a, b) => (numelFromShape(b) < numelFromShape(a)) ? b : a) };
+    }
+    const limit = Math.max(budget, peak[0]!);
+    const cost = new Array<number>(n + 1).fill(Infinity), size = new Array<number>(n).fill(1);
+    cost[n] = 0;
+    for (let i = n - 1; i >= 0; i--) {
+        if (!usable[i]) continue;
+        for (let k = 1, product = 1; k <= Math.min(MAX_RESIZE_LEVELS, n - i); k++) {
+            product *= taps[i + k - 1]!;
+            const total = out[i]! * (product + writeCost) + cost[i + k]!;
+            if (bytes[i]! + bytes[i + k]! <= limit && total <= cost[i]!) { cost[i] = total; size[i] = k; }
+        }
+    }
+    const passes: ResizeLevel[][] = [];
+    for (let i = 0; i < n; i += size[i]!) passes.unshift(levels.slice(i, i + size[i]!));
+    return { passes };
+};
+
+const cpuResize = (dst: CPUndarray, src: CPUndarray, levels: ReadonlyArray<ResizeLevel>, weighted: boolean, value: ComplexScalar, constant: Uint32Array, op: string): void => {
     if (dst.numel === 0) return;
-    const keep = dst.shape.map((_, i) => i === axes[0] || i === axes[1]);
+    const keep = dst.shape.map((_, i) => levels.some((level) => level.axis === i));
     const c = coalesceDims(dst.shape, [src.stridesBytes, dst.stridesBytes], keep);
     assertRank(c.shape.length, CPU_MAX_RANK, "CPU", op);
-    const rows = ty.offsets.length + tx.offsets.length, taps = ty.index.length + tx.index.length;
-    const index = new Int32Array(rows + taps), weight = new Float64Array(taps + 2);
-    index.set(ty.offsets, 0);
-    index.set(tx.offsets, ty.offsets.length);
-    index.set(ty.index, rows);
-    index.set(tx.index, rows + ty.index.length);
-    weight.set(ty.weight, 0);
-    weight.set(tx.weight, ty.weight.length);
+    let rows = 0, taps = 0;
+    for (const { table } of levels) { rows += table.offsets.length; taps += table.index.length; }
+    const index = new Int32Array(rows + taps + 4), weight = new Float64Array(taps + 2);
+    let at = 0, tap = 0;
+    for (const { table } of levels) {
+        index.set(table.offsets, at);
+        index.set(table.index, rows + tap);
+        weight.set(table.weight, tap);
+        at += table.offsets.length;
+        tap += table.index.length;
+    }
+    index.set(new Int32Array(constant.buffer, constant.byteOffset, 4), rows + taps);
     weight[taps] = value[0];
     weight[taps + 1] = value[1];
     withWasmScratch((scratch) => {
-        const layout = scratch.u32([dst.offsetBytes, src.offsetBytes, c.axes[axes[0]]!, c.axes[axes[1]]!, src.shape[axes[0]]!, src.shape[axes[1]]!, ty.index.length, tx.index.length, ...c.shape, ...c.strides[0]!, ...c.strides[1]!]);
+        const layout = scratch.u32([dst.offsetBytes, src.offsetBytes, levels.length, ...levels.flatMap((level) => [c.axes[level.axis]!, src.shape[level.axis]!, level.table.index.length]), ...c.shape, ...c.strides[0]!, ...c.strides[1]!]);
         const srcLength = src.numel === 0 ? 0 : src.byteLength;
         checkWasmStatus(ndarrayf.resize(dst.basePtrBytes, dst.byteLength, srcLength === 0 ? 0 : src.basePtrBytes, srcLength, layout, c.shape.length, DTYPE_CODE[dst.dtype] | (DTYPE_CODE[src.dtype] << 4) | (weighted ? 0x100 : 0), scratch.u32(index), scratch.f64(weight)), op);
     });
@@ -1116,7 +1203,7 @@ const cpuResize = (dst: CPUndarray, src: CPUndarray, axes: readonly [number, num
 
 const PARAM_WORDS_RETAINED = 262144;
 
-const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, P_VALUE_LO = 5, P_VALUE_HI = 6, P_PARAM_AXIS = 7, P_PARAM_LEN = 8, P_AXIS_Y = 9, P_AXIS_X = 10, P_TABLE = 11, P_VALUE_2 = 12, P_VALUE_3 = 13, P_TABLE_X = 14, P_SHAPE = 16, P_SRC_STRIDE = 24, P_DST_STRIDE = 32, P_SRC_SHAPE = 40, P_BEFORE = 48, P_HEADER_WORDS = 56;
+const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, P_VALUE_LO = 5, P_VALUE_HI = 6, P_PARAM_AXIS = 7, P_PARAM_LEN = 8, P_LEVEL_COUNT = 9, P_TABLE = 11, P_VALUE_2 = 12, P_VALUE_3 = 13, P_SHAPE = 16, P_SRC_STRIDE = 24, P_DST_STRIDE = 32, P_SRC_SHAPE = 40, P_BEFORE = 48, P_LEVEL_DIM = 56, P_LEVEL_TABLE = 64, P_HEADER_WORDS = 72;
 
 const assertResizeParams = (words: number, limit: number, op: string): void => {
     const bytes = (P_HEADER_WORDS + words) * 4;
@@ -1133,10 +1220,9 @@ type GPUGather = {
     srcShape?: ReadonlyArray<number>;
     before?: ReadonlyArray<number>;
     paramAxis?: number;
-    resizeAxes?: readonly [number, number];
+    resizeLevels?: { axes: ReadonlyArray<number>; tables: ReadonlyArray<Uint32Array> };
     valueBits?: ArrayLike<number>;
     table?: Uint32Array;
-    tableX?: Uint32Array;
     paramLen?: number;
 };
 
@@ -1234,10 +1320,13 @@ export class NdarrayGPUEngine {
         return GPUndarray.empty({ device: this.device, queue: this.queue }, dtype, { shape }, { label: options.label ?? qualifiedName(op), copySrc: options.copySrc ?? true, copyDst: options.copyDst ?? true, usage: options.usage });
     }
 
+    tempStorage(byteLength: number, op: string): StorageBuffer {
+        const bytes = alignTo(byteLength, 4);
+        return wrapStorageBuffer(this.device, this.queue, this.scratch.acquire(bytes, `${qualifiedName(op)}:staging`), { byteLength: bytes });
+    }
+
     temp(dtype: DType, shape: ReadonlyArray<number>, op: string): GPUndarray {
-        const bytes = alignTo(numelFromShape(shape) * dtypeInfo(dtype).bytesPerElement, 4);
-        const storage = wrapStorageBuffer(this.device, this.queue, this.scratch.acquire(bytes, `${qualifiedName(op)}:staging`), { byteLength: bytes });
-        return GPUndarray.wrap(storage, dtype, { shape });
+        return GPUndarray.wrap(this.tempStorage(numelFromShape(shape) * dtypeInfo(dtype).bytesPerElement, op), dtype, { shape });
     }
 
     stage(src: GPUndarray, commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, op: string): GPUndarray {
@@ -1261,8 +1350,9 @@ export class NdarrayGPUEngine {
         const size = dst.bytesPerElement;
         const dstOffset = dstBinding.delta + dst.offsetBytes;
         const count = (size < 4) ? Math.floor((dstOffset + dst.numel * size - 1) / 4) - Math.floor(dstOffset / 4) + 1 : dst.numel;
-        const table = spec.table ?? new Uint32Array(0), tableX = spec.tableX ?? new Uint32Array(0);
-        const length = P_HEADER_WORDS + table.length + tableX.length;
+        const levels = spec.resizeLevels, tables = levels?.tables ?? (spec.table ? [spec.table] : []);
+        let length = P_HEADER_WORDS;
+        for (const table of tables) length += table.length;
         if (length > this.words.length && length <= PARAM_WORDS_RETAINED) this.words = new Uint32Array(Math.max(length, 2 * this.words.length));
         const words = (length <= this.words.length) ? this.words.subarray(0, length) : new Uint32Array(length);
         words.fill(0, 0, P_HEADER_WORDS);
@@ -1277,10 +1367,8 @@ export class NdarrayGPUEngine {
         words[P_VALUE_3] = spec.valueBits?.[3] ?? 0;
         words[P_PARAM_AXIS] = (spec.paramAxis !== undefined && spec.paramAxis >= 0) ? c.axes[spec.paramAxis]! : 0xFFFFFFFF;
         words[P_PARAM_LEN] = spec.paramLen ?? 1;
-        words[P_AXIS_Y] = spec.resizeAxes ? c.axes[spec.resizeAxes[0]]! : 0;
-        words[P_AXIS_X] = spec.resizeAxes ? c.axes[spec.resizeAxes[1]]! : 0;
+        words[P_LEVEL_COUNT] = levels ? levels.axes.length : 0;
         words[P_TABLE] = P_HEADER_WORDS;
-        words[P_TABLE_X] = P_HEADER_WORDS + table.length;
         for (let i = 0; i < c.shape.length; i++) {
             const axis = kept.get(i);
             words[P_SHAPE + i] = c.shape[i]!;
@@ -1289,8 +1377,10 @@ export class NdarrayGPUEngine {
             words[P_SRC_SHAPE + i] = (axis !== undefined && spec.srcShape) ? spec.srcShape[axis]! : c.shape[i]!;
             words[P_BEFORE + i] = (axis !== undefined && spec.before) ? spec.before[axis]! : 0;
         }
-        words.set(table, P_HEADER_WORDS);
-        words.set(tableX, P_HEADER_WORDS + table.length);
+        for (let l = 0, at = P_HEADER_WORDS; l < tables.length; at += tables[l]!.length, l++) {
+            if (levels) { words[P_LEVEL_DIM + l] = c.axes[levels.axes[l]!]!; words[P_LEVEL_TABLE + l] = at; }
+            words.set(tables[l]!, at);
+        }
         const params = this.scratch.params(words, encoder);
         const pipeline = this.pipeline(spec.entryPoint, spec.constants);
         const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: params }, `${qualifiedName(op)}:bg`);
@@ -1317,13 +1407,9 @@ const assertCast = (src: DType, dst: DType, residency: NdarrayResidency, op: str
     assert(!((src === "c128") !== (dst === "c128") && integers), `${opName(op)}: c128 <-> integer casts are not supported on the GPU; cast through f32 or c64, or use a CPU array`);
 };
 
-const assertRealOperation = (dtypes: ReadonlyArray<DType>, op: string): void => {
-    assert(!dtypes.some(isComplexDType), `${opName(op)}: complex dtypes (c64, c128) are not supported`);
-};
+const assertRealOperation = (dtypes: ReadonlyArray<DType>, op: string): void => { assert(!dtypes.some(isComplexDType), `${opName(op)}: complex dtypes (c64, c128) are not supported`); };
 
-const assertCPUOptions = (options: NdarrayGPUOptions & { encoder?: unknown; out?: unknown }, op: string): void => {
-    assert(!hasGPUOptions(options), `${opName(op)}: GPU options (encoder, out, label, copySrc, copyDst, usage) are not supported for CPU arrays`);
-};
+const assertCPUOptions = (options: NdarrayGPUOptions & { encoder?: unknown; out?: unknown }, op: string): void => { assert(!hasGPUOptions(options), `${opName(op)}: GPU options (encoder, out, label, copySrc, copyDst, usage) are not supported for CPU arrays`); };
 
 const normalizePadWidth = (width: NdarrayPadWidth, ndim: number, op: string): { before: number[]; after: number[] } => {
     const integer = (value: unknown): number => {
@@ -1360,10 +1446,14 @@ export class NdarrayNamespace {
     private readonly ownsScratch: boolean;
     private readonly gpu: NdarrayGPUEngine;
     private readonly ownsEngine: boolean;
+    private readonly maxCPUIntermediateBytes: number;
     private destroyed: boolean = false;
 
-    constructor(device: GPUDevice, queue: GPUQueue, readback: ReadbackRing | null = null, scratch?: ScratchAllocator, engine?: NdarrayGPUEngine) {
+    constructor(device: GPUDevice, queue: GPUQueue, readback: ReadbackRing | null = null, scratch?: ScratchAllocator, engine?: NdarrayGPUEngine, desc: NdarrayDescriptor = {}) {
         assert(!engine || scratch, "NdarrayNamespace: an injected engine requires the scratch allocator it was created with");
+        const maxCPUIntermediateBytes = desc.maxCPUIntermediateBytes ?? CPU_INTERMEDIATE_BYTES;
+        assert(Number.isSafeInteger(maxCPUIntermediateBytes) && maxCPUIntermediateBytes >= 0, `ndarray.maxCPUIntermediateBytes must be a safe integer >= 0 (got ${maxCPUIntermediateBytes})`);
+        this.maxCPUIntermediateBytes = maxCPUIntermediateBytes;
         this.device = device;
         this.queue = queue;
         this.readback = readback;
@@ -1549,18 +1639,33 @@ export class NdarrayNamespace {
     }
 
     resize<T extends AnyNdarray>(a: T, options: NdarrayResizeOptions): T {
-        const op = "resize";
+        return this.resizeImpl(a, options, "resize");
+    }
+
+    resample<T extends AnyNdarray>(a: T, options: NdarrayResampleOptions): T {
+        return this.resizeImpl(a, options, "resample");
+    }
+
+    private resizeImpl<T extends AnyNdarray>(a: T, options: NdarrayResizeOptions | NdarrayResampleOptions, op: "resize" | "resample"): T {
         this.assertAlive(op);
         assertNdarray(a, op);
-        assert(typeof options === "object" && options !== null, `${opName(op)}: options with axes and size are required`);
-        assert(Array.isArray(options.axes) && options.axes.length === 2, `${opName(op)}: axes must be two axes`);
-        const axes = normalizeAxes(options.axes, a.ndim, opName(op)) as unknown as readonly [number, number];
-        assert(Array.isArray(options.size) && options.size.length === 2, `${opName(op)}: size must be two integers`);
-        for (const n of options.size) assert(Number.isInteger(n) && n >= 0 && n <= 0xFFFFFFFF, `${opName(op)}: size entries must be integers >= 0 that fit in u32 (got ${n})`);
+        const resample = op === "resample", verb = resample ? "resampl" : "resiz";
+        assert(typeof options === "object" && options !== null, `${opName(op)}: options with ${resample ? "axes, size, and scale" : "axes and size"} are required`);
+        assert(typeof options.axes === "number" || (Array.isArray(options.axes) && options.axes.length > 0), `${opName(op)}: axes must be a non-empty list of distinct axes`);
+        const axes = normalizeAxes(options.axes, a.ndim, opName(op));
+        const count = axes.length;
+        const perAxis = <V>(value: V | ReadonlyArray<V>, label: string): V[] => {
+            if (!Array.isArray(value)) return new Array<V>(count).fill(value as V);
+            assert(value.length === count, `${opName(op)}: ${label} must be a single value or have one entry per axis (${count} axes, got ${value.length} entries)`);
+            return value.slice();
+        };
+        const sizes = perAxis(options.size, "size");
+        for (const n of sizes) assert(Number.isInteger(n) && n >= 0 && n <= 0xFFFFFFFF, `${opName(op)}: size entries must be integers >= 0 that fit in u32 (got ${n})`);
         const method = options.method ?? "linear";
         assert(method === "nearest" || method === "linear" || method === "cubic", `${opName(op)}: method must be "nearest", "linear", or "cubic" (got ${String(method)})`);
         const weighted = method !== "nearest";
-        const alignCorners = options.alignCorners ?? false;
+        const alignCorners = (options as NdarrayResizeOptions).alignCorners ?? false;
+        if (resample) assert((options as NdarrayResizeOptions).alignCorners === undefined, `${opName(op)}: alignCorners is not a resample option; express the alignment through scale and offset (corner alignment is scale (nIn - 1) / (nOut - 1) with offset 0)`);
         assert(typeof alignCorners === "boolean", `${opName(op)}: alignCorners must be a boolean`);
         assert(!(alignCorners && !weighted), `${opName(op)}: alignCorners applies only to methods "linear" and "cubic"`);
         const antialias = options.antialias ?? false;
@@ -1570,67 +1675,105 @@ export class NdarrayNamespace {
         assert(options.cubicCoefficient === undefined || method === "cubic", `${opName(op)}: cubicCoefficient applies only to method "cubic"`);
         const cubicCoefficient = options.cubicCoefficient ?? -0.75;
         assert(typeof cubicCoefficient === "number" && Number.isFinite(cubicCoefficient), `${opName(op)}: cubicCoefficient must be a finite number (got ${String(cubicCoefficient)})`);
-        const boundary = options.boundary ?? "edge";
-        assert(RESIZE_BOUNDARIES.includes(boundary), `${opName(op)}: boundary must be "edge", "constant", "reflect", "symmetric", "wrap", or "renormalize" (got ${String(boundary)})`);
-        assert(boundary === "constant" || options.value === undefined, `${opName(op)}: value applies only to boundary "constant"`);
+        if (resample) assert((options as NdarrayResampleOptions).scale !== undefined, `${opName(op)}: scale is required`);
+        const scales = resample ? perAxis((options as NdarrayResampleOptions).scale, "scale") : [];
+        const offsets = resample ? perAxis((options as NdarrayResampleOptions).offset ?? 0, "offset") : [];
+        for (const [label, values] of [["scale", scales], ["offset", offsets]] as const) for (const v of values) assert(typeof v === "number" && Number.isFinite(v), `${opName(op)}: ${label} values must be finite numbers (got ${String(v)})`);
+        const boundaries = perAxis<NdarrayResizeBoundary>(options.boundary ?? "edge", "boundary");
+        for (const boundary of boundaries) assert(RESIZE_BOUNDARIES.includes(boundary), `${opName(op)}: boundary must be "edge", "constant", "reflect", "symmetric", "wrap", or "renormalize" (got ${String(boundary)})`);
+        if (resample) assert(boundaries.some((b) => b === "constant" || b === "renormalize") || options.value === undefined, `${opName(op)}: value applies only to boundaries "constant" and "renormalize"`);
+        else assert(boundaries.includes("constant") || options.value === undefined, `${opName(op)}: value applies only to boundary "constant"`);
         const complex = isComplexDType(a.dtype);
+        const dtype = options.dtype ?? a.dtype;
         const raw = options.value ?? 0;
-        if (complex) validateElementValue(a.dtype, raw, op);
+        if (resample && !weighted) { dtypeInfo(dtype); validateElementValue(dtype, raw, op); }
+        else if (complex) validateElementValue(a.dtype, raw, op);
         else {
             assert(!Array.isArray(raw), `${opName(op)}: a [re, im] value requires a complex input (got ${a.dtype})`);
             assert(typeof raw === "number", `${opName(op)}: value must be a number`);
         }
         const value: ComplexScalar = (typeof raw === "number") ? [raw, 0] : [raw[0], raw[1]];
+        const order = axes.map((_, k) => k).sort((i, j) => axes[i]! - axes[j]!);
         const shape = a.shape.slice();
-        for (let k = 0; k < 2; k++) {
-            const axis = axes[k]!;
-            assert(a.shape[axis]! > 0 || options.size[k] === 0, `${opName(op)}: cannot resize empty axis ${axis} to ${options.size[k]}`);
-            assert(a.shape[axis]! <= 0x7FFFFFFF, `${opName(op)}: resized axes support at most 2^31 - 1 input elements (axis ${axis} has ${a.shape[axis]})`);
-            shape[axis] = options.size[k]!;
-        }
+        const resized: ResizeAxis[] = order.map((k) => {
+            const axis = axes[k]!, nIn = a.shape[axis]!, nOut = sizes[k]!;
+            assert(nIn > 0 || nOut === 0, `${opName(op)}: cannot ${verb}e empty axis ${axis} to ${nOut}`);
+            assert(nIn <= 0x7FFFFFFF, `${opName(op)}: ${verb}ed axes support at most 2^31 - 1 input elements (axis ${axis} has ${nIn})`);
+            shape[axis] = nOut;
+            if (!resample) return { axis, nIn, nOut, boundary: boundaries[k]!, grid: { alignCorners } };
+            const scale = scales[k]!, offset = offsets[k]!;
+            const reach = ((method === "nearest") ? 0.5 : (method === "cubic") ? 2 : 1) * (antialias ? Math.max(1, Math.abs(scale)) : 1);
+            if (nOut > 0) for (const x of [offset, (nOut - 1) * scale + offset]) assert(Math.abs(x) + reach < 0x7FFFFFFF, `${opName(op)}: axis ${axis} samples the source coordinate ${x}, and |x| + ${reach} (the filter reach) must stay below 2^31 - 1`);
+            return { axis, nIn, nOut, boundary: boundaries[k]!, grid: { scale, offset } };
+        });
         assert(numelFromShape(shape) <= 0xFFFFFFFF, `${opName(op)}: the number of output elements must fit in u32`);
-        const dtype = options.dtype ?? a.dtype;
         dtypeInfo(dtype);
-        assert(!complex || isComplexDType(dtype), `${opName(op)}: resizing ${a.dtype} into ${dtype} would discard imaginary parts; resize compute.ndarray.real() or compute.ndarray.imag() views instead`);
+        assert(!complex || isComplexDType(dtype), `${opName(op)}: ${verb}ing ${a.dtype} into ${dtype} would discard imaginary parts; ${verb}e compute.ndarray.real() or compute.ndarray.imag() views instead`);
+        const gpu = a instanceof GPUndarray;
         if (a instanceof CPUndarray) { assertCPUOptions(options, op); a[ndarrayAssertAlive](); }
-        else if (weighted) assert(a.dtype !== "f64" && a.dtype !== "c128" && dtype !== "f64" && dtype !== "c128", `${opName(op)}: GPU linear and cubic resizing computes in f32 and does not support f64 or c128 inputs or outputs; use method "nearest" or a CPU array`);
+        else if (weighted) assert(a.dtype !== "f64" && a.dtype !== "c128" && dtype !== "f64" && dtype !== "c128", `${opName(op)}: GPU linear and cubic ${verb}ing computes in f32 and does not support f64 or c128 inputs or outputs; use method "nearest" or a CPU array`);
         else assertCast(a.dtype, dtype, "gpu", op);
-        const nInY = a.shape[axes[0]]!, nInX = a.shape[axes[1]]!, nOutY = shape[axes[0]]!, nOutX = shape[axes[1]]!, gpu = a instanceof GPUndarray;
-        if (gpu) assertResizeParams(3 * (nOutY + nOutX) + 2, this.device.limits.maxStorageBufferBindingSize, op);
-        const spec: ResizeAxisSpec = { method, alignCorners, antialias, cubicCoefficient, boundary };
-        const ty = buildResizeTable(nInY, nOutY, spec, gpu), tx = buildResizeTable(nInX, nOutX, spec, gpu);
-        const midShape = a.shape.slice();
-        midShape[axes[1]] = nOutX;
-        if (a instanceof CPUndarray) {
-            const out = CPUndarray.empty(dtype, { shape });
-            try {
-                if (!resizeTwoPass(ty, tx)) cpuResize(out, a, axes, ty, tx, weighted, value, op);
-                else {
-                    const mid = CPUndarray.empty(complex ? "c128" : "f64", { shape: midShape });
-                    try {
-                        cpuResize(mid, a, axes, identityResizeTable(nInY), tx, true, value, op);
-                        cpuResize(out, mid, axes, ty, identityResizeTable(nOutX), true, value, op);
-                    } finally { mid.destroy(); }
-                }
-                return out as T;
-            } catch (error) { out.destroy(); throw error; }
+        const empty = numelFromShape(shape) === 0;
+        const limit = this.device.limits.maxStorageBufferBindingSize;
+        const sampling: ResizeSampling = { method, antialias, cubicCoefficient };
+        const levels: ResizeLevel[] = [];
+        if (!empty) {
+            for (const axis of resized) {
+                if (isIdentityAxis(axis)) continue;
+                if (gpu) assertResizeParams(3 * axis.nOut + 1, limit, op);
+                const table = buildResizeTable(axis, sampling, gpu, op);
+                if (!isIdentityTable(table, axis.nIn)) levels.push({ ...axis, table });
+            }
+            if (levels.length === 0) levels.push({ ...resized[count - 1]!, table: buildResizeTable(resized[count - 1]!, sampling, gpu, op) });
         }
-        const midDType: DType = complex ? "c64" : "f32";
-        const midNumel = numelFromShape(midShape), midBytes = alignTo(midNumel * dtypeInfo(midDType).bytesPerElement, 4);
-        const split = resizeTwoPass(ty, tx) && numelFromShape(shape) > 0 && midNumel <= 0xFFFFFFFF && midBytes <= Math.min(this.device.limits.maxBufferSize, this.device.limits.maxStorageBufferBindingSize);
-        const passes = split ? [{ table: identityResizeTable(nInY, true).words!, tableX: tx.words! }, { table: ty.words!, tableX: identityResizeTable(nOutX, true).words! }] : [{ table: ty.words!, tableX: tx.words! }];
-        for (const { table, tableX } of passes) assertResizeParams(table.length + tableX.length, this.device.limits.maxStorageBufferBindingSize, op);
-        const valueBits = complex ? elementBits("c64", value) : elementBits("f32", value[0]);
-        const keep = shape.map((_, i) => i === axes[0] || i === axes[1]);
+        const midDType: DType = !weighted ? dtype : gpu ? (complex ? "c64" : "f32") : (complex ? "c128" : "f64");
+        const midBytes = dtypeInfo(midDType).bytesPerElement;
+        const constant = elementBits(dtype, weighted ? 0 : value);
+        if (a instanceof CPUndarray) {
+            const plan = empty ? { passes: [] } : planResize(levels, a.shape, RESIZE_WRITE_COST.cpu, midBytes, (mid) => numelFromShape(mid) * midBytes <= 0xFFFFFFFF, this.maxCPUIntermediateBytes);
+            if ("blocked" in plan) throw new Error(`${opName(op)}: a ${numelFromShape(plan.blocked) * midBytes}-byte ${midDType} resize intermediate of shape [${plan.blocked}] exceeds the wasm32 address space, and its passes cannot be merged`);
+            const passes = plan.passes;
+            const shapes = resizeShapes(a.shape, passes);
+            let out: CPUndarray | null = null, mid: CPUndarray | null = null;
+            try {
+                let input: CPUndarray = a;
+                for (let p = 0; p < passes.length; p++) {
+                    const last = p === passes.length - 1;
+                    const target = CPUndarray.empty(last ? dtype : midDType, { shape: last ? shape : shapes[p]! });
+                    if (last) out = target;
+                    try { cpuResize(target, input, passes[p]!, weighted, value, constant, op); }
+                    catch (error) { if (!last) target.destroy(); throw error; }
+                    mid?.destroy();
+                    mid = last ? null : target;
+                    input = target;
+                }
+                return (out ?? CPUndarray.empty(dtype, { shape })) as T;
+            } catch (error) { mid?.destroy(); out?.destroy(); throw error; }
+        }
+        const bindable = Math.min(this.device.limits.maxBufferSize, limit);
+        const fits = (mid: ReadonlyArray<number>): boolean => { const n = numelFromShape(mid); return n <= 0xFFFFFFFF && alignTo(n * midBytes, 4) <= bindable; };
+        const plan = empty ? { passes: [] } : planResize(levels, a.shape, RESIZE_WRITE_COST.gpu, midBytes, fits);
+        if ("blocked" in plan) {
+            const widest = plan.blocked;
+            throw new Error(`${opName(op)}: a ${numelFromShape(widest) * midBytes}-byte ${midDType} resize intermediate of shape [${widest}] exceeds device.limits.maxStorageBufferBindingSize (${limit}) or device.limits.maxBufferSize (${this.device.limits.maxBufferSize}), and its passes cannot be merged; request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
+        }
+        const passes = plan.passes;
+        for (const pass of passes) assertResizeParams(pass.reduce((words, level) => words + level.table.words!.length, 0), limit, op);
+        const shapes = resizeShapes(a.shape, passes);
+        const slots = [0, 0];
+        for (let p = 0; p < passes.length - 1; p++) slots[p % 2] = Math.max(slots[p % 2]!, numelFromShape(shapes[p]!) * midBytes);
+        const valueBits = !weighted ? constant : complex ? elementBits("c64", value) : elementBits("f32", value[0]);
         return this.gpuRun(a as GPUndarray, dtype, shape, options, op, (commands, out, src) => {
-            const pass = (dst: GPUndarray, input: GPUndarray, params: { table: Uint32Array; tableX: Uint32Array }): void => {
-                const constants = { SRC_DTYPE: DTYPE_CODE[input.dtype], DST_DTYPE: DTYPE_CODE[dst.dtype], OPERATION: 3, RESIZE_METHOD: weighted ? 1 : 0, OVERFLOW: 1, ROUNDING: 1 };
-                this.gpu.gather(commands, options.encoder, { dst, src: input, entryPoint: "resize", constants, srcStrides: input.stridesBytes, keep, resizeAxes: axes, valueBits, ...params }, op);
-            };
-            if (!split) { pass(out, src, passes[0]!); return; }
-            const mid = this.gpu.temp(midDType, midShape, op);
-            pass(mid, src, passes[0]!);
-            pass(out, mid, passes[1]!);
+            const temps = slots.map((bytes) => (bytes > 0) ? this.gpu.tempStorage(bytes, op) : null);
+            let input = src;
+            for (let p = 0; p < passes.length; p++) {
+                const pass = passes[p]!, last = p === passes.length - 1;
+                const dst = last ? out : GPUndarray.wrap(temps[p % 2]!, midDType, { shape: shapes[p]! });
+                const constants = { SRC_DTYPE: DTYPE_CODE[input.dtype], DST_DTYPE: DTYPE_CODE[dst.dtype], OPERATION: 3, RESIZE_METHOD: weighted ? 1 : 0, RESIZE_LEVELS: pass.length, OVERFLOW: 1, ROUNDING: 1 };
+                const keep = dst.shape.map((_, i) => pass.some((level) => level.axis === i));
+                this.gpu.gather(commands, options.encoder, { dst, src: input, entryPoint: "resize", constants, srcStrides: input.stridesBytes, keep, valueBits, resizeLevels: { axes: pass.map((level) => level.axis), tables: pass.map((level) => level.table.words!) } }, op);
+                input = dst;
+            }
         }) as T;
     }
 
