@@ -48,6 +48,12 @@ import ndarrayResizeTrilinearGPU from "./compute/ndarray-resize-gpu-trilinear-f3
 import ndarrayResizeTrilinearCPU from "./compute/ndarray-resize-cpu-trilinear-f32-throughput.bench.js";
 import ndarrayResizeTricubicGPU from "./compute/ndarray-resize-gpu-tricubic-f32-throughput.bench.js";
 import ndarrayResizeTricubicCPU from "./compute/ndarray-resize-cpu-tricubic-f32-throughput.bench.js";
+import ndarraySumCPU from "./compute/ndarray-sum-cpu-f32-throughput.bench.js";
+import ndarraySumGPU from "./compute/ndarray-sum-gpu-f32-throughput.bench.js";
+import ndarraySumOuterGPU from "./compute/ndarray-sum-gpu-outer-f32-throughput.bench.js";
+import ndarrayVarCPU from "./compute/ndarray-var-cpu-f32-throughput.bench.js";
+import ndarrayVarGPU from "./compute/ndarray-var-gpu-f32-throughput.bench.js";
+import ndarrayMaxGPU from "./compute/ndarray-max-gpu-u16-throughput.bench.js";
 import math from "./math/mat4-mul-throughput.bench.js";
 import mathF32 from "./math/mat4f-mul-throughput.bench.js";
 import mathF64 from "./math/mat4d-mul-throughput.bench.js";
@@ -130,6 +136,12 @@ export const benchmarks = [
     ndarrayResizeTrilinearCPU,
     ndarrayResizeTricubicGPU,
     ndarrayResizeTricubicCPU,
+    ndarraySumCPU,
+    ndarraySumGPU,
+    ndarraySumOuterGPU,
+    ndarrayVarCPU,
+    ndarrayVarGPU,
+    ndarrayMaxGPU,
     pointcloud,
     glyphfield,
     nodelink,

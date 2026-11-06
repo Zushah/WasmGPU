@@ -1319,6 +1319,1437 @@ pub(crate) fn resize(
     STATUS_OK
 }
 
+const REDUCE_BLOCK: usize = 64;
+const REDUCE_TILE_OUTER: usize = 1024;
+const REDUCE_TILE_TINY: usize = 512;
+const REDUCE_TILE_SHORT: usize = 64;
+const REDUCE_TINY_AXIS: u32 = 32;
+const REDUCE_SHORT_AXIS: u32 = 1536;
+
+const F32_NAN_BITS: u32 = 0x7FC0_0000;
+const F64_NAN_BITS: u64 = 0x7FF8_0000_0000_0000;
+const KEY_SIGN: u64 = 1 << 63;
+const KEY_NAN: u64 = u64::MAX;
+const NO_INDEX: u32 = u32::MAX;
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ReduceOp {
+    Sum,
+    Prod,
+    Mean,
+    Var,
+    Std,
+    Min,
+    Max,
+    ArgMin,
+    ArgMax,
+    MinMax,
+    VarMean,
+    StdMean,
+}
+
+impl ReduceOp {
+    pub(crate) fn from_code(code: u32) -> Option<ReduceOp> {
+        match code {
+            0 => Some(ReduceOp::Sum),
+            1 => Some(ReduceOp::Prod),
+            2 => Some(ReduceOp::Mean),
+            3 => Some(ReduceOp::Var),
+            4 => Some(ReduceOp::Std),
+            5 => Some(ReduceOp::Min),
+            6 => Some(ReduceOp::Max),
+            7 => Some(ReduceOp::ArgMin),
+            8 => Some(ReduceOp::ArgMax),
+            9 => Some(ReduceOp::MinMax),
+            10 => Some(ReduceOp::VarMean),
+            11 => Some(ReduceOp::StdMean),
+            _ => None,
+        }
+    }
+
+    fn fused(self) -> bool {
+        matches!(
+            self,
+            ReduceOp::MinMax | ReduceOp::VarMean | ReduceOp::StdMean
+        )
+    }
+
+    fn variance(self) -> bool {
+        matches!(
+            self,
+            ReduceOp::Var | ReduceOp::Std | ReduceOp::VarMean | ReduceOp::StdMean
+        )
+    }
+
+    fn ordered(self) -> bool {
+        matches!(
+            self,
+            ReduceOp::Min | ReduceOp::Max | ReduceOp::ArgMin | ReduceOp::ArgMax | ReduceOp::MinMax
+        )
+    }
+}
+
+pub(crate) struct ReduceOutput<'a> {
+    pub(crate) bytes: &'a mut [u8],
+    pub(crate) dtype: DType,
+    pub(crate) offset: u32,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(crate) struct ReduceSpec {
+    pub(crate) op: ReduceOp,
+    pub(crate) omit: bool,
+    pub(crate) saturate: bool,
+    pub(crate) ddof: f64,
+}
+
+fn is_float(dtype: DType) -> bool {
+    matches!(dtype, DType::F32 | DType::F64)
+}
+
+fn is_integer(dtype: DType) -> bool {
+    !is_float(dtype) && !dtype.is_complex()
+}
+
+fn is_signed(dtype: DType) -> bool {
+    matches!(dtype, DType::I8 | DType::I16 | DType::I32)
+}
+
+fn complex_of(dtype: DType) -> Option<DType> {
+    match dtype {
+        DType::F32 => Some(DType::C64),
+        DType::F64 => Some(DType::C128),
+        _ => None,
+    }
+}
+
+fn valid_reduce_dtypes(op: ReduceOp, src: DType, out: DType, out2: Option<DType>) -> bool {
+    let complex = src.is_complex();
+    match op {
+        ReduceOp::Sum | ReduceOp::Prod => {
+            if complex {
+                out.is_complex()
+            } else if is_float(src) {
+                is_float(out)
+            } else {
+                !out.is_complex()
+            }
+        }
+        ReduceOp::Mean => {
+            if complex {
+                out.is_complex()
+            } else {
+                is_float(out)
+            }
+        }
+        ReduceOp::Var | ReduceOp::Std => is_float(out),
+        ReduceOp::Min | ReduceOp::Max => !complex && out == src,
+        ReduceOp::ArgMin | ReduceOp::ArgMax => !complex && out == DType::U32,
+        ReduceOp::MinMax => !complex && out == src && out2 == Some(src),
+        ReduceOp::VarMean | ReduceOp::StdMean => {
+            let mean = if complex { complex_of(out) } else { Some(out) };
+            is_float(out) && out2.is_some() && out2 == mean
+        }
+    }
+}
+
+#[inline(always)]
+pub(crate) fn f32_order_key(v: f32) -> u64 {
+    let bits = v.to_bits();
+    if v.is_nan() {
+        KEY_NAN
+    } else if bits >> 31 == 1 {
+        !bits as u64
+    } else {
+        (bits | 0x8000_0000) as u64
+    }
+}
+
+#[inline(always)]
+pub(crate) fn f64_order_key(v: f64) -> u64 {
+    let bits = v.to_bits();
+    if v.is_nan() {
+        KEY_NAN
+    } else if bits >> 63 == 1 {
+        !bits
+    } else {
+        bits | KEY_SIGN
+    }
+}
+
+pub(crate) trait KeyElement: Element {
+    fn order_key(self) -> u64;
+}
+
+macro_rules! int_key {
+    ($t:ty) => {
+        impl KeyElement for $t {
+            #[inline(always)]
+            fn order_key(self) -> u64 {
+                (self as i64 as u64) ^ KEY_SIGN
+            }
+        }
+    };
+}
+
+int_key!(i8);
+int_key!(u8);
+int_key!(i16);
+int_key!(u16);
+int_key!(i32);
+int_key!(u32);
+
+impl KeyElement for f32 {
+    #[inline(always)]
+    fn order_key(self) -> u64 {
+        f32_order_key(self)
+    }
+}
+
+impl KeyElement for f64 {
+    #[inline(always)]
+    fn order_key(self) -> u64 {
+        f64_order_key(self)
+    }
+}
+
+type KeyReader = fn(&[u8], usize, i64, &mut [u64]);
+
+fn read_keys<S: KeyElement>(src: &[u8], offset: usize, stride: i64, out: &mut [u64]) {
+    let mut at = offset as i64;
+    for v in out.iter_mut() {
+        *v = S::load(src, at as usize).order_key();
+        at += stride;
+    }
+}
+
+fn key_reader_for(dtype: DType) -> KeyReader {
+    match dtype {
+        DType::I8 => read_keys::<i8>,
+        DType::U8 => read_keys::<u8>,
+        DType::I16 => read_keys::<i16>,
+        DType::U16 => read_keys::<u16>,
+        DType::I32 => read_keys::<i32>,
+        DType::U32 => read_keys::<u32>,
+        DType::F32 => read_keys::<f32>,
+        DType::F64 => read_keys::<f64>,
+        DType::C64 | DType::C128 => unreachable!("complex dtypes have no ordering"),
+    }
+}
+
+fn store_key(out: &mut [u8], at: usize, dtype: DType, key: u64) {
+    match dtype {
+        DType::I8 | DType::U8 => ((key ^ KEY_SIGN) as u8).store(out, at),
+        DType::I16 | DType::U16 => ((key ^ KEY_SIGN) as u16).store(out, at),
+        DType::I32 | DType::U32 => ((key ^ KEY_SIGN) as u32).store(out, at),
+        DType::F32 => {
+            let k = key as u32;
+            (if k >> 31 == 1 { k & 0x7FFF_FFFF } else { !k }).store(out, at);
+        }
+        DType::F64 => {
+            let bits = if key >> 63 == 1 {
+                key & !KEY_SIGN
+            } else {
+                !key
+            };
+            f64::from_bits(bits).store(out, at);
+        }
+        DType::C64 | DType::C128 => unreachable!("complex dtypes have no ordering"),
+    }
+}
+
+fn store_nan(out: &mut [u8], at: usize, dtype: DType) {
+    match dtype {
+        DType::F32 => F32_NAN_BITS.store(out, at),
+        DType::F64 => f64::from_bits(F64_NAN_BITS).store(out, at),
+        _ => unreachable!("only floating-point outputs hold NaN"),
+    }
+}
+
+fn store_float(out: &mut [u8], at: usize, dtype: DType, v: f64) {
+    if v.is_nan() {
+        store_nan(out, at, dtype);
+    } else if dtype == DType::F32 {
+        (v as f32).store(out, at);
+    } else {
+        v.store(out, at);
+    }
+}
+
+fn store_complex(out: &mut [u8], at: usize, dtype: DType, re: f64, im: f64) {
+    let part = dtype.component();
+    let (a, b) = if re.is_nan() || im.is_nan() {
+        (f64::NAN, f64::NAN)
+    } else {
+        (re, im)
+    };
+    store_float(out, at, part, a);
+    store_float(out, at + part.size(), part, b);
+}
+
+fn store_identity(out: &mut [u8], at: usize, dtype: DType, one: bool) {
+    let size = dtype.size();
+    out[at..at + size].fill(0);
+    if !one {
+        return;
+    }
+    match dtype {
+        DType::I8 => 1i8.store(out, at),
+        DType::U8 => 1u8.store(out, at),
+        DType::I16 => 1i16.store(out, at),
+        DType::U16 => 1u16.store(out, at),
+        DType::I32 => 1i32.store(out, at),
+        DType::U32 => 1u32.store(out, at),
+        DType::F32 | DType::C64 => 1f32.store(out, at),
+        DType::F64 | DType::C128 => 1f64.store(out, at),
+    }
+}
+
+macro_rules! store_exact_int {
+    ($t:ty, $exact:expr, $saturate:expr, $out:expr, $at:expr) => {{
+        let exact: i128 = $exact;
+        let v = if $saturate {
+            exact.clamp(<$t>::MIN as i128, <$t>::MAX as i128)
+        } else {
+            exact
+        };
+        (v as $t).store($out, $at);
+    }};
+}
+
+fn store_exact(out: &mut [u8], at: usize, dtype: DType, wide: u64, signed: bool, saturate: bool) {
+    let exact = if signed {
+        wide as i64 as i128
+    } else {
+        wide as i128
+    };
+    match dtype {
+        DType::I8 => store_exact_int!(i8, exact, saturate, out, at),
+        DType::U8 => store_exact_int!(u8, exact, saturate, out, at),
+        DType::I16 => store_exact_int!(i16, exact, saturate, out, at),
+        DType::U16 => store_exact_int!(u16, exact, saturate, out, at),
+        DType::I32 => store_exact_int!(i32, exact, saturate, out, at),
+        DType::U32 => store_exact_int!(u32, exact, saturate, out, at),
+        DType::F32 => (if signed {
+            wide as i64 as f32
+        } else {
+            wide as f32
+        })
+        .store(out, at),
+        DType::F64 => (if signed {
+            wide as i64 as f64
+        } else {
+            wide as f64
+        })
+        .store(out, at),
+        DType::C64 | DType::C128 => unreachable!("integer reductions have real outputs"),
+    }
+}
+
+struct ReduceWalk {
+    kept_shape: [u32; MAX_RANK],
+    kept_strides: [i64; MAX_RANK],
+    output_steps: [i64; MAX_RANK],
+    kept: usize,
+    reduced_shape: [u32; MAX_RANK],
+    reduced_strides: [i64; MAX_RANK],
+    reduced: usize,
+    outputs: u32,
+    count: u32,
+    empty: bool,
+    base: i64,
+}
+
+impl ReduceWalk {
+    fn new(shape: &[u32], strides: &[i32], reduced: &[u32], base: u32) -> Option<ReduceWalk> {
+        let mut walk = ReduceWalk {
+            kept_shape: [0; MAX_RANK],
+            kept_strides: [0; MAX_RANK],
+            output_steps: [0; MAX_RANK],
+            kept: 0,
+            reduced_shape: [0; MAX_RANK],
+            reduced_strides: [0; MAX_RANK],
+            reduced: 0,
+            outputs: 1,
+            count: 1,
+            empty: false,
+            base: base as i64,
+        };
+        let (mut outputs, mut count) = (1u64, 1u64);
+        for ((&n, &s), &flag) in shape.iter().zip(strides).zip(reduced) {
+            if flag == 0 {
+                walk.kept_shape[walk.kept] = n;
+                walk.kept_strides[walk.kept] = s as i64;
+                walk.kept += 1;
+                outputs = outputs.checked_mul(n as u64)?;
+            } else {
+                walk.reduced_shape[walk.reduced] = n;
+                walk.reduced_strides[walk.reduced] = s as i64;
+                walk.reduced += 1;
+                walk.empty |= n == 0;
+                count = count.saturating_mul(n as u64);
+            }
+        }
+        if outputs > u32::MAX as u64 || (!walk.empty && count > u32::MAX as u64) {
+            return None;
+        }
+        walk.outputs = outputs as u32;
+        walk.count = if walk.empty { 0 } else { count as u32 };
+        let mut step = 1i64;
+        for d in (0..walk.kept).rev() {
+            walk.output_steps[d] = step;
+            step *= walk.kept_shape[d] as i64;
+        }
+        let smallest = (0..walk.kept)
+            .filter(|&d| walk.kept_shape[d] > 1)
+            .min_by_key(|&d| walk.kept_strides[d].unsigned_abs());
+        if let Some(d) = smallest {
+            walk.kept_shape[d..walk.kept].rotate_left(1);
+            walk.kept_strides[d..walk.kept].rotate_left(1);
+            walk.output_steps[d..walk.kept].rotate_left(1);
+        }
+        Some(walk)
+    }
+
+    fn runs(&self, base: i64, mut visit: impl FnMut(i64, i64, usize)) {
+        let zeros = [0i64; MAX_RANK];
+        let (n, stride, _) = inner(
+            &self.reduced_shape[..self.reduced],
+            &self.reduced_strides,
+            &zeros,
+        );
+        for_each_outer(
+            &self.reduced_shape[..self.reduced],
+            &self.reduced_strides,
+            &zeros,
+            base,
+            0,
+            |_, s, _| visit(s, stride, n),
+        );
+    }
+
+    fn tiles(&self, tile: usize, mut visit: impl FnMut(usize, usize, i64, i64, usize)) {
+        let (n, stride, step) = inner(
+            &self.kept_shape[..self.kept],
+            &self.kept_strides,
+            &self.output_steps,
+        );
+        for_each_outer(
+            &self.kept_shape[..self.kept],
+            &self.kept_strides,
+            &self.output_steps,
+            self.base,
+            0,
+            |_, s, o| {
+                let mut done = 0;
+                while done < n {
+                    let width = tile.min(n - done);
+                    visit(
+                        (o + done as i64 * step) as usize,
+                        step as usize,
+                        s + done as i64 * stride,
+                        stride,
+                        width,
+                    );
+                    done += width;
+                }
+            },
+        );
+    }
+
+    fn tile(&self) -> usize {
+        if self.kept == 0 {
+            return 1;
+        }
+        let kept = self.kept_strides[self.kept - 1].unsigned_abs();
+        let reduced = self.reduced_strides[..self.reduced]
+            .iter()
+            .map(|s| s.unsigned_abs())
+            .min()
+            .unwrap_or(u64::MAX);
+        let tile = if kept <= reduced {
+            REDUCE_TILE_OUTER
+        } else if self.count < REDUCE_TINY_AXIS {
+            REDUCE_TILE_TINY
+        } else if self.count <= REDUCE_SHORT_AXIS {
+            REDUCE_TILE_SHORT
+        } else {
+            1
+        };
+        tile.min(self.kept_shape[self.kept - 1] as usize)
+    }
+}
+
+trait Reducer {
+    fn begin(&mut self, width: usize);
+    fn run(&mut self, input: &[u8], at: i64, stride: i64, count: usize, seq: u32);
+    fn row(&mut self, input: &[u8], at: i64, stride: i64, seq: u32);
+    fn end_block(&mut self) {}
+}
+
+fn scan<R: Reducer>(
+    reducer: &mut R,
+    walk: &ReduceWalk,
+    input: &[u8],
+    base: i64,
+    kept_stride: i64,
+    width: usize,
+) {
+    reducer.begin(width);
+    let (mut seq, mut filled) = (0u32, 0usize);
+    walk.runs(base, |start, stride, n| {
+        let mut done = 0;
+        while done < n {
+            if width == 1 {
+                let k = (REDUCE_BLOCK - filled).min(n - done);
+                reducer.run(input, start + done as i64 * stride, stride, k, seq);
+                seq = seq.wrapping_add(k as u32);
+                filled += k;
+                done += k;
+            } else {
+                reducer.row(input, start + done as i64 * stride, kept_stride, seq);
+                seq = seq.wrapping_add(1);
+                filled += 1;
+                done += 1;
+            }
+            if filled == REDUCE_BLOCK {
+                reducer.end_block();
+                filled = 0;
+            }
+        }
+    });
+    if filled > 0 {
+        reducer.end_block();
+    }
+}
+
+struct Cascade {
+    width: usize,
+    stack: Vec<f64>,
+    levels: Vec<u32>,
+    top: usize,
+}
+
+impl Cascade {
+    fn new(capacity: usize, count: u32) -> Cascade {
+        let blocks = (count as u64).div_ceil(REDUCE_BLOCK as u64);
+        let depth = (u64::BITS - blocks.leading_zeros()) as usize + 1;
+        Cascade {
+            width: capacity,
+            stack: vec![0.0; capacity * depth],
+            levels: vec![0; depth],
+            top: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn push(&mut self, block: &[f64], merge: impl Fn(&mut [f64], &[f64])) {
+        let w = self.width;
+        self.stack[self.top * w..(self.top + 1) * w].copy_from_slice(&block[..w]);
+        self.levels[self.top] = 0;
+        self.top += 1;
+        while self.top >= 2 && self.levels[self.top - 1] == self.levels[self.top - 2] {
+            let (older, newer) = self.stack.split_at_mut((self.top - 1) * w);
+            merge(&mut older[(self.top - 2) * w..], &newer[..w]);
+            self.levels[self.top - 2] += 1;
+            self.top -= 1;
+        }
+    }
+
+    #[inline(always)]
+    fn finish(&mut self, out: &mut [f64], merge: impl Fn(&[f64], &mut [f64])) -> bool {
+        let w = self.width;
+        if self.top == 0 {
+            return false;
+        }
+        out[..w].copy_from_slice(&self.stack[(self.top - 1) * w..self.top * w]);
+        for i in (0..self.top - 1).rev() {
+            merge(&self.stack[i * w..(i + 1) * w], &mut out[..w]);
+        }
+        self.top = 0;
+        true
+    }
+}
+
+#[inline(always)]
+fn add_merge(older: &mut [f64], newer: &[f64]) {
+    for (a, b) in older.iter_mut().zip(newer) {
+        *a += *b;
+    }
+}
+
+#[inline(always)]
+fn add_fold(entry: &[f64], acc: &mut [f64]) {
+    for (a, e) in acc.iter_mut().zip(entry) {
+        *a += *e;
+    }
+}
+
+#[inline(always)]
+fn sum_run<const OMIT: bool, const CENTER: bool>(s: &mut f64, mean: f64, values: &[f64]) -> u32 {
+    let (mut acc, mut kept) = (*s, 0u32);
+    for &v in values {
+        let y = if CENTER {
+            let d = v - mean;
+            d * d
+        } else {
+            v
+        };
+        if OMIT {
+            let keep = !v.is_nan();
+            acc += if keep { y } else { -0.0 };
+            kept += keep as u32;
+        } else {
+            acc += y;
+        }
+    }
+    *s = acc;
+    kept
+}
+
+#[inline(always)]
+fn sum_row<const OMIT: bool, const CENTER: bool>(block: &mut [f64], means: &[f64], values: &[f64]) {
+    for (j, (s, &v)) in block.iter_mut().zip(values).enumerate() {
+        let y = if CENTER {
+            let d = v - means[j];
+            d * d
+        } else {
+            v
+        };
+        if OMIT {
+            *s += if v.is_nan() { -0.0 } else { y };
+        } else {
+            *s += y;
+        }
+    }
+}
+
+fn mask_pairs(re: &mut [f64], im: &mut [f64]) {
+    for (a, b) in re.iter_mut().zip(im) {
+        if a.is_nan() || b.is_nan() {
+            *a = f64::NAN;
+            *b = f64::NAN;
+        }
+    }
+}
+
+struct Fold<const OMIT: bool, const CENTER: bool> {
+    read: Reader,
+    part: i64,
+    comps: usize,
+    outputs: usize,
+    block: Vec<f64>,
+    counts: Vec<u32>,
+    means: Vec<f64>,
+    re: Vec<f64>,
+    im: Vec<f64>,
+    cascade: Cascade,
+}
+
+impl<const OMIT: bool, const CENTER: bool> Fold<OMIT, CENTER> {
+    fn new(src: DType, tile: usize, count: u32) -> Self {
+        let part = src.component();
+        let comps = if src.is_complex() { 2 } else { 1 };
+        let buffer = REDUCE_BLOCK.max(tile);
+        Fold {
+            read: reader_for(part),
+            part: part.size() as i64,
+            comps,
+            outputs: tile,
+            block: vec![-0.0; tile * comps],
+            counts: vec![0; tile],
+            means: if CENTER {
+                vec![0.0; tile * comps]
+            } else {
+                Vec::new()
+            },
+            re: vec![0.0; buffer],
+            im: vec![0.0; if comps == 2 { buffer } else { 0 }],
+            cascade: Cascade::new(tile * comps, count),
+        }
+    }
+
+    fn total(&mut self, out: &mut [f64]) {
+        self.cascade.finish(out, add_fold);
+    }
+}
+
+impl<const OMIT: bool, const CENTER: bool> Reducer for Fold<OMIT, CENTER> {
+    fn begin(&mut self, width: usize) {
+        self.outputs = width;
+        self.cascade.width = width * self.comps;
+        self.block[..width * self.comps].fill(-0.0);
+        self.counts[..width].fill(0);
+    }
+
+    fn run(&mut self, input: &[u8], at: i64, stride: i64, count: usize, _seq: u32) {
+        (self.read)(input, at as usize, stride, &mut self.re[..count]);
+        let mean = |c: usize, means: &[f64]| if CENTER { means[c] } else { 0.0 };
+        if self.comps == 2 {
+            (self.read)(
+                input,
+                (at + self.part) as usize,
+                stride,
+                &mut self.im[..count],
+            );
+            if OMIT {
+                mask_pairs(&mut self.re[..count], &mut self.im[..count]);
+            }
+            sum_run::<OMIT, CENTER>(&mut self.block[1], mean(1, &self.means), &self.im[..count]);
+        }
+        let kept =
+            sum_run::<OMIT, CENTER>(&mut self.block[0], mean(0, &self.means), &self.re[..count]);
+        if OMIT {
+            self.counts[0] += kept;
+        }
+    }
+
+    fn row(&mut self, input: &[u8], at: i64, stride: i64, _seq: u32) {
+        let t = self.outputs;
+        (self.read)(input, at as usize, stride, &mut self.re[..t]);
+        if self.comps == 2 {
+            (self.read)(input, (at + self.part) as usize, stride, &mut self.im[..t]);
+            if OMIT {
+                mask_pairs(&mut self.re[..t], &mut self.im[..t]);
+            }
+            let means_im: &[f64] = if CENTER { &self.means[t..2 * t] } else { &[] };
+            sum_row::<OMIT, CENTER>(&mut self.block[t..2 * t], means_im, &self.im[..t]);
+        }
+        let means_re: &[f64] = if CENTER { &self.means[..t] } else { &[] };
+        sum_row::<OMIT, CENTER>(&mut self.block[..t], means_re, &self.re[..t]);
+        if OMIT {
+            for (c, v) in self.counts[..t].iter_mut().zip(&self.re[..t]) {
+                *c += !v.is_nan() as u32;
+            }
+        }
+    }
+
+    fn end_block(&mut self) {
+        let w = self.outputs * self.comps;
+        self.cascade.push(&self.block, add_merge);
+        self.block[..w].fill(-0.0);
+    }
+}
+
+struct IntFold {
+    read: KeyReader,
+    outputs: usize,
+    acc: Vec<u64>,
+    keys: Vec<u64>,
+}
+
+impl IntFold {
+    fn new(src: DType, tile: usize) -> IntFold {
+        IntFold {
+            read: key_reader_for(src),
+            outputs: tile,
+            acc: vec![0; tile],
+            keys: vec![0; REDUCE_BLOCK.max(tile)],
+        }
+    }
+}
+
+impl Reducer for IntFold {
+    fn begin(&mut self, width: usize) {
+        self.outputs = width;
+        self.acc[..width].fill(0);
+    }
+
+    fn run(&mut self, input: &[u8], at: i64, stride: i64, count: usize, _seq: u32) {
+        (self.read)(input, at as usize, stride, &mut self.keys[..count]);
+        let mut acc = self.acc[0];
+        for &k in &self.keys[..count] {
+            acc = acc.wrapping_add(k ^ KEY_SIGN);
+        }
+        self.acc[0] = acc;
+    }
+
+    fn row(&mut self, input: &[u8], at: i64, stride: i64, _seq: u32) {
+        let t = self.outputs;
+        (self.read)(input, at as usize, stride, &mut self.keys[..t]);
+        for (a, &k) in self.acc[..t].iter_mut().zip(&self.keys[..t]) {
+            *a = a.wrapping_add(k ^ KEY_SIGN);
+        }
+    }
+}
+
+struct IntProduct {
+    read: KeyReader,
+    acc: u32,
+    keys: [u64; REDUCE_BLOCK],
+}
+
+impl Reducer for IntProduct {
+    fn begin(&mut self, _width: usize) {
+        self.acc = 1;
+    }
+
+    fn run(&mut self, input: &[u8], at: i64, stride: i64, count: usize, _seq: u32) {
+        (self.read)(input, at as usize, stride, &mut self.keys[..count]);
+        for &k in &self.keys[..count] {
+            self.acc = self.acc.wrapping_mul((k ^ KEY_SIGN) as u32);
+        }
+    }
+
+    fn row(&mut self, _: &[u8], _: i64, _: i64, _: u32) {
+        unreachable!("products run one output at a time");
+    }
+}
+
+#[inline(always)]
+fn complex_mul(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
+    [a[0] * b[0] - a[1] * b[1], a[0] * b[1] + a[1] * b[0]]
+}
+
+fn mul_merge(older: &mut [f64], newer: &[f64]) {
+    if older.len() == 2 {
+        let r = complex_mul([older[0], older[1]], [newer[0], newer[1]]);
+        older[..2].copy_from_slice(&r);
+    } else {
+        older[0] *= newer[0];
+    }
+}
+
+fn mul_fold(entry: &[f64], acc: &mut [f64]) {
+    if acc.len() == 2 {
+        let r = complex_mul([entry[0], entry[1]], [acc[0], acc[1]]);
+        acc[..2].copy_from_slice(&r);
+    } else {
+        acc[0] *= entry[0];
+    }
+}
+
+struct Product<const OMIT: bool> {
+    read: Reader,
+    part: i64,
+    comps: usize,
+    block: [f64; 2],
+    filled: bool,
+    re: [f64; REDUCE_BLOCK],
+    im: [f64; REDUCE_BLOCK],
+    cascade: Cascade,
+}
+
+impl<const OMIT: bool> Product<OMIT> {
+    fn new(src: DType, count: u32) -> Self {
+        let part = src.component();
+        let comps = if src.is_complex() { 2 } else { 1 };
+        Product {
+            read: reader_for(part),
+            part: part.size() as i64,
+            comps,
+            block: [1.0, 0.0],
+            filled: false,
+            re: [0.0; REDUCE_BLOCK],
+            im: [0.0; REDUCE_BLOCK],
+            cascade: Cascade::new(comps, count),
+        }
+    }
+
+    fn total(&mut self) -> [f64; 2] {
+        let mut out = [1.0, 0.0];
+        let comps = self.comps;
+        self.cascade.finish(&mut out[..comps], mul_fold);
+        out
+    }
+}
+
+impl<const OMIT: bool> Reducer for Product<OMIT> {
+    fn begin(&mut self, _width: usize) {
+        self.block = [1.0, 0.0];
+        self.filled = false;
+    }
+
+    fn run(&mut self, input: &[u8], at: i64, stride: i64, count: usize, _seq: u32) {
+        (self.read)(input, at as usize, stride, &mut self.re[..count]);
+        if self.comps == 2 {
+            (self.read)(
+                input,
+                (at + self.part) as usize,
+                stride,
+                &mut self.im[..count],
+            );
+            for (&re, &im) in self.re[..count].iter().zip(&self.im[..count]) {
+                if OMIT && (re.is_nan() || im.is_nan()) {
+                    continue;
+                }
+                self.block = if self.filled {
+                    complex_mul(self.block, [re, im])
+                } else {
+                    [re, im]
+                };
+                self.filled = true;
+            }
+            return;
+        }
+        for &v in &self.re[..count] {
+            if OMIT && v.is_nan() {
+                continue;
+            }
+            self.block[0] *= v;
+            self.filled = true;
+        }
+    }
+
+    fn row(&mut self, _: &[u8], _: i64, _: i64, _: u32) {
+        unreachable!("products run one output at a time");
+    }
+
+    fn end_block(&mut self) {
+        if self.filled {
+            self.cascade.push(&self.block, mul_merge);
+        }
+        self.block = [1.0, 0.0];
+        self.filled = false;
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeyMode {
+    Extreme,
+    Both,
+    Arg,
+}
+
+struct KeyFold {
+    mode: KeyMode,
+    read: KeyReader,
+    invert: u64,
+    nan_key: u64,
+    negative_zero: u64,
+    positive_zero: u64,
+    outputs: usize,
+    best: Vec<u64>,
+    other: Vec<u64>,
+    index: Vec<u32>,
+    keys: Vec<u64>,
+}
+
+impl KeyFold {
+    fn new(op: ReduceOp, src: DType, omit: bool, tile: usize) -> KeyFold {
+        let mode = match op {
+            ReduceOp::Min | ReduceOp::Max => KeyMode::Extreme,
+            ReduceOp::MinMax => KeyMode::Both,
+            _ => KeyMode::Arg,
+        };
+        let (negative_zero, positive_zero) = match src {
+            DType::F32 => (f32_order_key(-0.0), f32_order_key(0.0)),
+            DType::F64 => (f64_order_key(-0.0), f64_order_key(0.0)),
+            _ => (KEY_NAN, KEY_NAN),
+        };
+        KeyFold {
+            mode,
+            read: key_reader_for(src),
+            invert: if matches!(op, ReduceOp::Max | ReduceOp::ArgMax) {
+                u64::MAX
+            } else {
+                0
+            },
+            nan_key: if omit { u64::MAX } else { 0 },
+            negative_zero,
+            positive_zero,
+            outputs: tile,
+            best: vec![u64::MAX; tile],
+            other: vec![u64::MAX; if mode == KeyMode::Both { tile } else { 0 }],
+            index: vec![NO_INDEX; if mode == KeyMode::Arg { tile } else { 0 }],
+            keys: vec![0; REDUCE_BLOCK.max(tile)],
+        }
+    }
+
+    #[inline(always)]
+    fn ranked(&self, t: u64) -> u64 {
+        if t == KEY_NAN {
+            self.nan_key
+        } else {
+            t ^ self.invert
+        }
+    }
+}
+
+impl Reducer for KeyFold {
+    fn begin(&mut self, width: usize) {
+        self.outputs = width;
+        self.best[..width].fill(u64::MAX);
+        if self.mode == KeyMode::Both {
+            self.other[..width].fill(u64::MAX);
+        }
+        if self.mode == KeyMode::Arg {
+            self.index[..width].fill(NO_INDEX);
+        }
+    }
+
+    fn run(&mut self, input: &[u8], at: i64, stride: i64, count: usize, seq: u32) {
+        (self.read)(input, at as usize, stride, &mut self.keys[..count]);
+        match self.mode {
+            KeyMode::Extreme => {
+                let mut best = self.best[0];
+                for &t in &self.keys[..count] {
+                    best = best.min(self.ranked(t));
+                }
+                self.best[0] = best;
+            }
+            KeyMode::Both => {
+                let (mut low, mut high) = (self.best[0], self.other[0]);
+                for &t in &self.keys[..count] {
+                    let nan = t == KEY_NAN;
+                    low = low.min(if nan { self.nan_key } else { t });
+                    high = high.min(if nan { self.nan_key } else { !t });
+                }
+                self.best[0] = low;
+                self.other[0] = high;
+            }
+            KeyMode::Arg => {
+                for i in 0..count {
+                    let t = self.keys[i];
+                    let k = self.ranked(if t == self.negative_zero {
+                        self.positive_zero
+                    } else {
+                        t
+                    });
+                    if k < self.best[0] {
+                        self.best[0] = k;
+                        self.index[0] = seq.wrapping_add(i as u32);
+                    }
+                }
+            }
+        }
+    }
+
+    fn row(&mut self, input: &[u8], at: i64, stride: i64, seq: u32) {
+        let t = self.outputs;
+        (self.read)(input, at as usize, stride, &mut self.keys[..t]);
+        match self.mode {
+            KeyMode::Extreme => {
+                let (invert, nan_key) = (self.invert, self.nan_key);
+                for (b, &k) in self.best[..t].iter_mut().zip(&self.keys[..t]) {
+                    *b = (*b).min(if k == KEY_NAN { nan_key } else { k ^ invert });
+                }
+            }
+            KeyMode::Both => {
+                let nan_key = self.nan_key;
+                for j in 0..t {
+                    let k = self.keys[j];
+                    let nan = k == KEY_NAN;
+                    self.best[j] = self.best[j].min(if nan { nan_key } else { k });
+                    self.other[j] = self.other[j].min(if nan { nan_key } else { !k });
+                }
+            }
+            KeyMode::Arg => {
+                for j in 0..t {
+                    let raw = self.keys[j];
+                    let k = self.ranked(if raw == self.negative_zero {
+                        self.positive_zero
+                    } else {
+                        raw
+                    });
+                    if k < self.best[j] {
+                        self.best[j] = k;
+                        self.index[j] = seq;
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn reduce_keys(
+    dst: ReduceOutput,
+    dst2: Option<ReduceOutput>,
+    src: &Source,
+    walk: &ReduceWalk,
+    spec: ReduceSpec,
+    tile: usize,
+) {
+    let mut fold = KeyFold::new(spec.op, src.dtype, spec.omit, tile);
+    let (out, out_dtype, out_offset) = (dst.bytes, dst.dtype, dst.offset as usize);
+    let mut second = dst2;
+    let size = out_dtype.size();
+    walk.tiles(tile, |o, step, base, stride, width| {
+        scan(&mut fold, walk, src.bytes, base, stride, width);
+        for j in 0..width {
+            let at = out_offset + (o + j * step) * size;
+            match fold.mode {
+                KeyMode::Arg => fold.index[j].store(out, at),
+                _ => store_ranked(out, at, out_dtype, fold.best[j], fold.invert),
+            }
+            if let (KeyMode::Both, Some(second)) = (fold.mode, second.as_mut()) {
+                store_ranked(
+                    second.bytes,
+                    second.offset as usize + (o + j * step) * size,
+                    out_dtype,
+                    fold.other[j],
+                    u64::MAX,
+                );
+            }
+        }
+    });
+}
+
+fn store_ranked(out: &mut [u8], at: usize, dtype: DType, ranked: u64, invert: u64) {
+    if ranked == 0 || ranked == u64::MAX {
+        store_nan(out, at, dtype);
+    } else {
+        store_key(out, at, dtype, ranked ^ invert);
+    }
+}
+
+fn reduce_int_totals(
+    dst: ReduceOutput,
+    src: &Source,
+    walk: &ReduceWalk,
+    spec: ReduceSpec,
+    tile: usize,
+) {
+    let signed = is_signed(src.dtype);
+    let size = dst.dtype.size();
+    if spec.op == ReduceOp::Prod {
+        let mut fold = IntProduct {
+            read: key_reader_for(src.dtype),
+            acc: 1,
+            keys: [0; REDUCE_BLOCK],
+        };
+        walk.tiles(1, |o, _, base, stride, width| {
+            scan(&mut fold, walk, src.bytes, base, stride, width);
+            let wide = if signed {
+                fold.acc as i32 as i64 as u64
+            } else {
+                fold.acc as u64
+            };
+            store_exact(
+                dst.bytes,
+                dst.offset as usize + o * size,
+                dst.dtype,
+                wide,
+                signed,
+                false,
+            );
+        });
+        return;
+    }
+    let mut fold = IntFold::new(src.dtype, tile);
+    walk.tiles(tile, |o, step, base, stride, width| {
+        scan(&mut fold, walk, src.bytes, base, stride, width);
+        for j in 0..width {
+            store_exact(
+                dst.bytes,
+                dst.offset as usize + (o + j * step) * size,
+                dst.dtype,
+                fold.acc[j],
+                signed,
+                spec.saturate,
+            );
+        }
+    });
+}
+
+fn reduce_float_products<const OMIT: bool>(dst: ReduceOutput, src: &Source, walk: &ReduceWalk) {
+    let mut fold = Product::<OMIT>::new(src.dtype, walk.count);
+    let complex = src.dtype.is_complex();
+    let size = dst.dtype.size();
+    walk.tiles(1, |o, _, base, stride, width| {
+        scan(&mut fold, walk, src.bytes, base, stride, width);
+        let total = fold.total();
+        let at = dst.offset as usize + o * size;
+        if complex {
+            store_complex(dst.bytes, at, dst.dtype, total[0], total[1]);
+        } else {
+            store_float(dst.bytes, at, dst.dtype, total[0]);
+        }
+    });
+}
+
+fn reduce_float_totals<const OMIT: bool>(
+    dst: ReduceOutput,
+    src: &Source,
+    walk: &ReduceWalk,
+    spec: ReduceSpec,
+    tile: usize,
+) {
+    let mut fold = Fold::<OMIT, false>::new(src.dtype, tile, walk.count);
+    let comps = fold.comps;
+    let size = dst.dtype.size();
+    let mut totals = vec![0.0; tile * comps];
+    walk.tiles(tile, |o, step, base, stride, width| {
+        scan(&mut fold, walk, src.bytes, base, stride, width);
+        fold.total(&mut totals);
+        for j in 0..width {
+            let at = dst.offset as usize + (o + j * step) * size;
+            let n = if OMIT { fold.counts[j] } else { walk.count };
+            let re = totals[j]
+                / if spec.op == ReduceOp::Mean {
+                    n as f64
+                } else {
+                    1.0
+                };
+            if comps == 2 {
+                let im = totals[width + j]
+                    / if spec.op == ReduceOp::Mean {
+                        n as f64
+                    } else {
+                        1.0
+                    };
+                if n == 0 && spec.op == ReduceOp::Sum {
+                    store_identity(dst.bytes, at, dst.dtype, false);
+                } else {
+                    store_complex(dst.bytes, at, dst.dtype, re, im);
+                }
+            } else if n == 0 && spec.op == ReduceOp::Sum {
+                store_identity(dst.bytes, at, dst.dtype, false);
+            } else {
+                store_float(dst.bytes, at, dst.dtype, re);
+            }
+        }
+    });
+}
+
+fn variance_value(
+    m2: &[f64],
+    width: usize,
+    comps: usize,
+    j: usize,
+    n: u32,
+    spec: ReduceSpec,
+) -> f64 {
+    let denom = n as f64 - spec.ddof;
+    if denom <= 0.0 {
+        return f64::NAN;
+    }
+    let mut v = m2[j] / denom;
+    if comps == 2 {
+        v += m2[width + j] / denom;
+    }
+    if matches!(spec.op, ReduceOp::Std | ReduceOp::StdMean) {
+        v.sqrt()
+    } else {
+        v
+    }
+}
+
+fn reduce_variance<const OMIT: bool>(
+    dst: ReduceOutput,
+    dst2: Option<ReduceOutput>,
+    src: &Source,
+    walk: &ReduceWalk,
+    spec: ReduceSpec,
+    tile: usize,
+) {
+    let integer = is_integer(src.dtype);
+    let signed = is_signed(src.dtype);
+    let mut first = Fold::<OMIT, false>::new(src.dtype, if integer { 1 } else { tile }, walk.count);
+    let mut wide = if integer {
+        Some(IntFold::new(src.dtype, tile))
+    } else {
+        None
+    };
+    let mut second = Fold::<OMIT, true>::new(src.dtype, tile, walk.count);
+    let comps = second.comps;
+    let size = dst.dtype.size();
+    let mut totals = vec![0.0; tile * comps];
+    let mut m2 = vec![0.0; tile * comps];
+    let mut mean_out = dst2;
+    walk.tiles(tile, |o, step, base, stride, width| {
+        if let Some(wide) = wide.as_mut() {
+            scan(wide, walk, src.bytes, base, stride, width);
+            for (total, &acc) in totals[..width].iter_mut().zip(&wide.acc[..width]) {
+                *total = if signed {
+                    acc as i64 as f64
+                } else {
+                    acc as f64
+                };
+            }
+        } else {
+            scan(&mut first, walk, src.bytes, base, stride, width);
+            first.total(&mut totals);
+        }
+        let count = |j: usize| {
+            if OMIT && !integer {
+                first.counts[j]
+            } else {
+                walk.count
+            }
+        };
+        for c in 0..comps {
+            for j in 0..width {
+                second.means[c * width + j] = totals[c * width + j] / count(j) as f64;
+            }
+        }
+        scan(&mut second, walk, src.bytes, base, stride, width);
+        second.total(&mut m2);
+        for j in 0..width {
+            let v = variance_value(&m2, width, comps, j, count(j), spec);
+            store_float(
+                dst.bytes,
+                dst.offset as usize + (o + j * step) * size,
+                dst.dtype,
+                v,
+            );
+            if let Some(out) = mean_out.as_mut() {
+                let at = out.offset as usize + (o + j * step) * out.dtype.size();
+                if comps == 2 {
+                    store_complex(
+                        out.bytes,
+                        at,
+                        out.dtype,
+                        second.means[j],
+                        second.means[width + j],
+                    );
+                } else {
+                    store_float(out.bytes, at, out.dtype, second.means[j]);
+                }
+            }
+        }
+    });
+}
+
+fn reduce_int_means(dst: ReduceOutput, src: &Source, walk: &ReduceWalk, tile: usize) {
+    let signed = is_signed(src.dtype);
+    let size = dst.dtype.size();
+    let mut fold = IntFold::new(src.dtype, tile);
+    walk.tiles(tile, |o, step, base, stride, width| {
+        scan(&mut fold, walk, src.bytes, base, stride, width);
+        for j in 0..width {
+            let total = if signed {
+                fold.acc[j] as i64 as f64
+            } else {
+                fold.acc[j] as f64
+            };
+            store_float(
+                dst.bytes,
+                dst.offset as usize + (o + j * step) * size,
+                dst.dtype,
+                total / walk.count as f64,
+            );
+        }
+    });
+}
+
+fn store_nan_element(out: &mut [u8], at: usize, dtype: DType) {
+    let part = dtype.component();
+    store_nan(out, at, part);
+    if dtype.is_complex() {
+        store_nan(out, at + part.size(), part);
+    }
+}
+
+fn reduce_empty(
+    dst: ReduceOutput,
+    dst2: Option<ReduceOutput>,
+    walk: &ReduceWalk,
+    spec: ReduceSpec,
+) {
+    let size = dst.dtype.size();
+    let nan = !matches!(spec.op, ReduceOp::Sum | ReduceOp::Prod);
+    for o in 0..walk.outputs as usize {
+        let at = dst.offset as usize + o * size;
+        if nan {
+            store_nan_element(dst.bytes, at, dst.dtype);
+        } else {
+            store_identity(dst.bytes, at, dst.dtype, spec.op == ReduceOp::Prod);
+        }
+    }
+    if let Some(out) = dst2 {
+        for o in 0..walk.outputs as usize {
+            store_nan_element(
+                out.bytes,
+                out.offset as usize + o * out.dtype.size(),
+                out.dtype,
+            );
+        }
+    }
+}
+
+pub(crate) fn reduce(
+    dst: ReduceOutput,
+    dst2: Option<ReduceOutput>,
+    src: Source,
+    shape: &[u32],
+    reduced: &[u32],
+    spec: ReduceSpec,
+) -> u32 {
+    reduce_with_tile(dst, dst2, src, shape, reduced, spec, None)
+}
+
+pub(crate) fn reduce_with_tile(
+    dst: ReduceOutput,
+    dst2: Option<ReduceOutput>,
+    src: Source,
+    shape: &[u32],
+    reduced: &[u32],
+    spec: ReduceSpec,
+    tile: Option<usize>,
+) -> u32 {
+    let nd = shape.len();
+    if nd > MAX_RANK || src.strides.len() != nd || reduced.len() != nd {
+        return STATUS_INVALID_RANK;
+    }
+    if !valid_reduce_dtypes(
+        spec.op,
+        src.dtype,
+        dst.dtype,
+        dst2.as_ref().map(|o| o.dtype),
+    ) || (spec.op.fused() != dst2.is_some())
+    {
+        return STATUS_INVALID_DTYPE;
+    }
+    if reduced.iter().any(|&flag| flag > 1) {
+        return STATUS_INVALID_PARAMETERS;
+    }
+    if spec.op.variance() && (!spec.ddof.is_finite() || spec.ddof < 0.0) {
+        return STATUS_INVALID_PARAMETERS;
+    }
+    let Some(walk) = ReduceWalk::new(shape, src.strides, reduced, src.offset) else {
+        return STATUS_INVALID_SHAPE;
+    };
+    if walk.outputs == 0 {
+        return STATUS_OK;
+    }
+    if walk.empty && spec.op.ordered() {
+        return STATUS_INVALID_SHAPE;
+    }
+    if !walk.empty
+        && !layout_within(
+            src.bytes.len(),
+            shape,
+            src.strides,
+            src.offset,
+            src.dtype.size(),
+        )
+    {
+        return STATUS_SOURCE_BOUNDS;
+    }
+    let fits = |o: &ReduceOutput| {
+        (o.offset as u64) + (walk.outputs as u64) * (o.dtype.size() as u64) <= o.bytes.len() as u64
+    };
+    if !fits(&dst) || !dst2.as_ref().is_none_or(fits) {
+        return STATUS_DESTINATION_BOUNDS;
+    }
+    if walk.empty {
+        reduce_empty(dst, dst2, &walk, spec);
+        return STATUS_OK;
+    }
+    let tile = tile.unwrap_or_else(|| walk.tile()).max(1);
+    let integer = is_integer(src.dtype);
+    match spec.op {
+        ReduceOp::Min | ReduceOp::Max | ReduceOp::ArgMin | ReduceOp::ArgMax | ReduceOp::MinMax => {
+            reduce_keys(dst, dst2, &src, &walk, spec, tile);
+        }
+        ReduceOp::Sum if integer => reduce_int_totals(dst, &src, &walk, spec, tile),
+        ReduceOp::Prod if integer => reduce_int_totals(dst, &src, &walk, spec, tile),
+        ReduceOp::Mean if integer => reduce_int_means(dst, &src, &walk, tile),
+        ReduceOp::Prod if spec.omit => reduce_float_products::<true>(dst, &src, &walk),
+        ReduceOp::Prod => reduce_float_products::<false>(dst, &src, &walk),
+        ReduceOp::Sum | ReduceOp::Mean if spec.omit => {
+            reduce_float_totals::<true>(dst, &src, &walk, spec, tile)
+        }
+        ReduceOp::Sum | ReduceOp::Mean => {
+            reduce_float_totals::<false>(dst, &src, &walk, spec, tile)
+        }
+        _ if spec.omit && !integer => reduce_variance::<true>(dst, dst2, &src, &walk, spec, tile),
+        _ => reduce_variance::<false>(dst, dst2, &src, &walk, spec, tile),
+    }
+    STATUS_OK
+}
+
 fn ranges_overlap(a_ptr: u32, a_len: usize, b_ptr: u32, b_len: usize) -> bool {
     let (a0, a1) = (a_ptr as u64, a_ptr as u64 + a_len as u64);
     let (b0, b1) = (b_ptr as u64, b_ptr as u64 + b_len as u64);
@@ -1629,6 +3060,113 @@ pub unsafe extern "C" fn ndarray_affine(
                 a: &params[..len],
                 b: &params[len..],
                 form,
+            },
+        )
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ndarray_reduce(
+    dst_ptr: u32,
+    dst_len: u32,
+    dst2_ptr: u32,
+    dst2_len: u32,
+    src_ptr: u32,
+    src_len: u32,
+    layout_ptr: u32,
+    ndim: u32,
+    codes: u32,
+    params_ptr: u32,
+) -> u32 {
+    let nd = ndim as usize;
+    if nd > MAX_RANK {
+        return STATUS_INVALID_RANK;
+    }
+    let Some(dst_dtype) = DType::from_code(codes & 0xF) else {
+        return STATUS_INVALID_DTYPE;
+    };
+    let Some(src_dtype) = DType::from_code((codes >> 4) & 0xF) else {
+        return STATUS_INVALID_DTYPE;
+    };
+    let Some(op) = ReduceOp::from_code((codes >> 8) & 0xF) else {
+        return STATUS_INVALID_MODE;
+    };
+    if codes & !0x000F_3FFF != 0 {
+        return STATUS_INVALID_MODE;
+    }
+    let dst2_dtype = if op.fused() {
+        let Some(dtype) = DType::from_code((codes >> 16) & 0xF) else {
+            return STATUS_INVALID_DTYPE;
+        };
+        Some(dtype)
+    } else {
+        if (codes >> 16) != 0 || dst2_ptr != 0 || dst2_len != 0 {
+            return STATUS_INVALID_PARAMETERS;
+        }
+        None
+    };
+    if dst2_ptr == 0 && dst2_len != 0 {
+        return STATUS_INVALID_POINTER;
+    }
+    let words = 3 + 3 * nd;
+    let clear = |ptr: u32, bytes: usize, align: u32| {
+        valid_descriptor(ptr, bytes, align, dst_ptr, dst_len)
+            && valid_descriptor(ptr, bytes, align, dst2_ptr, dst2_len)
+    };
+    if !clear(layout_ptr, words * 4, 4) || (op.variance() && !clear(params_ptr, 8, 8)) {
+        return STATUS_INVALID_POINTER;
+    }
+    if ranges_overlap(dst2_ptr, dst2_len as usize, src_ptr, src_len as usize)
+        || ranges_overlap(dst2_ptr, dst2_len as usize, dst_ptr, dst_len as usize)
+    {
+        return STATUS_OVERLAP;
+    }
+    with_driver_call(|call| {
+        let layout = unsafe { u32_slice(call, layout_ptr, words) };
+        let (mut shape, mut reduced, mut strides) =
+            ([0u32; MAX_RANK], [0u32; MAX_RANK], [0i32; MAX_RANK]);
+        read_axes(layout, 3, nd, &mut shape);
+        read_strides(layout, 3 + nd, nd, &mut strides);
+        read_axes(layout, 3 + 2 * nd, nd, &mut reduced);
+        let ddof = if op.variance() {
+            let params = unsafe { f64_slice(call, params_ptr, 1) };
+            params[0]
+        } else {
+            0.0
+        };
+        let (dst, src) = match unsafe { borrow_pair(call, dst_ptr, dst_len, src_ptr, src_len) } {
+            Ok(v) => v,
+            Err(status) => return status,
+        };
+        let second = dst2_dtype.map(|dtype| ReduceOutput {
+            bytes: if dst2_len == 0 {
+                &mut []
+            } else {
+                unsafe { u8_slice_mut(call, dst2_ptr, dst2_len as usize) }
+            },
+            dtype,
+            offset: layout[1],
+        });
+        reduce(
+            ReduceOutput {
+                bytes: dst,
+                dtype: dst_dtype,
+                offset: layout[0],
+            },
+            second,
+            Source {
+                bytes: src,
+                dtype: src_dtype,
+                offset: layout[2],
+                strides: &strides[..nd],
+            },
+            &shape[..nd],
+            &reduced[..nd],
+            ReduceSpec {
+                op,
+                omit: codes & 0x1000 != 0,
+                saturate: codes & 0x2000 != 0,
+                ddof,
             },
         )
     })

@@ -633,6 +633,9 @@ export const ndarrayf = {
     },
     resize: (dstPtr: WasmPtr, dstLen: number, srcPtr: WasmPtr, srcLen: number, layoutPtr: WasmPtr, ndim: number, codes: number, indexPtr: WasmPtr, weightPtr: WasmPtr): number => {
         return ensure().ndarray_resize(dstPtr >>> 0, dstLen >>> 0, srcPtr >>> 0, srcLen >>> 0, layoutPtr >>> 0, ndim >>> 0, codes >>> 0, indexPtr >>> 0, weightPtr >>> 0) >>> 0;
+    },
+    reduce: (dstPtr: WasmPtr, dstLen: number, dst2Ptr: WasmPtr, dst2Len: number, srcPtr: WasmPtr, srcLen: number, layoutPtr: WasmPtr, ndim: number, codes: number, paramsPtr: WasmPtr): number => {
+        return ensure().ndarray_reduce(dstPtr >>> 0, dstLen >>> 0, dst2Ptr >>> 0, dst2Len >>> 0, srcPtr >>> 0, srcLen >>> 0, layoutPtr >>> 0, ndim >>> 0, codes >>> 0, paramsPtr >>> 0) >>> 0;
     }
 };
 

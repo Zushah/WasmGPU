@@ -14,6 +14,9 @@ import { ndarrayf, wasm, type WasmPtr } from "../wasm";
 import type { ReadbackRing } from "./readback";
 import { ScratchAllocator } from "./scratch";
 import ndarrayWGSL from "../../wgsl/compute/ndarray.wgsl";
+import ndarrayReduceWGSL from "../../wgsl/compute/ndarray-reduce.wgsl";
+
+const NDARRAY_REDUCE_WGSL = ndarrayWGSL + ndarrayReduceWGSL;
 
 export type RealDType = "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "f32" | "f64";
 
@@ -811,6 +814,32 @@ export type NdarrayResampleOptions = NdarrayOperationOptions & {
     dtype?: DType;
 };
 
+export type NdarrayNaNMode = "propagate" | "omit";
+
+export type NdarrayReduceOptions = NdarrayOperationOptions & {
+    axes?: number | readonly number[];
+    keepDims?: boolean;
+    dtype?: DType;
+    nan?: NdarrayNaNMode;
+    overflow?: NdarrayOverflowMode;
+};
+
+export type NdarrayVarianceOptions = NdarrayReduceOptions & { ddof?: number; };
+
+export type NdarrayArgReduceOptions = NdarrayOperationOptions & { axis?: number; keepDims?: boolean; nan?: NdarrayNaNMode; };
+
+export type NdarrayMinMaxOptions = Omit<NdarrayReduceOptions, "out" | "dtype" | "overflow"> & { out?: { min?: GPUndarray; max?: GPUndarray }; };
+
+export type NdarrayVarMeanOptions = Omit<NdarrayVarianceOptions, "out" | "overflow"> & { out?: { var?: GPUndarray; mean?: GPUndarray }; };
+
+export type NdarrayStdMeanOptions = Omit<NdarrayVarianceOptions, "out" | "overflow"> & { out?: { std?: GPUndarray; mean?: GPUndarray }; };
+
+export type NdarrayMinMaxResult<T> = { min: T; max: T };
+
+export type NdarrayVarMeanResult<T> = { var: T; mean: T };
+
+export type NdarrayStdMeanResult<T> = { std: T; mean: T };
+
 export type NdarrayDescriptor = {
     maxCPUIntermediateBytes?: number;
 };
@@ -1201,6 +1230,165 @@ const cpuResize = (dst: CPUndarray, src: CPUndarray, levels: ReadonlyArray<Resiz
     });
 };
 
+type ReduceOp = "sum" | "prod" | "mean" | "var" | "std" | "min" | "max" | "argmin" | "argmax" | "minMax" | "varMean" | "stdMean";
+
+type ReduceOptions = {
+    axes?: number | readonly number[];
+    axis?: number;
+    keepDims?: boolean;
+    dtype?: DType;
+    nan?: NdarrayNaNMode;
+    overflow?: NdarrayOverflowMode;
+    ddof?: number;
+    encoder?: GPUCommandEncoder;
+    out?: unknown;
+    label?: string;
+    copySrc?: boolean;
+    copyDst?: boolean;
+    usage?: GPUBufferUsageFlags;
+};
+
+export type ReduceSpec = {
+    op: ReduceOp;
+    src: DType;
+    dtypes: readonly DType[];
+    omit: boolean;
+    saturate: boolean;
+    ddof: number;
+    axes: number[];
+    shape: number[];
+    empty: boolean;
+};
+
+const REDUCE_OP_CODE: Record<ReduceOp, number> = { sum: 0, prod: 1, mean: 2, var: 3, std: 4, min: 5, max: 6, argmin: 7, argmax: 8, minMax: 9, varMean: 10, stdMean: 11 };
+const REDUCE_ORDERED: ReadonlySet<ReduceOp> = new Set<ReduceOp>(["min", "max", "argmin", "argmax", "minMax"]);
+const REDUCE_VARIANCE: ReadonlySet<ReduceOp> = new Set<ReduceOp>(["var", "std", "varMean", "stdMean"]);
+const REDUCE_ARG: ReadonlySet<ReduceOp> = new Set<ReduceOp>(["argmin", "argmax"]);
+const REDUCE_OUTPUT_NAMES: Partial<Record<ReduceOp, readonly [string, string]>> = { minMax: ["min", "max"], varMean: ["var", "mean"], stdMean: ["std", "mean"] };
+
+const complexOf = (dtype: DType): DType => (dtype === "f64") ? "c128" : "c64";
+
+const defaultReduceDType = (op: ReduceOp, src: DType): DType => {
+    const kind = dtypeInfo(src).kind;
+    switch (op) {
+        case "sum":
+        case "prod":
+            return (kind === "int") ? "i32" : (kind === "uint") ? "u32" : src;
+        case "mean":
+            return (kind === "int" || kind === "uint") ? "f32" : src;
+        case "var":
+        case "std":
+        case "varMean":
+        case "stdMean":
+            return (src === "f64" || src === "c128") ? "f64" : "f32";
+        case "argmin":
+        case "argmax":
+            return "u32";
+        default:
+            return src;
+    }
+};
+
+const assertReduceDType = (op: ReduceOp, src: DType, dtype: DType): void => {
+    const name = opName(op), kind = dtypeInfo(src).kind;
+    dtypeInfo(dtype);
+    if (op === "sum" || op === "prod") {
+        if (kind === "complex") assert(isComplexDType(dtype), `${name}: a real dtype would discard the imaginary parts of ${src}; reduce compute.ndarray.real() or compute.ndarray.imag() views instead`);
+        else if (kind === "float") assert(isFloatDType(dtype), `${name}: ${src} inputs can produce f32 or f64 (got ${dtype})`);
+        else assert(!isComplexDType(dtype), `${name}: real inputs cannot produce complex outputs (got ${dtype}); cast() the result instead`);
+        return;
+    }
+    if (op === "mean" && kind === "complex") { assert(isComplexDType(dtype), `${name}: ${src} inputs can produce c64 or c128 (got ${dtype})`); return; }
+    assert(isFloatDType(dtype), `${name}: dtype must be f32 or f64 (got ${dtype})`);
+};
+
+const resolveReduce = (a: AnyNdarray, op: ReduceOp, options: ReduceOptions): ReduceSpec => {
+    const name = opName(op), src = a.dtype, ndim = a.ndim;
+    assert(typeof options === "object" && options !== null, `${name}: options must be an object`);
+    const ordered = REDUCE_ORDERED.has(op), arg = REDUCE_ARG.has(op), variance = REDUCE_VARIANCE.has(op), complex = isComplexDType(src), integer = INTEGER_RANGE[src] !== null;
+    assert(!(ordered && complex), `${name}: ${src} values have no ordering; reduce compute.ndarray.real() or compute.ndarray.imag() views instead`);
+    assert(!(arg && options.axes !== undefined), `${name}: arg-reductions take a single axis, not axes`);
+    assert(arg || options.axis === undefined, `${name}: use axes instead of axis`);
+    const axes = arg ? ((options.axis === undefined) ? a.shape.map((_, i) => i) : [normalizeAxis(options.axis, ndim, name)]) : ((options.axes === undefined) ? a.shape.map((_, i) => i) : normalizeAxes(options.axes, ndim, name));
+    axes.sort((x, y) => x - y);
+    assert(options.keepDims === undefined || typeof options.keepDims === "boolean", `${name}: keepDims must be a boolean (got ${String(options.keepDims)})`);
+    assert(options.nan === undefined || options.nan === "propagate" || options.nan === "omit", `${name}: nan must be "propagate" or "omit" (got ${String(options.nan)})`);
+    assert(options.dtype === undefined || !ordered, `${name}: dtype is not an option because outputs ${arg ? "are u32 indices" : "keep the input dtype"}`);
+    const dtype = options.dtype ?? defaultReduceDType(op, src);
+    if (!ordered) assertReduceDType(op, src, dtype);
+    const outputInteger = INTEGER_RANGE[dtype] !== null;
+    if (options.overflow !== undefined) {
+        assert(op === "sum" || op === "prod", `${name}: overflow applies only to integer outputs of sum`);
+        assert(options.overflow === "wrap" || options.overflow === "saturate", `${name}: overflow must be "wrap" or "saturate" (got ${String(options.overflow)})`);
+        assert(outputInteger && integer, `${name}: overflow applies only to integer outputs (got ${dtype})`);
+        assert(op === "sum" || options.overflow === "wrap", `${name}: integer products always wrap, so overflow "saturate" is not supported`);
+    }
+    assert(variance || options.ddof === undefined, `${name}: ddof applies only to var, std, varMean, and stdMean`);
+    const ddof = options.ddof ?? 0;
+    assert(typeof ddof === "number" && Number.isFinite(ddof) && ddof >= 0, `${name}: ddof must be a finite number >= 0 (got ${String(ddof)})`);
+    const shape: number[] = [], keepDims = options.keepDims ?? false;
+    let count = 1;
+    for (let i = 0; i < ndim; i++) {
+        if (!axes.includes(i)) shape.push(a.shape[i]!);
+        else { count *= a.shape[i]!; if (keepDims) shape.push(1); }
+    }
+    const outputs = numelFromShape(shape);
+    assert(count <= 0xFFFFFFFF && outputs <= 0xFFFFFFFF && outputs * count <= 0xFFFFFFFF, `${name}: reductions support at most 2^32 - 1 input elements`);
+    assert(!ordered || count > 0 || outputs === 0, `${name}: cannot reduce an empty array because ${op} has no identity`);
+    const dtypes: readonly DType[] = (op === "minMax") ? [src, src] : (op === "varMean" || op === "stdMean") ? [dtype, complex ? complexOf(dtype) : dtype] : [dtype];
+    return { op, src, dtypes, omit: options.nan === "omit" && !integer, saturate: op === "sum" && (options.overflow ?? "saturate") === "saturate", ddof, axes, shape, empty: count === 0 };
+};
+
+export const wholeArrayReduce = (op: "sum" | "min" | "max" | "argmin" | "argmax", a: Ndarray, dtype: DType, omit: boolean, saturate: boolean): ReduceSpec => ({ op, src: a.dtype, dtypes: [dtype], omit, saturate, ddof: 0, axes: a.shape.map((_, i) => i), shape: [], empty: a.numel === 0 });
+
+const assertReduceGPU = (spec: ReduceSpec): void => {
+    const { op, src, dtypes } = spec;
+    if (REDUCE_ORDERED.has(op)) return;
+    const name = opName(op), wide = (dtype: DType): boolean => dtype === "f64" || dtype === "c128";
+    assert(!wide(src), `${name}: GPU ${op} computes in f32 and does not support ${src} inputs; use a CPU array or cast() to ${(src === "f64") ? "f32" : "c64"}`);
+    const storageOnly = op === "sum" && INTEGER_RANGE[src] !== null && dtypes[0] === "f64";
+    if (!storageOnly) for (const dtype of dtypes) assert(!wide(dtype), `${name}: GPU ${op} computes in f32 and does not support ${dtype} outputs${(op === "sum") ? " except for integer inputs written as f64" : ""}; use a CPU array or cast() the result`);
+};
+
+type ReduceAxes = { keptShape: number[]; keptStrides: number[]; reducedShape: number[]; reducedStrides: number[]; count: number };
+
+const coalesceReduce = (a: Ndarray, axes: ReadonlyArray<number>, limit: number, backend: string, op: string): ReduceAxes => {
+    const reduced = new Set(axes);
+    const keptIndices = a.shape.map((_, i) => i).filter((i) => !reduced.has(i));
+    const kept = coalesceDims(keptIndices.map((i) => a.shape[i]!), [keptIndices.map((i) => a.stridesBytes[i]!)]);
+    const red = coalesceDims(axes.map((i) => a.shape[i]!), [axes.map((i) => a.stridesBytes[i]!)]);
+    assertRank(kept.shape.length + red.shape.length, limit, backend, op);
+    return { keptShape: kept.shape, keptStrides: kept.strides[0]!, reducedShape: red.shape, reducedStrides: red.strides[0]!, count: red.shape.reduce((n, d) => n * d, 1) };
+};
+
+const gpuRangesOverlap = (a: GPUndarray, b: GPUndarray): boolean => {
+    if (a.buffer.buffer !== b.buffer.buffer || a.numel === 0 || b.numel === 0) return false;
+    const start = (x: GPUndarray): number => x.buffer.offsetBytes + x.baseOffsetBytes + x.offsetBytes;
+    return start(a) < start(b) + b.numel * b.bytesPerElement && start(b) < start(a) + a.numel * a.bytesPerElement;
+};
+
+const cpuReduce = (a: CPUndarray, spec: ReduceSpec): CPUndarray[] => {
+    const { op, dtypes, shape } = spec;
+    const outs: CPUndarray[] = [];
+    try {
+        for (const dtype of dtypes) outs.push(CPUndarray.empty(dtype, { shape }));
+        const first = outs[0]!, second = outs[1];
+        if (first.numel === 0) return outs;
+        const axes = spec.empty ? null : coalesceReduce(a, spec.axes, CPU_MAX_RANK, "CPU", op);
+        const dims = axes ? [...axes.keptShape, ...axes.reducedShape] : [...shape.filter((n) => n > 1), 0];
+        const strides = axes ? [...axes.keptStrides, ...axes.reducedStrides] : dims.map(() => 0);
+        const keptRank = axes ? axes.keptShape.length : dims.length - 1;
+        const flags = dims.map((_, i) => (i < keptRank) ? 0 : 1);
+        const codes = DTYPE_CODE[first.dtype] | (DTYPE_CODE[a.dtype] << 4) | (REDUCE_OP_CODE[op] << 8) | (spec.omit ? 0x1000 : 0) | (spec.saturate ? 0x2000 : 0) | (second ? (DTYPE_CODE[second.dtype] << 16) : 0);
+        const srcLength = (spec.empty) ? 0 : a.byteLength;
+        withWasmScratch((scratch) => {
+            const layout = scratch.u32([first.offsetBytes, second?.offsetBytes ?? 0, axes ? a.offsetBytes : 0, ...dims, ...strides, ...flags]);
+            checkWasmStatus(ndarrayf.reduce(first.basePtrBytes, first.byteLength, second?.basePtrBytes ?? 0, second?.byteLength ?? 0, srcLength === 0 ? 0 : a.basePtrBytes, srcLength, layout, dims.length, codes, scratch.f64([spec.ddof])), op);
+        });
+        return outs;
+    } catch (error) { for (const out of outs) out.destroy(); throw error; }
+};
+
 const PARAM_WORDS_RETAINED = 262144;
 
 const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, P_VALUE_LO = 5, P_VALUE_HI = 6, P_PARAM_AXIS = 7, P_PARAM_LEN = 8, P_LEVEL_COUNT = 9, P_TABLE = 11, P_VALUE_2 = 12, P_VALUE_3 = 13, P_SHAPE = 16, P_SRC_STRIDE = 24, P_DST_STRIDE = 32, P_SRC_SHAPE = 40, P_BEFORE = 48, P_LEVEL_DIM = 56, P_LEVEL_TABLE = 64, P_HEADER_WORDS = 72;
@@ -1208,6 +1396,54 @@ const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, 
 const assertResizeParams = (words: number, limit: number, op: string): void => {
     const bytes = (P_HEADER_WORDS + words) * 4;
     assert(bytes <= limit, `${opName(op)}: a ${bytes}-byte resize parameter table exceeds device.limits.maxStorageBufferBindingSize (${limit}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
+};
+
+const REDUCE_PARAM_WORDS = 44;
+const REDUCE_SHARED_MIN_ELEMENTS = 512;
+const REDUCE_THREAD_MIN_OUTPUTS = 128;
+const REDUCE_THREAD_MIN_ELEMENTS = 2097152;
+const REDUCE_THREAD_CHUNK = 256;
+const REDUCE_SHARED_CHUNK = 32768;
+const REDUCE_SHARED_WORKGROUPS = 512;
+
+const R_OUTPUTS = 0, R_CHUNKS = 1, R_CHUNK = 2, R_COUNT = 3, R_SRC_OFFSET = 4, R_DST_OFFSET = 5, R_KEPT = 6, R_REDUCED = 7, R_STATE_SRC = 8, R_STATE_DST = 9, R_MEAN = 10, R_DDOF_HI = 11, R_DDOF_LO = 12, R_SWAP = 13, R_SELECT = 14, R_BASE = 40, R_WALK_COUNT = 41, R_WALK_STEP = 42;
+
+type ReducePlan = { shared: boolean; swap: boolean; chunk: number; chunks: number; walkCount: number; walkStep: number };
+
+type ReduceEntry = "reduce" | "reduceShared" | "reducePartials";
+
+const REDUCE_ENTRY_CODE: Record<ReduceEntry, number> = { reduce: 0, reduceShared: 1, reducePartials: 2 };
+
+type ReduceConstants = { src: number; op: number; omit: number; write: number; dst?: number; output?: number; overflow?: number };
+
+type ReduceResource = { buffer: StorageBuffer; offset: number; size: number };
+
+type ReduceTarget = { out: GPUndarray; array: GPUndarray; resource: ReduceResource };
+
+const planReduce = (axes: ReduceAxes, outputs: number): ReducePlan => {
+    const count = axes.count, kept = axes.keptShape.length, reduced = axes.reducedShape.length;
+    let walkAxis = kept - 1, walkStep = 1, reducedStride = Infinity;
+    for (let d = kept - 1; d >= 0; d--) if (Math.abs(axes.keptStrides[d]!) < Math.abs(axes.keptStrides[walkAxis]!)) walkAxis = d;
+    for (let d = walkAxis + 1; d < kept; d++) walkStep *= axes.keptShape[d]!;
+    for (let d = 0; d < reduced; d++) reducedStride = Math.min(reducedStride, Math.abs(axes.reducedStrides[d]!));
+    const outer = kept > 0 && Math.abs(axes.keptStrides[walkAxis]!) <= reducedStride;
+    const total = outputs * count;
+    const shared = count >= REDUCE_SHARED_MIN_ELEMENTS && !(outer && outputs >= REDUCE_THREAD_MIN_OUTPUTS && total >= REDUCE_THREAD_MIN_ELEMENTS);
+    const chunk = shared ? Math.min(count, Math.max(REDUCE_SHARED_CHUNK, Math.ceil(total / REDUCE_SHARED_WORKGROUPS))) : (count < REDUCE_SHARED_MIN_ELEMENTS) ? count : Math.min(count, REDUCE_THREAD_CHUNK);
+    return { shared, swap: outer, chunk, chunks: Math.ceil(count / chunk), walkCount: (kept > 0) ? axes.keptShape[walkAxis]! : 1, walkStep };
+};
+
+const reduceStateWords = (op: ReduceOp, src: DType, omit: boolean): number => {
+    const floatState = op === "var" || op === "std" || op === "varMean" || op === "stdMean" || ((op === "sum" || op === "mean") && (isFloatDType(src) || isComplexDType(src)));
+    const two = op === "minMax" || (floatState && isComplexDType(src));
+    const counted = op === "argmin" || op === "argmax" || (op === "prod" && isComplexDType(src)) || (omit && floatState);
+    return 2 + (two ? 2 : 0) + (counted ? 1 : 0);
+};
+
+const reduceIdentityBits = (op: ReduceOp, dtype: DType): ArrayLike<number> => {
+    if (op === "sum") return new Uint32Array(4);
+    if (op === "prod") return elementBits(dtype, isComplexDType(dtype) ? [1, 0] : 1);
+    return (dtype === "c64") ? [0x7FC00000, 0x7FC00000, 0, 0] : [0x7FC00000, 0, 0, 0];
 };
 
 type GPUGather = {
@@ -1231,6 +1467,7 @@ export class NdarrayGPUEngine {
     private readonly queue: GPUQueue;
     private readonly scratch: ScratchAllocator;
     private readonly pipelines: Map<string, ComputePipeline> = new Map();
+    private readonly reducePipelines: Map<number, ComputePipeline> = new Map();
     private readonly alignment: number;
     private readonly maxBindingBytes: number;
     private empty: StorageBuffer | null = null;
@@ -1246,16 +1483,17 @@ export class NdarrayGPUEngine {
 
     destroy(): void {
         this.pipelines.clear();
+        this.reducePipelines.clear();
         this.empty = null;
     }
 
-    private pipeline(entryPoint: "gather" | "resize", constants: Record<string, number>): ComputePipeline {
+    private pipeline(entryPoint: "gather" | "resize" | ReduceEntry, constants: Record<string, number>): ComputePipeline {
         const key = `${entryPoint}:${Object.keys(constants).sort().map((name) => `${name}=${constants[name]}`).join(",")}`;
         let pipeline = this.pipelines.get(key);
         if (!pipeline) {
             pipeline = new ComputePipeline(this.device, {
                 label: `compute.ndarray:${key}`,
-                code: ndarrayWGSL,
+                code: (entryPoint === "gather" || entryPoint === "resize") ? ndarrayWGSL : NDARRAY_REDUCE_WGSL,
                 entryPoint,
                 constants,
                 bindGroups: [
@@ -1385,6 +1623,152 @@ export class NdarrayGPUEngine {
         const pipeline = this.pipeline(spec.entryPoint, spec.constants);
         const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: params }, `${qualifiedName(op)}:bg`);
         commands.push({ pipeline, bindGroups: [bindGroup], workgroups: workgroupsFolded(count, 256, this.device.limits.maxComputeWorkgroupsPerDimension), label: qualifiedName(op) });
+    }
+
+    fill(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, dst: GPUndarray, src: GPUndarray, bits: ArrayLike<number>, op: string): void {
+        const count = dst.numel, size = dst.bytesPerElement, code = DTYPE_CODE[dst.dtype];
+        for (let base = 0, batch = this.outputWindow(dst); base < count; base += batch) {
+            const flat = dst[ndarrayView]([Math.min(batch, count - base)], [size], dst.offsetBytes + base * size);
+            this.gather(commands, encoder, { dst: flat, src, entryPoint: "gather", constants: { SRC_DTYPE: code, DST_DTYPE: code, OPERATION: 1, PAD_MODE: 0 }, srcStrides: [0], keep: [true], srcShape: [0], before: [0], valueBits: bits }, op);
+        }
+    }
+
+    private outputWindow(out: GPUndarray): number {
+        const absolute = out.buffer.offsetBytes + out.baseOffsetBytes, limit = this.maxBindingBytes;
+        if (alignTo(absolute % this.alignment + out.byteLength, 4) <= limit) return out.numel;
+        return Math.max(1, Math.floor((limit - this.alignment) / out.bytesPerElement));
+    }
+
+    private reducePipeline(entryPoint: ReduceEntry, c: ReduceConstants): ComputePipeline {
+        const key = REDUCE_ENTRY_CODE[entryPoint] | (c.src << 2) | ((c.dst ?? 0) << 6) | (c.op << 10) | (c.omit << 14) | (c.write << 15) | ((c.output ?? 0) << 16) | ((c.overflow ?? 0) << 20);
+        let pipeline = this.reducePipelines.get(key);
+        if (!pipeline) {
+            const constants: Record<string, number> = { SRC_DTYPE: c.src, REDUCE_OP: c.op, REDUCE_OMIT: c.omit, REDUCE_WRITE: c.write };
+            if (c.write === 1) { constants.DST_DTYPE = c.dst!; constants.REDUCE_OUTPUT = c.output!; constants.OVERFLOW = c.overflow!; }
+            pipeline = this.pipeline(entryPoint, constants);
+            this.reducePipelines.set(key, pipeline);
+        }
+        return pipeline;
+    }
+
+    private reduceDispatch(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, entryPoint: ReduceEntry, constants: ReduceConstants, srcResource: ReduceResource, dstResource: ReduceResource, params: Uint32Array<ArrayBuffer>, invocations: number, op: string): void {
+        const pipeline = this.reducePipeline(entryPoint, constants);
+        const bindGroup = pipeline.createBindGroup(0, { 0: srcResource, 1: dstResource, 2: this.scratch.params(params, encoder) }, `${qualifiedName(op)}:bg`);
+        commands.push({ pipeline, bindGroups: [bindGroup], workgroups: workgroupsFolded(invocations, 256, this.device.limits.maxComputeWorkgroupsPerDimension), label: qualifiedName(op) });
+    }
+
+    private reduceFinish(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, target: ReduceTarget, op: string): void {
+        if (target.array.dtype !== target.out.dtype) this.gather(commands, encoder, { dst: target.out, src: target.array, entryPoint: "gather", constants: castConstants("u32", target.out.dtype, { saturate: false, nearest: false }), srcStrides: target.array.stridesBytes }, op);
+    }
+
+    private reduceTemp(bytes: number, op: string): ReduceResource {
+        const storage = this.tempStorage(bytes, op);
+        return { buffer: storage, offset: 0, size: storage.byteLength };
+    }
+
+    private reduceBatch(K: number, bytesPerOutput: number, outs: ReadonlyArray<GPUndarray>, op: string): number {
+        const bindable = this.reduceBindable();
+        assert(bytesPerOutput <= bindable, () => `${qualifiedName(op)}: a ${bytesPerOutput}-byte temporary for one output exceeds device.limits.maxStorageBufferBindingSize (${this.maxBindingBytes}) or device.limits.maxBufferSize (${this.device.limits.maxBufferSize}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
+        let batch = (bytesPerOutput > 0) ? Math.min(K, Math.floor(bindable / bytesPerOutput)) : K;
+        for (const out of outs) batch = Math.min(batch, this.outputWindow(out));
+        return batch;
+    }
+
+    private reduceBindable(): number {
+        return Math.min(this.device.limits.maxBufferSize, this.maxBindingBytes);
+    }
+
+    reduce(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, spec: ReduceSpec, src: GPUndarray, outs: ReadonlyArray<GPUndarray>, op: string): void {
+        const first = outs[0]!, K = first.numel;
+        if (K === 0) return;
+        if (spec.empty) { for (const out of outs) this.fill(commands, encoder, out, src, reduceIdentityBits((out === first) ? spec.op : "mean", out.dtype), op); return; }
+        const axes = coalesceReduce(src, spec.axes, GPU_MAX_RANK, "GPU", op);
+        const plan = planReduce(axes, K), C = plan.chunks, kept = axes.keptShape.length, reduced = axes.reducedShape.length;
+        const words = reduceStateWords(spec.op, spec.src, spec.omit), stateBytes = 4 * words;
+        const variance = spec.op === "var" || spec.op === "std" || spec.op === "varMean" || spec.op === "stdMean", both = spec.op === "minMax";
+        const narrow = outs.some((out) => out.bytesPerElement < 4);
+        const stateful = variance || both || C > 1;
+        const batch = this.reduceBatch(K, Math.max(variance ? (1 + C) * stateBytes : stateful ? C * stateBytes : 0, narrow ? 4 : 0), outs, op);
+        const srcBinding = this.binding(src, op);
+        const params = new Uint32Array(REDUCE_PARAM_WORDS);
+        params[R_CHUNK] = plan.chunk;
+        params[R_COUNT] = axes.count;
+        params[R_SRC_OFFSET] = srcBinding.delta + src.offsetBytes;
+        params[R_KEPT] = kept;
+        params[R_REDUCED] = reduced;
+        params[R_SWAP] = plan.swap ? 1 : 0;
+        params[R_WALK_COUNT] = plan.walkCount;
+        params[R_WALK_STEP] = (batch === K) ? plan.walkStep : 1;
+        for (let i = 0; i < kept; i++) { params[P_SHAPE + i] = axes.keptShape[i]!; params[P_SRC_STRIDE + i] = axes.keptStrides[i]! >>> 0; }
+        for (let i = 0; i < reduced; i++) { params[P_SHAPE + kept + i] = axes.reducedShape[i]!; params[P_SRC_STRIDE + kept + i] = axes.reducedStrides[i]! >>> 0; }
+        if (variance) {
+            const ddofHi = Math.fround(spec.ddof), bits = new Uint32Array(new Float32Array([ddofHi, Math.fround(spec.ddof - ddofHi)]).buffer);
+            params[R_DDOF_HI] = bits[0]!;
+            params[R_DDOF_LO] = bits[1]!;
+        }
+        const entry = plan.shared ? "reduceShared" : "reduce", perOutput = plan.shared ? C * 256 : C;
+        const code = DTYPE_CODE[spec.src], omit = spec.omit ? 1 : 0, opCode = REDUCE_OP_CODE[spec.op], overflow = (spec.saturate && INTEGER_RANGE[spec.src] !== null) ? 1 : 0;
+        const dispatch = (entryPoint: ReduceEntry, c: ReduceConstants, from: ReduceResource, to: ReduceResource, invocations: number): void => this.reduceDispatch(commands, encoder, entryPoint, c, from, to, params, invocations, op);
+        const final = (target: ReduceTarget, reduceOp: number): ReduceConstants => ({ src: code, op: reduceOp, omit, write: 1, dst: DTYPE_CODE[target.array.dtype], output: DTYPE_CODE[target.out.dtype], overflow });
+        const states = variance ? this.reduceTemp((batch + batch * C) * stateBytes, op) : stateful ? this.reduceTemp(batch * C * stateBytes, op) : null;
+        const partials = (variance && C > 1) ? this.reduceTemp(batch * C * stateBytes, op) : (both && C > 1) ? this.reduceTemp(batch * stateBytes, op) : null;
+        const narrowStorage = narrow ? this.tempStorage(batch * 4, op) : null;
+        const center = (spec.op === "var" || spec.op === "varMean") ? REDUCE_OP_CODE.var : REDUCE_OP_CODE.std, meanCode = REDUCE_OP_CODE.mean;
+        for (let base = 0; base < K; base += batch) {
+            const count = Math.min(batch, K - base);
+            const targetOf = (out: GPUndarray): ReduceTarget => {
+                const window = (count === K) ? out : out[ndarrayView]([count], [out.bytesPerElement], out.offsetBytes + base * out.bytesPerElement);
+                const array = (out.bytesPerElement < 4) ? GPUndarray.wrap(narrowStorage!, "u32", { shape: window.shape }) : window;
+                const binding = this.binding(array, op);
+                params[R_DST_OFFSET] = binding.delta + array.offsetBytes;
+                return { out: window, array, resource: binding.resource };
+            };
+            params[R_BASE] = base;
+            params[R_OUTPUTS] = count;
+            params[R_CHUNKS] = C;
+            params[R_STATE_SRC] = 0;
+            params[R_STATE_DST] = 0;
+            if (variance) {
+                if (C === 1) dispatch(entry, { src: code, op: meanCode, omit, write: 0 }, srcBinding.resource, states!, count * perOutput);
+                else {
+                    dispatch(entry, { src: code, op: meanCode, omit, write: 0 }, srcBinding.resource, partials!, count * perOutput);
+                    dispatch("reducePartials", { src: code, op: meanCode, omit, write: 0 }, partials!, states!, count);
+                }
+                params[R_STATE_DST] = count * words;
+                dispatch(entry, { src: code, op: center, omit, write: 0 }, srcBinding.resource, states!, count * perOutput);
+                params[R_STATE_SRC] = count * words;
+                const target = targetOf(first);
+                dispatch("reducePartials", final(target, center), states!, target.resource, count);
+                this.reduceFinish(commands, encoder, target, op);
+                if (outs[1]) {
+                    const meanTarget = targetOf(outs[1]);
+                    params[R_STATE_SRC] = 0;
+                    params[R_CHUNKS] = 1;
+                    dispatch("reducePartials", final(meanTarget, meanCode), states!, meanTarget.resource, count);
+                    this.reduceFinish(commands, encoder, meanTarget, op);
+                }
+            } else if (both) {
+                dispatch(entry, { src: code, op: opCode, omit, write: 0 }, srcBinding.resource, states!, count * perOutput);
+                if (C > 1) {
+                    dispatch("reducePartials", { src: code, op: opCode, omit, write: 0 }, states!, partials!, count);
+                    params[R_CHUNKS] = 1;
+                }
+                for (let select = 0; select < 2; select++) {
+                    const target = targetOf(outs[select]!);
+                    params[R_SELECT] = select;
+                    dispatch("reducePartials", final(target, opCode), (C > 1) ? partials! : states!, target.resource, count);
+                    this.reduceFinish(commands, encoder, target, op);
+                }
+            } else {
+                const target = targetOf(first);
+                if (C === 1) dispatch(entry, final(target, opCode), srcBinding.resource, target.resource, count * perOutput);
+                else {
+                    dispatch(entry, { src: code, op: opCode, omit, write: 0 }, srcBinding.resource, states!, count * perOutput);
+                    dispatch("reducePartials", final(target, opCode), states!, target.resource, count);
+                }
+                this.reduceFinish(commands, encoder, target, op);
+            }
+        }
     }
 
     submit(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, label: string | undefined, op: string): void {
@@ -1775,6 +2159,96 @@ export class NdarrayNamespace {
                 input = dst;
             }
         }) as T;
+    }
+
+    sum<T extends AnyNdarray>(a: T, options: NdarrayReduceOptions = {}): T {
+        return this.reduceImpl(a, "sum", options)[0] as T;
+    }
+
+    prod<T extends AnyNdarray>(a: T, options: NdarrayReduceOptions = {}): T {
+        return this.reduceImpl(a, "prod", options)[0] as T;
+    }
+
+    mean<T extends AnyNdarray>(a: T, options: NdarrayReduceOptions = {}): T {
+        return this.reduceImpl(a, "mean", options)[0] as T;
+    }
+
+    var<T extends AnyNdarray>(a: T, options: NdarrayVarianceOptions = {}): T {
+        return this.reduceImpl(a, "var", options)[0] as T;
+    }
+
+    std<T extends AnyNdarray>(a: T, options: NdarrayVarianceOptions = {}): T {
+        return this.reduceImpl(a, "std", options)[0] as T;
+    }
+
+    min<T extends AnyNdarray>(a: T, options: NdarrayReduceOptions = {}): T {
+        return this.reduceImpl(a, "min", options)[0] as T;
+    }
+
+    max<T extends AnyNdarray>(a: T, options: NdarrayReduceOptions = {}): T {
+        return this.reduceImpl(a, "max", options)[0] as T;
+    }
+
+    argmin<T extends AnyNdarray>(a: T, options: NdarrayArgReduceOptions = {}): T {
+        return this.reduceImpl(a, "argmin", options)[0] as T;
+    }
+
+    argmax<T extends AnyNdarray>(a: T, options: NdarrayArgReduceOptions = {}): T {
+        return this.reduceImpl(a, "argmax", options)[0] as T;
+    }
+
+    minMax<T extends AnyNdarray>(a: T, options: NdarrayMinMaxOptions = {}): NdarrayMinMaxResult<T> {
+        const [min, max] = this.reduceImpl(a, "minMax", options);
+        return { min: min as T, max: max as T };
+    }
+
+    varMean<T extends AnyNdarray>(a: T, options: NdarrayVarMeanOptions = {}): NdarrayVarMeanResult<T> {
+        const [variance, mean] = this.reduceImpl(a, "varMean", options);
+        return { var: variance as T, mean: mean as T };
+    }
+
+    stdMean<T extends AnyNdarray>(a: T, options: NdarrayStdMeanOptions = {}): NdarrayStdMeanResult<T> {
+        const [std, mean] = this.reduceImpl(a, "stdMean", options);
+        return { std: std as T, mean: mean as T };
+    }
+
+    private reduceImpl(a: AnyNdarray, op: ReduceOp, options: ReduceOptions): AnyNdarray[] {
+        this.assertAlive(op);
+        assertNdarray(a, op);
+        const spec = resolveReduce(a, op, options);
+        if (a instanceof CPUndarray) {
+            assertCPUOptions(options, op);
+            a[ndarrayAssertAlive]();
+            return cpuReduce(a, spec);
+        }
+        return this.gpuReduce(a as GPUndarray, spec, options);
+    }
+
+    private gpuReduce(a: GPUndarray, spec: ReduceSpec, options: ReduceOptions): GPUndarray[] {
+        const op = spec.op, name = opName(op);
+        this.assertGPUArray(a, op);
+        assertReduceGPU(spec);
+        const names = REDUCE_OUTPUT_NAMES[op];
+        if (names) {
+            assert(options.out === undefined || (typeof options.out === "object" && options.out !== null && !(options.out instanceof GPUndarray) && !Array.isArray(options.out)), `${name}: out must be an object with optional ${names[0]} and ${names[1]} arrays`);
+            for (const key in (options.out ?? {})) assert(key === names[0] || key === names[1], `${name}: out has no ${key} output; use ${names[0]} and ${names[1]}`);
+        }
+        const requested = (i: number): GPUndarray | undefined => (names ? (options.out as Record<string, GPUndarray | undefined> | undefined)?.[names[i]!] : options.out as GPUndarray | undefined);
+        const made: GPUndarray[] = [], outs: GPUndarray[] = [];
+        const commands: ComputeDispatchCommand[] = [];
+        try {
+            spec.dtypes.forEach((dtype, i) => {
+                const { out, owned } = this.gpuOutput(dtype, spec.shape, { ...options, out: requested(i) } as NdarrayOperationOptions, op);
+                outs.push(out);
+                if (owned) made.push(out);
+            });
+            if (outs.length === 2) assert(!gpuRangesOverlap(outs[0]!, outs[1]!), `${name}: the ${names![0]} and ${names![1]} outputs must not overlap`);
+            const shared = outs.some((out) => out.buffer.buffer === a.buffer.buffer && out.numel > 0);
+            const input = (shared && !spec.empty) ? this.gpu.stage(a, commands, options.encoder, op) : a;
+            this.gpu.reduce(commands, options.encoder, spec, input, outs, op);
+            this.gpu.submit(commands, options.encoder, options.label, op);
+            return outs;
+        } catch (error) { for (const out of made) out.destroy(); throw error; } finally { this.scratch.reset(options.encoder); }
     }
 
     private assertAlive(op: string): void {

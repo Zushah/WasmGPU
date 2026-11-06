@@ -59,23 +59,3 @@ fn main(
     }
     reduce_and_write(lid.x, block, acc);
 }
-
-@compute @workgroup_size(256)
-fn reduce(
-    @builtin(local_invocation_id) lid: vec3<u32>,
-    @builtin(workgroup_id) wid: vec3<u32>,
-    @builtin(num_workgroups) nwg: vec3<u32>,
-) {
-    let block = workgroup_index(wid, nwg);
-    let i0 = block * ELEMENTS_PER_WORKGROUP + lid.x;
-    let i1 = i0 + WORKGROUP_SIZE;
-    let n = arrayLength(&a);
-    var acc = vec2<f32>(0.0);
-    if (i0 < n) {
-        acc = a[i0];
-    }
-    if (i1 < n) {
-        acc = acc + a[i1];
-    }
-    reduce_and_write(lid.x, block, acc);
-}

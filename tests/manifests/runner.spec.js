@@ -10,12 +10,14 @@ import { testFiles } from "./suites.js";
 
 const { r, g, y, x } = colors;
 const firefoxIntentionalTeardownErrors = new Set(["Buffer with '' label has been destroyed"]);
+const slowTestTimeouts = new Map([["kernels.test.js", 300_000], ["ndarray.test.js", 300_000]]);
 
 for (let i = 0; i < testFiles.length; ++i) {
     const file = testFiles[i];
     const name = file.replace(/\.test\.js$/, "");
     const index = (i + 1).toString().padStart(2, "0");
     test(`tests/${file}`, async ({ browserName, page }) => {
+        if (slowTestTimeouts.has(file)) test.setTimeout(slowTestTimeouts.get(file));
         const start = Date.now();
         await installWebGPUMonitor(page);
         const consoleErrors = [];

@@ -924,7 +924,328 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     for (const x of [a, g, grid]) x.destroy();
 }
 
-// 28) Cleanup releases the shared compute context before its browser GPU device.
+// 28) Reductions: output shapes, default dtypes, axes normalization, and validation.
+{
+    const nd = compute.ndarray;
+    for (const [op, table] of [["sum", { i8: "i32", u16: "u32", f64: "f64", c64: "c64" }], ["prod", { i16: "i32", u8: "u32", c128: "c128" }], ["mean", { i32: "f32", f32: "f32", c64: "c64" }], ["var", { u8: "f32", f64: "f64", c64: "f32", c128: "f64" }], ["min", { i16: "i16", f64: "f64" }], ["argmax", { u8: "u32", f64: "u32" }]]) {
+        for (const [src, dtype] of Object.entries(table)) assert.strictEqual(nd[op](nd.zeros(src, { shape: [2, 3] })).dtype, dtype, `${op} of ${src}`);
+    }
+    const a = nd.fromArray("f32", [2, 3, 4], Array.from({ length: 24 }, (_, i) => i));
+    for (const [options, shape] of [[{}, []], [{ keepDims: true }, [1, 1, 1]], [{ axes: -1 }, [2, 3]], [{ axes: [2, 0] }, [3]], [{ axes: [0, 2], keepDims: true }, [1, 3, 1]], [{ axes: [] }, [2, 3, 4]]]) assert.deepStrictEqual(nd.sum(a, options).shape, shape, JSON.stringify(options));
+    assert.deepStrictEqual(nd.argmin(a, { axis: -1, keepDims: true }).shape, [2, 3, 1]);
+    assert.deepStrictEqual(Array.from(nd.sum(a, { axes: [2, 0] }).data()), Array.from(nd.sum(a, { axes: [0, 2] }).data()), "Axes are sorted however the caller lists them");
+
+    const f64GPU = nd.zeros("f64", { shape: [2] }, { residency: "gpu" }), u8GPU = nd.zeros("u8", { shape: [2] }, { residency: "gpu" }), f32GPU = nd.zeros("f32", { shape: [2] }, { residency: "gpu" });
+    const invalid = [
+        [() => nd.sum(a, { axes: [0, -3] }), /compute\.ndarray\.sum: axes must be distinct/],
+        [() => nd.argmin(a, { axes: [0] }), /compute\.ndarray\.argmin: arg-reductions take a single axis, not axes/],
+        [() => nd.mean(a, { overflow: "wrap" }), /compute\.ndarray\.mean: overflow applies only to integer outputs of sum/],
+        [() => nd.prod(nd.zeros("u8", { shape: [1] }), { overflow: "saturate" }), /compute\.ndarray\.prod: integer products always wrap/],
+        [() => nd.min(a, { dtype: "f64" }), /compute\.ndarray\.min: dtype is not an option because outputs keep the input dtype/],
+        [() => nd.sum(nd.zeros("u8", { shape: [1] }), { dtype: "c64" }), /compute\.ndarray\.sum: real inputs cannot produce complex outputs/],
+        [() => nd.sum(nd.zeros("c64", { shape: [1] }), { dtype: "f32" }), /compute\.ndarray\.sum: a real dtype would discard the imaginary parts of c64/],
+        [() => nd.min(nd.zeros("c64", { shape: [1] })), /compute\.ndarray\.min: c64 values have no ordering; reduce compute\.ndarray\.real\(\) or compute\.ndarray\.imag\(\) views instead/],
+        [() => nd.var(a, { ddof: -1 }), /compute\.ndarray\.var: ddof must be a finite number >= 0 \(got -1\)/],
+        [() => nd.sum(a, { nan: "skip" }), /compute\.ndarray\.sum: nan must be "propagate" or "omit" \(got skip\)/],
+        [() => nd.sum(a, { label: "x" }), /compute\.ndarray\.sum: GPU options \(encoder, out, label, copySrc, copyDst, usage\) are not supported for CPU arrays/],
+        [() => nd.sum(f64GPU), /compute\.ndarray\.sum: GPU sum computes in f32 and does not support f64 inputs; use a CPU array or cast\(\) to f32/],
+        [() => nd.prod(u8GPU, { dtype: "f64" }), /compute\.ndarray\.prod: GPU prod computes in f32 and does not support f64 outputs; use a CPU array/],
+        [() => nd.sum(f32GPU, { out: nd.zeros("f64", { shape: [] }, { residency: "gpu" }) }), /out must have dtype f32 \(got f64\)/],
+        [() => nd.minMax(f32GPU, { out: { low: f32GPU } }), /compute\.ndarray\.minMax: out has no low output; use min and max/]
+    ];
+    for (const [run, message] of invalid) assert.throws(run, message, String(run));
+    assert.strictEqual(nd.sum(u8GPU, { dtype: "f64" }).dtype, "f64", "Integer sums may write f64 on the GPU");
+    assert.strictEqual(nd.max(f64GPU).dtype, "f64", "Ordering reductions accept f64 on the GPU");
+    assert.strictEqual(nd.varMean(nd.zeros("c64", { shape: [1] }), { dtype: "f64" }).mean.dtype, "c128", "A fused mean uses the complex counterpart of a real dtype");
+    assert.deepStrictEqual(nd.sum(nd.zeros("f32", { shape: [0, 3] }, { residency: "gpu" }), { axes: 1 }).shape, [0], "An empty output has nothing to reduce");
+    for (const x of [a, f64GPU, u8GPU, f32GPU]) x.destroy();
+}
+
+// 29) CPU reductions match NumPy on strided, flipped, unaligned, and broadcast views, and do not depend on the layout.
+{
+    const nd = compute.ndarray;
+    const { arraysApproxEqual } = createApproxHelpers(0);
+    const base = [-5.5, -4.25, -1, 4.25, 10.5, 2.75, -3, 10.25, 7.5, 7.75, 10, -2.75, 2.5, 10.75, 4, -0.75, -4.5, -5.25, -4, -0.75, 3.5, 10.75, 3, -2.75];
+    const a = nd.fromArray("f32", [2, 3, 4], base);
+    const same = (r, want, label) => { arraysApproxEqual(Array.from(r.data()), want, 0, label); r.destroy(); };
+    same(nd.sum(a, { axes: [0, 2], keepDims: true }), [10, 6, 37], "sum axes [0, 2]");
+    same(nd.prod(a, { axes: 2 }), [-99.34375, -887.90625, -1598.4375, -80.625, 70.875, -310.40625], "prod axes 2");
+    same(nd.mean(a, { axes: 0 }), [-1.5, 3.25, 1.5, 1.75, 3, -1.25, -3.5, 4.75, 5.5, 9.25, 6.5, -2.75], "mean axes 0");
+    same(nd.var(a, { axes: 1, ddof: 1 }), [72.33333587646484, 36.33333206176758, 49, 42.33333206176758, 19, 85.33333587646484, 19, 1.3333333730697632], "var axes 1 ddof 1");
+    same(nd.std(a, { axes: 2 }), [3.7687034606933594, 5.630552768707275, 4.932354927062988, 4.192627429962158, 1.7184659242630005, 4.790942192077637], "std axes 2");
+    same(nd.min(a, { axes: 1 }), [-5.5, -4.25, -3, -2.75, -4.5, -5.25, -4, -2.75], "min axes 1");
+    same(nd.argmax(a, { axis: 2 }), [3, 0, 2, 1, 3, 1], "argmax axis 2");
+    // a[::-1, ::2, 1:]
+    const view = nd.slice(a, [[null, null, -1], [null, null, 2], [1, null]]);
+    same(nd.sum(view, { axes: 1 }), [21.5, 7, -3.5, 3.5, 9, 1.5], "strided flipped sum");
+    same(nd.var(view), [28.52083396911621], "strided flipped var");
+    same(nd.argmax(view), [0], "strided flipped argmax is a flat logical index");
+    same(nd.sum(nd.transpose(a, [2, 0, 1]), { axes: 0 }), [-6.5, 20.5, 22.5, 16.5, -14.5, 14.5], "transposed sum");
+    same(nd.var(nd.slice(nd.reshape(a, [-1]), [[1, null, 3]])), [40.703125], "unaligned var");
+    const row = nd.fromArray("f32", [2], [1.5, -2.5]), broadcast = nd.broadcastTo(row, [3, 2]);
+    same(nd.sum(broadcast, { axes: 0 }), [4.5, -7.5], "broadcast sum");
+    same(nd.var(broadcast, { axes: 1 }), [4, 4, 4], "broadcast var across");
+    // axes: [] is a converted copy with the reduction's per-element result.
+    same(nd.sum(a, { axes: [] }), base, "sum over no axes");
+    same(nd.var(a, { axes: [] }), new Array(24).fill(0), "var over no axes");
+    assert.ok(Array.from(nd.var(a, { axes: [], ddof: 1 }).data()).every(Number.isNaN), "1 - ddof <= 0 gives NaN");
+    // Layout independence: op(view) is bitwise equal to op(contiguous(view)), for sums long enough to need several cascade levels.
+    const long = nd.fromArray("f32", [40, 200], Array.from({ length: 8000 }, (_, i) => Math.sin(i * 12.9898) * Math.pow(2, (i % 40) - 20)));
+    for (const v of [nd.flip(long), nd.transpose(long), nd.slice(long, [[null, null, 3], [null, null, -7]])]) {
+        const dense = nd.contiguous(v);
+        for (const [op, options] of [["sum", { axes: 0 }], ["var", {}], ["argmax", {}]]) assert.deepStrictEqual(await bytesOf(nd[op](v, options)), await bytesOf(nd[op](dense, options)), `${op} ${JSON.stringify(options)} must not depend on the layout`);
+        dense.destroy();
+    }
+    for (const x of [a, row, long]) x.destroy();
+}
+
+// The documented CPU/GPU bounds of float reductions, for n reduced elements with S = sum |x|.
+const ulpF32 = (x) => (x === 0) ? 2 ** -149 : 2 ** Math.max(Math.floor(Math.log2(Math.abs(x))) - 23, -149);
+const sumBound = (r, n, S) => ulpF32(r) + 3 * n * 2 ** -48 * S + n * 2 ** -125;
+const meanBound = (r, S) => 4 * ulpF32(r) + 3 * 2 ** -48 * S + 2 ** -125;
+const varianceTerm = (n, ddof, S) => (n / (n - ddof)) * ((3 * 2 ** -48 * S) ** 2 + 2 ** -125);
+const varBound = (r, n, ddof, S) => 8 * ulpF32(r) + varianceTerm(n, ddof, S);
+const stdBound = (r, n, ddof, S) => 10 * ulpF32(r) + Math.sqrt(varianceTerm(n, ddof, S));
+const assertWithin = (a, b, bound, label) => { assert.ok(Object.is(a, b) || Math.abs(a - b) <= bound, `${label}: |${a} - ${b}| = ${Math.abs(a - b)} exceeds ${bound}`); };
+
+// 30) CPU and GPU agree bitwise on ordering and integer reductions and within the documented bound on float ones, in each strategy.
+{
+    const nd = compute.ndarray;
+    let seed = 5;
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    for (const [label, shape, axes, ops] of [["cooperative, inner axis", [13, 600], 1, ["sum", "var"]], ["threads, short axis", [80, 16], 1, ["sum"]], ["threads, chunked outer axis", [2048, 1024], 0, ["sum", "mean", "var", "std"]], ["cooperative, outer axis", [700, 200], 0, ["sum"]], ["several kept axes on a transposed view", [12, 5, 50], 0, ["sum"]], ["whole array in chunks", [40000], undefined, ["sum", "mean"]]]) {
+        const n = shape.reduce((x, y) => x * y, 1), floats = Float32Array.from({ length: n }, () => (rnd() - 0.5) * 1000);
+        const base = nd.fromArray("f32", shape, floats), baseGPU = nd.toGPU(base);
+        const cpu = (shape.length === 3) ? nd.transpose(base, [2, 1, 0]) : base, gpu = (shape.length === 3) ? nd.transpose(baseGPU, [2, 1, 0]) : baseGPU;
+        const options = (axes === undefined) ? {} : { axes };
+        assert.deepStrictEqual(await bytesOf(nd.max(gpu, options)), await bytesOf(nd.max(cpu, options)), `${label}: max is bit-identical`);
+        const fused = [nd.minMax(gpu, options), nd.minMax(cpu, options)];
+        assert.deepStrictEqual(await bytesOf(fused[0].min), await bytesOf(fused[1].min), `${label}: fused min is bit-identical`);
+        const R = (axes === undefined) ? n : cpu.shape[axes], S = R * 500;
+        const bounds = { sum: (v) => sumBound(v, R, S), mean: (v) => meanBound(v, S), var: (v) => varBound(v, R, 0, S), std: (v) => stdBound(v, R, 0, S) };
+        for (const op of ops) {
+            const g = await readGPU(nd[op](gpu, options));
+            valuesOf(nd[op](cpu, options)).forEach((v, k) => assertWithin(g[k], v, bounds[op](v), `${label}: ${op}[${k}]`));
+        }
+        base.destroy();
+        baseGPU.destroy();
+    }
+    // f64 ordering reductions compare two-word keys on the GPU, including values that differ only in their low word.
+    const wide = nd.fromArray("f64", [3, 4], [1, 1 + 2 ** -52, 1 - 2 ** -53, -1e300, 1e300, -(2 ** -1074), 2 ** -1074, Math.PI, -0, 0, 1 + 2 ** -51, -1e-300]), wideGPU = nd.toGPU(wide);
+    for (const [op, options] of [["min", { axes: 1 }], ["max", { axes: 0 }], ["argmin", {}], ["argmax", { axis: 1 }]]) assert.deepStrictEqual(await bytesOf(nd[op](wideGPU, options)), await bytesOf(nd[op](wide, options)), `f64 ${op}`);
+    // Narrow dtypes: reads below 32 bits, and outputs narrowed through whole words.
+    const narrow = nd.fromArray("u16", [12, 41], Array.from({ length: 492 }, () => Math.floor(rnd() * 65536))), narrowGPU = nd.toGPU(narrow);
+    for (const [op, options] of [["max", { axes: 0 }], ["sum", { axes: 1, dtype: "u16", overflow: "wrap" }], ["sum", { axes: 1, dtype: "u16" }]]) assert.deepStrictEqual(await bytesOf(nd[op](narrowGPU, options)), await bytesOf(nd[op](narrow, options)), `u16 ${op} ${JSON.stringify(options)}`);
+    for (const x of [wide, wideGPU, narrow, narrowGPU]) x.destroy();
+}
+
+// 31) NaN modes, signed zeros, ties, and empty reductions, identically on both backends.
+{
+    const nd = compute.ndarray;
+    const both = (dtype, shape, values) => { const c = nd.fromArray(dtype, shape, values); return [c, nd.toGPU(c)]; };
+    const words = async (r) => Array.from(new Uint32Array(new Uint8Array(await bytesOf(r)).buffer));
+    const floats = async (r) => Array.from(new Float32Array(new Uint8Array(await bytesOf(r)).buffer));
+    const NAN32 = 0x7FC00000;
+    const nans = both("f32", [2, 3], [1, NaN, 3, NaN, NaN, NaN]);
+    const payload = nd.fromArray("f32", [3], [1, 0, 2]);
+    new Uint32Array(payload.data().buffer, payload.data().byteOffset, 3)[1] = 0xFFC12345;
+    const payloads = [payload, nd.toGPU(payload)], infs = both("f32", [3], [Infinity, NaN, 1]), cancel = both("f32", [3], [Infinity, 1, -Infinity]), wide = both("f64", [3], [1, NaN, -1]), zeros = both("f32", [2], [0, -0]), minus = both("f32", [3], [-0, -0, -0]), ties = both("f32", [6], [2, 1, 3, 1, 3, 2]);
+    for (let b = 0; b < 2; b++) {
+        const name = b ? "GPU" : "CPU", x = nans[b], omit = { axes: 1, nan: "omit" };
+        for (const op of ["sum", "prod", "mean", "var", "min", "max"]) assert.deepStrictEqual(await words(nd[op](x, { axes: 1 })), [NAN32, NAN32], `${name} propagated ${op}`);
+        assert.deepStrictEqual(await floats(nd.sum(x, omit)), [4, 0], `${name} omitted sum: all-NaN gives +0`);
+        assert.deepStrictEqual(await floats(nd.prod(x, omit)), [3, 1], `${name} omitted prod: all-NaN gives 1`);
+        assert.deepStrictEqual(await words(nd.mean(x, omit)), [new Uint32Array(new Float32Array([2]).buffer)[0], NAN32], `${name} omitted mean does not count NaN`);
+        assert.strictEqual((await words(nd.var(x, { ...omit, ddof: 2 })))[0], NAN32, `${name} n - ddof <= 0 counts kept elements`);
+        assert.deepStrictEqual(await words(nd.argmin(x, { axis: 1, nan: "omit" })), [0, 0xFFFFFFFF], `${name} all-NaN argmin sentinel`);
+        assert.deepStrictEqual(await words(nd.argmin(x, { axis: 1 })), [1, 0], `${name} first NaN wins`);
+        assert.deepStrictEqual(await words(nd.mean(payloads[b])), [NAN32], `${name} payloads canonicalize`);
+        assert.deepStrictEqual(await floats(nd.sum(infs[b], { nan: "omit" })), [Infinity], `${name} omission keeps infinities`);
+        assert.deepStrictEqual(await words(nd.sum(cancel[b])), [NAN32], `${name} opposite infinities`);
+        assert.deepStrictEqual(await words(nd.min(wide[b])), [0, 0x7FF80000], `${name} f64 canonical NaN`);
+        assert.ok(Object.is((await floats(nd.min(zeros[b])))[0], -0), `${name} min([+0, -0]) is -0`);
+        assert.deepStrictEqual(await words(nd.argmin(zeros[b])), [0], `${name} argmin([+0, -0]) is the first`);
+        assert.ok(Object.is((await floats(nd.sum(minus[b])))[0], -0), `${name} a sum of only -0 is -0`);
+        assert.deepStrictEqual(await words(nd.argmax(ties[b])), [2], `${name} ties take the lowest index`);
+    }
+    // Empty reductions write identities and do not read the source; orderings throw because they have none.
+    const empty = [nd.zeros("f32", { shape: [2, 0] }), nd.zeros("f32", { shape: [2, 0] }, { residency: "gpu" })];
+    for (const x of empty) {
+        const name = x.residency;
+        assert.deepStrictEqual(await words(nd.sum(x, { axes: 1 })), [0, 0], `${name} empty sum`);
+        assert.deepStrictEqual(await floats(nd.prod(x, { axes: 1 })), [1, 1], `${name} empty prod`);
+        assert.deepStrictEqual(await words(nd.std(x, { axes: 1 })), [NAN32, NAN32], `${name} empty std`);
+        assert.deepStrictEqual(await words(nd.varMean(x, { axes: 1 }).mean), [NAN32, NAN32], `${name} empty fused mean`);
+        assert.throws(() => nd.argmax(x, { axis: 1 }), /compute\.ndarray\.argmax: cannot reduce an empty array because argmax has no identity/);
+        assert.throws(() => nd.minMax(x, { axes: 1 }), /compute\.ndarray\.minMax: cannot reduce an empty array because minMax has no identity/);
+    }
+    const noCopyDst = nd.zeros("f32", { shape: [] }, { residency: "gpu", copyDst: false });
+    nd.prod(empty[1], { out: noCopyDst, axes: [0, 1] });
+    assert.deepStrictEqual(await readGPU(noCopyDst), [1], "An empty product reaches an out without COPY_DST");
+    for (const pair of [nans, payloads, infs, cancel, wide, zeros, minus, ties, empty]) for (const x of pair) x.destroy();
+    noCopyDst.destroy();
+}
+
+// 32) Integer sums are exact, then saturate or wrap once; integer products wrap modulo 2^32, bit-identically on both backends.
+{
+    const nd = compute.ndarray;
+    const both = (dtype, shape, values) => { const c = nd.fromArray(dtype, shape, values); return [c, nd.toGPU(c)]; };
+    const u32Max = both("u32", [5], new Array(5).fill(0xFFFFFFFF)), i32Min = both("i32", [3], new Array(3).fill(-2147483648));
+    for (const [[c, g], cases] of [[u32Max, [[{}, [0xFFFFFFFF]], [{ overflow: "wrap" }, [(5 * 0xFFFFFFFF) % 2 ** 32]], [{ dtype: "f64" }, [5 * 0xFFFFFFFF]], [{ dtype: "u8", overflow: "wrap" }, [251]]]], [i32Min, [[{}, [-2147483648]], [{ dtype: "u32" }, [0]], [{ dtype: "f32" }, [Math.fround(-6442450944)]], [{ dtype: "i16" }, [-32768]]]]]) {
+        for (const [options, want] of cases) {
+            assert.deepStrictEqual(valuesOf(nd.sum(c, options)), want, `CPU ${c.dtype} ${JSON.stringify(options)}`);
+            assert.deepStrictEqual(await readGPU(nd.sum(g, options)), want, `GPU ${c.dtype} ${JSON.stringify(options)}`);
+        }
+    }
+    // A sum is exact in 64 bits, however many large values it holds, also across the chunks of a large reduction, and rounds to f32 once.
+    const many = both("u32", [40000], new Array(40000).fill(0xFFFFFFFF));
+    assert.deepStrictEqual(await readGPU(nd.sum(many[1], { dtype: "f64" })), [Number(40000n * 0xFFFFFFFFn)], "GPU large exact sum");
+    assert.deepStrictEqual(await bytesOf(nd.sum(many[1], { dtype: "f32" })), await bytesOf(nd.sum(many[0], { dtype: "f32" })), "Large integer sums convert to f32 identically");
+    const signed = both("i16", [3], [-300, 300, 300]), wrapped = both("i32", [2], [65537, 65537]);
+    assert.deepStrictEqual(valuesOf(nd.prod(signed[0])), [-27000000], "An i16 product widens to i32");
+    assert.deepStrictEqual(await bytesOf(nd.prod(signed[1], { dtype: "f32" })), await bytesOf(nd.prod(signed[0], { dtype: "f32" })), "A wrapped product written as f32");
+    assert.deepStrictEqual(valuesOf(nd.prod(wrapped[0])), [131073], "Products wrap modulo 2^32");
+    assert.deepStrictEqual(await bytesOf(nd.prod(wrapped[1])), await bytesOf(nd.prod(wrapped[0])), "Products wrap identically");
+    // Integer means and variances start from the exact data.
+    const big = both("u32", [2], [0xFFFFFFFF, 0xFFFFFFFD]);
+    assert.deepStrictEqual(valuesOf(nd.mean(big[0], { dtype: "f64" })), [4294967294], "CPU integer mean keeps every bit before rounding");
+    assert.deepStrictEqual(await readGPU(nd.var(big[1])), [1], "GPU integer variance of values above 2^24 is exact");
+    for (const pair of [u32Max, i32Min, many, signed, wrapped, big]) for (const x of pair) x.destroy();
+}
+
+// 33) Variance and standard deviation: ddof, n - ddof <= 0, and accuracy on offset data.
+{
+    const nd = compute.ndarray;
+    const { numberApproxEqual } = createApproxHelpers(0);
+    const values = [1, 2, 4, 8, 16, 32];
+    const c = nd.fromArray("f32", [6], values), g = nd.toGPU(c);
+    const mean = values.reduce((a, b) => a + b) / 6, m2 = values.reduce((a, b) => a + (b - mean) * (b - mean), 0);
+    for (const ddof of [0, 2.5]) {
+        const want = m2 / (6 - ddof);
+        numberApproxEqual(nd.var(c, { ddof }).get(), want, want * 2e-7, `CPU var ddof ${ddof}`);
+        numberApproxEqual((await readGPU(nd.var(g, { ddof })))[0], want, 8 * ulpF32(want), `GPU var ddof ${ddof}`);
+        numberApproxEqual((await readGPU(nd.std(g, { ddof })))[0], Math.sqrt(want), 10 * ulpF32(Math.sqrt(want)), `GPU std ddof ${ddof}`);
+    }
+    assert.ok(Number.isNaN(nd.var(c, { ddof: 6 }).get()), "CPU n - ddof <= 0");
+    assert.ok(Number.isNaN((await readGPU(nd.std(g, { ddof: 100.5 })))[0]), "GPU n - ddof <= 0");
+    // A large mean and a small spread lose every digit in a plain f32 sum, so these fail unless the GPU's compensation survives compilation.
+    const count = 4096, offset = 1e6;
+    const spread = Float32Array.from({ length: count }, (_, i) => offset + (Math.imul(i, Math.imul(i, 37) + 11) >>> 3 & 255) / 16);
+    const exactMean = spread.reduce((a, b) => a + b, 0) / count;
+    let exactM2 = 0;
+    for (const x of spread) exactM2 += (x - exactMean) * (x - exactMean);
+    const offsetGPU = nd.fromArray("f32", [count], spread, { residency: "gpu" }), S = count * offset;
+    assertWithin((await readGPU(nd.mean(offsetGPU)))[0], Math.fround(exactMean), meanBound(exactMean, S), "offset mean");
+    assertWithin((await readGPU(nd.var(offsetGPU)))[0], Math.fround(exactM2 / count), varBound(exactM2 / count, count, 0, S), "offset var");
+    const alternating = nd.fromArray("f32", [count], Float32Array.from({ length: count }, (_, i) => (i % 2 === 1) ? 1 : ((i % 4 === 0) ? 1e8 : -1e8)), { residency: "gpu" });
+    assert.deepStrictEqual(await readGPU(nd.sum(alternating)), [count / 2], "A cancellation-heavy sum keeps its low-order terms");
+    for (const x of [c, g, offsetGPU, alternating]) x.destroy();
+}
+
+// 34) Complex reductions match NumPy, and a NaN in either component counts for the whole element.
+{
+    const nd = compute.ndarray;
+    const { arraysApproxEqual } = createApproxHelpers(0);
+    const c = nd.fromArray("c64", [2, 3], [1, 2, -3, 0.5, 2, -1, 0.5, 4, -1, -1, 3, 3]), g = nd.toGPU(c);
+    const flat = (r) => Array.from(r.data());
+    const gpuFlat = async (r) => (await readGPU(r)).flat();
+    arraysApproxEqual(flat(nd.sum(c, { axes: 1 })), [0, 1.5, 2.5, 6], 0, "CPU complex sum");
+    arraysApproxEqual(await gpuFlat(nd.sum(g, { axes: 1 })), [0, 1.5, 2.5, 6], 0, "GPU complex sum");
+    arraysApproxEqual(flat(nd.prod(c, { axes: 1 })), [-13.5, -7, 24, -3], 0, "CPU complex prod");
+    arraysApproxEqual(await gpuFlat(nd.prod(g, { axes: 1 })), [-13.5, -7, 24, -3], 1e-5, "GPU complex prod");
+    arraysApproxEqual(await gpuFlat(nd.mean(g, { axes: 0 })), [0.75, 3, -2, -0.25, 2.5, 1], 4e-6, "GPU complex mean");
+    arraysApproxEqual(flat(nd.var(c, { axes: 0 })), [1.0625, 1.5625, 4.25], 0, "CPU complex var");
+    arraysApproxEqual(await readGPU(nd.std(g, { axes: 1 })), [2.4832773208618164, 2.7182509899139404], 3e-6, "GPU complex std");
+    const cn = nd.fromArray("c64", [3], [1, 2, NaN, 5, 3, 6]), gn = nd.toGPU(cn);
+    for (const x of [cn, gn]) {
+        const name = x.residency;
+        assert.deepStrictEqual(Array.from(new Uint32Array(new Uint8Array(await bytesOf(nd.sum(x))).buffer)), [0x7FC00000, 0x7FC00000], `${name} a NaN component makes the whole sum NaN`);
+        const values = async (r) => Array.from(new Float32Array(new Uint8Array(await bytesOf(r)).buffer));
+        assert.deepStrictEqual(await values(nd.mean(x, { nan: "omit" })), [2, 4], `${name} omitted complex mean`);
+        assert.deepStrictEqual(await values(nd.var(x, { nan: "omit" })), [5], `${name} omitted complex var`);
+    }
+    // A running product that equals (1, 0) is not the identity: it still multiplies, as on the CPU.
+    const unit = nd.fromArray("c64", [2], [1, 0, Infinity, 0]), unitGPU = nd.toGPU(unit);
+    assert.deepStrictEqual(await bytesOf(nd.prod(unitGPU)), await bytesOf(nd.prod(unit)), "prod([(1, 0), (inf, 0)]) matches the CPU");
+    assert.ok(nd.prod(unit).data().every(Number.isNaN), "(1 + 0i)(inf + 0i) has a NaN component, so the result is NaN");
+    const alone = nd.fromArray("c64", [1], [Infinity, 0]), aloneGPU = nd.toGPU(alone);
+    assert.deepStrictEqual(await bytesOf(nd.prod(aloneGPU)), await bytesOf(nd.prod(alone)), "A single factor is its own product");
+    for (const x of [c, g, cn, gn, unit, unitGPU, alone, aloneGPU]) x.destroy();
+}
+
+// 35) Fused statistics equal their separate operations, and outs, encoders, and aliasing keep results bitwise identical.
+{
+    const nd = compute.ndarray;
+    let seed = 11;
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    const floats = Float32Array.from({ length: 80 * 40 }, () => (rnd() < 0.02) ? NaN : (rnd() - 0.5) * 100);
+    const c = nd.fromArray("f32", [80, 40], floats), g = nd.toGPU(c);
+    for (const x of [c, g]) {
+        const options = { axes: 1, nan: "omit" }, name = x.residency;
+        const mm = nd.minMax(x, options), vm = nd.varMean(x, { ...options, ddof: 1 }), sm = nd.stdMean(x, options);
+        assert.deepStrictEqual(await bytesOf(mm.max), await bytesOf(nd.max(x, options)), `${name} fused max`);
+        assert.deepStrictEqual(await bytesOf(vm.var), await bytesOf(nd.var(x, { ...options, ddof: 1 })), `${name} fused var`);
+        assert.deepStrictEqual(await bytesOf(vm.mean), await bytesOf(nd.mean(x, options)), `${name} fused mean is bitwise mean()`);
+        assert.deepStrictEqual(await bytesOf(sm.std), await bytesOf(nd.std(x, options)), `${name} fused std`);
+    }
+    // Per-output out objects are optional individually, and two outputs must not overlap, though they may share a buffer.
+    const outMin = nd.empty("f32", { shape: [40] }, { residency: "gpu" });
+    const partly = nd.minMax(g, { axes: 0, nan: "omit", out: { min: outMin } });
+    assert.strictEqual(partly.min, outMin);
+    assert.notStrictEqual(partly.max, outMin);
+    assert.deepStrictEqual(await bytesOf(outMin), await bytesOf(nd.min(g, { axes: 0, nan: "omit" })), "out.min");
+    assert.throws(() => nd.minMax(g, { axes: 0, out: { min: outMin, max: outMin } }), /compute\.ndarray\.minMax: the min and max outputs must not overlap/);
+    const pair = nd.empty("f32", { shape: [2, 40] }, { residency: "gpu" });
+    const split = nd.minMax(g, { axes: 0, nan: "omit", out: { min: nd.slice(pair, [0]), max: nd.slice(pair, [1]) } });
+    assert.deepStrictEqual(await bytesOf(split.max), await bytesOf(nd.max(g, { axes: 0, nan: "omit" })), "A fused output in the second half of a shared buffer");
+    // Recording into a caller's encoder is bitwise identical to self-submission, and a repeat is too.
+    for (const op of ["sum", "var", "min"]) {
+        const options = { axes: 0, nan: "omit" }, self = nd[op](g, options), again = nd[op](g, options);
+        assert.deepStrictEqual(await bytesOf(again), await bytesOf(self), `${op} repeats bitwise`);
+        const encoder = device.createCommandEncoder();
+        const recorded = nd[op](g, { ...options, encoder });
+        device.queue.submit([encoder.finish()]);
+        assert.deepStrictEqual(await bytesOf(recorded), await bytesOf(self), `${op} through an encoder`);
+    }
+    // An out sharing a raw buffer with the input is computed from a staged copy.
+    const storage = compute.createStorageBuffer({ byteLength: 1024, copySrc: true, copyDst: true });
+    const input = nd.wrap(storage, "f32", { shape: [4] }), shared = nd.wrap(storage, "f32", { shape: [] }, 512);
+    storage.write(new Float32Array([1, 2, 3, 4]));
+    nd.sum(input, { out: shared });
+    assert.deepStrictEqual(await readGPU(shared), [10], "out in the input's raw buffer");
+    // keepDims results broadcast against their inputs without readback.
+    const row = nd.mean(g, { axes: 1, nan: "omit", keepDims: true });
+    assert.deepStrictEqual(nd.broadcastTo(row, [80, 40]).shape, [80, 40]);
+    for (const x of [c, g, outMin, pair, row]) x.destroy();
+    storage.destroy();
+}
+
+// 36) Reductions whose temporaries exceed a binding run in batches, bitwise identically to one batch, and fail clearly when one output cannot fit.
+{
+    const nd = compute.ndarray;
+    const withBindingLimit = (bytes, run) => {
+        const limits = {};
+        for (const key in device.limits) limits[key] = device.limits[key];
+        limits.maxStorageBufferBindingSize = bytes;
+        Object.defineProperty(device, "limits", { value: limits, configurable: true });
+        const limited = new Compute(device, device.queue);
+        try { return run(limited.ndarray); }
+        finally { delete device.limits; limited.destroy(); }
+    };
+    // 512 bytes hold the input but not the 1,024 bytes of state that 64 outputs need, so these run in two or more batches.
+    const u8 = nd.fromArray("u8", [64, 8], Uint8Array.from({ length: 512 }, (_, i) => Math.imul(i, 2654435761) >>> 24), { residency: "gpu" });
+    const floats = nd.fromArray("f32", [16, 8], Float32Array.from({ length: 128 }, (_, i) => Math.sin(i) * 100), { residency: "gpu" });
+    for (const [array, op] of [[u8, "minMax"], [u8, "std"], [floats, "varMean"]]) {
+        const flat = (r) => (op === "minMax") ? [r.min, r.max] : (op === "varMean") ? [r.var, r.mean] : [r];
+        const batched = flat(withBindingLimit(512, (limited) => limited[op](array, { axes: 1 })));
+        const whole = flat(nd[op](array, { axes: 1 }));
+        for (let i = 0; i < whole.length; i++) assert.deepStrictEqual(await bytesOf(batched[i]), await bytesOf(whole[i]), `batched ${array.dtype} ${op} output ${i}`);
+    }
+    assert.throws(() => withBindingLimit(8, (limited) => limited.minMax(floats, { axes: 1 })), /a 16-byte temporary for one output exceeds device\.limits\.maxStorageBufferBindingSize \(8\) or device\.limits\.maxBufferSize/);
+    for (const x of [u8, floats]) x.destroy();
+}
+
+// 37) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

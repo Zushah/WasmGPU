@@ -5,27 +5,17 @@
  */
 
 import { alignTo, assert, isGPUBuffer } from "../utils";
-import { StorageBuffer, validateStorageBufferRange, wrapStorageBuffer } from "./buffer";
+import { StorageBuffer, validateStorageBufferRange } from "./buffer";
 import { ComputePipeline } from "./pipeline";
 import { encodeDispatchBatchWithLimit } from "./dispatch";
 import type { ComputeDispatchCommand } from "./dispatch";
 import { ceilDiv, makeWorkgroupCounts, workgroupsFolded } from "./workgroups";
 import type { WorkgroupCounts } from "./workgroups";
 import { ScratchAllocator } from "./scratch";
-import { CPUndarray, GPU_MAX_RANK, GPUndarray, NdarrayGPUEngine, broadcastStrides, coalesceDims, mayAddressTwice, sameShape } from "./ndarray";
-import type { ComplexScalar, DType, NdarrayGPUOptions } from "./ndarray";
+import { CPUndarray, GPU_MAX_RANK, GPUndarray, NdarrayGPUEngine, broadcastStrides, coalesceDims, mayAddressTwice, sameShape, wholeArrayReduce } from "./ndarray";
+import type { ComplexScalar, DType, NdarrayGPUOptions, ReduceSpec } from "./ndarray";
 import { storageBufferLayout, uniformBufferLayout } from "../wgsl";
 import type { BufferResource } from "../wgsl";
-import reduceMaxF32WGSL from "../../wgsl/compute/reduce-max-f32.wgsl";
-import reduceMaxU32WGSL from "../../wgsl/compute/reduce-max-u32.wgsl";
-import reduceMinF32WGSL from "../../wgsl/compute/reduce-min-f32.wgsl";
-import reduceMinU32WGSL from "../../wgsl/compute/reduce-min-u32.wgsl";
-import reduceSumF32WGSL from "../../wgsl/compute/reduce-sum-f32.wgsl";
-import reduceSumU32WGSL from "../../wgsl/compute/reduce-sum-u32.wgsl";
-import argreduceArgmaxInitialWGSL from "../../wgsl/compute/argreduce-argmax-initial.wgsl";
-import argreduceArgmaxPairsWGSL from "../../wgsl/compute/argreduce-argmax-pairs.wgsl";
-import argreduceArgminInitialWGSL from "../../wgsl/compute/argreduce-argmin-initial.wgsl";
-import argreduceArgminPairsWGSL from "../../wgsl/compute/argreduce-argmin-pairs.wgsl";
 import scanBlockExclusiveU32WGSL from "../../wgsl/compute/scan-block-exclusive-u32.wgsl";
 import scanAddBlockOffsetsU32WGSL from "../../wgsl/compute/scan-add-block-offsets-u32.wgsl";
 import histogramClearAtomicU32WGSL from "../../wgsl/compute/histogram-clear-atomic-u32.wgsl";
@@ -163,8 +153,6 @@ type ElementwiseOp = "add" | "sub" | "mul";
 
 type StridedOp = ElementwiseOp | "axpy";
 
-type ReduceType = "u32" | "f32";
-
 type KernelKind = "f32" | "u32" | "c64";
 
 type KernelBinding = { buffer: BufferResource; offset: number; size?: number };
@@ -190,7 +178,6 @@ const ELEMENTWISE_KEYS: Record<ElementwiseOp, Record<KernelKind, string>> = { ad
 const SCL_KEYS = kindKeys("kernels:scl");
 const AXPY_KEYS = kindKeys("kernels:axpy");
 const DOT_KEYS = kindKeys("kernels:dot");
-const DOT_REDUCE_KEYS = kindKeys("kernels:dot:reduce");
 const MATMUL_KEYS = kindKeys("kernels:matmul");
 const STRIDED_KEYS: Record<StridedOp, Record<KernelKind, string>> = { add: kindKeys("kernels:strided:add"), sub: kindKeys("kernels:strided:sub"), mul: kindKeys("kernels:strided:mul"), axpy: kindKeys("kernels:strided:axpy") };
 const STRIDED_OPERATION: Record<StridedOp, number> = { add: 0, sub: 1, mul: 2, axpy: 3 };
@@ -206,7 +193,6 @@ const AXPY_WGSL: Record<KernelKind, string> = { f32: axpyF32WGSL, u32: axpyU32WG
 const DOT_WGSL: Record<KernelKind, string> = { f32: dotF32WGSL, u32: dotU32WGSL, c64: dotC64WGSL };
 const MATMUL_WGSL: Record<KernelKind, string> = { f32: matmulF32WGSL, u32: matmulU32WGSL, c64: matmulC64WGSL };
 
-const bytesPerElement = (type: ReduceType): number => 4;
 const kernelOp = (op: string): string => `compute.kernels.${op}`;
 const rawBuffer = (res: KernelResource): GPUBuffer => { const buffer = ("offset" in res) ? res.buffer : res; return isGPUBuffer(buffer) ? buffer : buffer.buffer; };
 const product = (shape: ReadonlyArray<number>): number => shape.reduce((n, d) => n * d, 1);
@@ -417,154 +403,6 @@ export class ComputeKernels {
             for (const array of owned) array.destroy();
             throw error;
         } finally { this.scratch.reset(opts.encoder); }
-    }
-
-    private getReducePipeline(type: ReduceType, op: ReduceOp): ComputePipeline {
-        const key = `kernels:reduce:${type}:${op}`;
-        return this.getPipeline(key, () => {
-            return new ComputePipeline(this.device, {
-                label: key,
-                code: (type === "f32") ?
-                    ((op === "sum") ? reduceSumF32WGSL : (op === "max") ? reduceMaxF32WGSL : reduceMinF32WGSL) :
-                    ((op === "sum") ? reduceSumU32WGSL : (op === "max") ? reduceMaxU32WGSL : reduceMinU32WGSL),
-                entryPoint: "main",
-                bindGroups: [
-                    {
-                        label: `${key}:bg0`,
-                        entries: [
-                            storageBufferLayout({ binding: 0, readOnly: true }),
-                            storageBufferLayout({ binding: 1, readOnly: false })
-                        ]
-                    }
-                ]
-            });
-        });
-    }
-
-    private getArgReduceInitialPipeline(op: ArgReduceOp): ComputePipeline {
-        const key = `kernels:argreduce:init:${op}`;
-        return this.getPipeline(key, () => {
-            return new ComputePipeline(this.device, {
-                label: key,
-                code: (op === "argmax") ? argreduceArgmaxInitialWGSL : argreduceArgminInitialWGSL,
-                entryPoint: "main",
-                bindGroups: [
-                    {
-                        label: `${key}:bg0`,
-                        entries: [
-                            storageBufferLayout({ binding: 0, readOnly: true }),
-                            storageBufferLayout({ binding: 1, readOnly: false })
-                        ]
-                    }
-                ]
-            });
-        });
-    }
-
-    private getArgReducePairsPipeline(op: ArgReduceOp): ComputePipeline {
-        const key = `kernels:argreduce:pairs:${op}`;
-        return this.getPipeline(key, () => {
-            const code = (op === "argmax") ? argreduceArgmaxPairsWGSL : argreduceArgminPairsWGSL;
-            return new ComputePipeline(this.device, {
-                label: key,
-                code,
-                entryPoint: "main",
-                bindGroups: [
-                    {
-                        label: `${key}:bg0`,
-                        entries: [
-                            storageBufferLayout({ binding: 0, readOnly: true }),
-                            storageBufferLayout({ binding: 1, readOnly: false })
-                        ]
-                    }
-                ]
-            });
-        });
-    }
-
-    private encodeReduceScalar(commands: ComputeDispatchCommand[], type: ReduceType, op: ReduceOp, input: KernelResource, inputCount: number, out: KernelResource, labelPrefix: string): void {
-        assert(Number.isInteger(inputCount) && inputCount > 0, "encodeReduceScalar expects inputCount > 0");
-        const elemBytes = bytesPerElement(type);
-        let inRes: KernelResource = input;
-        let n = inputCount;
-        let pass = 0;
-        while (true) {
-            const outCount = ceilDiv(n, 512);
-            const isFinal = outCount <= 1;
-            const outRes: KernelResource = isFinal ? out : this.scratch.acquire(outCount * elemBytes, `${labelPrefix}:reduce:${pass}`);
-            const pipeline = this.getReducePipeline(type, op);
-            const bg = pipeline.createBindGroup(0, {
-                0: this.bindSized(inRes, n * elemBytes),
-                1: this.bindSized(outRes, outCount * elemBytes)
-            }, `${labelPrefix}:reduce:${pass}:bg`);
-            commands.push({
-                pipeline,
-                bindGroups: [bg],
-                workgroups: this.workgroups(n, 512),
-                label: `${labelPrefix}:reduce:${pass}`
-            });
-            if (isFinal) break;
-            inRes = outRes;
-            n = outCount;
-            pass++;
-        }
-    }
-
-    private encodeReduceC64(commands: ComputeDispatchCommand[], input: KernelResource, inputCount: number, out: KernelResource, labelPrefix: string, firstPass: number = 0): void {
-        assert(Number.isInteger(inputCount) && inputCount > 0, "encodeReduceC64 expects inputCount > 0");
-        let inRes: KernelResource = input;
-        let n = inputCount;
-        let pass = firstPass;
-        while (true) {
-            const outCount = ceilDiv(n, 512);
-            const isFinal = outCount <= 1;
-            const outRes: KernelResource = isFinal ? out : this.scratch.acquire(outCount * 8, `${labelPrefix}:partial:${pass}`);
-            const pipeline = this.getDotPipeline("c64", true);
-            const bg = pipeline.createBindGroup(0, {
-                0: this.bindSized(inRes, n * 8),
-                1: this.bindSized(inRes, n * 8),
-                2: this.bindSized(outRes, outCount * 8)
-            }, `${labelPrefix}:${pass}:bg`);
-            commands.push({
-                pipeline,
-                bindGroups: [bg],
-                workgroups: this.workgroups(n, 512),
-                label: `${labelPrefix}:${pass}`
-            });
-            if (isFinal) break;
-            inRes = outRes;
-            n = outCount;
-            pass++;
-        }
-    }
-
-    private encodeArgReduceF32Scalar(commands: ComputeDispatchCommand[], op: ArgReduceOp, input: KernelResource, inputCount: number, out: KernelResource, labelPrefix: string): void {
-        assert(Number.isInteger(inputCount) && inputCount > 0, "encodeArgReduceF32Scalar expects inputCount > 0");
-        let inRes: KernelResource = input;
-        let n = inputCount;
-        let inStrideBytes = 4;
-        let pass = 0;
-        while (true) {
-            const outCount = ceilDiv(n, 512);
-            const isFinal = outCount <= 1;
-            const outRes: KernelResource = isFinal ? out : this.scratch.acquire(outCount * 8, `${labelPrefix}:argreduce:${pass}`);
-            const pipeline = (pass === 0) ? this.getArgReduceInitialPipeline(op) : this.getArgReducePairsPipeline(op);
-            const bg = pipeline.createBindGroup(0, {
-                0: this.bindSized(inRes, n * inStrideBytes),
-                1: this.bindSized(outRes, outCount * 8)
-            }, `${labelPrefix}:argreduce:${pass}:bg`);
-            commands.push({
-                pipeline,
-                bindGroups: [bg],
-                workgroups: this.workgroups(n, 512),
-                label: `${labelPrefix}:argreduce:${pass}`
-            });
-            if (isFinal) break;
-            inRes = outRes;
-            n = outCount;
-            inStrideBytes = 8;
-            pass++;
-        }
     }
 
     private getScanBlockExclusiveU32Pipeline(): ComputePipeline {
@@ -935,13 +773,13 @@ export class ComputeKernels {
         });
     }
 
-    private getDotPipeline(kind: KernelKind, reduce: boolean = false): ComputePipeline {
-        const key = reduce ? DOT_REDUCE_KEYS[kind] : DOT_KEYS[kind];
+    private getDotPipeline(kind: KernelKind): ComputePipeline {
+        const key = DOT_KEYS[kind];
         return this.getPipeline(key, () => {
             return new ComputePipeline(this.device, {
                 label: key,
                 code: DOT_WGSL[kind],
-                entryPoint: reduce ? "reduce" : "main",
+                entryPoint: "main",
                 bindGroups: [
                     {
                         label: `${key}:bg0`,
@@ -1551,17 +1389,19 @@ export class ComputeKernels {
             if (n === 0) { this.zero(batch, out, owned, opts.encoder, op); return out; }
             const ab = this.operand(commands, a, opts.encoder, op);
             const bb = this.operand(commands, b, opts.encoder, op);
-            const t = this.target(commands, out, [ab, bb], opts.encoder, op);
             const partialCount = ceilDiv(n, 512);
-            const partial: KernelResource = (partialCount === 1) ? t.binding : this.scratch.acquire(partialCount * elemBytes, `${op}:partial:0`);
             const pipeline = this.getDotPipeline(x.dtype);
-            const bg = pipeline.createBindGroup(0, { 0: this.bindSized(ab, n * elemBytes), 1: this.bindSized(bb, n * elemBytes), 2: this.bindSized(partial, partialCount * elemBytes) }, `${op}:0:bg`);
-            commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(n, 512), label: `${op}:0` });
-            if (partialCount > 1) {
-                if (x.dtype === "c64") this.encodeReduceC64(commands, partial, partialCount, t.binding, op, 1);
-                else this.encodeReduceScalar(commands, x.dtype as ReduceType, "sum", partial, partialCount, t.binding, op);
+            if (partialCount === 1) {
+                const t = this.target(commands, out, [ab, bb], opts.encoder, op);
+                const bg = pipeline.createBindGroup(0, { 0: this.bindSized(ab, n * elemBytes), 1: this.bindSized(bb, n * elemBytes), 2: this.bindSized(t.binding, elemBytes) }, `${op}:bg`);
+                commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(n, 512), label: op });
+                this.finish(commands, t, opts.encoder, op);
+                return out;
             }
-            this.finish(commands, t, opts.encoder, op);
+            const partials = this.engine.temp(x.dtype, [partialCount], op);
+            const bg = pipeline.createBindGroup(0, { 0: this.bindSized(ab, n * elemBytes), 1: this.bindSized(bb, n * elemBytes), 2: this.bindSized(this.engine.direct(partials), partialCount * elemBytes) }, `${op}:bg`);
+            commands.push({ pipeline, bindGroups: [bg], workgroups: this.workgroups(n, 512), label: op });
+            this.engine.reduce(commands, opts.encoder, wholeArrayReduce("sum", partials, x.dtype, false, false), partials, [out], op);
             return out;
         });
     }
@@ -1641,15 +1481,10 @@ export class ComputeKernels {
         const x = this.input(a, op, "a", (name === "sum") ? ARITHMETIC : REAL);
         assert(name === "sum" || a.numel > 0, () => `${op}: cannot reduce an empty array because ${name} has no identity`);
         const owned: GPUndarray[] = [];
-        return this.run(opts, owned, (batch) => {
-            const { commands } = batch;
+        return this.run(opts, owned, ({ commands }) => {
             const out = this.output(opts.out, x.dtype, [], opts, op, owned);
-            if (a.numel === 0) { this.zero(batch, out, owned, opts.encoder, op); return out; }
-            const ab = this.operand(commands, a, opts.encoder, op);
-            const t = this.target(commands, out, [ab], opts.encoder, op);
-            if (x.dtype === "c64") this.encodeReduceC64(commands, ab, a.numel, t.binding, op);
-            else this.encodeReduceScalar(commands, x.dtype as ReduceType, name, ab, a.numel, t.binding, op);
-            this.finish(commands, t, opts.encoder, op);
+            if (a.numel === 0 && owned.includes(out)) return out;
+            this.reduceInto(commands, wholeArrayReduce(name, a, x.dtype, false, false), a, out, opts.encoder, op);
             return out;
         });
     }
@@ -1668,18 +1503,16 @@ export class ComputeKernels {
         this.input(a, op, "a", F32);
         assert(a.numel > 0, () => `${op}: cannot reduce an empty array because ${name} has no identity`);
         const owned: GPUndarray[] = [];
-        return this.run(opts, owned, (batch) => {
-            const { commands } = batch;
+        return this.run(opts, owned, ({ commands }) => {
             const out = this.output(opts.out, "u32", [], opts, op, owned);
-            const ab = this.operand(commands, a, opts.encoder, op);
-            const pair = this.scratch.acquire(8, `${op}:pair`);
-            this.encodeArgReduceF32Scalar(commands, name, ab, a.numel, pair, op);
-            if ((out.buffer.usage & GPUBufferUsage.COPY_DST) !== 0) {
-                const offset = out.buffer.offsetBytes + out.baseOffsetBytes + out.offsetBytes;
-                batch.transfers.push({ at: commands.length, encode: (encoder) => encoder.copyBufferToBuffer(pair, 4, out.buffer.buffer, offset, 4) });
-            } else this.engine.copy(GPUndarray.wrap(wrapStorageBuffer(this.device, this.queue, pair, { byteLength: 8 }), "u32", { shape: [], offsetBytes: 4 }), out, commands, opts.encoder, op);
+            this.reduceInto(commands, wholeArrayReduce(name, a, "u32", true, false), a, out, opts.encoder, op);
             return out;
         });
+    }
+
+    private reduceInto(commands: ComputeDispatchCommand[], spec: ReduceSpec, a: GPUndarray, out: GPUndarray, encoder: GPUCommandEncoder | undefined, op: string): void {
+        const input = (out.buffer.buffer === a.buffer.buffer && a.numel > 0) ? this.engine.stage(a, commands, encoder, op) : a;
+        this.engine.reduce(commands, encoder, spec, input, [out], op);
     }
 
     scanExclusive(a: GPUndarray, opts: KernelOutputOptions = {}): GPUndarray {
@@ -1754,7 +1587,7 @@ export class ComputeKernels {
             this.encodeScanExclusiveU32Into(commands, fb, n, prefix, `${op}:scan`);
             const tv = this.target(commands, out, [vb, fb], opts.encoder, op, !owned.includes(out));
             const tc = this.target(commands, count, [vb, fb], opts.encoder, op);
-            const pipeline = this.getCompactPipeline(v.dtype as ReduceType);
+            const pipeline = this.getCompactPipeline(v.dtype as "f32" | "u32");
             const bg = pipeline.createBindGroup(0, {
                 0: this.bindSized(vb, n * 4),
                 1: this.bindSized(fb, n * 4),

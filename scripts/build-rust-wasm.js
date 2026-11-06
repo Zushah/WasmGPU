@@ -459,6 +459,7 @@ export const ndarray_copy = wasm.ndarray_copy;
 export const ndarray_pad = wasm.ndarray_pad;
 export const ndarray_affine = wasm.ndarray_affine;
 export const ndarray_resize = wasm.ndarray_resize;
+export const ndarray_reduce = wasm.ndarray_reduce;
 
 export const mat4f_abs = wasm.mat4f_abs;
 export const mat4d_abs = wasm.mat4d_abs;
@@ -836,6 +837,7 @@ export function ndarray_copy(dstPtr: number, dstLen: number, srcPtr: number, src
 export function ndarray_pad(dstPtr: number, dstLen: number, srcPtr: number, srcLen: number, layoutPtr: number, ndim: number, codes: number, valuePtr: number): number;
 export function ndarray_affine(dstPtr: number, dstLen: number, srcPtr: number, srcLen: number, layoutPtr: number, ndim: number, codes: number, paramsPtr: number): number;
 export function ndarray_resize(dstPtr: number, dstLen: number, srcPtr: number, srcLen: number, layoutPtr: number, ndim: number, codes: number, indexPtr: number, weightPtr: number): number;
+export function ndarray_reduce(dstPtr: number, dstLen: number, dst2Ptr: number, dst2Len: number, srcPtr: number, srcLen: number, layoutPtr: number, ndim: number, codes: number, paramsPtr: number): number;
 
 export function mat4f_abs(outPtr: number, mPtr: number): number;
 export function mat4d_abs(outPtr: number, mPtr: number): number;

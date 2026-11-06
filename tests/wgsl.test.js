@@ -20,6 +20,15 @@ const extractBundledShaders = (bundle) => {
     return shaders;
 };
 
+const fragmentBases = new Map([["wgsl/compute/ndarray-reduce.wgsl", "wgsl/compute/ndarray.wgsl"]]);
+const moduleCode = (shader, shaders) => {
+    const basePath = fragmentBases.get(shader.path);
+    if (basePath === undefined) return shader.code;
+    const base = shaders.find((candidate) => candidate.path === basePath);
+    assert.ok(base, `${shader.path} needs its base module ${basePath} in the bundle`);
+    return base.code + shader.code;
+};
+
 const formatDiagnostic = (path, message) => { const location = message.lineNum > 0 ? `:${message.lineNum}:${message.linePos}` : ""; return `${path}${location}: ${message.message}`; };
 
 const bundleResponse = await fetch(new URL("../release/WasmGPU.js", import.meta.url));
@@ -42,7 +51,7 @@ const skipped = [];
         let compilationInfo;
         let validationError;
         try {
-            const module = device.createShaderModule({ label: shader.path, code: shader.code });
+            const module = device.createShaderModule({ label: shader.path, code: moduleCode(shader, shaders) });
             assert.equal(typeof module.getCompilationInfo, "function", "GPUShaderModule.getCompilationInfo() is required for WGSL tests");
             compilationInfo = await module.getCompilationInfo();
         } finally {

@@ -95,6 +95,7 @@ const RUST_ABI = {
     ndarray_numel: 2,
     ndarray_offset_bytes: 5,
     ndarray_pad: 8,
+    ndarray_reduce: 10,
     ndarray_resize: 9,
     ndarray_strides_row_major: 4,
     quatf_abs: 2,
@@ -552,6 +553,14 @@ const makeFixture = () => {
         generatedWasm.u32view(complexLayoutPtr, 7).set([0, 0, 0xFFFFFFFF, 1, 1, 8, 8]);
         generatedWasm.f64view(complexValuePtr, 2).set([1, 0]);
         assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, complexLayoutPtr, 1, 0x68, complexValuePtr), 1, "Affine maps must reject complex dtypes");
+        generatedWasm.f64view(complexSourcePtr, 2).set([1.5, -2.5]);
+        generatedWasm.u32view(complexLayoutPtr, 6).set([0, 0, 0, 2, 8, 1]);
+        assert.strictEqual(generatedWasm.ndarray_reduce(complexOutputPtr, 8, 0, 0, complexSourcePtr, 16, complexLayoutPtr, 1, 0x0066, 0), 0, "f64-backed f32 sums must succeed");
+        assert.strictEqual(generatedWasm.ndarray_reduce(complexOutputPtr, 8, 0, 0, complexSourcePtr, 16, complexLayoutPtr, 1, 0x0588, 0), 1, "Complex minimums must be rejected as an invalid dtype");
+        assert.strictEqual(generatedWasm.ndarray_reduce(complexOutputPtr, 8, 0, 0, complexSourcePtr, 16, complexLayoutPtr, 1, 0x0C66, 0), 2, "Reduction op code 12 must be rejected");
+        assert.strictEqual(generatedWasm.ndarray_reduce(complexOutputPtr, 8, 0, 0, complexSourcePtr, 16, complexLayoutPtr, 1, 0x100066, 0), 2, "Unknown reduction code bits must be rejected");
+        assert.strictEqual(generatedWasm.ndarray_reduce(complexOutputPtr, 8, 0, 0, complexSourcePtr, 16, complexLayoutPtr, 1, 0x40066, 0), 10, "Only fused reductions name a second dtype");
+        assert.strictEqual(generatedWasm.ndarray_reduce(complexOutputPtr, 8, complexSourcePtr, 8, complexSourcePtr, 16, complexLayoutPtr, 1, 0x0066, 0), 10, "Only fused reductions accept a second output");
 
         generatedWasm.mat4f_identity(matrixPtr);
         assert.deepStrictEqual(Array.from(generatedWasm.f32view(matrixPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);

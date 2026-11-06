@@ -14,7 +14,7 @@ export type ScratchParams = { buffer: GPUBuffer; offset: number; size: number };
 
 type ScratchLease = { buffer: GPUBuffer; size: number; marked: boolean; tick: number };
 type ScratchBlock = { buffer: GPUBuffer; size: number; tick: number };
-type ScratchChain = { blocks: ScratchBlock[]; index: number; offset: number };
+type ScratchChain = { blocks: ScratchBlock[]; index: number; offset: number; last: { params: ScratchParams; bytes: Uint8Array } | null };
 
 const LABEL_PREFIX = "compute:scratch";
 const FIRST_BLOCK_BYTES = 4096;
@@ -23,7 +23,10 @@ const MAX_POW2_CLASS_BYTES = 1_048_576;
 const nextPow2 = (n: number): number => { let p = 1; while (p < n) p *= 2; return p; };
 // Powers of two up to 1 MiB, then multiples of 1/16 of the next power of two, so large buffers waste under 12.5%.
 const sizeClass = (n: number): number => { const p = nextPow2(n); return (p <= MAX_POW2_CLASS_BYTES) ? p : alignTo(n, p / 16); };
-const emptyChain = (): ScratchChain => ({ blocks: [], index: 0, offset: 0 });
+const emptyChain = (): ScratchChain => ({ blocks: [], index: 0, offset: 0, last: null });
+const MAX_REUSED_PARAM_BYTES = 256;
+const viewBytes = (data: BufferSource): Uint8Array => (data instanceof ArrayBuffer) ? new Uint8Array(data) : new Uint8Array(data.buffer as ArrayBuffer, data.byteOffset, data.byteLength);
+const sameBytes = (a: Uint8Array, b: Uint8Array): boolean => { if (a.length !== b.length) return false; for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false; return true; };
 
 export class ScratchAllocator {
     private readonly device: GPUDevice;
@@ -65,9 +68,14 @@ export class ScratchAllocator {
         const size = data.byteLength;
         assert(size >= 4 && (size % 4) === 0, `ScratchAllocator.params: byteLength must be a positive multiple of 4 (got ${size})`);
         let chain = this.chain;
+        let bytes: Uint8Array | null = null;
         if (encoder) {
             chain = this.encoderChains.get(encoder) ?? emptyChain();
             this.encoderChains.set(encoder, chain);
+            if (size <= MAX_REUSED_PARAM_BYTES) {
+                bytes = viewBytes(data);
+                if (chain.last && sameBytes(chain.last.bytes, bytes)) return chain.last.params;
+            }
         }
         let block = chain.blocks[chain.index];
         let offset = alignTo(chain.offset, this.paramAlignment);
@@ -86,7 +94,9 @@ export class ScratchAllocator {
         block.tick = this.tick;
         chain.offset = offset + size;
         this.queue.writeBuffer(block.buffer, offset, data);
-        return { buffer: block.buffer, offset, size };
+        const params = { buffer: block.buffer, offset, size };
+        if (bytes) chain.last = { params, bytes: bytes.slice() };
+        return params;
     }
 
     reset(encoder?: GPUCommandEncoder): void {

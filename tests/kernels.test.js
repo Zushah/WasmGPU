@@ -148,7 +148,7 @@ const read = async (array) => { const c = nd.contiguous(array); try { return awa
     assert.ok(out.ndim === 0 && out.dtype === "f32", "reductions return 0-d arrays of the input dtype");
     numberApproxEqual((await read(out))[0], 8192 + 37, 1e-3, "sum f32");
 
-    // An unaligned contiguous slice and a stepped view are staged into dense temporaries first.
+    // An unaligned contiguous slice and a stepped view are read in place.
     const f = makeRandomF32Array(4099);
     const root = gpu("f32", [4099], f);
     const sliced = nd.slice(root, [[3, 4099]]);
@@ -162,6 +162,11 @@ const read = async (array) => { const c = nd.contiguous(array); try { return awa
     assert.strictEqual((await read(kernels.sum(empty)))[0], 0, "empty sum is 0");
     assert.throws(() => kernels.min(empty), /compute\.kernels\.min: cannot reduce an empty array/);
     assert.throws(() => kernels.max(empty), /compute\.kernels\.max: cannot reduce an empty array/);
+
+    // A NaN propagates through min and max as the canonical quiet NaN.
+    const withNaN = gpu("f32", [3], [1, NaN, -1]);
+    assert.strictEqual(new Uint32Array((await read(kernels.min(withNaN))).buffer)[0], 0x7FC00000, "min propagates NaN");
+    assert.strictEqual(new Uint32Array((await read(kernels.max(withNaN))).buffer)[0], 0x7FC00000, "max propagates NaN");
 
     // c64 sums reduce both components in one, several, or zero passes.
     const small = kernels.sum(gpu("c64", [2, 2], [1, 2, 3, 4, 5, 6, 7, 8]));

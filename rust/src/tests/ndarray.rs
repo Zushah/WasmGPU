@@ -4,13 +4,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use crate::ndarray::DType::{C64, C128, F32, F64, I8, I16, I32, U8, U32};
+use crate::ndarray::DType::{C64, C128, F32, F64, I8, I16, I32, U8, U16, U32};
 use crate::ndarray::{
     AffineForm, AffineParams, DType, Destination, Element, IntMode, MAX_RESIZE_LEVELS,
-    NO_RESIZE_LEVEL, PadAxes, PadMode, ResizeLevel, ResizeTables, STATUS_DESTINATION_BOUNDS,
-    STATUS_INVALID_DTYPE, STATUS_INVALID_PARAMETERS, STATUS_INVALID_RANK, STATUS_INVALID_SHAPE,
-    STATUS_INVALID_TABLE, STATUS_SOURCE_BOUNDS, Source, affine, affine_value, copy_cast,
-    layout_within, numel, offset_bytes, pad, pad_index, resize, strides_row_major, to_int,
+    NO_RESIZE_LEVEL, PadAxes, PadMode, ReduceOp, ReduceOutput, ReduceSpec, ResizeLevel,
+    ResizeTables, STATUS_DESTINATION_BOUNDS, STATUS_INVALID_DTYPE, STATUS_INVALID_PARAMETERS,
+    STATUS_INVALID_RANK, STATUS_INVALID_SHAPE, STATUS_INVALID_TABLE, STATUS_OK,
+    STATUS_SOURCE_BOUNDS, Source, affine, affine_value, copy_cast, f32_order_key, f64_order_key,
+    layout_within, numel, offset_bytes, pad, pad_index, reduce, reduce_with_tile, resize,
+    strides_row_major, to_int,
 };
 
 const ND_ERROR: u32 = u32::MAX;
@@ -748,4 +750,577 @@ fn complex_dtypes_copy_cast_and_pad_by_component() {
         params,
     );
     assert_eq!(status, STATUS_INVALID_DTYPE);
+}
+
+const NAN_32: u32 = 0x7FC0_0000;
+const NAN_64: f64 = f64::from_bits(0x7FF8_0000_0000_0000);
+
+fn spec(op: ReduceOp) -> ReduceSpec {
+    ReduceSpec {
+        op,
+        omit: false,
+        saturate: true,
+        ddof: 0.0,
+    }
+}
+
+fn omit(op: ReduceOp) -> ReduceSpec {
+    ReduceSpec {
+        omit: true,
+        ..spec(op)
+    }
+}
+
+fn wrap(op: ReduceOp) -> ReduceSpec {
+    ReduceSpec {
+        saturate: false,
+        ..spec(op)
+    }
+}
+
+fn ddof(op: ReduceOp, ddof: f64, omit: bool) -> ReduceSpec {
+    ReduceSpec {
+        ddof,
+        omit,
+        ..spec(op)
+    }
+}
+
+fn output(bytes: &mut [u8], dtype: DType) -> ReduceOutput<'_> {
+    ReduceOutput {
+        bytes,
+        dtype,
+        offset: 0,
+    }
+}
+
+fn flags_of(ndim: usize, axes: &[usize]) -> Vec<u32> {
+    (0..ndim).map(|d| axes.contains(&d) as u32).collect()
+}
+
+struct View<'a>(&'a [u8], DType, u32, &'a [i32], &'a [u32]);
+
+fn reduce_view(
+    v: &View,
+    axes: &[usize],
+    out: DType,
+    s: ReduceSpec,
+    tile: Option<usize>,
+) -> Vec<u8> {
+    let flags = flags_of(v.4.len(), axes);
+    let kept: usize =
+        v.4.iter()
+            .zip(&flags)
+            .filter(|(_, f)| **f == 0)
+            .map(|(n, _)| *n as usize)
+            .product();
+    let mut bytes = vec![0xAAu8; kept * out.size()];
+    let status = reduce_with_tile(
+        output(&mut bytes, out),
+        None,
+        src(v.0, v.1, v.2, v.3),
+        v.4,
+        &flags,
+        s,
+        tile,
+    );
+    assert_eq!(status, STATUS_OK, "{:?} over {axes:?} of {:?}", s.op, v.4);
+    bytes
+}
+
+fn reduce_c<T: Element>(
+    values: &[T],
+    from: DType,
+    shape: &[u32],
+    axes: &[usize],
+    out: DType,
+    s: ReduceSpec,
+) -> Vec<u8> {
+    let mut strides = vec![0i32; shape.len()];
+    assert_eq!(
+        strides_row_major(&mut strides, shape, from.size() as u32),
+        1
+    );
+    reduce_view(
+        &View(&le(values), from, 0, &strides, shape),
+        axes,
+        out,
+        s,
+        None,
+    )
+}
+
+macro_rules! reduce_cases {
+    ($($values:expr, $from:expr, $shape:expr, $axes:expr, $out:expr, $spec:expr => $want:expr;)+) => {
+        $(assert_eq!(reduce_c(&$values, $from, &$shape, &$axes, $out, $spec), le(&$want), "{} with {}", stringify!($values), stringify!($spec));)+
+    };
+}
+
+fn f32_data(n: usize) -> Vec<f32> {
+    let mut state = 0x2545_F491u32;
+    (0..n)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            let unit = (state >> 8) as f32 / 16_777_216.0;
+            (unit - 0.5) * 2f32.powi((state & 31) as i32 - 15)
+        })
+        .collect()
+}
+
+fn canonical_sum(values: &[f64]) -> f64 {
+    let mut stack: Vec<(f64, u32)> = Vec::new();
+    for block in values.chunks(64) {
+        let mut sum = block[0];
+        for &v in &block[1..] {
+            sum += v;
+        }
+        let mut entry = (sum, 0);
+        while stack.last().is_some_and(|top| top.1 == entry.1) {
+            let older = stack.pop().unwrap();
+            entry = (older.0 + entry.0, entry.1 + 1);
+        }
+        stack.push(entry);
+    }
+    let mut acc = stack.pop().map_or(0.0, |top| top.0);
+    while let Some(entry) = stack.pop() {
+        acc += entry.0;
+    }
+    acc
+}
+
+#[test]
+fn reduce_sums_follow_the_canonical_block_and_cascade_order() {
+    let data: Vec<f64> = (0..1000)
+        .map(|i| {
+            (if i % 2 == 0 { 1e16 } else { -1e16 }) * (1.0 + (i % 7) as f64) + (i as f64) * 0.1
+        })
+        .collect();
+    let want = canonical_sum(&data);
+    assert_ne!(
+        want.to_bits(),
+        data.iter().fold(-0.0, |a, b| a + b).to_bits(),
+        "The data must distinguish the order"
+    );
+    assert_eq!(
+        reduce_c(&data, F64, &[1000], &[0], F64, spec(ReduceOp::Sum)),
+        le(&[want])
+    );
+    reduce_cases! {
+        [-0.0f64, -0.0], F64, [2], [0], F64, spec(ReduceOp::Sum) => [-0.0f64];
+        [-0.0f64, 0.0], F64, [2], [0], F64, spec(ReduceOp::Sum) => [0.0f64];
+    }
+}
+
+#[test]
+fn reduce_results_do_not_depend_on_layouts_or_tile_widths() {
+    let (ny, nx) = (37usize, 211usize);
+    let data = f32_data(ny * nx);
+    let mut fortran = vec![0f32; ny * nx];
+    for y in 0..ny {
+        for x in 0..nx {
+            fortran[x * ny + y] = data[y * nx + x];
+        }
+    }
+    let flipped: Vec<f32> = data.iter().rev().copied().collect();
+    let (c, f, r) = (le(&data), le(&fortran), le(&flipped));
+    let shape = [ny as u32, nx as u32];
+    let (cs, fs, rs) = (
+        [nx as i32 * 4, 4],
+        [4, ny as i32 * 4],
+        [-(nx as i32) * 4, -4],
+    );
+    let (cv, fv) = (View(&c, F32, 0, &cs, &shape), View(&f, F32, 0, &fs, &shape));
+    let rv = View(&r, F32, ((ny * nx - 1) * 4) as u32, &rs, &shape);
+    for op in [ReduceOp::Sum, ReduceOp::Var, ReduceOp::Max] {
+        for axes in [&[0usize][..], &[1], &[0, 1], &[]] {
+            let base = reduce_view(&cv, axes, F32, spec(op), None);
+            assert_eq!(
+                reduce_view(&fv, axes, F32, spec(op), None),
+                base,
+                "{op:?} {axes:?} Fortran"
+            );
+            assert_eq!(
+                reduce_view(&rv, axes, F32, spec(op), None),
+                base,
+                "{op:?} {axes:?} flipped"
+            );
+            for tile in [1, 7, 256] {
+                assert_eq!(
+                    reduce_view(&cv, axes, F32, spec(op), Some(tile)),
+                    base,
+                    "{op:?} {axes:?} tile {tile}"
+                );
+            }
+        }
+    }
+    let whole = reduce_view(
+        &View(&c, F32, 0, &[4], &[(ny * nx) as u32]),
+        &[0],
+        F32,
+        spec(ReduceOp::Sum),
+        None,
+    );
+    assert_eq!(
+        reduce_view(&cv, &[0, 1], F32, spec(ReduceOp::Sum), None),
+        whole
+    );
+    let half = le(&[0.5f32]);
+    let broadcast = View(&half, F32, 0, &[0, 0], &[3, 4]);
+    assert_eq!(
+        reduce_view(&broadcast, &[1], F32, spec(ReduceOp::Sum), None),
+        le(&[2.0f32; 3])
+    );
+    let cube: Vec<f32> = (0..24).map(|i| i as f32).collect();
+    let bytes = le(&cube);
+    let permuted = View(&bytes, F32, 0, &[4, 24, 8], &[2, 4, 3]);
+    let want = [6.0f32, 24.0, 42.0, 60.0, 9.0, 27.0, 45.0, 63.0];
+    assert_eq!(
+        reduce_view(&permuted, &[2], F32, spec(ReduceOp::Sum), None),
+        le(&want)
+    );
+}
+
+#[test]
+fn reduce_integers_are_exact_with_saturation_and_wrapping() {
+    let (sum, prod) = (ReduceOp::Sum, ReduceOp::Prod);
+    reduce_cases! {
+        [u32::MAX; 5], U32, [5], [0], U32, spec(sum) => [u32::MAX];
+        [u32::MAX; 5], U32, [5], [0], U32, wrap(sum) => [u32::MAX.wrapping_mul(5)];
+        [u32::MAX; 5], U32, [5], [0], F64, spec(sum) => [5.0f64 * 4294967295.0];
+        [u32::MAX; 5], U32, [5], [0], F32, spec(sum) => [(5u64 * 4294967295) as f32];
+        [i32::MIN; 3], I32, [3], [0], I32, spec(sum) => [i32::MIN];
+        [i32::MIN; 3], I32, [3], [0], I32, wrap(sum) => [i32::MIN];
+        [i32::MIN; 3], I32, [3], [0], F64, spec(sum) => [3.0f64 * -2147483648.0];
+        [200u8, 100], U8, [2], [0], U8, spec(sum) => [255u8];
+        [200u8, 100], U8, [2], [0], U8, wrap(sum) => [44u8];
+        [-5i8, 1], I8, [2], [0], U8, spec(sum) => [0u8];
+        [-100i8, -100], I8, [2], [0], I8, wrap(sum) => [56i8];
+        [16777216i32, 1], I32, [2], [0], F32, spec(sum) => [16777216.0f32];
+        [16777217i32, 2], I32, [2], [0], F32, spec(sum) => [16777220.0f32];
+        [65536u32, 65536, 3], U32, [3], [0], U32, spec(prod) => [0u32];
+        [-3i16, 5, 7], I16, [3], [0], I32, spec(prod) => [-105i32];
+        [65537i32, 65537], I32, [2], [0], I32, spec(prod) => [131073i32];
+        [-3i16, 5], I16, [2], [0], F32, spec(prod) => [-15.0f32];
+    }
+}
+
+#[test]
+fn reduce_order_keys_form_a_total_order_with_the_documented_ties() {
+    let f32s = [
+        f32::NEG_INFINITY,
+        -1e30,
+        -1.0,
+        -f32::from_bits(1),
+        -0.0,
+        0.0,
+        f32::from_bits(1),
+        1.0,
+        1e30,
+        f32::INFINITY,
+    ];
+    assert!(
+        f32s.windows(2)
+            .all(|p| f32_order_key(p[0]) < f32_order_key(p[1]))
+    );
+    let f64s = [
+        f64::NEG_INFINITY,
+        -1e300,
+        -1.0,
+        -f64::from_bits(1),
+        -0.0,
+        0.0,
+        f64::from_bits(1),
+        1.0,
+        1e300,
+        f64::INFINITY,
+    ];
+    assert!(
+        f64s.windows(2)
+            .all(|p| f64_order_key(p[0]) < f64_order_key(p[1]))
+    );
+    let (min, max, argmin, argmax) = (
+        ReduceOp::Min,
+        ReduceOp::Max,
+        ReduceOp::ArgMin,
+        ReduceOp::ArgMax,
+    );
+    let (signaling, quiet) = (f32::from_bits(0xFFA0_0001), f32::from_bits(0x7FC1_2345));
+    let grid = [5.0f32, 1.0, 7.0, 9.0, 0.5, 2.0];
+    reduce_cases! {
+        [0.0f32, -0.0], F32, [2], [0], F32, spec(min) => [-0.0f32];
+        [-0.0f32, 0.0], F32, [2], [0], F32, spec(max) => [0.0f32];
+        [0.0f32, -0.0], F32, [2], [0], U32, spec(argmin) => [0u32];
+        [0.0f32, -0.0], F32, [2], [0], U32, spec(argmax) => [0u32];
+        [1.0f32, -0.0, 0.0], F32, [3], [0], U32, spec(argmin) => [1u32];
+        [1.0f32, signaling, -1.0], F32, [3], [0], F32, spec(min) => [NAN_32];
+        [1.0f32, quiet, -1.0], F32, [3], [0], F32, spec(max) => [NAN_32];
+        [1.0f32, quiet, signaling], F32, [3], [0], U32, spec(argmin) => [1u32];
+        [1.0f32, signaling, quiet], F32, [3], [0], U32, spec(argmax) => [1u32];
+        [1.0f64, f64::from_bits(0xFFF8_0000_0000_1234)], F64, [2], [0], F64, spec(min) => [NAN_64];
+        [quiet, 3.0, signaling, 2.0], F32, [4], [0], F32, omit(min) => [2.0f32];
+        [quiet, f32::INFINITY, 2.0], F32, [3], [0], F32, omit(max) => [f32::INFINITY];
+        [quiet, signaling], F32, [2], [0], F32, omit(min) => [NAN_32];
+        [quiet, signaling], F32, [2], [0], U32, omit(argmin) => [u32::MAX];
+        [quiet, 5.0, 5.0], F32, [3], [0], U32, omit(argmax) => [1u32];
+        [f32::from_bits(1), 1.0], F32, [2], [0], F32, spec(min) => [1u32];
+        [0u32, u32::MAX, 7], U32, [3], [0], U32, spec(min) => [0u32];
+        [0u32, u32::MAX, 7], U32, [3], [0], U32, spec(max) => [u32::MAX];
+        [0u32, 0], U32, [2], [0], U32, spec(argmax) => [0u32];
+        [u32::MAX, u32::MAX], U32, [2], [0], U32, spec(argmin) => [0u32];
+        [i32::MIN, i32::MAX], I32, [2], [0], I32, spec(min) => [i32::MIN];
+        [-5i16, 4], I16, [2], [0], I16, spec(max) => [4i16];
+        [9u16, 65535], U16, [2], [0], U16, spec(max) => [65535u16];
+        [-128i8, 127], I8, [2], [0], I8, spec(min) => [-128i8];
+        grid, F32, [2, 3], [0, 1], U32, spec(argmin) => [4u32];
+        grid, F32, [2, 3], [1], U32, spec(argmax) => [2u32, 0];
+        grid, F32, [2, 3], [0], U32, spec(argmin) => [0u32, 1, 1];
+    }
+}
+
+#[test]
+fn reduce_omission_counts_only_the_kept_elements() {
+    let nan = f32::NAN;
+    let data = [1.0, nan, 3.0, nan, nan, nan];
+    let z = [1.0, 2.0, nan, 5.0, 3.0, 6.0];
+    let (sum, prod, mean, var) = (ReduceOp::Sum, ReduceOp::Prod, ReduceOp::Mean, ReduceOp::Var);
+    reduce_cases! {
+        data, F32, [2, 3], [1], F32, omit(sum) => [4.0f32, 0.0];
+        data, F32, [2, 3], [1], F32, omit(prod) => [3.0f32, 1.0];
+        data, F32, [2, 3], [1], F32, omit(mean) => [2.0f32.to_bits(), NAN_32];
+        data, F32, [2, 3], [1], F32, omit(var) => [1.0f32.to_bits(), NAN_32];
+        data, F32, [2, 3], [1], F32, ddof(var, 1.0, true) => [2.0f32.to_bits(), NAN_32];
+        data, F32, [2, 3], [1], F32, ddof(var, 2.0, true) => [NAN_32, NAN_32];
+        [nan], F32, [1], [0], F32, omit(sum) => [0u32];
+        data, F32, [2, 3], [1], F32, spec(sum) => [NAN_32, NAN_32];
+        [f32::INFINITY, nan, 1.0], F32, [3], [0], F32, omit(sum) => [f32::INFINITY];
+        [f32::INFINITY, nan, f32::NEG_INFINITY], F32, [3], [0], F32, omit(sum) => [NAN_32];
+        z, C64, [3], [0], C64, omit(sum) => [4.0f32, 8.0];
+        z, C64, [3], [0], C64, omit(mean) => [2.0f32, 4.0];
+        z, C64, [3], [0], F32, omit(var) => [5.0f32];
+        z, C64, [3], [0], C64, spec(sum) => [NAN_32, NAN_32];
+    }
+}
+
+#[test]
+fn reduce_two_pass_variance_survives_large_offsets() {
+    let data: Vec<f64> = (0..4096).map(|i| 1e9 + (i % 8) as f64 * 0.25).collect();
+    let mean = data.iter().sum::<f64>() / 4096.0;
+    let expected = data.iter().map(|v| (v - mean) * (v - mean)).sum::<f64>() / 4096.0;
+    let got = f64::from_le_bytes(
+        reduce_c(&data, F64, &[4096], &[0], F64, spec(ReduceOp::Var))
+            .try_into()
+            .unwrap(),
+    );
+    assert!(
+        (got - expected).abs() <= 1e-12 * expected,
+        "{got} vs {expected}"
+    );
+    let std = reduce_c(&data, F64, &[4096], &[0], F64, spec(ReduceOp::Std));
+    assert_eq!(std, le(&[got.sqrt()]));
+    let big = [u32::MAX, u32::MAX - 2];
+    let z = [1.0f64, 10.0, 3.0, 14.0];
+    let (mean, var) = (ReduceOp::Mean, ReduceOp::Var);
+    reduce_cases! {
+        big, U32, [2], [0], F64, spec(mean) => [4294967294.0f64];
+        big, U32, [2], [0], F64, spec(var) => [1.0f64];
+        z, C128, [2], [0], F64, spec(var) => [5.0f64];
+        [1.0f64, 3.0], F64, [2], [0], F64, ddof(var, 0.5, false) => [2.0f64 / 1.5];
+        [1.0f64, 3.0], F64, [2], [0], F64, ddof(var, 2.5, false) => [NAN_64];
+    }
+}
+
+#[test]
+fn reduce_complex_products_multiply_and_empty_reductions_write_identities() {
+    let z = [1.0f32, 2.0, 3.0, 4.0];
+    let prod = ReduceOp::Prod;
+    reduce_cases! {
+        z, C64, [2], [0], C64, spec(prod) => [-5.0f32, 10.0];
+        z, C64, [2], [0], C128, spec(prod) => [-5.0f64, 10.0];
+        [1.0f32, 0.0, f32::INFINITY, 0.0], C64, [2], [0], C64, spec(prod) => [NAN_32, NAN_32];
+        [f32::INFINITY, 0.0], C64, [1], [0], C64, spec(prod) => [f32::INFINITY, 0.0];
+    }
+    let flags = [0, 1];
+    let empty = |op, from, out: DType| {
+        let mut bytes = vec![0xAAu8; 2 * out.size()];
+        let strides = [from_size(from), from_size(from)];
+        let status = reduce(
+            output(&mut bytes, out),
+            None,
+            src(&[], from, 0, &strides),
+            &[2, 0],
+            &flags,
+            spec(op),
+        );
+        assert_eq!(status, STATUS_OK, "{op:?}");
+        bytes
+    };
+    assert_eq!(empty(ReduceOp::Sum, F32, F32), le(&[0u32; 2]));
+    assert_eq!(empty(prod, F32, F32), le(&[1.0f32; 2]));
+    assert_eq!(empty(ReduceOp::Mean, F32, F32), le(&[NAN_32; 2]));
+    assert_eq!(empty(ReduceOp::Std, F32, F32), le(&[NAN_32; 2]));
+    assert_eq!(empty(ReduceOp::Mean, C128, C128), le(&[NAN_64; 4]));
+    assert_eq!(empty(prod, C64, C64), le(&[1.0f32, 0.0, 1.0, 0.0]));
+    for (op, out) in [(ReduceOp::Min, F32), (ReduceOp::ArgMin, U32)] {
+        let mut bytes = vec![0u8; 8];
+        let status = reduce(
+            output(&mut bytes, out),
+            None,
+            src(&[], F32, 0, &[4, 4]),
+            &[2, 0],
+            &flags,
+            spec(op),
+        );
+        assert_eq!(status, STATUS_INVALID_SHAPE, "{op:?} has no identity");
+    }
+}
+
+fn from_size(dtype: DType) -> i32 {
+    dtype.size() as i32
+}
+
+#[test]
+fn reduce_fused_statistics_equal_their_separate_operations() {
+    let (k, r) = (9usize, 300usize);
+    let bytes = le(&f32_data(k * r));
+    let (shape, strides, flags) = ([k as u32, r as u32], [r as i32 * 4, 4], [0, 1]);
+    let view = View(&bytes, F32, 0, &strides, &shape);
+    let pairs = [
+        (ReduceOp::VarMean, ReduceOp::Var, ReduceOp::Mean),
+        (ReduceOp::StdMean, ReduceOp::Std, ReduceOp::Mean),
+        (ReduceOp::MinMax, ReduceOp::Min, ReduceOp::Max),
+    ];
+    for (fused, first, second) in pairs {
+        for omit in [false, true] {
+            let s = ReduceSpec {
+                omit,
+                ddof: if fused == ReduceOp::MinMax { 0.0 } else { 1.0 },
+                ..spec(fused)
+            };
+            let (mut a, mut b) = (vec![0u8; k * 4], vec![0u8; k * 4]);
+            let status = reduce(
+                output(&mut a, F32),
+                Some(output(&mut b, F32)),
+                src(&bytes, F32, 0, &strides),
+                &shape,
+                &flags,
+                s,
+            );
+            assert_eq!(status, STATUS_OK);
+            assert_eq!(
+                a,
+                reduce_view(&view, &[1], F32, ReduceSpec { op: first, ..s }, None),
+                "{fused:?} first output"
+            );
+            assert_eq!(
+                b,
+                reduce_view(&view, &[1], F32, ReduceSpec { op: second, ..s }, None),
+                "{fused:?} second output"
+            );
+        }
+    }
+    let z = le(&[1.0f32, 10.0, 3.0, 14.0]);
+    let (mut v, mut m) = (vec![0u8; 4], vec![0u8; 8]);
+    let status = reduce(
+        output(&mut v, F32),
+        Some(output(&mut m, C64)),
+        src(&z, C64, 0, &[8]),
+        &[2],
+        &[1],
+        spec(ReduceOp::VarMean),
+    );
+    assert_eq!(status, STATUS_OK);
+    assert_eq!((v, m), (le(&[5.0f32]), le(&[2.0f32, 12.0])));
+}
+
+#[test]
+fn reduce_reports_status_codes_for_invalid_descriptors() {
+    let bytes = le(&[1.0f32, 2.0]);
+    let run = |from: DType,
+               out: DType,
+               s: ReduceSpec,
+               strides: &[i32],
+               shape: &[u32],
+               flags: &[u32],
+               len: usize,
+               offset: u32| {
+        let mut dst = vec![0u8; len];
+        reduce(
+            ReduceOutput {
+                bytes: &mut dst,
+                dtype: out,
+                offset,
+            },
+            None,
+            src(&bytes, from, 0, strides),
+            shape,
+            flags,
+            s,
+        )
+    };
+    let (sum, var, min, argmax) = (
+        spec(ReduceOp::Sum),
+        ReduceOp::Var,
+        spec(ReduceOp::Min),
+        spec(ReduceOp::ArgMax),
+    );
+    macro_rules! status_cases {
+        ($($status:expr => $($args:expr),+;)+) => { $(assert_eq!(run($($args),+), $status, "{}", stringify!($($args),+));)+ };
+    }
+    status_cases! {
+        STATUS_OK => F32, F32, sum, &[4], &[2], &[1], 4, 0;
+        STATUS_INVALID_DTYPE => C64, C64, min, &[8], &[1], &[1], 8, 0;
+        STATUS_INVALID_DTYPE => C64, U32, argmax, &[8], &[1], &[1], 4, 0;
+        STATUS_INVALID_DTYPE => F32, I32, sum, &[4], &[2], &[1], 4, 0;
+        STATUS_INVALID_DTYPE => I32, C64, sum, &[4], &[2], &[1], 8, 0;
+        STATUS_INVALID_DTYPE => C64, F32, sum, &[8], &[1], &[1], 4, 0;
+        STATUS_INVALID_DTYPE => I32, I32, spec(ReduceOp::Mean), &[4], &[2], &[1], 4, 0;
+        STATUS_INVALID_DTYPE => F32, F64, min, &[4], &[2], &[1], 8, 0;
+        STATUS_INVALID_DTYPE => F32, F32, spec(ReduceOp::ArgMin), &[4], &[2], &[1], 4, 0;
+        STATUS_INVALID_DTYPE => F32, F32, spec(ReduceOp::VarMean), &[4], &[2], &[1], 4, 0;
+        STATUS_INVALID_RANK => F32, F32, sum, &[4, 4], &[2], &[1], 4, 0;
+        STATUS_INVALID_RANK => F32, F32, sum, &[4], &[2], &[1, 0], 4, 0;
+        STATUS_INVALID_PARAMETERS => F32, F32, sum, &[4], &[2], &[2], 4, 0;
+        STATUS_INVALID_PARAMETERS => F32, F32, ddof(var, -1.0, false), &[4], &[2], &[1], 4, 0;
+        STATUS_INVALID_PARAMETERS => F32, F32, ddof(ReduceOp::Std, f64::NAN, false), &[4], &[2], &[1], 4, 0;
+        STATUS_INVALID_PARAMETERS => F32, F32, ddof(var, f64::INFINITY, false), &[4], &[2], &[1], 4, 0;
+        STATUS_SOURCE_BOUNDS => F32, F32, sum, &[4], &[3], &[1], 4, 0;
+        STATUS_SOURCE_BOUNDS => F32, F32, sum, &[-4], &[2], &[1], 4, 0;
+        STATUS_DESTINATION_BOUNDS => F32, F32, sum, &[4], &[2], &[1], 3, 0;
+        STATUS_DESTINATION_BOUNDS => F32, F32, sum, &[4], &[2], &[1], 4, 1;
+        STATUS_INVALID_SHAPE => F32, F32, sum, &[0, 0], &[u32::MAX, 2], &[0, 0], 4, 0;
+        STATUS_INVALID_SHAPE => F32, F32, sum, &[0, 0], &[u32::MAX, 2], &[1, 1], 4, 0;
+        STATUS_OK => F32, F32, sum, &[4, 4], &[0, 2], &[0, 1], 0, 0;
+    }
+    let (mut first, mut second) = (vec![0u8; 4], vec![0u8; 4]);
+    let shifted = ReduceOutput {
+        bytes: &mut second,
+        dtype: F32,
+        offset: 1,
+    };
+    assert_eq!(
+        reduce(
+            output(&mut first, F32),
+            Some(shifted),
+            src(&bytes, F32, 0, &[4]),
+            &[2],
+            &[1],
+            spec(ReduceOp::VarMean)
+        ),
+        STATUS_DESTINATION_BOUNDS
+    );
+    let mut second = vec![0u8; 4];
+    assert_eq!(
+        reduce(
+            output(&mut first, F32),
+            Some(output(&mut second, F32)),
+            src(&bytes, F32, 0, &[4]),
+            &[2],
+            &[1],
+            sum
+        ),
+        STATUS_INVALID_DTYPE,
+        "Only fused operations take a second output"
+    );
 }
