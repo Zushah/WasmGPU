@@ -192,6 +192,27 @@ impl PadMode {
 pub(crate) enum AffineForm {
     ScaleOffset,
     MeanStd,
+    ZScore,
+    MinMax,
+}
+
+impl AffineForm {
+    pub(crate) fn from_code(code: u32) -> Option<AffineForm> {
+        match code {
+            0 => Some(AffineForm::ScaleOffset),
+            1 => Some(AffineForm::MeanStd),
+            2 => Some(AffineForm::ZScore),
+            3 => Some(AffineForm::MinMax),
+            _ => None,
+        }
+    }
+
+    fn parameters(self) -> usize {
+        match self {
+            AffineForm::ZScore => 4,
+            _ => 2,
+        }
+    }
 }
 
 pub(crate) struct Source<'a> {
@@ -799,19 +820,343 @@ pub(crate) fn pad(
     STATUS_OK
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct AffineParam<'a> {
+    pub(crate) values: &'a [f64],
+    pub(crate) offset: u32,
+    pub(crate) strides: &'a [i32],
+}
+
+pub(crate) const NO_AFFINE_PARAM: AffineParam<'static> = AffineParam {
+    values: &[],
+    offset: 0,
+    strides: &[],
+};
+
 pub(crate) struct AffineParams<'a> {
-    pub(crate) axis: Option<usize>,
-    pub(crate) a: &'a [f64],
-    pub(crate) b: &'a [f64],
+    pub(crate) p: [AffineParam<'a>; 4],
     pub(crate) form: AffineForm,
+    pub(crate) epsilon: f64,
+    pub(crate) range: [f64; 2],
 }
 
 #[inline(always)]
 pub(crate) fn affine_value(x: f64, a: f64, b: f64, form: AffineForm) -> f64 {
     match form {
         AffineForm::ScaleOffset => x * a + b,
-        AffineForm::MeanStd => (x - a) / b,
+        _ => (x - a) / b,
     }
+}
+
+#[inline(always)]
+pub(crate) fn zero_rule(d: f64, epsilon: f64) -> f64 {
+    if d.is_nan() {
+        d
+    } else if d.abs() <= epsilon {
+        1.0
+    } else {
+        d
+    }
+}
+
+#[inline(always)]
+pub(crate) fn zscore_terms(mean: f64, std: f64, min: f64, max: f64, epsilon: f64) -> (f64, f64) {
+    if min == max && !std.is_nan() {
+        (min, 1.0)
+    } else {
+        (mean, zero_rule(std, epsilon))
+    }
+}
+
+#[inline(always)]
+pub(crate) fn minmax_terms(min: f64, max: f64, epsilon: f64) -> (f64, f64) {
+    (min, zero_rule(max - min, epsilon))
+}
+
+const AFFINE_FMA: u8 = 0;
+const AFFINE_DIV: u8 = 1;
+const AFFINE_RANGE: u8 = 2;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum LaneKind {
+    Fixed,
+    Contiguous,
+    Strided,
+}
+
+trait Lane<'a>: Copy {
+    fn new(values: &'a [f64], start: i64, step: i64, n: usize) -> Self;
+    fn get(&self, j: usize) -> f64;
+}
+
+#[derive(Clone, Copy)]
+struct Fixed(f64);
+
+impl<'a> Lane<'a> for Fixed {
+    #[inline(always)]
+    fn new(values: &'a [f64], start: i64, _: i64, _: usize) -> Self {
+        Fixed(values[start as usize])
+    }
+
+    #[inline(always)]
+    fn get(&self, _: usize) -> f64 {
+        self.0
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Contiguous<'a>(&'a [f64]);
+
+impl<'a> Lane<'a> for Contiguous<'a> {
+    #[inline(always)]
+    fn new(values: &'a [f64], start: i64, _: i64, n: usize) -> Self {
+        Contiguous(&values[start as usize..start as usize + n])
+    }
+
+    #[inline(always)]
+    fn get(&self, j: usize) -> f64 {
+        self.0[j]
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Strided<'a> {
+    values: &'a [f64],
+    start: i64,
+    step: i64,
+}
+
+impl<'a> Lane<'a> for Strided<'a> {
+    #[inline(always)]
+    fn new(values: &'a [f64], start: i64, step: i64, _: usize) -> Self {
+        Strided {
+            values,
+            start,
+            step,
+        }
+    }
+
+    #[inline(always)]
+    fn get(&self, j: usize) -> f64 {
+        self.values[(self.start + j as i64 * self.step) as usize]
+    }
+}
+
+trait Terms<'a>: Copy {
+    fn new(p: &[&'a [f64]; 4], at: &[i64; 6], step: &[i64; 4], n: usize, epsilon: f64) -> Self;
+    fn terms(&self, j: usize) -> (f64, f64);
+}
+
+#[derive(Clone, Copy)]
+struct Pair<A, B>(A, B);
+
+impl<'a, A: Lane<'a>, B: Lane<'a>> Terms<'a> for Pair<A, B> {
+    #[inline(always)]
+    fn new(p: &[&'a [f64]; 4], at: &[i64; 6], step: &[i64; 4], n: usize, _: f64) -> Self {
+        Pair(
+            A::new(p[0], at[2], step[0], n),
+            B::new(p[1], at[3], step[1], n),
+        )
+    }
+
+    #[inline(always)]
+    fn terms(&self, j: usize) -> (f64, f64) {
+        (self.0.get(j), self.1.get(j))
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Standard<L>([L; 4], f64);
+
+impl<'a, L: Lane<'a>> Terms<'a> for Standard<L> {
+    #[inline(always)]
+    fn new(p: &[&'a [f64]; 4], at: &[i64; 6], step: &[i64; 4], n: usize, epsilon: f64) -> Self {
+        Standard(
+            core::array::from_fn(|i| L::new(p[i], at[2 + i], step[i], n)),
+            epsilon,
+        )
+    }
+
+    #[inline(always)]
+    fn terms(&self, j: usize) -> (f64, f64) {
+        let [mean, std, min, max] = self.0.map(|lane| lane.get(j));
+        zscore_terms(mean, std, min, max, self.1)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Range<L>(L, L, f64);
+
+impl<'a, L: Lane<'a>> Terms<'a> for Range<L> {
+    #[inline(always)]
+    fn new(p: &[&'a [f64]; 4], at: &[i64; 6], step: &[i64; 4], n: usize, epsilon: f64) -> Self {
+        Range(
+            L::new(p[0], at[2], step[0], n),
+            L::new(p[1], at[3], step[1], n),
+            epsilon,
+        )
+    }
+
+    #[inline(always)]
+    fn terms(&self, j: usize) -> (f64, f64) {
+        minmax_terms(self.0.get(j), self.1.get(j), self.2)
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Resolved(f64, f64);
+
+impl<'a> Terms<'a> for Resolved {
+    #[inline(always)]
+    fn new(p: &[&'a [f64]; 4], at: &[i64; 6], _: &[i64; 4], _: usize, epsilon: f64) -> Self {
+        let value = |i: usize| p[i][at[2 + i] as usize];
+        let (a, b) = if p[2].is_empty() {
+            minmax_terms(value(0), value(1), epsilon)
+        } else {
+            zscore_terms(value(0), value(1), value(2), value(3), epsilon)
+        };
+        Resolved(a, b)
+    }
+
+    #[inline(always)]
+    fn terms(&self, _: usize) -> (f64, f64) {
+        (self.0, self.1)
+    }
+}
+
+fn for_each_run<const N: usize>(
+    shape: &[u32],
+    strides: &[[i64; MAX_RANK]; N],
+    start: [i64; N],
+    mut visit: impl FnMut(&[i64; N]),
+) {
+    let mut index = [0u32; MAX_RANK];
+    let mut at = start;
+    if shape.len() <= 1 {
+        visit(&at);
+        return;
+    }
+    let outer = shape.len() - 1;
+    loop {
+        visit(&at);
+        let mut axis = outer;
+        loop {
+            if axis == 0 {
+                return;
+            }
+            axis -= 1;
+            index[axis] += 1;
+            for (a, s) in at.iter_mut().zip(strides) {
+                *a += s[axis];
+            }
+            if index[axis] < shape[axis] {
+                break;
+            }
+            for (a, s) in at.iter_mut().zip(strides) {
+                *a -= s[axis] * shape[axis] as i64;
+            }
+            index[axis] = 0;
+        }
+    }
+}
+
+struct AffineRun<'a, 'b> {
+    out: &'b mut [u8],
+    input: &'a [u8],
+    shape: &'b [u32],
+    strides: [[i64; MAX_RANK]; 6],
+    start: [i64; 6],
+    values: [&'a [f64]; 4],
+    read: Reader,
+    write: Writer,
+    epsilon: f64,
+    width: f64,
+    low: f64,
+}
+
+impl<'a> AffineRun<'a, '_> {
+    fn run<T: Terms<'a>, const OP: u8>(self) {
+        let nd = self.shape.len();
+        let (n, step) = match nd {
+            0 => (1, [0i64; 6]),
+            _ => (
+                self.shape[nd - 1] as usize,
+                core::array::from_fn(|k| self.strides[k][nd - 1]),
+            ),
+        };
+        let param_step = [step[2], step[3], step[4], step[5]];
+        let (out, input, values, epsilon) = (self.out, self.input, self.values, self.epsilon);
+        let (read, write, width, low) = (self.read, self.write, self.width, self.low);
+        let mut buffer = [0f64; CHUNK];
+        for_each_run(self.shape, &self.strides, self.start, |at| {
+            let terms = T::new(&values, at, &param_step, n, epsilon);
+            let mut done = 0;
+            while done < n {
+                let k = CHUNK.min(n - done);
+                read(
+                    input,
+                    (at[0] + done as i64 * step[0]) as usize,
+                    step[0],
+                    &mut buffer[..k],
+                );
+                for (j, v) in buffer[..k].iter_mut().enumerate() {
+                    let (a, b) = terms.terms(done + j);
+                    *v = match OP {
+                        AFFINE_FMA => affine_value(*v, a, b, AffineForm::ScaleOffset),
+                        AFFINE_DIV => affine_value(*v, a, b, AffineForm::MeanStd),
+                        _ => affine_value(*v, a, b, AffineForm::MeanStd) * width + low,
+                    };
+                }
+                write(
+                    out,
+                    (at[1] + done as i64 * step[1]) as usize,
+                    step[1],
+                    &buffer[..k],
+                );
+                done += k;
+            }
+        });
+    }
+}
+
+fn lane_kind(param: &AffineParam, nd: usize) -> LaneKind {
+    match param.strides.get(nd.wrapping_sub(1)) {
+        None | Some(0) => LaneKind::Fixed,
+        Some(1) => LaneKind::Contiguous,
+        _ => LaneKind::Strided,
+    }
+}
+
+macro_rules! pair_run {
+    ($run:expr, $op:expr, $a:expr, $b:expr) => {
+        match ($a, $b) {
+            (LaneKind::Fixed, LaneKind::Fixed) => $run.run::<Pair<Fixed, Fixed>, $op>(),
+            (LaneKind::Fixed, LaneKind::Contiguous) => $run.run::<Pair<Fixed, Contiguous>, $op>(),
+            (LaneKind::Fixed, LaneKind::Strided) => $run.run::<Pair<Fixed, Strided>, $op>(),
+            (LaneKind::Contiguous, LaneKind::Fixed) => $run.run::<Pair<Contiguous, Fixed>, $op>(),
+            (LaneKind::Contiguous, LaneKind::Contiguous) => {
+                $run.run::<Pair<Contiguous, Contiguous>, $op>()
+            }
+            (LaneKind::Contiguous, LaneKind::Strided) => {
+                $run.run::<Pair<Contiguous, Strided>, $op>()
+            }
+            (LaneKind::Strided, LaneKind::Fixed) => $run.run::<Pair<Strided, Fixed>, $op>(),
+            (LaneKind::Strided, LaneKind::Contiguous) => {
+                $run.run::<Pair<Strided, Contiguous>, $op>()
+            }
+            (LaneKind::Strided, LaneKind::Strided) => $run.run::<Pair<Strided, Strided>, $op>(),
+        }
+    };
+}
+
+macro_rules! statistics_run {
+    ($run:expr, $op:expr, $terms:ident, $kind:expr) => {
+        match $kind {
+            LaneKind::Fixed => $run.run::<Resolved, $op>(),
+            LaneKind::Contiguous => $run.run::<$terms<Contiguous>, $op>(),
+            LaneKind::Strided => $run.run::<$terms<Strided>, $op>(),
+        }
+    };
 }
 
 pub(crate) fn affine(dst: Destination, src: Source, shape: &[u32], params: AffineParams) -> u32 {
@@ -819,19 +1164,18 @@ pub(crate) fn affine(dst: Destination, src: Source, shape: &[u32], params: Affin
         return STATUS_INVALID_DTYPE;
     }
     let nd = shape.len();
-    if nd > MAX_RANK || src.strides.len() != nd || dst.strides.len() != nd {
+    let used = params.form.parameters();
+    if nd > MAX_RANK
+        || src.strides.len() != nd
+        || dst.strides.len() != nd
+        || params.p[..used].iter().any(|p| p.strides.len() != nd)
+    {
         return STATUS_INVALID_RANK;
     }
-    let len = params.a.len();
-    if len == 0 || params.b.len() != len {
+    let [low, high] = params.range;
+    let scalars = params.epsilon >= 0.0 && params.epsilon.is_finite() && low < high;
+    if !scalars || params.p[used..].iter().any(|p| !p.values.is_empty()) {
         return STATUS_INVALID_PARAMETERS;
-    }
-    match params.axis {
-        Some(axis) if axis >= nd || (len != 1 && len != shape[axis] as usize) => {
-            return STATUS_INVALID_PARAMETERS;
-        }
-        None if len != 1 => return STATUS_INVALID_PARAMETERS,
-        _ => {}
     }
     if shape.contains(&0) {
         return STATUS_OK;
@@ -854,51 +1198,59 @@ pub(crate) fn affine(dst: Destination, src: Source, shape: &[u32], params: Affin
     ) {
         return STATUS_DESTINATION_BOUNDS;
     }
-    let (mut ss, mut ds) = ([0i64; MAX_RANK], [0i64; MAX_RANK]);
-    widen(src.strides, &mut ss);
-    widen(dst.strides, &mut ds);
-    let (n, s_inner, d_inner) = inner(shape, &ss, &ds);
-    let axis = if len == 1 { None } else { params.axis };
-    let per_element = nd > 0 && axis == Some(nd - 1);
-    let read = reader_for(src.dtype);
-    let write = writer_for(dst.dtype, ARITHMETIC_MODE);
-    let out = dst.bytes;
-    let input = src.bytes;
-    let mut buffer = [0f64; CHUNK];
-    for_each_outer(
+    if params.p[..used]
+        .iter()
+        .any(|p| !layout_within(p.values.len(), shape, p.strides, p.offset, 1))
+    {
+        return STATUS_INVALID_PARAMETERS;
+    }
+    let mut strides = [[0i64; MAX_RANK]; 6];
+    widen(src.strides, &mut strides[0]);
+    widen(dst.strides, &mut strides[1]);
+    for (k, p) in params.p[..used].iter().enumerate() {
+        widen(p.strides, &mut strides[2 + k]);
+    }
+    let kinds: [LaneKind; 4] = core::array::from_fn(|k| {
+        if k < used {
+            lane_kind(&params.p[k], nd)
+        } else {
+            LaneKind::Fixed
+        }
+    });
+    let shared = if kinds[..used].iter().all(|&k| k == kinds[0]) {
+        kinds[0]
+    } else {
+        LaneKind::Strided
+    };
+    let run = AffineRun {
+        out: dst.bytes,
+        input: src.bytes,
         shape,
-        &ss,
-        &ds,
-        src.offset as i64,
-        dst.offset as i64,
-        |index, s, d| {
-            let fixed = match axis {
-                Some(a) if !per_element => index[a] as usize,
-                _ => 0,
-            };
-            let mut done = 0;
-            while done < n {
-                let k = CHUNK.min(n - done);
-                read(
-                    input,
-                    (s + done as i64 * s_inner) as usize,
-                    s_inner,
-                    &mut buffer[..k],
-                );
-                for (j, v) in buffer[..k].iter_mut().enumerate() {
-                    let p = if per_element { done + j } else { fixed };
-                    *v = affine_value(*v, params.a[p], params.b[p], params.form);
-                }
-                write(
-                    out,
-                    (d + done as i64 * d_inner) as usize,
-                    d_inner,
-                    &buffer[..k],
-                );
-                done += k;
-            }
-        },
-    );
+        strides,
+        start: [
+            src.offset as i64,
+            dst.offset as i64,
+            params.p[0].offset as i64,
+            params.p[1].offset as i64,
+            params.p[2].offset as i64,
+            params.p[3].offset as i64,
+        ],
+        values: params.p.map(|p| p.values),
+        read: reader_for(src.dtype),
+        write: writer_for(dst.dtype, ARITHMETIC_MODE),
+        epsilon: params.epsilon,
+        width: high - low,
+        low,
+    };
+    match params.form {
+        AffineForm::ScaleOffset => pair_run!(run, AFFINE_FMA, kinds[0], kinds[1]),
+        AffineForm::MeanStd => pair_run!(run, AFFINE_DIV, kinds[0], kinds[1]),
+        AffineForm::ZScore => statistics_run!(run, AFFINE_DIV, Standard, shared),
+        AffineForm::MinMax if low == 0.0 && high == 1.0 => {
+            statistics_run!(run, AFFINE_DIV, Range, shared)
+        }
+        AffineForm::MinMax => statistics_run!(run, AFFINE_RANGE, Range, shared),
+    }
     STATUS_OK
 }
 
@@ -3003,39 +3355,60 @@ pub unsafe extern "C" fn ndarray_affine(
     if nd > MAX_RANK {
         return STATUS_INVALID_RANK;
     }
-    let (dst_dtype, src_dtype, form) = match decode_pair_codes(codes) {
-        Ok((d, s, f)) => (
-            d,
-            s,
-            if f == 0 {
-                AffineForm::ScaleOffset
-            } else {
-                AffineForm::MeanStd
-            },
-        ),
-        Err(status) => return status,
+    let (dst_dtype, src_dtype) = match (
+        DType::from_code(codes & 0xF),
+        DType::from_code((codes >> 4) & 0xF),
+    ) {
+        (Some(d), Some(s)) => (d, s),
+        _ => return STATUS_INVALID_DTYPE,
     };
-    let words = 4 + 3 * nd;
-    if !valid_descriptor(layout_ptr, words * 4, 4, dst_ptr, dst_len) {
+    let form = match AffineForm::from_code((codes >> 8) & 0x3) {
+        Some(form) if codes >> 10 == 0 => form,
+        _ => return STATUS_INVALID_MODE,
+    };
+    let words = 14 + 7 * nd;
+    if !valid_descriptor(layout_ptr, words * 4, 4, dst_ptr, dst_len)
+        || !valid_descriptor(params_ptr, 24, 8, dst_ptr, dst_len)
+    {
         return STATUS_INVALID_POINTER;
     }
     with_driver_call(|call| {
         let layout = unsafe { u32_slice(call, layout_ptr, words) };
-        let len = layout[3] as usize;
-        if len == 0 || len > u32::MAX as usize / 16 {
-            return STATUS_INVALID_PARAMETERS;
+        let scalars = unsafe { f64_slice(call, params_ptr, 3) };
+        let mut values: [&[f64]; 4] = [&[]; 4];
+        for (k, value) in values.iter_mut().enumerate() {
+            let (ptr, len) = (layout[2 + 3 * k], layout[3 + 3 * k] as usize);
+            if len == 0 {
+                continue;
+            }
+            if len > u32::MAX as usize / 8 {
+                return STATUS_INVALID_PARAMETERS;
+            }
+            if !valid_descriptor(ptr, len * 8, 8, dst_ptr, dst_len) {
+                return STATUS_INVALID_POINTER;
+            }
+            *value = unsafe { f64_slice(call, ptr, len) };
         }
-        if !valid_descriptor(params_ptr, len * 16, 8, dst_ptr, dst_len) {
-            return STATUS_INVALID_POINTER;
+        let mut shape = [0u32; MAX_RANK];
+        let (mut ss, mut ds) = ([0i32; MAX_RANK], [0i32; MAX_RANK]);
+        let mut ps = [[0i32; MAX_RANK]; 4];
+        read_axes(layout, 14, nd, &mut shape);
+        read_strides(layout, 14 + nd, nd, &mut ss);
+        read_strides(layout, 14 + 2 * nd, nd, &mut ds);
+        for (k, strides) in ps.iter_mut().enumerate() {
+            read_strides(layout, 14 + (3 + k) * nd, nd, strides);
         }
-        let params = unsafe { f64_slice(call, params_ptr, 2 * len) };
-        let (mut shape, mut ss, mut ds) = ([0u32; MAX_RANK], [0i32; MAX_RANK], [0i32; MAX_RANK]);
-        read_axes(layout, 4, nd, &mut shape);
-        read_strides(layout, 4 + nd, nd, &mut ss);
-        read_strides(layout, 4 + 2 * nd, nd, &mut ds);
         let (dst, src) = match unsafe { borrow_pair(call, dst_ptr, dst_len, src_ptr, src_len) } {
             Ok(v) => v,
             Err(status) => return status,
+        };
+        let param = |k: usize| match values[k] {
+            [] if k >= form.parameters() => NO_AFFINE_PARAM,
+            values => AffineParam {
+                values,
+                offset: layout[4 + 3 * k],
+                strides: &ps[k][..nd],
+            },
         };
         affine(
             Destination {
@@ -3052,14 +3425,10 @@ pub unsafe extern "C" fn ndarray_affine(
             },
             &shape[..nd],
             AffineParams {
-                axis: if layout[2] == u32::MAX {
-                    None
-                } else {
-                    Some(layout[2] as usize)
-                },
-                a: &params[..len],
-                b: &params[len..],
+                p: [param(0), param(1), param(2), param(3)],
                 form,
+                epsilon: scalars[0],
+                range: [scalars[1], scalars[2]],
             },
         )
     })

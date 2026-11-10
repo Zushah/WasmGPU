@@ -20,7 +20,7 @@ const extractBundledShaders = (bundle) => {
     return shaders;
 };
 
-const fragmentBases = new Map([["wgsl/compute/ndarray-reduce.wgsl", "wgsl/compute/ndarray.wgsl"]]);
+const fragmentBases = new Map([["wgsl/compute/ndarray-reduce.wgsl", "wgsl/compute/ndarray.wgsl"], ["wgsl/compute/ndarray-affine.wgsl", "wgsl/compute/ndarray.wgsl"]]);
 const moduleCode = (shader, shaders) => {
     const basePath = fragmentBases.get(shader.path);
     if (basePath === undefined) return shader.code;

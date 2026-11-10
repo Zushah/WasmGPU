@@ -54,6 +54,11 @@ import ndarraySumOuterGPU from "./compute/ndarray-sum-gpu-outer-f32-throughput.b
 import ndarrayVarCPU from "./compute/ndarray-var-cpu-f32-throughput.bench.js";
 import ndarrayVarGPU from "./compute/ndarray-var-gpu-f32-throughput.bench.js";
 import ndarrayMaxGPU from "./compute/ndarray-max-gpu-u16-throughput.bench.js";
+import ndarrayNormalizeGPU from "./compute/ndarray-normalize-gpu-f32-throughput.bench.js";
+import ndarrayNormalizeZScoreGPU from "./compute/ndarray-normalize-gpu-zscore-f32-throughput.bench.js";
+import ndarrayNormalizeMinMaxGPU from "./compute/ndarray-normalize-gpu-minmax-f32-throughput.bench.js";
+import ndarrayNormalizeZScoreCPU from "./compute/ndarray-normalize-cpu-zscore-f32-throughput.bench.js";
+import ndarrayNormalizeMinMaxU16GPU from "./compute/ndarray-normalize-gpu-minmax-u16-throughput.bench.js";
 import math from "./math/mat4-mul-throughput.bench.js";
 import mathF32 from "./math/mat4f-mul-throughput.bench.js";
 import mathF64 from "./math/mat4d-mul-throughput.bench.js";
@@ -142,6 +147,11 @@ export const benchmarks = [
     ndarrayVarCPU,
     ndarrayVarGPU,
     ndarrayMaxGPU,
+    ndarrayNormalizeGPU,
+    ndarrayNormalizeZScoreGPU,
+    ndarrayNormalizeMinMaxGPU,
+    ndarrayNormalizeZScoreCPU,
+    ndarrayNormalizeMinMaxU16GPU,
     pointcloud,
     glyphfield,
     nodelink,

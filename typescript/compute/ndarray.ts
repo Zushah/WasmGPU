@@ -15,8 +15,10 @@ import type { ReadbackRing } from "./readback";
 import { ScratchAllocator } from "./scratch";
 import ndarrayWGSL from "../../wgsl/compute/ndarray.wgsl";
 import ndarrayReduceWGSL from "../../wgsl/compute/ndarray-reduce.wgsl";
+import ndarrayAffineWGSL from "../../wgsl/compute/ndarray-affine.wgsl";
 
 const NDARRAY_REDUCE_WGSL = ndarrayWGSL + ndarrayReduceWGSL;
+const NDARRAY_AFFINE_WGSL = ndarrayWGSL + ndarrayAffineWGSL;
 
 export type RealDType = "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "f32" | "f64";
 
@@ -778,12 +780,26 @@ export type NdarrayPadOptions = NdarrayOperationOptions & {
     value?: number | ComplexScalar;
 };
 
-export type NdarrayParameter = number | ArrayLike<number>;
+export type NdarrayParameter = number | ArrayLike<number> | CPUndarray | GPUndarray;
 
-export type NdarrayNormalizeOptions = NdarrayOperationOptions & ({ scale?: NdarrayParameter; offset?: NdarrayParameter; mean?: undefined; std?: undefined } | { mean: NdarrayParameter; std: NdarrayParameter; scale?: undefined; offset?: undefined }) & {
+export type NdarrayNormalizeMethod = "minmax" | "zscore";
+
+type NdarrayNormalizeExplicit =
+    | { scale?: NdarrayParameter; offset?: NdarrayParameter; mean?: undefined; std?: undefined; method?: undefined; axis?: number }
+    | { mean: NdarrayParameter; std: NdarrayParameter; scale?: undefined; offset?: undefined; method?: undefined; axis?: number };
+
+type NdarrayNormalizeStatistics = {
+    scale?: undefined;
+    offset?: undefined;
+    mean?: undefined;
+    std?: undefined;
+    axes?: number | readonly number[];
     axis?: number;
-    dtype?: DType;
-};
+    nan?: NdarrayNaNMode;
+    epsilon?: number;
+} & ({ method: "zscore"; ddof?: number; range?: undefined } | { method: "minmax"; range?: readonly [number, number]; ddof?: undefined });
+
+export type NdarrayNormalizeOptions = NdarrayOperationOptions & (NdarrayNormalizeExplicit | NdarrayNormalizeStatistics) & { dtype?: DType };
 
 export type NdarrayResizeMethod = "nearest" | "linear" | "cubic";
 
@@ -815,6 +831,8 @@ export type NdarrayResampleOptions = NdarrayOperationOptions & {
 };
 
 export type NdarrayNaNMode = "propagate" | "omit";
+
+type NormalizeOptionBag = NdarrayOperationOptions & { scale?: unknown; offset?: unknown; mean?: unknown; std?: unknown; method?: unknown; axis?: number; axes?: number | readonly number[]; nan?: unknown; epsilon?: unknown; ddof?: unknown; range?: unknown; dtype?: DType };
 
 export type NdarrayReduceOptions = NdarrayOperationOptions & {
     axes?: number | readonly number[];
@@ -954,16 +972,25 @@ const cpuPad = (dst: CPUndarray, src: CPUndarray, before: ReadonlyArray<number>,
     });
 };
 
-const cpuAffine = (dst: CPUndarray, src: CPUndarray, axis: number, a: ReadonlyArray<number>, b: ReadonlyArray<number>, meanStd: boolean, op: string): void => {
+type AffineForm = 0 | 1 | 2 | 3;
+
+type CPUAffineParameter = { values: ReadonlyArray<number>; strides: ReadonlyArray<number> } | { array: CPUndarray; strides: ReadonlyArray<number> };
+
+const cpuAffine = (dst: CPUndarray, src: CPUndarray, form: AffineForm, params: ReadonlyArray<CPUAffineParameter>, epsilon: number, range: readonly [number, number], op: string): void => {
     if (dst.numel === 0) return;
-    const keep = dst.shape.map((_, i) => i === axis && a.length > 1);
-    const c = coalesceDims(dst.shape, [src.stridesBytes, dst.stridesBytes], keep);
+    const none = dst.shape.map(() => 0);
+    const c = coalesceDims(dst.shape, [src.stridesBytes, dst.stridesBytes, ...[0, 1, 2, 3].map((k) => params[k]?.strides ?? none)]);
     assertRank(c.shape.length, CPU_MAX_RANK, "CPU", op);
-    const coalescedAxis = (axis >= 0 && a.length > 1) ? c.axes[axis]! : 0xFFFFFFFF;
     withWasmScratch((scratch) => {
-        const layout = scratch.u32([dst.offsetBytes, src.offsetBytes, coalescedAxis, a.length, ...c.shape, ...c.strides[0]!, ...c.strides[1]!]);
-        const params = scratch.f64([...a, ...b]);
-        checkWasmStatus(ndarrayf.affine(dst.basePtrBytes, dst.byteLength, src.basePtrBytes, src.byteLength, layout, c.shape.length, DTYPE_CODE[dst.dtype] | (DTYPE_CODE[src.dtype] << 4) | (meanStd ? 0x100 : 0), params), op);
+        const slots = [0, 1, 2, 3].flatMap((k) => {
+            const q = params[k];
+            if (!q) return [0, 0, 0];
+            if ("values" in q) return [scratch.f64(q.values), q.values.length, 0];
+            return [q.array.basePtrBytes, q.array.byteLength / 8, q.array.offsetBytes / 8];
+        });
+        const elements = c.strides.slice(2).flatMap((strides) => strides.map((stride) => stride / 8));
+        const layout = scratch.u32([dst.offsetBytes, src.offsetBytes, ...slots, ...c.shape, ...c.strides[0]!, ...c.strides[1]!, ...elements]);
+        checkWasmStatus(ndarrayf.affine(dst.basePtrBytes, dst.byteLength, src.basePtrBytes, src.byteLength, layout, c.shape.length, DTYPE_CODE[dst.dtype] | (DTYPE_CODE[src.dtype] << 4) | (form << 8), scratch.f64([epsilon, range[0], range[1]])), op);
     });
 };
 
@@ -1391,7 +1418,7 @@ const cpuReduce = (a: CPUndarray, spec: ReduceSpec): CPUndarray[] => {
 
 const PARAM_WORDS_RETAINED = 262144;
 
-const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, P_VALUE_LO = 5, P_VALUE_HI = 6, P_PARAM_AXIS = 7, P_PARAM_LEN = 8, P_LEVEL_COUNT = 9, P_TABLE = 11, P_VALUE_2 = 12, P_VALUE_3 = 13, P_SHAPE = 16, P_SRC_STRIDE = 24, P_DST_STRIDE = 32, P_SRC_SHAPE = 40, P_BEFORE = 48, P_LEVEL_DIM = 56, P_LEVEL_TABLE = 64, P_HEADER_WORDS = 72;
+const P_COUNT = 0, P_NDIM = 1, P_NUMEL = 2, P_SRC_OFFSET = 3, P_DST_OFFSET = 4, P_VALUE_LO = 5, P_VALUE_HI = 6, P_P0_OFFSET = 7, P_P1_OFFSET = 8, P_LEVEL_COUNT = 9, P_EPSILON = 10, P_VALUE_2 = 12, P_VALUE_3 = 13, P_SHAPE = 16, P_SRC_STRIDE = 24, P_DST_STRIDE = 32, P_SRC_SHAPE = 40, P_BEFORE = 48, P_LEVEL_DIM = 56, P_LEVEL_TABLE = 64, P_P0_STRIDE = 72, P_P1_STRIDE = 80, P_HEADER_WORDS = 88;
 
 const assertResizeParams = (words: number, limit: number, op: string): void => {
     const bytes = (P_HEADER_WORDS + words) * 4;
@@ -1455,12 +1482,27 @@ type GPUGather = {
     keep?: ReadonlyArray<boolean>;
     srcShape?: ReadonlyArray<number>;
     before?: ReadonlyArray<number>;
-    paramAxis?: number;
     resizeLevels?: { axes: ReadonlyArray<number>; tables: ReadonlyArray<Uint32Array> };
     valueBits?: ArrayLike<number>;
-    table?: Uint32Array;
-    paramLen?: number;
 };
+
+export type GPUAffineParameter = { values: ReadonlyArray<number>; strides: ReadonlyArray<number> } | { array: GPUndarray; strides: ReadonlyArray<number> };
+
+export type GPUAffine = {
+    dst: GPUndarray;
+    src: GPUndarray;
+    srcStrides: ReadonlyArray<number>;
+    form: 0 | 1 | 2 | 3;
+    params: readonly [GPUAffineParameter, GPUAffineParameter];
+    epsilon?: number;
+    range?: readonly [r0: number, width: number];
+};
+
+export type GPUZScoreStatistics = { storage: StorageBuffer; count: number; dtype: DType; std: number; mean: number; min: number; max: number };
+
+const F32_VALUE = new Float32Array(1), F32_BITS = new Uint32Array(F32_VALUE.buffer);
+
+const f32Bits = (value: number): number => { F32_VALUE[0] = value; return F32_BITS[0]!; };
 
 export class NdarrayGPUEngine {
     private readonly device: GPUDevice;
@@ -1487,25 +1529,22 @@ export class NdarrayGPUEngine {
         this.empty = null;
     }
 
-    private pipeline(entryPoint: "gather" | "resize" | ReduceEntry, constants: Record<string, number>): ComputePipeline {
+    private pipeline(entryPoint: "gather" | "resize" | "affine" | "zscore" | ReduceEntry, constants: Record<string, number>): ComputePipeline {
         const key = `${entryPoint}:${Object.keys(constants).sort().map((name) => `${name}=${constants[name]}`).join(",")}`;
         let pipeline = this.pipelines.get(key);
         if (!pipeline) {
+            const entries = [
+                storageBufferLayout({ binding: 0, readOnly: true }),
+                storageBufferLayout({ binding: 1, readOnly: false }),
+                storageBufferLayout({ binding: 2, readOnly: true })
+            ];
+            if (entryPoint === "affine") entries.push(storageBufferLayout({ binding: 3, readOnly: true }), storageBufferLayout({ binding: 4, readOnly: true }));
             pipeline = new ComputePipeline(this.device, {
                 label: `compute.ndarray:${key}`,
-                code: (entryPoint === "gather" || entryPoint === "resize") ? ndarrayWGSL : NDARRAY_REDUCE_WGSL,
+                code: (entryPoint === "affine" || entryPoint === "zscore") ? NDARRAY_AFFINE_WGSL : (entryPoint === "gather" || entryPoint === "resize") ? ndarrayWGSL : NDARRAY_REDUCE_WGSL,
                 entryPoint,
                 constants,
-                bindGroups: [
-                    {
-                        label: "compute.ndarray:bg0",
-                        entries: [
-                            storageBufferLayout({ binding: 0, readOnly: true }),
-                            storageBufferLayout({ binding: 1, readOnly: false }),
-                            storageBufferLayout({ binding: 2, readOnly: true })
-                        ]
-                    }
-                ]
+                bindGroups: [{ label: "compute.ndarray:bg0", entries }]
             });
             this.pipelines.set(key, pipeline);
         }
@@ -1518,18 +1557,21 @@ export class NdarrayGPUEngine {
     }
 
     binding(a: GPUndarray, op: string): { resource: { buffer: StorageBuffer; offset: number; size: number }; delta: number } {
-        if (a.byteLength === 0) {
+        return this.rangeBinding(a.buffer, a.baseOffsetBytes, a.byteLength, op);
+    }
+
+    private rangeBinding(storage: StorageBuffer, baseOffsetBytes: number, byteLength: number, op: string): { resource: { buffer: StorageBuffer; offset: number; size: number }; delta: number } {
+        if (byteLength === 0) {
             this.empty ??= new StorageBuffer(this.device, this.queue, { label: "compute.ndarray:empty", byteLength: 4, copyDst: false });
             return { resource: { buffer: this.empty, offset: 0, size: 4 }, delta: 0 };
         }
-        const storage = a.buffer;
         const alignment = this.device.limits.minStorageBufferOffsetAlignment;
-        const absolute = storage.offsetBytes + a.baseOffsetBytes;
+        const absolute = storage.offsetBytes + baseOffsetBytes;
         const start = absolute - (absolute % alignment);
         const delta = absolute - start;
         const offset = start - storage.offsetBytes;
-        const size = alignTo(delta + a.byteLength, 4);
-        try { validateStorageBufferRange(storage, offset, delta + a.byteLength, true); }
+        const size = alignTo(delta + byteLength, 4);
+        try { validateStorageBufferRange(storage, offset, delta + byteLength, true); }
         catch { throw new Error(`${qualifiedName(op)}: the 4-byte-aligned binding range of an array extends past its StorageBuffer's logical range (odd-length external wrappers cannot be bound)`); }
         assert(size <= this.device.limits.maxStorageBufferBindingSize, () => `${qualifiedName(op)}: a ${size}-byte binding exceeds device.limits.maxStorageBufferBindingSize (${this.device.limits.maxStorageBufferBindingSize}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
         return { resource: { buffer: storage, offset, size }, delta };
@@ -1588,12 +1630,10 @@ export class NdarrayGPUEngine {
         const size = dst.bytesPerElement;
         const dstOffset = dstBinding.delta + dst.offsetBytes;
         const count = (size < 4) ? Math.floor((dstOffset + dst.numel * size - 1) / 4) - Math.floor(dstOffset / 4) + 1 : dst.numel;
-        const levels = spec.resizeLevels, tables = levels?.tables ?? (spec.table ? [spec.table] : []);
+        const levels = spec.resizeLevels, tables = levels?.tables ?? [];
         let length = P_HEADER_WORDS;
         for (const table of tables) length += table.length;
-        if (length > this.words.length && length <= PARAM_WORDS_RETAINED) this.words = new Uint32Array(Math.max(length, 2 * this.words.length));
-        const words = (length <= this.words.length) ? this.words.subarray(0, length) : new Uint32Array(length);
-        words.fill(0, 0, P_HEADER_WORDS);
+        const words = this.header(length);
         words[P_COUNT] = count;
         words[P_NDIM] = c.shape.length;
         words[P_NUMEL] = dst.numel;
@@ -1603,10 +1643,7 @@ export class NdarrayGPUEngine {
         words[P_VALUE_HI] = spec.valueBits?.[1] ?? 0;
         words[P_VALUE_2] = spec.valueBits?.[2] ?? 0;
         words[P_VALUE_3] = spec.valueBits?.[3] ?? 0;
-        words[P_PARAM_AXIS] = (spec.paramAxis !== undefined && spec.paramAxis >= 0) ? c.axes[spec.paramAxis]! : 0xFFFFFFFF;
-        words[P_PARAM_LEN] = spec.paramLen ?? 1;
         words[P_LEVEL_COUNT] = levels ? levels.axes.length : 0;
-        words[P_TABLE] = P_HEADER_WORDS;
         for (let i = 0; i < c.shape.length; i++) {
             const axis = kept.get(i);
             words[P_SHAPE + i] = c.shape[i]!;
@@ -1623,6 +1660,90 @@ export class NdarrayGPUEngine {
         const pipeline = this.pipeline(spec.entryPoint, spec.constants);
         const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: params }, `${qualifiedName(op)}:bg`);
         commands.push({ pipeline, bindGroups: [bindGroup], workgroups: workgroupsFolded(count, 256, this.device.limits.maxComputeWorkgroupsPerDimension), label: qualifiedName(op) });
+    }
+
+    private header(length: number): Uint32Array<ArrayBuffer> {
+        if (length > this.words.length && length <= PARAM_WORDS_RETAINED) this.words = new Uint32Array(Math.max(length, 2 * this.words.length));
+        const words = (length <= this.words.length) ? this.words.subarray(0, length) : new Uint32Array(length);
+        words.fill(0, 0, P_HEADER_WORDS);
+        return words;
+    }
+
+    affine(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, spec: GPUAffine, op: string): void {
+        const { dst, src, params: [q0, q1] } = spec;
+        if (dst.numel === 0) return;
+        assert(dst.isContiguousC, "internal error: affine maps write C-contiguous outputs, addressed as offset + index × size");
+        const c = coalesceDims(dst.shape, [spec.srcStrides, dst.stridesBytes, q0.strides, q1.strides]);
+        assertRank(c.shape.length, GPU_MAX_RANK, "GPU", op);
+        const srcBinding = this.binding(src, op);
+        const dstBinding = this.binding(dst, op);
+        const arrays = [q0, q1].flatMap((q) => ("array" in q) ? [q.array] : []);
+        const paramDType = arrays[0]?.dtype ?? "f32";
+        assert(arrays.every((a) => a.dtype === paramDType) && (paramDType === "f32" || dtypeInfo(paramDType).bytesPerElement < 4), "internal error: affine parameter bindings need one f32, 8-bit, or 16-bit dtype");
+        const size = dst.bytesPerElement;
+        const dstOffset = dstBinding.delta + dst.offsetBytes;
+        const count = (size < 4) ? Math.floor((dstOffset + dst.numel * size - 1) / 4) - Math.floor(dstOffset / 4) + 1 : dst.numel;
+        const tableLength = (("values" in q0) ? q0.values.length : 0) + (("values" in q1) ? q1.values.length : 0);
+        const words = this.header(P_HEADER_WORDS + tableLength);
+        words[P_COUNT] = count;
+        words[P_NDIM] = c.shape.length;
+        words[P_NUMEL] = dst.numel;
+        words[P_SRC_OFFSET] = srcBinding.delta + src.offsetBytes;
+        words[P_DST_OFFSET] = dstOffset;
+        words[P_VALUE_LO] = f32Bits(spec.range?.[0] ?? 0);
+        words[P_VALUE_HI] = f32Bits(spec.range?.[1] ?? 1);
+        words[P_EPSILON] = f32Bits(spec.epsilon ?? 0);
+        const table = new Float32Array(words.buffer, words.byteOffset + 4 * P_HEADER_WORDS, tableLength);
+        const sources = [0, 0];
+        const resources: Array<{ buffer: StorageBuffer; offset: number; size: number } | null> = [null, null];
+        const [a0, a1] = [("array" in q0) ? q0.array : null, ("array" in q1) ? q1.array : null];
+        let shared: { start: number; delta: number } | null = null;
+        if (a0 && a1 && a0.buffer === a1.buffer) {
+            const start = Math.min(a0.baseOffsetBytes, a1.baseOffsetBytes), end = Math.max(a0.baseOffsetBytes + a0.byteLength, a1.baseOffsetBytes + a1.byteLength);
+            if (alignTo(end - start + this.alignment, 4) <= this.maxBindingBytes) {
+                const binding = this.rangeBinding(a0.buffer, start, end - start, op);
+                resources[0] = binding.resource;
+                shared = { start, delta: binding.delta };
+            }
+        }
+        let tableAt = P_HEADER_WORDS * 4;
+        [q0, q1].forEach((q, i) => {
+            if ("values" in q) { table.set(q.values, tableAt / 4 - P_HEADER_WORDS); words[P_P0_OFFSET + i] = tableAt; tableAt += 4 * q.values.length; return; }
+            if (shared) { sources[i] = 1; words[P_P0_OFFSET + i] = shared.delta + q.array.baseOffsetBytes - shared.start + q.array.offsetBytes; return; }
+            const binding = this.binding(q.array, op);
+            sources[i] = i + 1;
+            resources[i] = binding.resource;
+            words[P_P0_OFFSET + i] = binding.delta + q.array.offsetBytes;
+        });
+        for (let i = 0; i < c.shape.length; i++) {
+            words[P_SHAPE + i] = c.shape[i]!;
+            words[P_SRC_STRIDE + i] = c.strides[0]![i]! >>> 0;
+            words[P_P0_STRIDE + i] = c.strides[2]![i]! >>> 0;
+            words[P_P1_STRIDE + i] = c.strides[3]![i]! >>> 0;
+        }
+        const params = this.scratch.params(words, encoder);
+        const pipeline = this.pipeline("affine", { SRC_DTYPE: DTYPE_CODE[src.dtype], DST_DTYPE: DTYPE_CODE[dst.dtype], AFFINE_FORM: spec.form, AFFINE_P0: sources[0]!, AFFINE_P1: sources[1]!, PARAM_DTYPE: DTYPE_CODE[paramDType], OVERFLOW: 1, ROUNDING: 1 });
+        const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: params, 3: resources[0] ?? params, 4: resources[1] ?? params }, `${qualifiedName(op)}:bg`);
+        commands.push({ pipeline, bindGroups: [bindGroup], workgroups: workgroupsFolded(count, 256, this.device.limits.maxComputeWorkgroupsPerDimension), label: qualifiedName(op) });
+    }
+
+    zscore(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, stats: GPUZScoreStatistics, out: GPUndarray, epsilon: number, op: string): void {
+        const K = stats.count;
+        assert(out.dtype === "f32" && out.numel === 2 * K && out.isContiguousC, "internal error: z-score parameters need a contiguous f32 [2, K] output");
+        const srcBinding = this.rangeBinding(stats.storage, 0, stats.storage.byteLength, op);
+        const dstBinding = this.binding(out, op);
+        const words = this.header(P_HEADER_WORDS), delta = srcBinding.delta;
+        words[P_COUNT] = K;
+        words[P_SRC_OFFSET] = delta + stats.std;
+        words[P_P0_OFFSET] = delta + stats.mean;
+        words[P_VALUE_2] = delta + stats.min;
+        words[P_VALUE_3] = delta + stats.max;
+        words[P_DST_OFFSET] = dstBinding.delta + out.offsetBytes;
+        words[P_EPSILON] = f32Bits(epsilon);
+        const params = this.scratch.params(words, encoder);
+        const pipeline = this.pipeline("zscore", { SRC_DTYPE: DTYPE_CODE[stats.dtype] });
+        const bindGroup = pipeline.createBindGroup(0, { 0: srcBinding.resource, 1: dstBinding.resource, 2: params }, `${qualifiedName(op)}:bg`);
+        commands.push({ pipeline, bindGroups: [bindGroup], workgroups: workgroupsFolded(K, 256, this.device.limits.maxComputeWorkgroupsPerDimension), label: qualifiedName(op) });
     }
 
     fill(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, dst: GPUndarray, src: GPUndarray, bits: ArrayLike<number>, op: string): void {
@@ -1822,6 +1943,108 @@ const normalizeParameter = (value: NdarrayParameter, label: string, op: string):
     return values;
 };
 
+type NormalizeParameter = { values: number[]; axis: number } | { array: AnyNdarray; strides: number[] };
+
+type NormalizePlan = {
+    method: NdarrayNormalizeMethod | null;
+    meanStd: boolean;
+    params: readonly [NormalizeParameter, NormalizeParameter] | null;
+    axes: number[];
+    omit: boolean;
+    ddof: number;
+    epsilon: number;
+    range: readonly [number, number];
+    dtype: DType;
+};
+
+const NORMALIZE_PARAMETERS = ["scale", "offset", "mean", "std"] as const;
+
+const resolveNormalize = (a: AnyNdarray, options: NormalizeOptionBag, assertArray: (p: AnyNdarray, label: string) => void, op: string): NormalizePlan => {
+    const name = opName(op), ndim = a.ndim, gpu = a instanceof GPUndarray;
+    const method = options.method;
+    const meanStd = options.mean !== undefined || options.std !== undefined;
+    const scaleOffset = options.scale !== undefined || options.offset !== undefined;
+    if (method !== undefined) {
+        assert(!meanStd && !scaleOffset, `${name}: method computes its own parameters; do not also pass scale, offset, mean, or std`);
+        assert(method !== "percentile" && method !== "robust", `${name}: method "${String(method)}" is not supported yet; use "minmax" or "zscore"`);
+        assert(method === "minmax" || method === "zscore", `${name}: method must be "minmax" or "zscore" (got ${String(method)})`);
+    } else {
+        assert(!(meanStd && scaleOffset), `${name}: use either { scale, offset } or { mean, std }, not both`);
+        assert(meanStd || scaleOffset, `${name}: provide scale and/or offset, or mean and std`);
+        if (meanStd) assert(options.mean !== undefined && options.std !== undefined, `${name}: { mean, std } requires both mean and std`);
+    }
+    for (const key of ["axes", "nan", "epsilon"] as const) assert(method !== undefined || options[key] === undefined, `${name}: ${key} applies only to the statistics methods ("minmax" and "zscore")`);
+    assert(options.ddof === undefined || method === "zscore", `${name}: ddof applies only to method "zscore"`);
+    assert(options.range === undefined || method === "minmax", `${name}: range applies only to method "minmax"`);
+    assert(options.axis === undefined || options.axes === undefined, `${name}: use either axis (the one axis the statistics vary along) or axes (the axes they are computed over), not both`);
+    const dtype = options.dtype ?? (isFloatDType(a.dtype) ? a.dtype : "f32");
+    dtypeInfo(dtype);
+    const plan: NormalizePlan = { method: (method as NdarrayNormalizeMethod | undefined) ?? null, meanStd, params: null, axes: [], omit: false, ddof: 0, epsilon: 0, range: [0, 1], dtype };
+    if (plan.method) {
+        const axes = (options.axis !== undefined) ? a.shape.map((_, i) => i).filter((i) => i !== normalizeAxis(options.axis!, ndim, name)) : (options.axes !== undefined) ? normalizeAxes(options.axes, ndim, name) : a.shape.map((_, i) => i);
+        plan.axes = axes.sort((x, y) => x - y);
+        assert(options.nan === undefined || options.nan === "propagate" || options.nan === "omit", `${name}: nan must be "propagate" or "omit" (got ${String(options.nan)})`);
+        plan.omit = options.nan === "omit" && INTEGER_RANGE[a.dtype] === null;
+        const ddof = options.ddof ?? 0;
+        assert(typeof ddof === "number" && Number.isFinite(ddof) && ddof >= 0, `${name}: ddof must be a finite number >= 0 (got ${String(ddof)})`);
+        const epsilon = options.epsilon ?? 0;
+        assert(typeof epsilon === "number" && Number.isFinite(epsilon) && epsilon >= 0, `${name}: epsilon must be a finite number >= 0 (got ${String(epsilon)})`);
+        const range = (options.range ?? [0, 1]) as readonly unknown[];
+        assert(Array.isArray(range) && range.length === 2 && range.every((v) => typeof v === "number" && Number.isFinite(v)), `${name}: range must be a [min, max] pair of finite numbers`);
+        const [r0, r1] = range as [number, number];
+        assert(r0 < r1, `${name}: range[0] must be less than range[1] (got [${r0}, ${r1}])`);
+        Object.assign(plan, { ddof, epsilon, range: [r0, r1] });
+        if (gpu) {
+            const [f0, f1] = [Math.fround(r0), Math.fround(r1)], width = Math.fround(f1 - f0);
+            assert(Number.isFinite(width) && f0 < f1 && Number.isFinite(Math.fround(epsilon)), `${name}: range and epsilon must stay finite when rounded to f32 for the GPU, with range[0] < range[1] (got [${f0}, ${f1}] and ${Math.fround(epsilon)})`);
+        }
+        return plan;
+    }
+    const labels = meanStd ? ["mean", "std"] as const : ["scale", "offset"] as const;
+    const raw = meanStd ? [options.mean, options.std] : [options.scale ?? 1, options.offset ?? 0];
+    const axis = (options.axis === undefined) ? -1 : normalizeAxis(options.axis, ndim, name);
+    const isArray = (v: unknown): v is AnyNdarray => v instanceof CPUndarray || v instanceof GPUndarray;
+    const params = raw.map((value, i) => {
+        if (!isArray(value)) return { values: normalizeParameter(value as NdarrayParameter, labels[i]!, op), axis: -1 };
+        const label = labels[i]!, kind = gpu ? "GPUndarray" : "CPUndarray";
+        assert(value.residency === a.residency, `${name}: ${label} must be a ${kind} like the input array (got a ${gpu ? "CPUndarray" : "GPUndarray"}); ndarray parameters keep the input's residency, so move them with compute.ndarray.${gpu ? "toGPU" : "toCPU"}() first`);
+        assertArray(value, label);
+        assertRealOperation([value.dtype], op);
+        assert(!gpu || value.dtype !== "f64", `${name}: GPU normalize computes in f32 and does not support f64 parameters; cast() ${label} to f32 or use CPU arrays`);
+        assert(axis < 0, `${name}: axis applies only to number-array parameters; ndarray parameters broadcast against the input, so reshape() or expandDims() ${label}, or compute it with keepDims: true`);
+        return { array: value, strides: broadcastStrides(value.shape, value.stridesBytes, a.shape, `${name}: ${label}`) };
+    }) as [NormalizeParameter, NormalizeParameter];
+    const numbers = params.flatMap((q) => ("values" in q) ? [q] : []);
+    const vector = numbers.some((q) => q.values.length > 1);
+    assert(!vector || axis >= 0, `${name}: axis is required when a parameter has more than one value`);
+    const length = vector ? a.shape[axis]! : 1;
+    params.forEach((q, i) => {
+        if (!("values" in q)) return;
+        assert(q.values.length === 1 || q.values.length === length, `${name}: ${labels[i]} must have 1 or ${length} values (got ${q.values.length})`);
+        if (q.values.length > 1) q.axis = axis;
+    });
+    if (meanStd && "values" in params[1]) assert(params[1].values.every((v) => v !== 0), `${name}: std must be nonzero`);
+    if (gpu) {
+        let finite = true;
+        for (const q of numbers) for (const v of q.values) finite &&= Number.isFinite(Math.fround(v));
+        const std = ("values" in params[1]) ? params[1].values : [];
+        let nonzero = true;
+        if (meanStd) for (const v of std) nonzero &&= Math.fround(v) !== 0;
+        assert(finite && nonzero, `${name}: parameters must stay finite (and std nonzero) when rounded to f32 for the GPU`);
+    }
+    plan.params = params;
+    return plan;
+};
+
+const statisticsSpec = (a: Ndarray, op: "stdMean" | "minMax", plan: NormalizePlan, dtype: DType, name: string): ReduceSpec => {
+    const shape = a.shape.map((n, i) => plan.axes.includes(i) ? 1 : n);
+    const count = plan.axes.reduce((n, i) => n * a.shape[i]!, 1), outputs = numelFromShape(shape);
+    assert(count <= 0xFFFFFFFF && outputs <= 0xFFFFFFFF && outputs * count <= 0xFFFFFFFF, `${name}: statistics support at most 2^32 - 1 input elements`);
+    return { op, src: a.dtype, dtypes: (op === "minMax") ? [a.dtype, a.dtype] : [dtype, dtype], omit: plan.omit, saturate: false, ddof: plan.ddof, axes: plan.axes, shape, empty: count === 0 };
+};
+
+const valueStrides = (q: { values: number[]; axis: number }, ndim: number, bytes: number): number[] => Array.from({ length: ndim }, (_, i) => (i === q.axis) ? bytes : 0);
+
 export class NdarrayNamespace {
     private readonly device: GPUDevice;
     private readonly queue: GPUQueue;
@@ -1985,41 +2208,103 @@ export class NdarrayNamespace {
     }
 
     normalize<T extends AnyNdarray>(a: T, options: NdarrayNormalizeOptions): T {
-        const op = "normalize";
+        const op = "normalize", name = opName(op);
         this.assertAlive(op);
         assertNdarray(a, op);
-        assert(typeof options === "object" && options !== null, `${opName(op)}: options are required`);
+        assert(typeof options === "object" && options !== null, `${name}: options are required`);
         assertRealOperation([a.dtype, options.dtype ?? a.dtype], op);
-        const meanStd = options.mean !== undefined || options.std !== undefined;
-        const scaleOffset = options.scale !== undefined || options.offset !== undefined;
-        assert(!(meanStd && scaleOffset), `${opName(op)}: use either { scale, offset } or { mean, std }, not both`);
-        assert(meanStd || scaleOffset, `${opName(op)}: provide scale and/or offset, or mean and std`);
-        if (meanStd) assert(options.mean !== undefined && options.std !== undefined, `${opName(op)}: { mean, std } requires both mean and std`);
-        let p0 = normalizeParameter(meanStd ? options.mean! : (options.scale ?? 1), meanStd ? "mean" : "scale", op);
-        let p1 = normalizeParameter(meanStd ? options.std! : (options.offset ?? 0), meanStd ? "std" : "offset", op);
-        const vector = p0.length > 1 || p1.length > 1;
-        const axis = (options.axis === undefined) ? -1 : normalizeAxis(options.axis, a.ndim, opName(op));
-        assert(!vector || axis >= 0, `${opName(op)}: axis is required when a parameter has more than one value`);
-        const length = vector ? a.shape[axis]! : 1;
-        for (const [label, values] of [[meanStd ? "mean" : "scale", p0], [meanStd ? "std" : "offset", p1]] as const) assert(values.length === 1 || values.length === length, `${opName(op)}: ${label} must have 1 or ${length} values (got ${values.length})`);
-        if (vector) { p0 = (p0.length === 1) ? new Array(length).fill(p0[0]) : p0; p1 = (p1.length === 1) ? new Array(length).fill(p1[0]) : p1; }
-        if (meanStd) assert(p1.every((v) => v !== 0), `${opName(op)}: std must be nonzero`);
-        const dtype = options.dtype ?? (isFloatDType(a.dtype) ? a.dtype : "f32");
-        dtypeInfo(dtype);
+        const plan = resolveNormalize(a, options as NormalizeOptionBag, (p, label) => { if (p instanceof GPUndarray) this.assertGPUArray(p, op, label); else p[ndarrayAssertAlive](); }, op);
+        const dtype = plan.dtype;
         if (a instanceof CPUndarray) {
             assertCPUOptions(options, op);
             a[ndarrayAssertAlive]();
             const out = CPUndarray.empty(dtype, { shape: a.shape });
-            try { cpuAffine(out, a, axis, p0, p1, meanStd, op); return out as T; }
+            try { if (a.numel > 0) this.cpuNormalize(out, a, plan, op); return out as T; }
             catch (error) { out.destroy(); throw error; }
         }
-        assert(a.dtype !== "f64" && dtype !== "f64", `${opName(op)}: GPU normalize computes in f32 and does not support f64 inputs or outputs; use a CPU array`);
-        const f0 = p0.map(Math.fround), f1 = p1.map(Math.fround);
-        assert([...f0, ...f1].every(Number.isFinite) && (!meanStd || f1.every((v) => v !== 0)), `${opName(op)}: parameters must stay finite (and std nonzero) when rounded to f32 for the GPU`);
-        const table = new Uint32Array(new Float32Array([...f0, ...f1]).buffer);
-        return this.gpuRun(a as GPUndarray, dtype, a.shape, options, op, (commands, out, src) => {
-            this.gpu.gather(commands, options.encoder, { dst: out, src, entryPoint: "gather", constants: { SRC_DTYPE: DTYPE_CODE[src.dtype], DST_DTYPE: DTYPE_CODE[dtype], OPERATION: 2, AFFINE_FORM: meanStd ? 1 : 0, OVERFLOW: 1, ROUNDING: 1 }, srcStrides: src.stridesBytes, keep: a.shape.map((_, i) => i === axis && vector), paramAxis: vector ? axis : -1, paramLen: f0.length, table }, op);
-        }) as T;
+        assert(a.dtype !== "f64" && dtype !== "f64", `${name}: GPU normalize computes in f32 and does not support f64 inputs or outputs; use a CPU array`);
+        const gpu = a as GPUndarray;
+        if (gpu.numel === 0) {
+            this.assertGPUArray(gpu, op);
+            return this.gpuOutput(dtype, gpu.shape, options, op).out as T;
+        }
+        if (plan.method) this.assertStatisticsBindings(gpu, plan, name);
+        return this.gpuRun(gpu, dtype, gpu.shape, options, op, (commands, out, src) => this.gpuNormalize(commands, options.encoder, out, src, plan, op)) as T;
+    }
+
+    private cpuNormalize(out: CPUndarray, a: CPUndarray, plan: NormalizePlan, op: string): void {
+        const name = opName(op), temps: CPUndarray[] = [];
+        const f64 = (x: CPUndarray): CPUndarray => {
+            if (x.dtype === "f64") return x;
+            const temp = CPUndarray.empty("f64", { shape: x.shape });
+            temps.push(temp);
+            cpuCopy(temp, x, x.stridesBytes, ARITHMETIC_MODE, op);
+            return temp;
+        };
+        const broadcast = (x: CPUndarray): CPUAffineParameter => ({ array: x, strides: broadcastStrides(x.shape, x.stridesBytes, a.shape, name) });
+        try {
+            if (!plan.method) {
+                const params = plan.params!.map((q): CPUAffineParameter => ("values" in q) ? { values: q.values, strides: valueStrides(q, a.ndim, 8) } : broadcast(f64(q.array as CPUndarray)));
+                cpuAffine(out, a, plan.meanStd ? 1 : 0, params, 0, [0, 1], op);
+                return;
+            }
+            const [min, max] = cpuReduce(a, statisticsSpec(a, "minMax", plan, a.dtype, name));
+            temps.push(min!, max!);
+            const bounds = [broadcast(f64(min!)), broadcast(f64(max!))];
+            if (plan.method === "minmax") { cpuAffine(out, a, 3, bounds, plan.epsilon, plan.range, op); return; }
+            const [std, mean] = cpuReduce(a, statisticsSpec(a, "stdMean", plan, "f64", name));
+            temps.push(std!, mean!);
+            cpuAffine(out, a, 2, [broadcast(mean!), broadcast(std!), ...bounds], plan.epsilon, [0, 1], op);
+        } finally { for (const temp of temps) temp.destroy(); }
+    }
+
+    private assertStatisticsBindings(a: GPUndarray, plan: NormalizePlan, name: string): void {
+        const K = a.shape.reduce((n, d, i) => plan.axes.includes(i) ? n : n * d, 1), region = alignTo(K * a.bytesPerElement, 4);
+        const bytes = (plan.method === "zscore") ? 8 * K + 2 * region : Math.max(2 * region, (a.bytesPerElement === 4 && a.dtype !== "f32") ? 8 * K : 0);
+        const limit = Math.min(this.device.limits.maxStorageBufferBindingSize, this.device.limits.maxBufferSize);
+        assert(bytes <= limit, `${name}: a ${bytes}-byte statistics temporary exceeds device.limits.maxStorageBufferBindingSize (${this.device.limits.maxStorageBufferBindingSize}) or device.limits.maxBufferSize (${this.device.limits.maxBufferSize}); request larger maxStorageBufferBindingSize and maxBufferSize limits through the renderer's device descriptor`);
+    }
+
+    private gpuNormalize(commands: ComputeDispatchCommand[], encoder: GPUCommandEncoder | undefined, out: GPUndarray, src: GPUndarray, plan: NormalizePlan, op: string): void {
+        const name = opName(op), gpu = this.gpu;
+        const broadcast = (x: GPUndarray): GPUAffineParameter => ({ array: x, strides: broadcastStrides(x.shape, x.stridesBytes, src.shape, name) });
+        gpu.binding(src, op);
+        gpu.binding(out, op);
+        if (!plan.method) {
+            const params = plan.params!.map((q): GPUAffineParameter => {
+                if ("values" in q) return { values: q.values, strides: valueStrides(q, src.ndim, 4) };
+                const array = q.array as GPUndarray;
+                if (array.dtype !== "f32") { const temp = gpu.temp("f32", array.shape, op); gpu.copy(array, temp, commands, encoder, op); return broadcast(temp); }
+                return broadcast((array.buffer.buffer === out.buffer.buffer) ? gpu.stage(array, commands, encoder, op) : array);
+            }) as [GPUAffineParameter, GPUAffineParameter];
+            gpu.affine(commands, encoder, { dst: out, src, srcStrides: src.stridesBytes, form: plan.meanStd ? 1 : 0, params }, op);
+            return;
+        }
+        const shape = src.shape.map((n, i) => plan.axes.includes(i) ? 1 : n), K = numelFromShape(shape);
+        const size = src.bytesPerElement, region = alignTo(K * size, 4), zscore = plan.method === "zscore";
+        const base = zscore ? 8 * K : 0;
+        const storage = gpu.tempStorage(base + 2 * region, op);
+        const view = (dtype: DType, offset: number): GPUndarray => GPUndarray.wrap(storage, dtype, { shape }, offset);
+        const [min, max] = [view(src.dtype, base), view(src.dtype, base + region)];
+        gpu.reduce(commands, encoder, statisticsSpec(src, "minMax", plan, src.dtype, name), src, [min, max], op);
+        const epsilon = Math.fround(plan.epsilon);
+        if (zscore) {
+            gpu.reduce(commands, encoder, statisticsSpec(src, "stdMean", plan, "f32", name), src, [view("f32", 0), view("f32", 4 * K)], op);
+            const prepared = gpu.temp("f32", [2, K], op);
+            gpu.zscore(commands, encoder, { storage, count: K, dtype: src.dtype, std: 0, mean: 4 * K, min: base, max: base + region }, prepared, epsilon, op);
+            const [center, denom] = [0, 4 * K].map((offset) => GPUndarray.wrap(prepared.buffer, "f32", { shape }, offset));
+            gpu.affine(commands, encoder, { dst: out, src, srcStrides: src.stridesBytes, form: 1, params: [broadcast(center!), broadcast(denom!)] }, op);
+            return;
+        }
+        let bounds = [min, max];
+        if (size === 4 && src.dtype !== "f32") {
+            const cast = gpu.temp("f32", [2 * K], op);
+            gpu.copy(GPUndarray.wrap(storage, src.dtype, { shape: [2 * K] }), cast, commands, encoder, op);
+            bounds = [0, 4 * K].map((offset) => GPUndarray.wrap(cast.buffer, "f32", { shape }, offset));
+        }
+        const [r0, r1] = plan.range.map(Math.fround) as [number, number];
+        const unit = r0 === 0 && r1 === 1;
+        gpu.affine(commands, encoder, { dst: out, src, srcStrides: src.stridesBytes, form: unit ? 2 : 3, params: [broadcast(bounds[0]!), broadcast(bounds[1]!)], epsilon, range: [r0, Math.fround(r1 - r0)] }, op);
     }
 
     resize<T extends AnyNdarray>(a: T, options: NdarrayResizeOptions): T {

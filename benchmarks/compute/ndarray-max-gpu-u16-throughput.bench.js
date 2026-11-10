@@ -4,11 +4,7 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-const makeU16 = (length) => {
-    const data = new Uint16Array(length);
-    for (let i = 0; i < length; i++) data[i] = (i * 17) % 65_521;
-    return data;
-};
+import { makeU16 } from "../harness/data.js";
 
 export default {
     name: "ndarray-max-gpu-u16-throughput",

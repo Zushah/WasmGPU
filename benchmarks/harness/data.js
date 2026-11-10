@@ -10,6 +10,12 @@ export const makeF32 = (length) => {
     return data;
 };
 
+export const makeU16 = (length) => {
+    const data = new Uint16Array(length);
+    for (let i = 0; i < length; i++) data[i] = (i * 17) % 65_521;
+    return data;
+};
+
 export const makeU32 = (length) => {
     const data = new Uint32Array(length);
     for (let i = 0; i < length; i++) data[i] = Math.imul(i, 2654435761) >>> 0;

@@ -6,13 +6,13 @@
 
 use crate::ndarray::DType::{C64, C128, F32, F64, I8, I16, I32, U8, U16, U32};
 use crate::ndarray::{
-    AffineForm, AffineParams, DType, Destination, Element, IntMode, MAX_RESIZE_LEVELS,
-    NO_RESIZE_LEVEL, PadAxes, PadMode, ReduceOp, ReduceOutput, ReduceSpec, ResizeLevel,
-    ResizeTables, STATUS_DESTINATION_BOUNDS, STATUS_INVALID_DTYPE, STATUS_INVALID_PARAMETERS,
-    STATUS_INVALID_RANK, STATUS_INVALID_SHAPE, STATUS_INVALID_TABLE, STATUS_OK,
-    STATUS_SOURCE_BOUNDS, Source, affine, affine_value, copy_cast, f32_order_key, f64_order_key,
-    layout_within, numel, offset_bytes, pad, pad_index, reduce, reduce_with_tile, resize,
-    strides_row_major, to_int,
+    AffineForm, AffineParam, AffineParams, DType, Destination, Element, IntMode, MAX_RESIZE_LEVELS,
+    NO_AFFINE_PARAM, NO_RESIZE_LEVEL, PadAxes, PadMode, ReduceOp, ReduceOutput, ReduceSpec,
+    ResizeLevel, ResizeTables, STATUS_DESTINATION_BOUNDS, STATUS_INVALID_DTYPE,
+    STATUS_INVALID_PARAMETERS, STATUS_INVALID_RANK, STATUS_INVALID_SHAPE, STATUS_INVALID_TABLE,
+    STATUS_OK, STATUS_SOURCE_BOUNDS, Source, affine, affine_value, copy_cast, f32_order_key,
+    f64_order_key, layout_within, minmax_terms, numel, offset_bytes, pad, pad_index, reduce,
+    reduce_with_tile, resize, strides_row_major, to_int, zero_rule, zscore_terms,
 };
 
 const ND_ERROR: u32 = u32::MAX;
@@ -89,6 +89,25 @@ fn src<'a>(bytes: &'a [u8], dtype: DType, offset: u32, strides: &'a [i32]) -> So
         dtype,
         offset,
         strides,
+    }
+}
+
+fn param<'a>(values: &'a [f64], offset: u32, strides: &'a [i32]) -> AffineParam<'a> {
+    AffineParam {
+        values,
+        offset,
+        strides,
+    }
+}
+
+fn affine_params<'a>(form: AffineForm, p: &[AffineParam<'a>]) -> AffineParams<'a> {
+    let mut all = [NO_AFFINE_PARAM; 4];
+    all[..p.len()].copy_from_slice(p);
+    AffineParams {
+        p: all,
+        form,
+        epsilon: 0.0,
+        range: [0.0, 1.0],
     }
 }
 
@@ -200,12 +219,11 @@ fn validation_reports_status_codes_before_any_access() {
     let table = tables2(&ty, &tx, (1, 3), [0.0; 2], false);
     let status = resize(dst(&mut out, U8, &[2, 1]), row, &[1, 2], table);
     assert_eq!(status, STATUS_INVALID_TABLE);
-    let params = AffineParams {
-        axis: Some(0),
-        a: &[1.0, 2.0],
-        b: &[0.0, 0.0],
-        form: AffineForm::ScaleOffset,
-    };
+    let (two, one) = ([1.0, 2.0], [0.0]);
+    let params = affine_params(
+        AffineForm::ScaleOffset,
+        &[param(&two, 0, &[1]), param(&one, 0, &[0])],
+    );
     let bytes = src(&s, U8, 0, &[1]);
     let status = affine(dst(&mut out, U8, &[1]), bytes, &[5], params);
     assert_eq!(status, STATUS_INVALID_PARAMETERS);
@@ -276,14 +294,158 @@ fn affine_uses_separate_f64_operations_and_rounds_integer_outputs() {
     let standardized = affine_value(0.5, 0.485, 0.229, AffineForm::MeanStd);
     assert_eq!(standardized, (0.5 - 0.485) / 0.229);
     let (s, mut out) = (le(&[0.5f32, 1.5, 2.5, -1.0e10, f32::NAN]), vec![0; 5]);
-    let params = AffineParams {
-        axis: None,
-        a: &[1.0],
-        b: &[0.0],
-        form: AffineForm::ScaleOffset,
-    };
+    let (one, zero) = ([1.0], [0.0]);
+    let params = affine_params(
+        AffineForm::ScaleOffset,
+        &[param(&one, 0, &[0]), param(&zero, 0, &[0])],
+    );
     let status = affine(dst(&mut out, U8, &[1]), src(&s, F32, 0, &[4]), &[5], params);
     assert_eq!((status, out), (0, vec![0, 2, 2, 0, 0]));
+}
+
+#[test]
+fn affine_parameters_broadcast_through_strides_identically_in_every_run_kind() {
+    let x: Vec<f32> = (0..12).map(|i| i as f32 * 0.7 - 3.1).collect();
+    let (s, scale, offset) = (le(&x), [0.5, -1.25, 3.0, 0.1], [7.0, -0.3, 2.5]);
+    let spread = [0.5, 9.0, -1.25, 9.0, 3.0, 9.0, 0.1];
+    let reversed = [0.1, 3.0, -1.25, 0.5];
+    let expect = |a: &dyn Fn(usize, usize) -> f64, b: &dyn Fn(usize, usize) -> f64| {
+        let mut out = vec![];
+        for i in 0..3 {
+            for j in 0..4 {
+                let v = affine_value(x[4 * i + j] as f64, a(i, j), b(i, j), AffineForm::MeanStd);
+                out.extend_from_slice(&le(&[v]));
+            }
+        }
+        out
+    };
+    let by_column = expect(&|_, j| scale[j], &|i, _| offset[i]);
+    let layouts = [
+        param(&scale, 0, &[0, 1]),
+        param(&spread, 0, &[0, 2]),
+        param(&reversed, 3, &[0, -1]),
+    ];
+    for a in layouts {
+        let mut out = vec![0; 96];
+        let b = param(&offset, 0, &[1, 0]);
+        let params = affine_params(AffineForm::MeanStd, &[a, b]);
+        let status = affine(
+            dst(&mut out, F64, &[32, 8]),
+            src(&s, F32, 0, &[16, 4]),
+            &[3, 4],
+            params,
+        );
+        assert_eq!((status, &out), (0, &by_column));
+        let mut out = vec![0; 96];
+        let params = affine_params(AffineForm::MeanStd, &[b, a]);
+        let status = affine(
+            dst(&mut out, F64, &[32, 8]),
+            src(&s, F32, 0, &[16, 4]),
+            &[3, 4],
+            params,
+        );
+        assert_eq!(
+            (status, out),
+            (0, expect(&|i, _| offset[i], &|_, j| scale[j]))
+        );
+    }
+}
+
+#[test]
+fn zscore_and_minmax_forms_apply_the_zero_rule_and_exact_constant_detection() {
+    assert_eq!(zero_rule(0.0, 0.0), 1.0);
+    assert_eq!(zero_rule(1e-3, 1e-2), 1.0);
+    assert!(zero_rule(f64::NAN, 1.0).is_nan());
+    let noisy = zscore_terms(0.1 + 2f64.powi(-56), 1.39e-17, 0.1, 0.1, 0.0);
+    assert_eq!(noisy, (0.1, 1.0));
+    assert!(zscore_terms(4.0, f64::NAN, 4.0, 4.0, 0.0).1.is_nan());
+    assert_eq!(minmax_terms(5.0, 5.0, 0.0), (5.0, 1.0));
+    let x = [0.1f64, 0.1, 0.1, 1.0, 2.0, 3.0, 4.0, f64::NAN, 5.0];
+    let mean = [0.10000000000000002, 2.0, f64::NAN];
+    let std = [1.3877787807814457e-17, (2.0f64 / 3.0).sqrt(), f64::NAN];
+    let (min, max) = ([0.1, 1.0, f64::NAN], [0.1, 3.0, f64::NAN]);
+    let s = le(&x);
+    for (strides, n) in [(&[1, 0][..], [3u32, 3]), (&[0, 1][..], [3, 3])] {
+        let src_strides: &[i32] = if strides[0] == 1 { &[24, 8] } else { &[8, 24] };
+        let mut out = vec![0; 72];
+        let p = [
+            param(&mean, 0, strides),
+            param(&std, 0, strides),
+            param(&min, 0, strides),
+            param(&max, 0, strides),
+        ];
+        let status = affine(
+            dst(&mut out, F64, &[24, 8]),
+            src(&s, F64, 0, src_strides),
+            &n,
+            affine_params(AffineForm::ZScore, &p),
+        );
+        let y = from_le::<f64>(&out);
+        let at = |row: usize, k: usize| {
+            if strides[0] == 1 {
+                y[3 * row + k]
+            } else {
+                y[3 * k + row]
+            }
+        };
+        assert_eq!(status, 0);
+        assert_eq!([at(0, 0), at(0, 1), at(0, 2)], [0.0; 3]);
+        assert_eq!(
+            [at(1, 0), at(1, 1), at(1, 2)],
+            [-1.0 / std[1], 0.0, 1.0 / std[1]]
+        );
+        assert!((0..3).all(|k| at(2, k).is_nan()));
+    }
+    let x = le(&[1.0f32, 3.0, -1.0, 10.0, 0.0, f32::INFINITY, 7.0, 7.0]);
+    let (lo, hi) = ([0.0, 7.0], [2.0, 7.0]);
+    let mut out = vec![0; 8];
+    let p = [param(&lo, 0, &[1, 0]), param(&hi, 0, &[1, 0])];
+    let mut params = affine_params(AffineForm::MinMax, &p);
+    params.range = [0.0, 5.0];
+    let status = affine(
+        dst(&mut out, U8, &[4, 1]),
+        src(&x, F32, 0, &[16, 4]),
+        &[2, 4],
+        params,
+    );
+    assert_eq!((status, out), (0, vec![2, 8, 0, 25, 0, 255, 0, 0]));
+}
+
+#[test]
+fn affine_validates_parameters_scalars_and_layouts() {
+    let (s, mut out) = (le(&[1.0f32, 2.0]), vec![0; 8]);
+    let (one, two) = ([1.0], [1.0, 2.0]);
+    let pair = [param(&one, 0, &[0]), param(&one, 0, &[0])];
+    let run = |out: &mut Vec<u8>, params: AffineParams| {
+        affine(dst(out, F32, &[4]), src(&s, F32, 0, &[4]), &[2], params)
+    };
+    let mut params = affine_params(AffineForm::MinMax, &pair);
+    params.epsilon = -1.0;
+    assert_eq!(run(&mut out, params), STATUS_INVALID_PARAMETERS);
+    let ranked = [param(&one, 0, &[0, 0]), pair[1]];
+    assert_eq!(
+        run(&mut out, affine_params(AffineForm::ScaleOffset, &ranked)),
+        STATUS_INVALID_RANK
+    );
+    let below = [param(&two, 0, &[-1]), pair[1]];
+    assert_eq!(
+        run(&mut out, affine_params(AffineForm::ScaleOffset, &below)),
+        STATUS_INVALID_PARAMETERS
+    );
+    let reversed = [param(&two, 1, &[-1]), pair[1]];
+    assert_eq!(
+        run(&mut out, affine_params(AffineForm::ScaleOffset, &reversed)),
+        STATUS_OK
+    );
+    assert_eq!(from_le::<f32>(&out), [3.0, 3.0]);
+    let empty = [param(&[], 0, &[1]), param(&[], 0, &[1])];
+    let status = affine(
+        dst(&mut out, F32, &[4]),
+        src(&s, F32, 0, &[4]),
+        &[0],
+        affine_params(AffineForm::MeanStd, &empty),
+    );
+    assert_eq!(status, STATUS_OK);
 }
 
 #[test]
@@ -736,12 +898,11 @@ fn complex_dtypes_copy_cast_and_pad_by_component() {
         (status, out),
         (0, le(&[1.0f64, 2.0, 0.5, -0.25, 0.5, -0.25]))
     );
-    let params = AffineParams {
-        axis: None,
-        a: &[1.0],
-        b: &[0.0],
-        form: AffineForm::ScaleOffset,
-    };
+    let (one, zero) = ([1.0], [0.0]);
+    let params = affine_params(
+        AffineForm::ScaleOffset,
+        &[param(&one, 0, &[0]), param(&zero, 0, &[0])],
+    );
     let (s, mut out) = (le(&[1.0f32, 2.0]), vec![0; 8]);
     let status = affine(
         dst(&mut out, C64, &[8]),

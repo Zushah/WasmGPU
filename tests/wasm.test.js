@@ -524,6 +524,9 @@ const makeFixture = () => {
     const complexOutputPtr = generatedWasm.wasmgpu_alloc(48);
     const complexLayoutPtr = generatedWasm.wasmgpu_alloc_u32(7);
     const complexValuePtr = generatedWasm.wasmgpu_alloc_f64(2);
+    const affineLayoutPtr = generatedWasm.wasmgpu_alloc_u32(21);
+    const affineScalarsPtr = generatedWasm.wasmgpu_alloc_f64(3);
+    const affineValuesPtr = generatedWasm.wasmgpu_alloc_f64(4);
     try {
         generatedWasm.u32view(shapePtr, 3).set([2, 3, 4]);
         assert.strictEqual(generatedWasm.ndarray_numel(shapePtr, 3), 24);
@@ -550,9 +553,33 @@ const makeFixture = () => {
         generatedWasm.u32view(complexLayoutPtr, 7).set([0, 0, 3, 1, 1, 16, 16]);
         assert.strictEqual(generatedWasm.ndarray_pad(complexOutputPtr, 48, complexSourcePtr, 16, complexLayoutPtr, 1, 0x09, complexValuePtr), 0, "c128 constant padding must succeed");
         assert.deepStrictEqual(Array.from(generatedWasm.f64view(complexOutputPtr, 6)), [7, -7, 1.5, -2.5, 7, -7], "c128 padding must read a 16-byte constant");
-        generatedWasm.u32view(complexLayoutPtr, 7).set([0, 0, 0xFFFFFFFF, 1, 1, 8, 8]);
-        generatedWasm.f64view(complexValuePtr, 2).set([1, 0]);
-        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, complexLayoutPtr, 1, 0x68, complexValuePtr), 1, "Affine maps must reject complex dtypes");
+        // Affine descriptors: [dst offset, src offset, (pointer, length, offset) x 4, shape, src/dst/parameter strides] and f64 [epsilon, r0, r1].
+        const affineLayout = (p0, p1, p2 = [0, 0, 0], p3 = [0, 0, 0], strides = [4, 4, 1, 0, 0, 0]) => generatedWasm.u32view(affineLayoutPtr, 21).set([0, 0, ...p0, ...p1, ...p2, ...p3, 2, ...strides.map((v) => v >>> 0)]);
+        generatedWasm.f32view(complexSourcePtr, 2).set([1, 2]);
+        generatedWasm.f64view(affineValuesPtr, 4).set([2, 3, 1, -1]);
+        generatedWasm.f64view(affineScalarsPtr, 3).set([0, 0, 1]);
+        affineLayout([affineValuesPtr, 2, 0], [affineValuesPtr + 16, 1, 0]);
+        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x66, affineScalarsPtr), 0, "Strided f64 parameters must succeed");
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(complexOutputPtr, 2)), [3, 7], "Parameters advance by their own element strides and broadcast with stride 0");
+        affineLayout([affineValuesPtr, 1, 0], [affineValuesPtr + 8, 1, 0], [0, 0, 0], [0, 0, 0], [4, 4, 0, 0, 0, 0]);
+        generatedWasm.f32view(complexSourcePtr, 2).set([3, 3]);
+        generatedWasm.f64view(affineValuesPtr, 2).set([3, 3]);
+        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x366, affineScalarsPtr), 0, "Min-max maps must succeed");
+        assert.deepStrictEqual(Array.from(generatedWasm.f32view(complexOutputPtr, 2)), [0, 0], "A constant min-max slice maps to the range start");
+        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x68, affineScalarsPtr), 1, "Affine maps must reject complex dtypes");
+        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x466, affineScalarsPtr), 2, "Unknown affine code bits must be rejected");
+        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x266, affineScalarsPtr), 10, "z-score maps need all four parameters");
+        affineLayout([affineValuesPtr + 4, 1, 0], [affineValuesPtr, 1, 0]);
+        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x66, affineScalarsPtr), 4, "Misaligned f64 parameters must be rejected");
+        affineLayout([complexOutputPtr, 1, 0], [affineValuesPtr, 1, 0]);
+        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x66, affineScalarsPtr), 4, "Parameters overlapping the destination must be rejected");
+        affineLayout([affineValuesPtr, 1, 0], [affineValuesPtr, 1, 0]);
+        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x66, affineScalarsPtr), 10, "Parameter layouts outside their values must be rejected");
+        affineLayout([affineValuesPtr, 1, 0], [affineValuesPtr, 1, 0], [affineValuesPtr, 1, 0], [0, 0, 0], [4, 4, 0, 0, 0, 0]);
+        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x166, affineScalarsPtr), 10, "Parameters beyond the form's count must be absent");
+        generatedWasm.f64view(affineScalarsPtr, 3).set([0, 1, 1]);
+        affineLayout([affineValuesPtr, 1, 0], [affineValuesPtr, 1, 0], [0, 0, 0], [0, 0, 0], [4, 4, 0, 0, 0, 0]);
+        assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x366, affineScalarsPtr), 10, "Empty ranges must be rejected");
         generatedWasm.f64view(complexSourcePtr, 2).set([1.5, -2.5]);
         generatedWasm.u32view(complexLayoutPtr, 6).set([0, 0, 0, 2, 8, 1]);
         assert.strictEqual(generatedWasm.ndarray_reduce(complexOutputPtr, 8, 0, 0, complexSourcePtr, 16, complexLayoutPtr, 1, 0x0066, 0), 0, "f64-backed f32 sums must succeed");
@@ -627,6 +654,9 @@ const makeFixture = () => {
         generatedWasm.wasmgpu_free(complexOutputPtr, 48);
         generatedWasm.wasmgpu_free_u32(complexLayoutPtr, 7);
         generatedWasm.wasmgpu_free_f64(complexValuePtr, 2);
+        generatedWasm.wasmgpu_free_u32(affineLayoutPtr, 21);
+        generatedWasm.wasmgpu_free_f64(affineScalarsPtr, 3);
+        generatedWasm.wasmgpu_free_f64(affineValuesPtr, 4);
     }
 }
 

@@ -750,6 +750,8 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     const r = compute.ndarray.zeros("f32", { shape: [2, 2] }, { residency: "gpu" });
     assert.throws(() => compute.ndarray.normalize(c, { scale: 2 }), /compute\.ndarray\.normalize: complex dtypes \(c64, c128\) are not supported$/);
     assert.throws(() => compute.ndarray.normalize(r, { mean: [1, 2, 3], std: 1, dtype: "c128" }), /compute\.ndarray\.normalize: complex dtypes \(c64, c128\) are not supported$/);
+    assert.throws(() => compute.ndarray.normalize(c, { method: "zscore", axes: 7, range: [1, 0], nan: "skip" }), /compute\.ndarray\.normalize: complex dtypes \(c64, c128\) are not supported$/);
+    assert.throws(() => compute.ndarray.normalize(r, { method: "percentile", dtype: "c64" }), /compute\.ndarray\.normalize: complex dtypes \(c64, c128\) are not supported$/);
     const gc = compute.ndarray.toGPU(c);
     assert.throws(() => compute.ndarray.resize(c, { axes: [0, 1], size: [3, 3], dtype: "u8" }), /compute\.ndarray\.resize: resizing c64 into u8 would discard imaginary parts/);
     assert.throws(() => compute.ndarray.resize(gc, { axes: [0, 1], size: [3, 3], method: "nearest", dtype: "f64" }), /compute\.ndarray\.resize: resizing c64 into f64 would discard imaginary parts/);
@@ -1245,7 +1247,164 @@ const assertWithin = (a, b, bound, label) => { assert.ok(Object.is(a, b) || Math
     for (const x of [u8, floats]) x.destroy();
 }
 
-// 37) Cleanup releases the shared compute context before its browser GPU device.
+// 37) normalize computes min-max and z-score statistics over chosen axes in the input's residency, maps constant slices exactly, and never reads back.
+{
+    const nd = compute.ndarray;
+    const both = (dtype, shape, values) => { const c = nd.fromArray(dtype, shape, values); return [c, nd.toGPU(c)]; };
+    const read = async (y) => (y.residency === "gpu") ? readGPU(y) : valuesOf(y);
+    const stats = (values, ddof = 0) => { const n = values.length, m = values.reduce((a, b) => a + b, 0) / n; return { m, s: Math.sqrt(values.reduce((a, v) => a + (v - m) ** 2, 0) / (n - ddof)), S: values.reduce((a, v) => a + Math.abs(v), 0), n }; };
+    // The documented GPU bounds: the reductions' mean and std bounds through (x - m) / s, and for f32 min-max, whose statistics are
+    // bit-identical, the rounded difference, the 2.5-ULP division, and q * width + r0, plus the f32 affine's and the CPU's own rounding.
+    const zBound = (x, y, { m, s, S, n }) => (meanBound(m, S) + ulpF32(x - m)) / s + Math.abs(y) * stdBound(s, n, 0, S) / s + 4 * ulpF32(y);
+    const mmBound = (y) => 7 * ulpF32(y);
+    // [C, H, W] = [2, 2, 3] of small integers, so the f64 statistics and the JavaScript references below are computed identically.
+    const img = [1, 2, 3, 4, 5, 6, -2, 0, 2, 4, 6, 8];
+    const [c, g] = both("f32", [2, 2, 3], img);
+    for (const slices of [[img.slice(0, 6), img.slice(6)], [img]]) {
+        const options = (slices.length === 2) ? { axis: 0 } : {}, label = (slices.length === 2) ? "per channel" : "global", k = (i) => (slices.length === 2 && i >= 6) ? 1 : 0;
+        const z = slices.map((v) => stats(v)), b = slices.map((v) => [Math.min(...v), Math.max(...v)]);
+        const zRef = img.map((x, i) => (x - z[k(i)].m) / z[k(i)].s), mRef = img.map((x, i) => (x - b[k(i)][0]) / (b[k(i)][1] - b[k(i)][0]));
+        assert.deepStrictEqual(valuesOf(nd.normalize(c, { method: "zscore", ...options })), zRef.map(Math.fround), `CPU ${label} z-score`);
+        assert.deepStrictEqual(valuesOf(nd.normalize(c, { method: "minmax", ...options })), mRef.map(Math.fround), `CPU ${label} min-max`);
+        const [gz, gm] = [await readGPU(nd.normalize(g, { method: "zscore", ...options })), await readGPU(nd.normalize(g, { method: "minmax", ...options }))];
+        img.forEach((x, i) => { assertWithin(gz[i], zRef[i], zBound(x, zRef[i], z[k(i)]), `GPU ${label} z-score[${i}]`); assertWithin(gm[i], mRef[i], mmBound(mRef[i]), `GPU ${label} min-max[${i}]`); });
+    }
+    assert.deepStrictEqual(await bytesOf(nd.normalize(c, { method: "zscore", axes: [-1, 1] })), await bytesOf(nd.normalize(c, { method: "zscore", axis: 0 })), "axes names the reduced axes and axis the one kept axis");
+    // range with integer outputs rounds half to even (2.5 to 2) and saturates beyond u8, identically on both backends.
+    const [rc, rg] = both("f32", [3, 3], [0, 1, 2, 0, 1, 4, 5, 6, 7]);
+    for (const [range, expected] of [[[0, 10], [0, 5, 10, 0, 2, 10, 0, 5, 10]], [[-10, 300], [0, 145, 255, 0, 68, 255, 0, 145, 255]]]) {
+        for (const x of [rc, rg]) { const y = nd.normalize(x, { method: "minmax", axes: 1, range, dtype: "u8" }); assert.deepStrictEqual([y.dtype, await read(y)], ["u8", expected], `${x.residency} min-max onto [${range}] as u8`); }
+    }
+    // ddof, and n - ddof <= 0, which gives NaN even though a one-element slice has min == max.
+    const sample = [img.slice(0, 6), img.slice(6)].map((v) => stats(v, 1));
+    assert.deepStrictEqual(valuesOf(nd.normalize(c, { method: "zscore", axis: 0, ddof: 1 })), img.map((x, i) => Math.fround((x - sample[i >= 6 ? 1 : 0].m) / sample[i >= 6 ? 1 : 0].s)), "ddof: 1");
+    for (const x of [c, g]) assert.ok((await read(nd.normalize(x, { method: "zscore", axes: [], ddof: 1 }))).every(Number.isNaN), `${x.residency}: n - ddof <= 0 gives NaN`);
+    // NaN modes: propagate poisons the whole slice, omit skips NaN in the statistics and keeps it in place, and integer outputs map NaN to 0.
+    const [nc, ng] = both("f32", [2, 3], [1, NaN, 3, 4, 5, 6]);
+    for (const x of [nc, ng]) {
+        const propagate = await read(nd.normalize(x, { method: "zscore", axes: 1 }));
+        assert.ok(propagate.slice(0, 3).every(Number.isNaN) && !propagate.slice(3).some(Number.isNaN), `${x.residency}: propagate`);
+        const omitted = await read(nd.normalize(x, { method: "zscore", axes: 1, nan: "omit" }));
+        assert.ok(Object.is(omitted[0], -1) && Number.isNaN(omitted[1]) && omitted[2] === 1, `${x.residency}: omit keeps NaN in place (got ${omitted})`);
+        assert.deepStrictEqual(await read(nd.normalize(x, { method: "minmax", axes: 1, nan: "omit", dtype: "i16" })), [0, 0, 1, 0, 0, 1], `${x.residency}: NaN becomes 0 in integer outputs`);
+    }
+    const [uc] = both("u8", [2, 2], [0, 10, 20, 20]);
+    assert.deepStrictEqual(valuesOf(nd.normalize(uc, { method: "minmax", axes: 1, nan: "omit" })), [0, 1, 0, 0], "nan is accepted and ignored for integer inputs");
+    // The GPU finds NaN by bit tests and writes the canonical quiet NaN, whatever the input's sign and payload bits.
+    const nanStorage = compute.createStorageBuffer({ byteLength: 256, copySrc: true, copyDst: true });
+    nanStorage.write(new Uint32Array([0xFFC00001, 0x3F800000]));
+    const nanBits = new Uint32Array(Uint8Array.from(await bytesOf(nd.normalize(nd.wrap(nanStorage, "f32", { shape: [2] }), { scale: 2 }))).buffer);
+    assert.deepStrictEqual(Array.from(nanBits), [0x7FC00000, 0x40000000], "GPU NaN outputs are canonical");
+    // Constant slices map exactly to 0 (z-score) and range[0] (min-max), even where the statistics carry rounding noise: the f64 cascade
+    // mean of three 0.1s is 0.10000000000000002 and their std 1.4e-17, and the f32 mean of i32 2^24 + 1 rounds away from f32(2^24 + 1).
+    const tenths = nd.fromArray("f64", [3], [0.1, 0.1, 0.1]);
+    assert.deepStrictEqual(valuesOf(nd.normalize(tenths, { method: "zscore" })), [0, 0, 0], "Three 0.1s");
+    const [ic, ig] = both("i32", [2, 300], Array.from({ length: 600 }, (_, i) => (i < 300) ? 2 ** 24 + 1 : (i % 7) - 3));
+    for (const x of [ic, ig]) {
+        assert.deepStrictEqual((await read(nd.normalize(x, { method: "zscore", axes: 1 }))).slice(0, 300), new Array(300).fill(0), `${x.residency}: an i32 constant slice at an f32 rounding midpoint`);
+        assert.deepStrictEqual((await read(nd.normalize(x, { method: "minmax", axes: 1, range: [-3, 3] }))).slice(0, 300), new Array(300).fill(-3), `${x.residency}: constant min-max`);
+    }
+    // epsilon: a std at or below epsilon divides by 1, so the slice is only centered.
+    const [ec, eg] = both("f32", [3], [1, 1.25, 0.75]);
+    for (const x of [ec, eg]) assert.deepStrictEqual(await read(nd.normalize(x, { method: "zscore", epsilon: 0.25 })), [0, 0.25, -0.25], `${x.residency} epsilon`);
+    // Statistics methods equal stdMean with keepDims followed by explicit ndarray parameters, bitwise: f64 statistics on the CPU, f32 on the GPU.
+    let seed = 3;
+    const rnd = () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+    const [wc, wg] = both("f32", [6, 40], Float32Array.from({ length: 240 }, () => (rnd() - 0.3) * 1000));
+    const fit = nd.stdMean(wc, { axes: 1, keepDims: true, dtype: "f64" });
+    assert.deepStrictEqual(await bytesOf(nd.normalize(wc, { method: "zscore", axes: 1 })), await bytesOf(nd.normalize(wc, { mean: fit.mean, std: fit.std })), "CPU z-score is stdMean then { mean, std }");
+    const gfit = nd.stdMean(wg, { axes: 1, keepDims: true });
+    assert.deepStrictEqual(await bytesOf(nd.normalize(wg, { method: "zscore", axes: 1 })), await bytesOf(nd.normalize(wg, { mean: gfit.mean, std: gfit.std })), "GPU z-score is stdMean then { mean, std }");
+    // CPU results depend only on the logical values: a flipped, strided view equals its contiguous copy bitwise.
+    const view = nd.flip(nd.slice(wc, [[0, 6, 2], [1, 40, 3]]), 1);
+    for (const method of ["zscore", "minmax"]) assert.deepStrictEqual(await bytesOf(nd.normalize(view, { method, axes: 1 })), await bytesOf(nd.normalize(nd.contiguous(view), { method, axes: 1 })), `CPU ${method} is layout-independent`);
+    // A caller's encoder records the reductions and the affine map without submitting anything; the result equals self-submission bitwise.
+    const monitor = globalThis.__wasmgpuTestMonitor;
+    assert.ok(monitor, "The test runner's WebGPU monitor counts queue submissions");
+    for (const options of [{ method: "zscore", axes: 1, ddof: 1 }, { method: "minmax", axes: 0, range: [0, 255], dtype: "u8" }]) {
+        const self = nd.normalize(wg, options);
+        const encoder = device.createCommandEncoder();
+        const before = monitor.submissions;
+        const recorded = nd.normalize(wg, { ...options, encoder });
+        assert.strictEqual(monitor.submissions, before, `${options.method} through an encoder submits nothing`);
+        device.queue.submit([encoder.finish()]);
+        assert.deepStrictEqual(await bytesOf(recorded), await bytesOf(self), `${options.method} through an encoder`);
+        const out = nd.empty(self.dtype, { shape: wg.shape }, { residency: "gpu" });
+        assert.strictEqual(nd.normalize(wg, { ...options, out }), out);
+        assert.deepStrictEqual(await bytesOf(out), await bytesOf(self), `${options.method} into out`);
+    }
+    // An out that aliases the input is computed from a staged copy.
+    const input = nd.fromArray("f32", [4], [1, 2, 3, 5], { residency: "gpu" });
+    nd.normalize(input, { method: "zscore", out: input });
+    assert.deepStrictEqual((await readGPU(input)).map((v) => Math.round(v * 1e4) / 1e4), [-1.1832, -0.5071, 0.169, 1.5213], "out aliasing the input");
+    // Empty inputs return empty outputs without reductions (min and max have no identity) or WebAssembly calls.
+    for (const residency of ["cpu", "gpu"]) for (const method of ["zscore", "minmax"]) {
+        const y = nd.normalize(nd.empty("u8", { shape: [0, 3] }, { residency }), { method, axes: 1 });
+        assert.deepStrictEqual([y.residency, y.dtype, y.shape], [residency, "f32", [0, 3]], `empty ${residency} ${method}`);
+    }
+    // Validation follows the documented order and messages under the normalize name: one case for each class of rule.
+    assert.throws(() => nd.normalize(c, { method: "zscore", scale: 2 }), /method computes its own parameters; do not also pass scale, offset, mean, or std/);
+    assert.throws(() => nd.normalize(c, { method: "percentile" }), /method "percentile" is not supported yet; use "minmax" or "zscore"/);
+    assert.throws(() => nd.normalize(c, { scale: 2, axes: 1 }), /axes applies only to the statistics methods/);
+    assert.throws(() => nd.normalize(c, { method: "minmax", axes: [1, 1] }), /compute\.ndarray\.normalize: axes must be distinct/, "Statistics options are validated under the normalize name, not minMax or stdMean");
+    assert.throws(() => nd.normalize(c, { method: "minmax", range: [1, 1] }), /range\[0\] must be less than range\[1\] \(got \[1, 1\]\)/);
+    assert.throws(() => nd.normalize(g, { method: "minmax", range: [0, 1e-50] }), /range and epsilon must stay finite when rounded to f32 for the GPU/);
+    const tenthsGPU = nd.toGPU(tenths);
+    assert.throws(() => nd.normalize(tenthsGPU, { method: "zscore" }), /GPU normalize computes in f32 and does not support f64 inputs or outputs/);
+    // Only the affine fragment declares parameter bindings, so gather, pad, cast, resize, and the reductions still create their pipelines.
+    const after = [nd.cast(g, "u8"), nd.pad(g, { width: 1, mode: "edge" }), nd.contiguous(nd.transpose(g)), nd.resize(g, { axes: [1, 2], size: [3, 4] }), nd.sum(g, { axes: [1, 2] }), ...Object.values(nd.minMax(g))];
+    assert.deepStrictEqual(await readGPU(after[0]), img.map((v) => Math.max(0, v)), "cast after an affine pipeline");
+    assert.deepStrictEqual(await readGPU(after[4]), [21, 18], "sum after an affine pipeline");
+    for (const x of [c, g, rc, rg, nc, ng, uc, tenths, tenthsGPU, ic, ig, ec, eg, wc, wg, fit.std, fit.mean, gfit.std, gfit.mean, view, input, ...after]) x.destroy();
+    nanStorage.destroy();
+}
+
+// 38) ndarray parameters broadcast against the input in its residency, mix with numbers, and apply statistics from one array to another.
+{
+    const nd = compute.ndarray;
+    const both = (dtype, shape, values) => { const c = nd.fromArray(dtype, shape, values); return [c, nd.toGPU(c)]; };
+    const train = [1, 10, 3, 30, 5, 50, 7, 70], test = [2, 20, 4, 40, 9, 90];
+    const [tc, tg] = both("f32", [4, 2], train), [xc, xg] = both("f32", [3, 2], test);
+    // Fit on train (keepDims statistics over the samples), apply to test, with no readback on the GPU.
+    const cpuFit = nd.stdMean(tc, { axes: 0, keepDims: true }), gpuFit = nd.stdMean(tg, { axes: 0, keepDims: true });
+    const mean = valuesOf(cpuFit.mean), std = valuesOf(cpuFit.std);
+    assert.deepStrictEqual(valuesOf(nd.normalize(xc, { mean: cpuFit.mean, std: cpuFit.std })), test.map((x, i) => Math.fround((x - mean[i % 2]) / std[i % 2])), "CPU: f32 statistics convert exactly to f64 parameters");
+    const applied = await readGPU(nd.normalize(xg, { mean: gpuFit.mean, std: gpuFit.std }));
+    const [gm, gs] = [await readGPU(gpuFit.mean), await readGPU(gpuFit.std)];
+    applied.forEach((y, i) => { const r = (test[i] - gm[i % 2]) / gs[i % 2]; assertWithin(y, r, 4 * ulpF32(r) + ulpF32(test[i] - gm[i % 2]) / gs[i % 2], `GPU fit on train, apply to test [${i}]`); });
+    // Numbers and arrays mix, arrays broadcast by NumPy rules (a [2] row and an i16 [3, 1] column against [3, 2]), and views are read in place;
+    // a flipped broadcast view and its own base in the other role share one binding on the GPU.
+    const [rowC, rowG] = both("f32", [2], [2, -1]), [colC, colG] = both("i16", [3, 1], [10, 20, 30]);
+    for (const [x, row, col] of [[xc, rowC, colC], [xg, rowG, colG]]) {
+        const read = async (y) => (x === xg) ? readGPU(y) : valuesOf(y);
+        assert.deepStrictEqual(await read(nd.normalize(x, { scale: row, offset: col })), test.map((v, i) => v * [2, -1][i % 2] + [10, 20, 30][i >> 1]), `${x.residency}: broadcast scale and integer offset arrays`);
+        assert.deepStrictEqual(await read(nd.normalize(x, { scale: 2, offset: col })), test.map((v, i) => 2 * v + [10, 20, 30][i >> 1]), `${x.residency}: a number with an array`);
+        assert.deepStrictEqual(await read(nd.normalize(x, { mean: nd.broadcastTo(nd.flip(row), [3, 2]), std: row })), test.map((v, i) => (v - [-1, 2][i % 2]) / [2, -1][i % 2]), `${x.residency}: a flipped broadcast view and its base`);
+    }
+    // CPU f64 parameters are passed to WebAssembly in place, so strided views at an offset exercise the element offset and stride conversion.
+    const table = nd.fromArray("f64", [2, 3], [5, 0.5, 6, 0.25, 7, 0.125]);
+    assert.deepStrictEqual(valuesOf(nd.normalize(xc, { mean: nd.slice(table, [0, [0, 3, 2]]), std: nd.slice(table, [1, [1, 3]]) })), test.map((v, i) => Math.fround((v - [5, 6][i % 2]) / [7, 0.125][i % 2])), "CPU f64 parameters are strided views of one array");
+    // ndarray std gets no zero rule.
+    const zero = nd.fromArray("f32", [1], [0]);
+    assert.deepStrictEqual(valuesOf(nd.normalize(xc, { mean: 0, std: zero })).slice(0, 2), [Infinity, Infinity], "ndarray std has no zero rule");
+    // A parameter sharing a raw buffer with out is staged.
+    const storage = compute.createStorageBuffer({ byteLength: 1024, copySrc: true, copyDst: true });
+    storage.write(new Float32Array([1, 2, 3, 4]));
+    const out = nd.wrap(storage, "f32", { shape: [2, 2] }, 256);
+    nd.normalize(nd.slice(tg, [[0, 2]]), { scale: nd.wrap(storage, "f32", { shape: [2] }, 0), offset: 1, out });
+    assert.deepStrictEqual(await readGPU(out), [2, 21, 4, 61], "a parameter in out's raw buffer");
+    // Parameters keep the input's residency and are real, the GPU rejects f64 ones, they broadcast to the input, and axis is only for number arrays.
+    const wide = nd.fromArray("f64", [2], [5, 6], { residency: "gpu" });
+    assert.throws(() => nd.normalize(xc, { mean: gpuFit.mean, std: 1 }), /mean must be a CPUndarray like the input array \(got a GPUndarray\).*toCPU\(\)/);
+    assert.throws(() => nd.normalize(xc, { scale: nd.zeros("c64", { shape: [2] }) }), /compute\.ndarray\.normalize: complex dtypes \(c64, c128\) are not supported$/);
+    assert.throws(() => nd.normalize(xg, { offset: wide }), /GPU normalize computes in f32 and does not support f64 parameters; cast\(\) offset to f32/);
+    assert.throws(() => nd.normalize(xc, { scale: rowC, axis: 1 }), /axis applies only to number-array parameters; ndarray parameters broadcast against the input, so reshape\(\) or expandDims\(\) scale/);
+    assert.throws(() => nd.normalize(xc, { scale: nd.reshape(colC, [1, 3]) }), /compute\.ndarray\.normalize: scale: cannot broadcast shape \[1,3\] to \[3,2\]/);
+        for (const x of [tc, tg, xc, xg, cpuFit.mean, cpuFit.std, gpuFit.mean, gpuFit.std, rowC, rowG, colC, colG, wide, table, zero]) x.destroy();
+    storage.destroy();
+}
+
+// 39) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

@@ -7,7 +7,7 @@
 // Dtype codes: 0 i8, 1 u8, 2 i16, 3 u16, 4 i32, 5 u32, 6 f32, 7 f64, 8 c64, 9 c128.
 override SRC_DTYPE: u32 = 6u;
 override DST_DTYPE: u32 = 6u;
-// 0 copy or cast, 1 pad, 2 affine, 3 resize.
+// 0 copy or cast, 1 pad, 3 resize (2 is unused; affine maps run in the affine entry point).
 override OPERATION: u32 = 0u;
 // 0 constant, 1 edge, 2 reflect, 3 symmetric, 4 wrap.
 override PAD_MODE: u32 = 0u;
@@ -15,8 +15,6 @@ override PAD_MODE: u32 = 0u;
 override OVERFLOW: u32 = 1u;
 // 0 truncate, 1 round half to even.
 override ROUNDING: u32 = 0u;
-// 0 scale and offset, 1 mean and std.
-override AFFINE_FORM: u32 = 0u;
 // 0 nearest (one-tap gather), 1 weighted taps (linear or cubic).
 override RESIZE_METHOD: u32 = 1u;
 // 1, 2, or 3 resize levels.
@@ -33,10 +31,8 @@ const P_SRC_OFFSET: u32 = 3u;
 const P_DST_OFFSET: u32 = 4u;
 const P_VALUE_LO: u32 = 5u;
 const P_VALUE_HI: u32 = 6u;
-const P_PARAM_AXIS: u32 = 7u;
-const P_PARAM_LEN: u32 = 8u;
+// Words 7, 8, 10, and 72 to 87 belong to the affine maps of ./ndarray-affine.wgsl.
 const P_LEVEL_COUNT: u32 = 9u;
-const P_TABLE: u32 = 11u;
 const P_VALUE_2: u32 = 12u;
 const P_VALUE_3: u32 = 13u;
 const P_SHAPE: u32 = 16u;
@@ -406,13 +402,12 @@ fn pad_index(i: i32, n: u32) -> i32 {
 struct Walk {
     src_addr: u32,
     dst_addr: u32,
-    param: u32,
     constant: bool,
 }
 
 fn walk(e: u32) -> Walk {
     let ndim = params[P_NDIM];
-    var w = Walk(params[P_SRC_OFFSET], params[P_DST_OFFSET], 0u, false);
+    var w = Walk(params[P_SRC_OFFSET], params[P_DST_OFFSET], false);
     var rem = e;
     for (var k = 0u; k < ndim; k = k + 1u) {
         let d = ndim - 1u - k;
@@ -428,9 +423,6 @@ fn walk(e: u32) -> Walk {
                 s = u32(mapped);
             }
         }
-        if (OPERATION == 2u && d == params[P_PARAM_AXIS]) {
-            w.param = c;
-        }
         w.src_addr = w.src_addr + s * params[P_SRC_STRIDE + d];
         w.dst_addr = w.dst_addr + c * params[P_DST_STRIDE + d];
     }
@@ -440,18 +432,6 @@ fn walk(e: u32) -> Walk {
 fn gather_value(w: Walk) -> vec4<u32> {
     if (OPERATION == 1u && w.constant) {
         return vec4<u32>(params[P_VALUE_LO], params[P_VALUE_HI], params[P_VALUE_2], params[P_VALUE_3]);
-    }
-    if (OPERATION == 2u) {
-        let len = params[P_PARAM_LEN];
-        let k = select(w.param, 0u, len == 1u);
-        let table = params[P_TABLE];
-        let a = bitcast<f32>(params[table + k]);
-        let b = bitcast<f32>(params[table + len + k]);
-        let x = load_f32(w.src_addr);
-        if (AFFINE_FORM == 0u) {
-            return encode_f32(x * a + b);
-        }
-        return encode_f32((x - a) / b);
     }
     return convert_bits(load_bits(w.src_addr));
 }
@@ -636,34 +616,44 @@ fn store_element(addr: u32, bits: vec4<u32>) {
     }
 }
 
+fn word_start(i: u32) -> vec3<u32> {
+    let start = params[P_DST_OFFSET];
+    let word_addr = ((start >> 2u) + i) << 2u;
+    return vec3<u32>(word_addr, start, start + params[P_NUMEL] * dtype_size(DST_DTYPE));
+}
+
+fn word_base(r: vec3<u32>) -> u32 {
+    if (r.x < r.y || r.x + 4u > r.z) {
+        return dst[r.x >> 2u];
+    }
+    return 0u;
+}
+
+fn word_merge(out: u32, lane: u32, bits: u32) -> u32 {
+    let mask = dtype_mask(DST_DTYPE);
+    let shift = lane * 8u;
+    return (out & ~(mask << shift)) | ((bits & mask) << shift);
+}
+
 fn store_word(i: u32) {
     let size = dtype_size(DST_DTYPE);
-    let mask = dtype_mask(DST_DTYPE);
-    let numel = params[P_NUMEL];
-    let start = params[P_DST_OFFSET];
-    let end = start + numel * size;
-    let word = (start >> 2u) + i;
-    let word_addr = word << 2u;
-    var out = 0u;
-    if (word_addr < start || word_addr + 4u > end) {
-        out = dst[word];
-    }
+    let r = word_start(i);
+    var out = word_base(r);
     for (var lane = 0u; lane < 4u; lane = lane + size) {
-        let addr = word_addr + lane;
-        if (addr < start || addr >= end) {
+        let addr = r.x + lane;
+        if (addr < r.y || addr >= r.z) {
             continue;
         }
-        let e = (addr - start) / size;
+        let e = (addr - r.y) / size;
         var bits = 0u;
         if (OPERATION == 3u) {
             bits = resize_value(e).x;
         } else {
             bits = gather_value(walk(e)).x;
         }
-        let shift = lane * 8u;
-        out = (out & ~(mask << shift)) | ((bits & mask) << shift);
+        out = word_merge(out, lane, bits);
     }
-    dst[word] = out;
+    dst[r.x >> 2u] = out;
 }
 
 @compute @workgroup_size(256)
