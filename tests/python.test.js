@@ -283,7 +283,11 @@ complex_checks = [
 ]
 for array in (z_cpu, z_view, z_gpu, w_cpu, w_gpu, z_dst, w_dst, promoted, narrowed):
     array.destroy()
-result = (cpu_back.tolist(), view_back.tolist(), converted.tolist(), gpu_back.tolist(), cpu_copy.tolist(), gpu_copy.tolist(), complex_checks)
+x_cpu = interop.to_cpu(np.arange(12, dtype=np.float32).reshape(3, 4))
+x_view = _wasmgpu_runtime.compute.ndarray.slice(x_cpu, "1:, None")
+string_slice = [list(x_view.shape), interop.from_cpu(x_view).tolist()]
+x_cpu.destroy()
+result = (cpu_back.tolist(), view_back.tolist(), converted.tolist(), gpu_back.tolist(), cpu_copy.tolist(), gpu_copy.tolist(), complex_checks, string_slice)
 cpu.destroy()
 view_cpu.destroy()
 converted_cpu.destroy()
@@ -303,6 +307,7 @@ result
     assert.deepStrictEqual(rows(value[5]), [[20, 21, 22], [23, 24, 25]]);
     assert.deepStrictEqual(Array.from(value[6][0]), ["c64", "c64", "c128", "c128", "c64", "c64"], "NumPy complex64 and complex128 map to c64 and c128");
     assert.deepStrictEqual(Array.from(value[6][1]), new Array(12).fill(true), "complex round trips, copies, promotions, casting rules, and empty arrays");
+    assert.deepStrictEqual([Array.from(value[7][0]), Array.from(value[7][1], (plane) => rows(plane))], [[2, 1, 4], [[[4, 5, 6, 7]], [[8, 9, 10, 11]]]], "A Python str spec crosses into slice(), where None is a new axis");
     results.destroy?.();
 }
 

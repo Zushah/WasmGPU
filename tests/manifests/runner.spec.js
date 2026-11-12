@@ -10,7 +10,7 @@ import { testFiles } from "./suites.js";
 
 const { r, g, y, x } = colors;
 const firefoxIntentionalTeardownErrors = new Set(["Buffer with '' label has been destroyed"]);
-const slowTestTimeouts = new Map([["kernels.test.js", 300_000], ["ndarray.test.js", 300_000]]);
+const slowTestTimeouts = new Map([["kernels.test.js", 600_000], ["ndarray.test.js", 600_000]]);
 
 for (let i = 0; i < testFiles.length; ++i) {
     const file = testFiles[i];

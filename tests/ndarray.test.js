@@ -1404,7 +1404,62 @@ const assertWithin = (a, b, bound, label) => { assert.ok(Object.is(a, b) || Math
     storage.destroy();
 }
 
-// 39) Cleanup releases the shared compute context before its browser GPU device.
+// 39) slice accepts NumPy basic-indexing strings, and both spec forms support "..." and new axes through one resolver.
+{
+    const nd = compute.ndarray;
+    const layoutOf = (v) => [v.shape, v.stridesBytes, v.offsetBytes, v.byteLength, v.baseOffsetBytes];
+    const read = (v) => (v.residency === "gpu") ? readGPU(v) : valuesOf(v);
+    const vol = nd.fromArray("f32", [80, 2, 5], Array.from({ length: 800 }, (_, i) => i));
+    const volGPU = nd.toGPU(vol);
+    const crop = [];
+    for (let i = 10; i < 74; i++) for (let j = 0; j < 2; j++) for (let k = 0; k < 5; k += 2) crop.push(i * 10 + j * 5 + k);
+    for (const a of [vol, volGPU]) {
+        // A string spec and its array form give the same view, including whitespace, negative steps, and omitted bounds.
+        const pairs = [["10:74, :, ::2", [[10, 74], null, [null, null, 2]]], ["-1", [-1]], [" ::-30 ,1 , 4:0:-2 ", [[null, null, -30], 1, [4, 0, -2]]], [":5, :, -2:", [[null, 5], null, [-2]]]];
+        for (const [text, array] of pairs) {
+            const s = nd.slice(a, text), t = nd.slice(a, array);
+            assert.deepStrictEqual(layoutOf(s), layoutOf(t), `${a.residency}: "${text}" and its array form`);
+            assert.deepStrictEqual(await read(s), await read(t), `${a.residency}: "${text}" values`);
+        }
+        assert.deepStrictEqual([nd.slice(a, "10:74, :, ::2").shape, await read(nd.slice(a, "10:74, :, ::2"))], [[64, 2, 3], crop], `${a.residency}: crop`);
+        assert.deepStrictEqual(await read(nd.slice(a, " ::-30 ,1 , 4:0:-2 ")), [799, 797, 499, 497, 199, 197], `${a.residency}: negative steps`);
+        // An ellipsis fills the unindexed axes, possibly none, in either form.
+        for (const [text, array, shape] of [["..., 0", ["...", 0], [80, 2]], ["1, ...", [1, "..."], [2, 5]], ["3, ..., 1, 2", [3, "...", 1, 2], []]]) {
+            const s = nd.slice(a, text);
+            assert.deepStrictEqual([s.shape, layoutOf(s)], [shape, layoutOf(nd.slice(a, array))], `${a.residency}: "${text}"`);
+        }
+        assert.deepStrictEqual(await read(nd.slice(a, "3, ..., 1, 2")), [37], `${a.residency}: an ellipsis over zero axes gives a 0-d view`);
+        // None and newaxis insert size-1 axes with expandDims' strides; the array form spells them "newaxis", since null there is a full axis.
+        assert.deepStrictEqual(layoutOf(nd.slice(a, ":, None")), layoutOf(nd.expandDims(a, 1)), `${a.residency}: ":, None"`);
+        assert.deepStrictEqual(layoutOf(nd.slice(a, "newaxis")), layoutOf(nd.expandDims(a, 0)), `${a.residency}: "newaxis"`);
+        assert.deepStrictEqual(layoutOf(nd.slice(a, [null, "newaxis"])), layoutOf(nd.expandDims(a, 1)), `${a.residency}: array "newaxis"`);
+        assert.deepStrictEqual(layoutOf(nd.slice(a, "None, ::-1, ..., None")), layoutOf(nd.expandDims(nd.slice(a, [[null, null, -1]]), [0, 4])), `${a.residency}: new axes around a flipped view`);
+        assert.deepStrictEqual([nd.slice(a, [null]).shape, nd.slice(a, "None").shape], [[80, 2, 5], [1, 80, 2, 5]], `${a.residency}: array null is a full axis, string None is a new axis`);
+        // Empty specs are full views, and one trailing comma is allowed.
+        for (const spec of ["", " \t", []]) assert.deepStrictEqual([layoutOf(nd.slice(a, spec)).slice(0, 3), nd.slice(a, spec).base], [[a.shape, a.stridesBytes, a.offsetBytes], a], `${a.residency}: empty spec ${JSON.stringify(spec)}`);
+        assert.deepStrictEqual(layoutOf(nd.slice(a, "0,")), layoutOf(nd.slice(a, [0])), `${a.residency}: "0,"`);
+    }
+    // Complex views keep their dtype and are placed like any other GPU view.
+    const z = nd.fromArray("c64", [4, 3], Array.from({ length: 12 }, (_, i) => [i, -i]).flat());
+    const zg = nd.toGPU(z);
+    const zv = nd.slice(zg, "1:, None, ::-2");
+    assert.deepStrictEqual([zv.dtype, zv.shape, zv.stridesBytes, zv.baseOffsetBytes, zv.offsetBytes, zv.byteLength], ["c64", [3, 1, 2], [24, -32, -16], 24, 16, 72]);
+    assert.deepStrictEqual(layoutOf(zv), layoutOf(nd.slice(zg, [[1, null], "newaxis", [null, null, -2]])));
+    assert.deepStrictEqual(await readGPU(zv), [[5, -5], [3, -3], [8, -8], [6, -6], [11, -11], [9, -9]]);
+    // Parse errors name the item and the spec, with a hint when one applies; semantic errors are shared with the array form.
+    assert.throws(() => nd.slice(vol, "1:3, x"), /compute\.ndarray\.slice: cannot parse item 1 \("x"\) of the spec "1:3, x": expected an integer, start:stop\[:step\], "\.\.\.", "None", or "newaxis"/);
+    assert.throws(() => nd.slice(vol, "[0, 1]"), /cannot parse item 0 \("\[0"\).*omit the brackets/);
+    assert.throws(() => nd.slice(vol, "0, 1.5"), /cannot parse item 1 \("1\.5"\).*indices must be integers/);
+    assert.throws(() => nd.slice(vol, "..., 0, ..."), /compute\.ndarray\.slice: at most one ellipsis \("\.\.\."\) is allowed/);
+    assert.throws(() => nd.slice(vol, "0, 0, 0, 0"), /compute\.ndarray\.slice: too many indices: 4 indexed for an array with 3 dimensions/);
+    assert.throws(() => nd.slice(vol, "::0"), /compute\.ndarray\.slice: step for axis 0 must be nonzero/);
+    assert.throws(() => nd.slice(vol, [0, undefined]), /spec\[1\] is undefined \(Python None converts to undefined\): use a string spec such as ":, None", or "newaxis" for a new axis, or null for a full axis/);
+    assert.throws(() => nd.slice(vol, ["1:3", ":"]), /spec\[0\] is the string "1:3": pass the whole NumPy-style spec as one string/);
+    assert.throws(() => nd.slice(vol, 5), /compute\.ndarray\.slice: spec must be a string or an array \(got number\)/);
+    for (const x of [vol, volGPU, z, zg]) x.destroy();
+}
+
+// 40) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

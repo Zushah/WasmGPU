@@ -229,7 +229,9 @@ const forEachElementOffset = (shape: ReadonlyArray<number>, stridesBytes: Readon
 
 export type NdarraySliceRange = readonly [start?: number | null, stop?: number | null, step?: number | null];
 
-export type NdarraySliceEntry = null | number | NdarraySliceRange;
+export type NdarraySliceEntry = null | number | NdarraySliceRange | "..." | "newaxis";
+
+export type NdarraySliceSpec = string | ReadonlyArray<NdarraySliceEntry>;
 
 const sliceInteger = (value: number | null | undefined, label: string, op: string): number | null => {
     if (value === null || value === undefined) return null;
@@ -251,6 +253,102 @@ const sliceIndices = (n: number, entry: NdarraySliceRange, axis: number, op: str
         stop = (stop === null) ? -1 : (stop < 0) ? Math.max(stop + n, -1) : Math.min(stop, n - 1);
     }
     return { start, length: Math.max(0, Math.ceil((stop - start) / step)), step };
+};
+
+const sliceSpecInteger = (text: string): number => { const value = Number(text); return Number.isFinite(value) ? value + 0 : (value < 0) ? -Number.MAX_VALUE : Number.MAX_VALUE; };
+
+const sliceSpecHint = (item: string): string => {
+    if (item === "") return "; the item is empty, so remove the extra comma";
+    if (/[[\]()]/.test(item)) return "; omit the brackets and pass only what goes inside a[...] (list indices are not supported)";
+    if (/\b(?:True|False)\b/.test(item)) return "; boolean indexing is not supported";
+    if (/\bEllipsis\b/.test(item)) return "; write ... for an ellipsis";
+    if (/\.\s*newaxis\b/.test(item)) return "; write None or newaxis for a new axis";
+    if (/\bNone\b/.test(item) && item.includes(":")) return "; omit the bound instead of writing None";
+    if (/\d_\d/.test(item)) return "; digit separators are not supported";
+    if (/\b0[box]/i.test(item)) return "; write integers in decimal";
+    if (/\d[.ej]|\.\d/i.test(item)) return "; indices must be integers";
+    if (/[+-]\s+\d/.test(item)) return "; remove the space between the sign and the digits";
+    if (/\d\s+[+-]?\d/.test(item)) return "; separate items with commas";
+    if (item.split(":").length > 3) return "; a slice has at most two colons (start:stop:step)";
+    return "";
+};
+
+const sliceSpecError = (spec: string, index: number, item: string, op: string): Error => new Error(`${op}: cannot parse item ${index} (${JSON.stringify(item)}) of the spec ${JSON.stringify(spec)}: expected an integer, start:stop[:step], "...", "None", or "newaxis"${sliceSpecHint(item)}`);
+
+const isSliceSpace = (c: number): boolean => (c <= 32) ? (c === 32 || (c >= 9 && c <= 13)) : (c >= 160 && (c === 160 || c === 5760 || (c >= 8192 && c <= 8202) || c === 8232 || c === 8233 || c === 8239 || c === 8287 || c === 12288 || c === 65279));
+
+const skipSliceSpace = (spec: string, i: number): number => { while (i < spec.length && isSliceSpace(spec.charCodeAt(i))) i++; return i; };
+
+const scanSliceInteger = (spec: string, i: number): number => {
+    const c = spec.charCodeAt(i);
+    const digits = (c === 43 || c === 45) ? i + 1 : i;
+    let j = digits;
+    while (j < spec.length) { const d = spec.charCodeAt(j); if (d < 48 || d > 57) break; j++; }
+    return (j > digits) ? j : i;
+};
+
+const parseSliceSpec = (spec: string, op: string): NdarraySliceEntry[] => {
+    const out: NdarraySliceEntry[] = [];
+    const n = spec.length;
+    let i = skipSliceSpace(spec, 0);
+    if (i === n) return out;
+    for (let index = 0; ; index++) {
+        const start = i;
+        let entry: NdarraySliceEntry | undefined;
+        if (spec.startsWith("...", i)) { entry = "..."; i += 3; }
+        else if (spec.startsWith("None", i)) { entry = "newaxis"; i += 4; }
+        else if (spec.startsWith("newaxis", i)) { entry = "newaxis"; i += 7; }
+        else {
+            let j = scanSliceInteger(spec, i);
+            const first = (j > i) ? sliceSpecInteger(spec.slice(i, j)) : null;
+            i = skipSliceSpace(spec, j);
+            if (spec.charCodeAt(i) !== 58) entry = first ?? undefined;
+            else {
+                i = skipSliceSpace(spec, i + 1);
+                j = scanSliceInteger(spec, i);
+                const stop = (j > i) ? sliceSpecInteger(spec.slice(i, j)) : null;
+                i = skipSliceSpace(spec, j);
+                let step: number | null = null;
+                if (spec.charCodeAt(i) === 58) {
+                    i = skipSliceSpace(spec, i + 1);
+                    j = scanSliceInteger(spec, i);
+                    if (j > i) step = sliceSpecInteger(spec.slice(i, j));
+                    i = j;
+                }
+                entry = (first === null && stop === null && step === null) ? null : [first, stop, step];
+            }
+        }
+        if (entry !== undefined) i = skipSliceSpace(spec, i);
+        if (entry === undefined || (i < n && spec.charCodeAt(i) !== 44)) { const end = spec.indexOf(",", start); throw sliceSpecError(spec, index, spec.slice(start, (end < 0) ? n : end).trim(), op); }
+        out.push(entry);
+        i = (i < n) ? skipSliceSpace(spec, i + 1) : n;
+        if (i === n) return out;
+    }
+};
+
+const SLICE_SPEC_CACHE = new Map<string, ReadonlyArray<NdarraySliceEntry>>();
+
+const sliceSpecEntries = (spec: string, op: string): ReadonlyArray<NdarraySliceEntry> => {
+    const cached = SLICE_SPEC_CACHE.get(spec);
+    if (cached !== undefined) return cached;
+    const entries = parseSliceSpec(spec, op);
+    if (spec.length > 256) return entries;
+    for (const entry of entries) if (Array.isArray(entry)) Object.freeze(entry);
+    if (SLICE_SPEC_CACHE.size >= 64) SLICE_SPEC_CACHE.delete(SLICE_SPEC_CACHE.keys().next().value!);
+    SLICE_SPEC_CACHE.set(spec, Object.freeze(entries));
+    return entries;
+};
+
+const sliceEntryError = (entry: unknown, i: number, op: string): string => (entry === undefined) ? `${op}: spec[${i}] is undefined (Python None converts to undefined): use a string spec such as ":, None", or "newaxis" for a new axis, or null for a full axis`
+    : (typeof entry === "string") ? `${op}: spec[${i}] is the string ${JSON.stringify(entry)}: pass the whole NumPy-style spec as one string, such as "1:3, ::2", rather than an array of strings`
+    : `${op}: spec[${i}] must be null, an integer, a [start, stop, step] array, "...", or "newaxis"`;
+
+const fillNewAxisStrides = (shape: ReadonlyArray<number>, strides: number[], axes: ReadonlyArray<number>, bytesPerElement: number): void => {
+    for (let k = axes.length - 1; k >= 0; k--) {
+        const i = axes[k]!;
+        const stride = (i === shape.length - 1) ? bytesPerElement : strides[i + 1]! * shape[i + 1]!;
+        strides[i] = (stride >= -0x80000000 && stride <= 0x7FFFFFFF && stride !== 0) ? stride : bytesPerElement;
+    }
 };
 
 const nocopyReshapeStrides = (oldShape: ReadonlyArray<number>, oldStrides: ReadonlyArray<number>, newShape: ReadonlyArray<number>, bytesPerElement: number): number[] | null => {
@@ -2618,34 +2716,52 @@ export class NdarrayNamespace {
         } catch (error) { cpu.destroy(); throw error; }
     }
 
-    slice<T extends AnyNdarray>(a: T, spec: ReadonlyArray<NdarraySliceEntry>): T {
+    slice<T extends AnyNdarray>(a: T, spec: NdarraySliceSpec): T {
         const op = "slice";
         this.assertAlive(op);
         assertNdarray(a, op);
-        assert(Array.isArray(spec), `${opName(op)}: spec must be an array`);
-        assert(spec.length <= a.ndim, `${opName(op)}: spec has ${spec.length} entries for an array with ${a.ndim} dimensions`);
+        const entries = (typeof spec === "string") ? sliceSpecEntries(spec, opName(op)) : spec;
+        if (!Array.isArray(entries)) throw new Error(`${opName(op)}: spec must be a string or an array (got ${(spec === null) ? "null" : typeof spec}); from Python, pass a NumPy-style string such as "1:3, ::2"`);
+        let consumed = 0;
+        let ellipsis = -1;
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i] as unknown;
+            if (entry === null || typeof entry === "number" || Array.isArray(entry)) consumed++;
+            else if (entry === "...") { assert(ellipsis < 0, `${opName(op)}: at most one ellipsis ("...") is allowed`); ellipsis = i; }
+            else if (entry !== "newaxis") throw new Error(sliceEntryError(entry, i, opName(op)));
+        }
+        if (consumed > a.ndim) throw new Error(`${opName(op)}: too many indices: ${consumed} indexed for an array with ${a.ndim} dimensions`);
         const shape: number[] = [];
         const strides: number[] = [];
+        let newAxes: number[] | null = null;
         let offset = a.offsetBytes;
-        for (let axis = 0; axis < a.ndim; axis++) {
+        let axis = 0;
+        for (let i = 0; i < entries.length; i++) {
+            const entry = entries[i]!;
+            if (typeof entry === "string") {
+                if (entry === "newaxis") { (newAxes ??= []).push(shape.length); shape.push(1); strides.push(0); }
+                else for (const end = axis + a.ndim - consumed; axis < end; axis++) { shape.push(a.shape[axis]!); strides.push(a.stridesBytes[axis]!); }
+                continue;
+            }
             const n = a.shape[axis]!;
             const stride = a.stridesBytes[axis]!;
-            const entry = (axis < spec.length) ? spec[axis] : null;
-            if (entry === null) { shape.push(n); strides.push(stride); continue; }
-            if (typeof entry === "number") {
+            if (entry === null) { shape.push(n); strides.push(stride); }
+            else if (typeof entry === "number") {
                 assert(Number.isInteger(entry), `${opName(op)}: index for axis ${axis} must be an integer (got ${entry})`);
                 const index = (entry < 0) ? entry + n : entry;
                 assert(index >= 0 && index < n, `${opName(op)}: index ${entry} is out of bounds for axis ${axis} with size ${n}`);
                 offset += index * stride;
-                continue;
+            } else {
+                const { start, length, step } = sliceIndices(n, entry as NdarraySliceRange, axis, opName(op));
+                if (length > 0) offset += start * stride;
+                const stepped = stride * step;
+                shape.push(length);
+                strides.push((length <= 1 && (stepped < -0x80000000 || stepped > 0x7FFFFFFF)) ? stride : stepped);
             }
-            assert(Array.isArray(entry), `${opName(op)}: spec[${axis}] must be null, an integer, or a [start, stop, step] array`);
-            const { start, length, step } = sliceIndices(n, entry as unknown as NdarraySliceRange, axis, opName(op));
-            if (length > 0) offset += start * stride;
-            const stepped = stride * step;
-            shape.push(length);
-            strides.push((length <= 1 && (stepped < -0x80000000 || stepped > 0x7FFFFFFF)) ? stride : stepped);
+            axis++;
         }
+        for (; axis < a.ndim; axis++) { shape.push(a.shape[axis]!); strides.push(a.stridesBytes[axis]!); }
+        if (newAxes !== null) fillNewAxisStrides(shape, strides, newAxes, a.bytesPerElement);
         return a[ndarrayView](shape, validateStridesBytes(strides, shape.length, a.bytesPerElement, `${opName(op)}: `), offset) as T;
     }
 
@@ -2738,22 +2854,17 @@ export class NdarrayNamespace {
         this.assertAlive(op);
         assertNdarray(a, op);
         const count = (typeof axis === "number") ? 1 : (Array.isArray(axis) ? axis.length : 0);
-        const inserted = new Set(normalizeAxes(axis, a.ndim + count, opName(op)));
-        const ndim = a.ndim + inserted.size;
+        const inserted = normalizeAxes(axis, a.ndim + count, opName(op)).sort((x, y) => x - y);
+        const ndim = a.ndim + inserted.length;
         const shape = new Array<number>(ndim);
         const strides = new Array<number>(ndim);
-        for (let i = 0, j = 0; i < ndim; i++) {
-            if (inserted.has(i)) continue;
+        for (let i = 0, j = 0, k = 0; i < ndim; i++) {
+            if (i === inserted[k]) { shape[i] = 1; k++; continue; }
             shape[i] = a.shape[j]!;
             strides[i] = a.stridesBytes[j]!;
             j++;
         }
-        for (let i = ndim - 1; i >= 0; i--) {
-            if (!inserted.has(i)) continue;
-            shape[i] = 1;
-            const stride = (i === ndim - 1) ? a.bytesPerElement : strides[i + 1]! * shape[i + 1]!;
-            strides[i] = (stride >= -0x80000000 && stride <= 0x7FFFFFFF && stride !== 0) ? stride : a.bytesPerElement;
-        }
+        fillNewAxisStrides(shape, strides, inserted, a.bytesPerElement);
         return a[ndarrayView](shape, strides, a.offsetBytes) as T;
     }
 
