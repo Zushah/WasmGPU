@@ -1,0 +1,746 @@
+<!DOCTYPE html>
+<!--
+ * This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at http://mozilla.org/MPL/2.0/.
+-->
+<html>
+    <head>
+        <meta charset="utf-8">
+        <title>WasmGPU | Tomography Example</title>
+        <link rel="icon" type="image/png" href="../assets/favicon.png">
+        <style>
+            * { margin: 0; padding: 0; box-sizing: border-box; }
+            body { overflow: hidden; background: #05070d; color: #dce8f8; font: 12px/1.45 monospace; }
+            canvas.main { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; }
+            .hud { position: fixed; top: 12px; left: 12px; z-index: 6; display: flex; flex-direction: column; gap: 10px; width: min(360px, calc(100vw - 24px)); max-height: calc(100vh - 24px); overflow-y: auto; scrollbar-width: thin; }
+            .pane { padding: 10px; border: 1px solid rgba(170, 205, 255, 0.24); background: rgba(6, 11, 20, 0.84); }
+            .intro { white-space: pre-line; }
+            .control-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 7px 9px; }
+            .control-grid label { display: flex; flex-direction: column; gap: 3px; font-size: 11px; }
+            .control-grid label.wide { grid-column: 1 / span 2; }
+            .control-grid label.check { flex-direction: row; align-items: center; gap: 6px; }
+            .control-grid select, .control-grid input { width: 100%; font: 11px monospace; color: #dce8f8; border: 1px solid rgba(170, 205, 255, 0.25); background: rgba(10, 16, 28, 0.96); }
+            .control-grid select { padding: 4px; }
+            .control-grid select option:disabled { color: #6c7a8d; }
+            .control-grid input[type="checkbox"] { width: auto; }
+            .control-grid .toggles { display: flex; align-items: flex-end; gap: 14px; }
+            .readout { min-height: 154px; white-space: pre-line; }
+            @media (min-width: 1000px) { .hud .readout { position: fixed; top: 118px; right: 12px; width: 360px; max-height: calc(100vh - 230px); overflow-y: auto; } }
+        </style>
+    </head>
+    <body>
+        <canvas class="main"></canvas>
+        <div class="hud">
+            <div class="pane intro">CT Volume Workflow<br>
+                A chest CT is cropped with an ndarray view, cast to f32, resampled to isotropic voxels, and normalized on the GPU or the CPU.
+                Planes slice the result, and a compute kernel fills the splat volume.
+                Drag to orbit, scroll to zoom, or click to probe.<br>
+                Data: LIDC-IDRI (The Cancer Imaging Archive, CC BY 3.0) via Kitware vtk-js-datasets
+            </div>
+            <div class="pane controls">
+                <div class="control-grid">
+                    <label class="wide">crop (slice view)
+                        <select id="crop"></select>
+                    </label>
+                    <label>spacing
+                        <select id="spacing">
+                            <option value="1.5">1.5 mm</option>
+                            <option value="2" selected>2.0 mm</option>
+                            <option value="3">3.0 mm</option>
+                        </select>
+                    </label>
+                    <label>resample
+                        <select id="method">
+                            <option value="nearest">nearest</option>
+                            <option value="linear" selected>linear</option>
+                            <option value="cubic">cubic</option>
+                        </select>
+                    </label>
+                    <label class="wide">normalize
+                        <select id="normalize">
+                            <option value="soft" selected>soft tissue (W 400, L 40)</option>
+                            <option value="lung">lung (W 1500, L -600)</option>
+                            <option value="bone">bone (W 1800, L 400)</option>
+                            <option value="minmax">min-max (raw stats)</option>
+                            <option value="zscore">z-score (ML preprocessing)</option>
+                        </select>
+                    </label>
+                    <label>backend
+                        <select id="backend">
+                            <option value="gpu" selected>gpu</option>
+                            <option value="cpu">cpu</option>
+                        </select>
+                    </label>
+                    <label>colormap
+                        <select id="colormap">
+                            <option value="grayscale" selected>grayscale</option>
+                            <option value="viridis">viridis</option>
+                            <option value="inferno">inferno</option>
+                        </select>
+                    </label>
+                    <label><span>axial <output id="axial-value"></output></span><input id="axial" type="range" min="0" max="1" step="1" value="0"></label>
+                    <label><span>coronal <output id="coronal-value"></output></span><input id="coronal" type="range" min="0" max="1" step="1" value="0"></label>
+                    <label><span>sagittal <output id="sagittal-value"></output></span><input id="sagittal" type="range" min="0" max="1" step="1" value="0"></label>
+                    <label><span>volume threshold <output id="threshold-value"></output></span><input id="threshold" type="range" min="0" max="1" step="0.01" value="0.75"></label>
+                    <label><span>volume opacity <output id="opacity-value"></output></span><input id="opacity" type="range" min="0.02" max="1" step="0.01" value="0.3"></label>
+                    <div class="toggles">
+                        <label class="check"><input id="planes" type="checkbox" checked>planes</label>
+                        <label class="check"><input id="volume" type="checkbox" checked>volume</label>
+                    </div>
+                </div>
+            </div>
+            <div class="pane readout">pipeline: loading</div>
+        </div>
+        <script src="../release/WasmGPU.iife.min.js"></script>
+        <script type="module">
+            const canvas = document.querySelector("canvas.main");
+            const readout = document.querySelector(".readout");
+            const ui = Object.fromEntries(["crop", "spacing", "method", "normalize", "backend", "colormap", "axial", "coronal", "sagittal", "threshold", "opacity", "planes", "volume"].map((id) => [id, document.querySelector(`#${id}`)]));
+            const outputs = Object.fromEntries(["axial", "coronal", "sagittal", "threshold", "opacity"].map((id) => [id, document.querySelector(`#${id}-value`)]));
+
+            // Dataset: LIDC-IDRI chest CT (The Cancer Imaging Archive, CC BY 3.0), as packaged by Kitware vtk-js-datasets (BSD-3-Clause), pinned to an immutable commit
+            const DATA_URL = "https://raw.githubusercontent.com/Kitware/vtk-js-datasets/cbdbd91c8b9f161d41fc1ddbb9369e17e20e6344/data/vti/LIDCFull.vti";
+            const DATA_BYTES = 47_228_441;
+            const SHAPE = [133, 512, 512];
+            const SPACING_MM = [2.5, 0.703125, 0.703125];
+            const BLOCK_COUNT = 2128;
+            const BLOCK_BYTES = 32_768;
+            const INFLATE_CONCURRENCY = 8;
+            const WANT_LIMIT_BYTES = 256 * 1024 * 1024;
+            const MM_PER_UNIT = 100;
+            const SPLAT_BUDGET = 250_000;
+            const SPLAT_SIGMA = 0.7;
+            const OPACITY_RAMP = 0.1;
+            const FINEST_SPACING_MM = 1.5;
+
+            // Crop presets ([start, stop) per [z, y, x] axis), derived from the decoded volume
+            const CROPS = {
+                thorax: { label: "thorax", ranges: [[0, 133], [64, 448], [16, 496]] },
+                full: { label: "full field of view", ranges: [[0, 133], [0, 512], [0, 512]] },
+                mediastinum: { label: "mediastinum", ranges: [[8, 100], [152, 392], [160, 400]] },
+                rightLung: { label: "right lung", ranges: [[0, 116], [116, 392], [72, 264]] },
+                leftLung: { label: "left lung", ranges: [[0, 108], [104, 376], [248, 448]] }
+            };
+            for (const crop of Object.values(CROPS)) {
+                crop.spec = crop.ranges.map(([a, b], axis) => (a === 0 && b === SHAPE[axis]) ? ":" : `${a}:${b}`).join(", ");
+                crop.start = crop.ranges.map(([a]) => a);
+                crop.shape = crop.ranges.map(([a, b]) => b - a);
+            }
+
+            const NORMALIZE = {
+                soft: { window: [400, 40], threshold: 0.75 },
+                lung: { window: [1500, -600], threshold: 0.95 },
+                bone: { window: [1800, 400], threshold: 0.33 },
+                minmax: { method: "minmax", domain: [0, 1], threshold: 0.42 },
+                zscore: { method: "zscore", domain: [-3, 3], threshold: 0.66 }
+            };
+
+            const check = (condition, message) => { if (!condition) throw new Error(message); };
+            const fmt = (value, digits = 2) => Number.isFinite(value) ? value.toFixed(digits) : "nan";
+            const mib = (bytes) => `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
+            const mb = (bytes) => (bytes / 1e6).toFixed(1);
+            const ms = (value) => `${Math.round(value)} ms`;
+            const product = (values) => values.reduce((a, b) => a * b, 1);
+            const nextPaint = () => new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)));
+
+            const state = {
+                status: "pipeline: loading", download: null, limits: null, timings: {}, raw: null, rawGPU: null,
+                iso: null, img: null, grid: null, generation: 0, settings: null, planes: null, splat: null,
+                probe: null, probeInFlight: Promise.resolve(), frameMs: 0
+            };
+
+            const setStatus = (status) => { state.status = status; refreshReadout(); };
+
+            // Isotropic resampling grid per ndarray axis: m = floor(n s / t), scale = t / s, offset centers the output extent on the input extent
+            const isoGrid = (shape, spacing, target) => {
+                const size = [], scale = [], offset = [];
+                for (let axis = 0; axis < shape.length; axis++) {
+                    const n = shape[axis], s = spacing[axis];
+                    const m = Math.max(1, Math.floor((n * s) / target));
+                    size.push(m);
+                    scale.push(target / s);
+                    offset.push(((target - s) + (n * s - m * target)) / (2 * s));
+                }
+                return { size, scale, offset, spacing: target };
+            };
+
+            const splatGridFor = (shape) => {
+                const f = Math.min(1, Math.cbrt(SPLAT_BUDGET / product(shape)));
+                return shape.map((n) => Math.max(2, Math.floor(n * f)));
+            };
+
+            const normalizeOptions = (mode) => {
+                const preset = NORMALIZE[mode];
+                if (preset.window) { const [W, L] = preset.window; return { scale: 1 / W, offset: -(L - W / 2) / W }; }
+                return { method: preset.method };
+            };
+            const normalizeLabel = (mode) => {
+                const preset = NORMALIZE[mode];
+                if (preset.window) return `${mode} (W ${preset.window[0]}, L ${preset.window[1]})`;
+                return `${mode} (all axes)`;
+            };
+            const domainFor = (mode) => NORMALIZE[mode].domain ?? [0, 1];
+            const toHU = (mode, value) => { const preset = NORMALIZE[mode]; if (!preset.window) return null; const [W, L] = preset.window; return value * W + (L - W / 2); };
+
+            const readSettings = () => ({
+                crop: ui.crop.value, spacing: Number(ui.spacing.value), method: ui.method.value, normalize: ui.normalize.value,
+                backend: ui.backend.value, colormap: ui.colormap.value, threshold: Number(ui.threshold.value), opacity: Number(ui.opacity.value)
+            });
+
+            const refreshReadout = () => {
+                const s = state.settings ?? readSettings();
+                const lines = [
+                    state.status,
+                    `backend: ${s.backend}`,
+                    `normalize: ${normalizeLabel(s.normalize)}`,
+                    `dataset: LIDC chest CT, ${SHAPE.join(" × ")} i16 [z, y, x]`
+                ];
+                if (state.download) lines.push(`download: ${state.download}`);
+                if (state.limits) lines.push(`limits: binding ${mib(state.limits.binding)}, buffer ${mib(state.limits.buffer)}`);
+                if (state.grid) {
+                    const crop = CROPS[s.crop], g = state.grid;
+                    lines.push(
+                        `crop: ${crop.label} [${crop.spec}], ${crop.shape.join(" × ")}, ${mib(product(crop.shape) * 4)} f32`,
+                        `iso: ${g.size.join(" × ")} @ ${fmt(g.spacing, 1)} mm, ${mib(product(g.size) * 4)}`,
+                        `resample scale: ${g.scale.map((v) => fmt(v, 3)).join(" / ")}`,
+                        `resample offset: ${g.offset.map((v) => fmt(v, 3)).join(" / ")}`
+                    );
+                }
+                if (state.splat) lines.push(`splats: ${state.splat.visible.toLocaleString("en-US")} drawn of ${state.splat.grid.join(" × ")} = ${state.splat.count.toLocaleString("en-US")}`);
+                const t = state.timings;
+                if (t.fetch !== undefined) lines.push(`load: fetch ${ms(t.fetch)}, base64 ${ms(t.base64)}, inflate ${ms(t.inflate)}, upload ${ms(t.upload)}`);
+                if (t.run !== undefined) lines.push(`last run: ${t.runKind} ${ms(t.run)} (${t.runBackend}), frame ${fmt(state.frameMs, 1)} ms`);
+                if (state.probe) lines.push(...state.probe);
+                readout.textContent = lines.join("\n");
+            };
+
+            const syncOutputs = () => {
+                for (const id of ["axial", "coronal", "sagittal"]) outputs[id].textContent = ui[id].value;
+                outputs.threshold.textContent = fmt(Number(ui.threshold.value), 2);
+                outputs.opacity.textContent = fmt(Number(ui.opacity.value), 2);
+            };
+            syncOutputs();
+            refreshReadout();
+
+            // Device limits: probe the adapter, then request raised limits clamped to what it supports
+            const adapter = await navigator.gpu?.requestAdapter({ powerPreference: "high-performance" });
+            const requested = adapter ? {
+                maxStorageBufferBindingSize: Math.min(adapter.limits.maxStorageBufferBindingSize, adapter.limits.maxBufferSize, WANT_LIMIT_BYTES),
+                maxBufferSize: Math.min(adapter.limits.maxBufferSize, WANT_LIMIT_BYTES)
+            } : {};
+            const wgpu = await WasmGPU.create(canvas, { powerPreference: "high-performance", antialias: true, ...requested });
+            const device = wgpu.gpu.device;
+            const queue = wgpu.gpu.queue;
+            const nd = wgpu.compute.ndarray;
+            state.limits = { binding: device.limits.maxStorageBufferBindingSize, buffer: device.limits.maxBufferSize };
+            const bindable = Math.min(state.limits.binding, state.limits.buffer);
+
+            // Gate crop presets on the granted limits: the f32 crop and the finest-spacing iso volume must both be bindable
+            const cropNeeds = (crop) => Math.max(product(crop.shape) * 4, product(isoGrid(crop.shape, SPACING_MM, FINEST_SPACING_MM).size) * 4);
+            for (const [id, crop] of Object.entries(CROPS)) {
+                const option = document.createElement("option");
+                const need = cropNeeds(crop);
+                option.value = id;
+                option.disabled = need > bindable;
+                option.textContent = option.disabled ? `${crop.label} (needs ${mib(need)} binding)` : `${crop.label} (${mib(product(crop.shape) * 4)} f32)`;
+                option.selected = id === "thorax";
+                ui.crop.append(option);
+            }
+            check(!ui.crop.selectedOptions[0].disabled, `the default crop needs ${mib(cropNeeds(CROPS.thorax))} of storage binding, but the device grants ${mib(bindable)}`);
+
+            const scene = wgpu.createScene([0.012, 0.016, 0.026]);
+            const camera = wgpu.createCamera.perspective({ fov: 40, near: 0.05, far: 100 });
+            camera.transform.setPosition(3.2, -7.4, 2.6);
+            camera.lookAtWithUp([0, 0, 0], [0, 0, 1]);
+            const controls = wgpu.createControls.navigation(camera, canvas, {
+                mode: "orbit",
+                axisConvention: "z-up-rh",
+                target: [0, 0, 0],
+                enableDamping: true,
+                dampingFactor: 0.1,
+                zoomOnCursor: true,
+                minDistance: 1.5,
+                maxDistance: 30
+            });
+
+            // One legend source shared by the planes and the splat kernel
+            const legendSource = (s) => ({ scaleTransform: { mode: "linear", domainMin: domainFor(s.normalize)[0], domainMax: domainFor(s.normalize)[1] }, colormap: s.colormap });
+            const legendFormat = (mode) => NORMALIZE[mode].window ? (value) => `${Math.round(toHU(mode, value))}` : (value) => fmt(value, 2);
+            const legendTitle = (mode) => NORMALIZE[mode].window ? `HU (window ${NORMALIZE[mode].window[0]}/${NORMALIZE[mode].window[1]})` : "normalized value";
+            const initial = readSettings();
+            const legend = wgpu.createOverlay.legend({
+                id: "tomography-legend",
+                title: legendTitle(initial.normalize),
+                source: legendSource(initial),
+                anchor: { kind: "screen", corner: "top-right", offsetPx: [-14, 14] },
+                orientation: "horizontal",
+                widthPx: 200,
+                heightPx: 18,
+                tickCount: 5,
+                strictParity: true,
+                formatValue: legendFormat(initial.normalize)
+            });
+            wgpu.createOverlay.system({ controls, camera, scene, zIndex: 4, interactionThrottleMs: 30, autoUpdate: true })
+                .addLayer(wgpu.createOverlay.axisTriad({ id: "tomography-axis-triad", anchor: { kind: "screen", corner: "bottom-right", offsetPx: [-70, -70] }, sizePx: 46, lineWidthPx: 2, labels: ["L", "P", "S"] }))
+                .addLayer(legend);
+
+            // Render loop: resolves waiters once a frame using the current data has been encoded
+            let frameWaiters = [];
+            const renderedFrame = () => new Promise((resolve) => frameWaiters.push(resolve));
+            let readoutClock = 0;
+            wgpu.run((dt) => {
+                controls.update(dt);
+                wgpu.render(scene, camera);
+                if (frameWaiters.length) { const waiters = frameWaiters; frameWaiters = []; for (const resolve of waiters) resolve(); }
+                if (dt > 0 && dt < 5) state.frameMs = state.frameMs ? state.frameMs * 0.9 + dt * 100 : dt * 1000;
+                readoutClock += dt;
+                if (readoutClock > 1 && state.timings.run !== undefined) { readoutClock = 0; refreshReadout(); }
+            });
+
+            // Byte-level base64 decoding (no 47 MB string conversion)
+            const B64 = new Uint8Array(256).fill(255);
+            for (let i = 0; i < 64; i++) B64["ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/".charCodeAt(i)] = i;
+            const decodeBase64 = (bytes, start, end) => {
+                while (end > start && bytes[end - 1] === 61) end--;
+                const out = new Uint8Array(Math.floor(((end - start) * 3) / 4));
+                let o = 0, i = start, bad = 0;
+                for (; i + 4 <= end; i += 4) {
+                    const a = B64[bytes[i]], b = B64[bytes[i + 1]], c = B64[bytes[i + 2]], d = B64[bytes[i + 3]];
+                    bad |= a | b | c | d;
+                    const v = (a << 18) | (b << 12) | (c << 6) | d;
+                    out[o++] = v >> 16; out[o++] = (v >> 8) & 255; out[o++] = v & 255;
+                }
+                if (end - i >= 2) { const a = B64[bytes[i]], b = B64[bytes[i + 1]]; bad |= a | b; out[o++] = (a << 2) | (b >> 4); if (end - i === 3) { const c = B64[bytes[i + 2]]; bad |= c; out[o++] = ((b & 15) << 4) | (c >> 2); } }
+                check((bad & 0xC0) === 0 && end - i !== 1, "dataset payload is not valid base64");
+                return out;
+            };
+
+            const indexOfBytes = (bytes, text, from = 0, backwards = false) => {
+                const pattern = new TextEncoder().encode(text);
+                const last = bytes.length - pattern.length;
+                for (let i = backwards ? last : from; backwards ? i >= from : i <= last; i += backwards ? -1 : 1) {
+                    let k = 0;
+                    while (k < pattern.length && bytes[i + k] === pattern[k]) k++;
+                    if (k === pattern.length) return i;
+                }
+                return -1;
+            };
+            const isSpace = (byte) => byte === 32 || byte === 9 || byte === 10 || byte === 13;
+            const attributes = (xml, tag) => {
+                const match = xml.match(new RegExp(`<${tag}\\b([^>]*)>`));
+                check(match, `dataset header has no <${tag}> element`);
+                return Object.fromEntries(Array.from(match[1].matchAll(/([A-Za-z_]+)="([^"]*)"/g), (m) => [m[1], m[2]]));
+            };
+            const expectAttributes = (xml, tag, expected) => {
+                const found = attributes(xml, tag);
+                for (const [name, value] of Object.entries(expected)) check(found[name] === value, `dataset ${tag}.${name} is "${found[name]}", expected "${value}"`);
+            };
+
+            const download = async () => {
+                const response = await fetch(DATA_URL);
+                if (!response.ok) throw new Error(`dataset download failed: HTTP ${response.status} ${response.statusText}`);
+                const encoding = response.headers.get("content-encoding");
+                const length = Number(response.headers.get("content-length") ?? 0);
+                const total = (!encoding || encoding === "identity") && length > 0 ? length : DATA_BYTES;
+                let bytes = new Uint8Array(total), received = 0, shown = 0;
+                const reader = response.body.getReader();
+                for (;;) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    if (received + value.byteLength > bytes.length) { const grown = new Uint8Array(Math.max(bytes.length * 2, received + value.byteLength)); grown.set(bytes.subarray(0, received)); bytes = grown; }
+                    bytes.set(value, received);
+                    received += value.byteLength;
+                    const now = performance.now();
+                    if (now - shown > 100) { shown = now; state.download = `${mb(received)} / ${mb(total)} MB`; refreshReadout(); }
+                }
+                state.download = `${mb(received)} / ${mb(total)} MB`;
+                check(received === DATA_BYTES, `dataset is ${received} bytes, expected ${DATA_BYTES}`);
+                return bytes.subarray(0, received);
+            };
+
+            // Decode the VTK ImageData file into one CPU i16 ndarray (the one CPU copy) and upload it once
+            const loadVolume = async () => {
+                let t = performance.now();
+                const bytes = await download();
+                state.timings.fetch = performance.now() - t;
+                t = performance.now();
+                const open = indexOfBytes(bytes, "<DataArray");
+                check(open >= 0, "dataset has no <DataArray> element");
+                const gt = bytes.indexOf(62, open);
+                const close = indexOfBytes(bytes, "</DataArray>", gt, true);
+                check(gt > 0 && close > gt, "dataset <DataArray> element is not closed");
+                const xml = new TextDecoder().decode(bytes.subarray(0, gt + 1));
+                check(indexOfBytes(bytes, "<DataArray", close) < 0, "dataset has more than one <DataArray> element");
+                expectAttributes(xml, "VTKFile", { type: "ImageData", byte_order: "LittleEndian", header_type: "UInt64", compressor: "vtkZLibDataCompressor" });
+                expectAttributes(xml, "ImageData", { WholeExtent: "0 511 0 511 0 132", Origin: "0 0 0", Spacing: "0.703125 0.703125 2.5" });
+                expectAttributes(xml, "DataArray", { type: "Int16", Name: "DICOMImage", format: "binary", RangeMin: "-2048", RangeMax: "3071" });
+                let start = gt + 1, end = close;
+                while (start < end && isSpace(bytes[start])) start++;
+                while (end > start && isSpace(bytes[end - 1])) end--;
+                // VTK encodes the UInt64 block header and the compressed blocks as two separate base64 runs
+                const headerBytes = 8 * (3 + BLOCK_COUNT), headerChars = Math.ceil(headerBytes / 3) * 4;
+                const header = new DataView(decodeBase64(bytes, start, start + headerChars).buffer);
+                check(header.byteLength === headerBytes, "dataset block header has the wrong length");
+                const word = (i) => Number(header.getBigUint64(8 * i, true));
+                check(word(0) === BLOCK_COUNT && word(1) === BLOCK_BYTES && word(2) === 0, `dataset block header is [${word(0)}, ${word(1)}, ${word(2)}], expected [${BLOCK_COUNT}, ${BLOCK_BYTES}, 0]`);
+                const blocks = decodeBase64(bytes, start + headerChars, end);
+                const offsets = new Array(BLOCK_COUNT + 1).fill(0);
+                for (let b = 0; b < BLOCK_COUNT; b++) offsets[b + 1] = offsets[b] + word(3 + b);
+                check(offsets[BLOCK_COUNT] === blocks.byteLength, `dataset blocks hold ${blocks.byteLength} bytes, the header says ${offsets[BLOCK_COUNT]}`);
+                check(BLOCK_COUNT * BLOCK_BYTES === product(SHAPE) * 2, "dataset blocks do not cover the volume");
+                state.timings.base64 = performance.now() - t;
+                t = performance.now();
+                // Each block is an independent zlib stream; inflate a few at a time straight into ndarray-owned memory
+                const raw = nd.empty("i16", { shape: SHAPE });
+                try {
+                    let next = 0, done = 0;
+                    const inflateBlock = async (b) => {
+                        const stream = new Blob([blocks.subarray(offsets[b], offsets[b + 1])]).stream().pipeThrough(new DecompressionStream("deflate"));
+                        const out = new Uint8Array(await new Response(stream).arrayBuffer());
+                        check(out.byteLength === BLOCK_BYTES, `dataset block ${b} inflated to ${out.byteLength} bytes, expected ${BLOCK_BYTES}`);
+                        raw.backingBytes().set(out, b * BLOCK_BYTES);
+                        if (++done % 128 === 0) { state.download = `${mb(DATA_BYTES)} MB, inflated ${done} / ${BLOCK_COUNT} blocks`; refreshReadout(); }
+                    };
+                    await Promise.all(Array.from({ length: INFLATE_CONCURRENCY }, async () => { while (next < BLOCK_COUNT) await inflateBlock(next++); }));
+                    state.download = `${mb(DATA_BYTES)} / ${mb(DATA_BYTES)} MB`;
+                    state.timings.inflate = performance.now() - t;
+                    t = performance.now();
+                    state.raw = raw;
+                    state.rawGPU = nd.toGPU(raw, { label: "tomography-example:raw-i16" });
+                    state.timings.upload = performance.now() - t;
+                } catch (error) { if (state.raw !== raw) raw.destroy(); throw error; }
+            };
+
+            // Slice planes: three 2D lattices fed by C-contiguous plane ndarrays; each plane maps its in-plane axes into the LPS world frame
+            const SQRT1_2 = Math.SQRT1_2;
+            const PLANE_SPECS = {
+                axial: { axis: 0, inPlane: [2, 1], rotation: [1, 0, 0, 0], slice: (k) => `${k}, :, :` },
+                coronal: { axis: 1, inPlane: [2, 0], rotation: [-SQRT1_2, 0, 0, SQRT1_2], slice: (j) => `:, ${j}, :` },
+                sagittal: { axis: 2, inPlane: [1, 0], rotation: [-0.5, 0.5, -0.5, 0.5], slice: (i) => `:, :, ${i}` }
+            };
+            const worldOf = (axis, index, size, spacing) => (axis === 2 ? 1 : -1) * (index - (size - 1) / 2) * spacing;
+
+            const createPlanes = (shape, spacingMM, s) => {
+                const w = spacingMM / MM_PER_UNIT, planes = {};
+                for (const [name, spec] of Object.entries(PLANE_SPECS)) {
+                    const [u, v] = spec.inPlane;
+                    const arr = nd.empty("f32", { shape: [shape[v], shape[u]] }, { residency: "gpu", label: `tomography-example:${name}` });
+                    check(arr.offsetBytes === 0 && arr.baseOffsetBytes === 0 && arr.buffer.offsetBytes === 0 && arr.isContiguousC, `${name} plane array must be an owned C-contiguous array at offset 0`);
+                    const lattice = wgpu.createLatticeSpace({
+                        dimensions: [shape[u], shape[v]],
+                        dataBuffer: arr.buffer,
+                        origin: [-(shape[u] - 1) / 2 * w, -(shape[v] - 1) / 2 * w, 0],
+                        spacing: [w, w, w],
+                        cullMode: "none",
+                        colormap: s.colormap,
+                        scaleTransform: legendSource(s).scaleTransform,
+                        visible: ui.planes.checked,
+                        name: `${name} plane`
+                    });
+                    lattice.transform.setRotation(...spec.rotation);
+                    planes[name] = { arr, lattice, spec };
+                }
+                return planes;
+            };
+            const destroyPlanes = (planes) => { for (const plane of Object.values(planes)) { scene.remove(plane.lattice); plane.lattice.destroy(); plane.arr.destroy(); } };
+
+            const updatePlanes = () => {
+                const { img, planes } = state, shape = img.shape, w = state.grid.spacing / MM_PER_UNIT;
+                for (const [name, plane] of Object.entries(planes)) {
+                    const index = Number(ui[name].value), axis = plane.spec.axis;
+                    nd.contiguous(nd.slice(img, plane.spec.slice(index)), { out: plane.arr });
+                    plane.lattice.markDataDirty();
+                    const position = [0, 0, 0];
+                    position[[2, 1, 0][axis]] = worldOf(axis, index, shape[axis], w);
+                    plane.lattice.transform.setPosition(...position);
+                }
+            };
+
+            // Splat volume: an example-local kernel maps a downsampled ndarray through the shared scale transform and colormap,
+            // and compacts the visible voxels to the front of the splat buffers so the per-frame depth sort only covers those
+            const SPLAT_WGSL = /* wgsl */`
+                struct Params {
+                    dims: vec4<u32>,
+                    spacing: vec4<f32>,
+                    window: vec4<f32>,
+                    style: vec4<f32>
+                }
+                @group(0) @binding(0) var<storage, read> vol: array<f32>;
+                @group(0) @binding(1) var<storage, read_write> centerOpacity: array<vec4<f32>>;
+                @group(0) @binding(2) var<storage, read_write> scales: array<vec4<f32>>;
+                @group(0) @binding(3) var<storage, read_write> colors: array<vec4<f32>>;
+                @group(0) @binding(4) var<storage, read_write> source: array<u32>;
+                @group(0) @binding(5) var<storage, read_write> visible: atomic<u32>;
+                @group(0) @binding(6) var<uniform> params: Params;
+                @group(0) @binding(7) var lut: texture_1d<f32>;
+                // Same texel addressing as a linearly filtered, clamped 1D colormap sample
+                fn sampleLUT(u: f32) -> vec4<f32> {
+                    let width = textureDimensions(lut);
+                    let x = clamp(u * f32(width) - 0.5, 0.0, f32(width - 1u));
+                    let i0 = u32(floor(x));
+                    let i1 = min(i0 + 1u, width - 1u);
+                    return mix(textureLoad(lut, i0, 0), textureLoad(lut, i1, 0), x - f32(i0));
+                }
+                @compute @workgroup_size(256)
+                fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
+                    let n = gid.x;
+                    if (n >= params.dims.w) { return; }
+                    let u = clamp((vol[n] - params.window.x) / max(params.window.y - params.window.x, 1e-20), 0.0, 1.0);
+                    let alpha = smoothstep(params.window.z, params.window.z + params.window.w, u) * params.style.x;
+                    if (alpha <= 0.002) { return; }
+                    let nx = params.dims.x;
+                    let ny = params.dims.y;
+                    let c = (vec3<f32>(params.dims.xyz) - vec3<f32>(1.0)) * 0.5;
+                    let p = vec3<f32>(f32(n % nx) - c.x, c.y - f32((n / nx) % ny), c.z - f32(n / (nx * ny))) * params.spacing.xyz;
+                    let slot = atomicAdd(&visible, 1u);
+                    centerOpacity[slot] = vec4<f32>(p, alpha);
+                    scales[slot] = vec4<f32>(params.spacing.xyz * params.spacing.w, 0.0);
+                    colors[slot] = vec4<f32>(sampleLUT(u).rgb, 1.0);
+                    source[slot] = n;
+                }
+            `;
+            const splatPipeline = wgpu.compute.createPipeline({ label: "tomography-example:splats", code: SPLAT_WGSL, entryPoint: "main" });
+            const splatParams = wgpu.compute.createUniformBuffer({ label: "tomography-example:splat-params", byteLength: 64, copyDst: true });
+            const splatParamData = new ArrayBuffer(64);
+            const ZERO_U32 = new Uint32Array(1);
+
+            const createSplat = (isoShape, spacingMM) => {
+                const grid = splatGridFor(isoShape), count = product(grid);
+                const spacing = [2, 1, 0].map((axis) => (isoShape[axis] * spacingMM) / grid[axis] / MM_PER_UNIT);
+                const rotations = new Float32Array(count * 4);
+                for (let n = 0; n < count; n++) rotations[n * 4 + 3] = 1;
+                const buffers = {
+                    centerOpacity: wgpu.compute.createStorageBuffer({ label: "tomography-example:splat-centers", byteLength: count * 16 }),
+                    rotation: wgpu.compute.createStorageBuffer({ label: "tomography-example:splat-rotations", data: rotations }),
+                    scale: wgpu.compute.createStorageBuffer({ label: "tomography-example:splat-scales", byteLength: count * 16 }),
+                    color: wgpu.compute.createStorageBuffer({ label: "tomography-example:splat-colors", byteLength: count * 16 })
+                };
+                // The kernel's bookkeeping lives in ndarrays too: a visible-splat counter and each slot's source voxel, read back with toCPU()
+                const vol = nd.empty("f32", { shape: grid }, { residency: "gpu", label: "tomography-example:splat-volume" });
+                const source = nd.empty("u32", { shape: [count] }, { residency: "gpu", label: "tomography-example:splat-source" });
+                const counter = nd.empty("u32", { shape: [1] }, { residency: "gpu", label: "tomography-example:splat-counter" });
+                const half = spacing.map((value, axis) => value * grid[2 - axis] / 2 + 3 * SPLAT_SIGMA * value);
+                return { grid, count, visible: 0, spacing, half, buffers, vol, source, counter, field: null, bindGroup: null, colormap: null };
+            };
+            const retireField = (splat) => { if (!splat.field) return; scene.remove(splat.field); splat.field.destroy(); splat.field = null; };
+            const destroySplat = (splat) => { retireField(splat); for (const buffer of Object.values(splat.buffers)) buffer.destroy(); for (const arr of [splat.vol, splat.source, splat.counter]) arr.destroy(); };
+
+            const updateSplat = async (resample) => {
+                const { splat, img } = state, s = readSettings();
+                if (resample) nd.resize(img, { axes: [0, 1, 2], size: splat.grid, method: "linear", antialias: true, out: splat.vol });
+                if (!splat.bindGroup || splat.colormap !== s.colormap) {
+                    splat.colormap = s.colormap;
+                    splat.bindGroup = splatPipeline.createBindGroup(0, {
+                        0: splat.vol.bindingResource(),
+                        1: splat.buffers.centerOpacity,
+                        2: splat.buffers.scale,
+                        3: splat.buffers.color,
+                        4: splat.source.bindingResource(),
+                        5: splat.counter.bindingResource(),
+                        6: splatParams,
+                        7: wgpu.colormap.builtin(s.colormap).getGPUResources(device, queue).view
+                    }, "tomography-example:splat-bg0");
+                }
+                const [domainMin, domainMax] = domainFor(s.normalize);
+                new Uint32Array(splatParamData, 0, 4).set([splat.grid[2], splat.grid[1], splat.grid[0], splat.count]);
+                new Float32Array(splatParamData, 16, 12).set([...splat.spacing, SPLAT_SIGMA, domainMin, domainMax, s.threshold, OPACITY_RAMP, s.opacity, 0, 0, 0]);
+                splatParams.write(splatParamData);
+                splat.counter.buffer.write(ZERO_U32);
+                wgpu.compute.dispatchBatch([{ pipeline: splatPipeline, bindGroups: [splat.bindGroup], workgroups: wgpu.compute.workgroups1D(splat.count, 256) }]);
+                const counted = await nd.toCPU(splat.counter);
+                const visible = counted.get(0);
+                counted.destroy();
+                // A field draws the first `visible` slots of the borrowed buffers; it is replaced only when that count changes
+                if (splat.field && visible === splat.visible) return;
+                retireField(splat);
+                splat.visible = visible;
+                if (visible === 0) return;
+                splat.field = wgpu.createSplatField({
+                    centerOpacityBuffer: splat.buffers.centerOpacity,
+                    rotationBuffer: splat.buffers.rotation,
+                    scaleBuffer: splat.buffers.scale,
+                    colorBuffer: splat.buffers.color,
+                    splatCount: visible,
+                    boundsMin: splat.half.map((value) => -value),
+                    boundsMax: splat.half,
+                    colorSpace: "linear",
+                    visible: ui.volume.checked,
+                    name: "ct splat volume"
+                });
+                scene.add(splat.field);
+            };
+
+            const applyVisuals = () => {
+                const s = readSettings(), source = legendSource(s);
+                for (const plane of Object.values(state.planes ?? {})) { plane.lattice.colormap = s.colormap; plane.lattice.setScaleTransform(source.scaleTransform); }
+                legend.setSource(source);
+                legend.setTitle(legendTitle(s.normalize));
+                legend.setTickPresentation(5, legendFormat(s.normalize));
+            };
+
+            // Probes and pipeline runs never overlap (the scheduler awaits state.probeInFlight), so replaced arrays can be destroyed at once
+            const retire = (...items) => { for (const item of items) item?.destroy(); };
+
+            // Slider ranges follow the iso shape, keeping each plane at the same relative depth
+            const fitSliders = (shape, previous) => {
+                for (const [name, spec] of Object.entries(PLANE_SPECS)) {
+                    const n = shape[spec.axis], input = ui[name];
+                    const old = previous ? Number(input.value) / Math.max(1, previous[spec.axis] - 1) : 0.5;
+                    input.max = String(n - 1);
+                    input.value = String(Math.min(n - 1, Math.max(0, Math.round(old * (n - 1)))));
+                }
+                syncOutputs();
+            };
+
+            // The ndarray workflow, written once for either residency: crop view -> f32 cast -> isotropic resample -> normalize
+            const runFull = async (s) => {
+                const crop = CROPS[s.crop];
+                check(cropNeeds(crop) <= bindable, `the ${crop.label} crop needs ${mib(cropNeeds(crop))} of storage binding, but the device grants ${mib(bindable)}`);
+                const source = s.backend === "gpu" ? state.rawGPU : state.raw;
+                const roi = nd.slice(source, crop.spec);
+                check(roi.shape.every((n, axis) => n === crop.shape[axis]), `crop ${crop.spec} has shape [${roi.shape}], expected [${crop.shape}]`);
+                const grid = isoGrid(roi.shape, SPACING_MM, s.spacing);
+                const roiF32 = nd.cast(roi, "f32");
+                let iso, img;
+                try {
+                    iso = nd.resample(roiF32, { axes: [0, 1, 2], size: grid.size, scale: grid.scale, offset: grid.offset, method: s.method, antialias: s.method !== "nearest", boundary: "edge" });
+                } finally { roiF32.destroy(); }
+                try {
+                    img = nd.normalize(iso, normalizeOptions(s.normalize));
+                    if (img.residency === "cpu") { const cpu = img; img = nd.toGPU(cpu, { label: "tomography-example:img" }); cpu.destroy(); }
+                } catch (error) { iso.destroy(); throw error; }
+                const previous = state.img?.shape ?? null, sameShape = previous && previous.every((n, axis) => n === img.shape[axis]);
+                retire(state.iso, state.img);
+                state.iso = iso;
+                state.img = img;
+                state.grid = grid;
+                state.generation++;
+                if (!sameShape) {
+                    const planes = createPlanes(img.shape, s.spacing, s), splat = createSplat(img.shape, s.spacing);
+                    for (const plane of Object.values(planes)) scene.add(plane.lattice);
+                    if (state.planes) destroyPlanes(state.planes);
+                    if (state.splat) destroySplat(state.splat);
+                    state.planes = planes;
+                    state.splat = splat;
+                    fitSliders(img.shape, previous);
+                }
+            };
+
+            const runNormalize = async (s) => {
+                const options = normalizeOptions(s.normalize);
+                if (state.iso.residency === "gpu") nd.normalize(state.iso, { ...options, out: state.img });
+                else {
+                    const cpu = nd.normalize(state.iso, options), img = nd.toGPU(cpu, { label: "tomography-example:img" });
+                    cpu.destroy();
+                    retire(state.img);
+                    state.img = img;
+                }
+                state.generation++;
+            };
+
+            // Coalesced scheduler: input events mark tiers dirty; at most one run at a time, plus one more if changes arrived meanwhile
+            const dirty = { full: false, normalize: false, planes: false, splat: false, visuals: false };
+            let scheduled = false, running = false;
+            const request = (...tiers) => {
+                for (const tier of tiers) dirty[tier] = true;
+                if (!state.rawGPU) return;
+                if (dirty.full || dirty.normalize) { state.settings = readSettings(); state.status = "pipeline: running"; refreshReadout(); }
+                if (!scheduled && !running) { scheduled = true; requestAnimationFrame(() => { scheduled = false; pump(); }); }
+            };
+            const pump = async () => {
+                if (running) return;
+                running = true;
+                try {
+                    while (Object.values(dirty).some(Boolean)) {
+                        await state.probeInFlight;
+                        const work = { ...dirty };
+                        for (const key of Object.keys(dirty)) dirty[key] = false;
+                        const s = readSettings();
+                        state.settings = s;
+                        const heavy = work.full || work.normalize, start = performance.now();
+                        if (heavy && s.backend === "cpu") await nextPaint();
+                        if (work.full) await runFull(s);
+                        else if (work.normalize) await runNormalize(s);
+                        if (heavy || work.visuals) applyVisuals();
+                        if (heavy || work.planes) updatePlanes();
+                        if (heavy || work.splat || work.visuals) await updateSplat(heavy);
+                        if (heavy) {
+                            state.probe = null;
+                            await renderedFrame();
+                            await queue.onSubmittedWorkDone();
+                            Object.assign(state.timings, { run: performance.now() - start, runKind: work.full ? "full" : "normalize", runBackend: s.backend });
+                            if (!dirty.full && !dirty.normalize) state.status = "pipeline: ready";
+                            refreshReadout();
+                        }
+                    }
+                } catch (error) {
+                    setStatus(`pipeline: error: ${error instanceof Error ? error.message : String(error)}`);
+                    throw error;
+                } finally { running = false; }
+            };
+
+            for (const id of ["crop", "spacing", "method", "backend"]) ui[id].addEventListener("change", () => request("full"));
+            // Each mode starts at a volume threshold that keeps roughly the same dense structures (contrast-filled vessels and bone) for the thorax crop
+            ui.normalize.addEventListener("change", () => { ui.threshold.value = String(NORMALIZE[ui.normalize.value].threshold); syncOutputs(); request("normalize"); });
+            ui.colormap.addEventListener("change", () => request("visuals"));
+            for (const id of ["axial", "coronal", "sagittal"]) ui[id].addEventListener("input", () => { syncOutputs(); request("planes"); });
+            for (const id of ["threshold", "opacity"]) ui[id].addEventListener("input", () => { syncOutputs(); request("splat"); });
+            ui.planes.addEventListener("change", () => { for (const plane of Object.values(state.planes ?? {})) plane.lattice.visible = ui.planes.checked; });
+            ui.volume.addEventListener("change", () => { if (state.splat?.field) state.splat.field.visible = ui.volume.checked; });
+
+            // Probe: picked cell -> iso index -> source voxel HU (CPU raw, no GPU work) and processed value (one-element readback of a view)
+            const isoIndexForHit = async (hit) => {
+                const shape = state.img.shape;
+                for (const [name, plane] of Object.entries(state.planes)) {
+                    if (hit.object !== plane.lattice) continue;
+                    const [u, v] = plane.spec.inPlane, width = plane.lattice.dimensions[0];
+                    const index = [0, 0, 0];
+                    index[plane.spec.axis] = Number(ui[name].value);
+                    index[u] = hit.elementIndex % width;
+                    index[v] = Math.floor(hit.elementIndex / width);
+                    return { where: `${name} plane`, index };
+                }
+                const splat = state.splat;
+                if (splat.field && hit.object === splat.field) {
+                    const slot = await nd.toCPU(nd.slice(splat.source, `${hit.elementIndex}:${hit.elementIndex + 1}`));
+                    let n = slot.get(0);
+                    slot.destroy();
+                    const voxel = [0, 0, 0];
+                    for (let axis = 2; axis >= 0; axis--) { voxel[axis] = n % splat.grid[axis]; n = Math.floor(n / splat.grid[axis]); }
+                    return { where: "splat volume", index: voxel.map((d, axis) => Math.min(shape[axis] - 1, Math.max(0, Math.round(((d + 0.5) * shape[axis]) / splat.grid[axis] - 0.5)))) };
+                }
+                return null;
+            };
+            canvas.addEventListener("click", async (event) => {
+                if (!state.img || running) return;
+                let release;
+                state.probeInFlight = new Promise((resolve) => { release = resolve; });
+                try {
+                    const generation = state.generation;
+                    const hit = await wgpu.pick(scene, camera, event.clientX, event.clientY, { includeAttributes: false });
+                    if (generation !== state.generation) return;
+                    const target = hit && await isoIndexForHit(hit);
+                    if (!target) { state.probe = null; refreshReadout(); return; }
+                    const s = state.settings, crop = CROPS[s.crop], g = state.grid, [k, j, i] = target.index;
+                    const voxel = target.index.map((d, axis) => Math.min(crop.shape[axis] - 1, Math.max(0, Math.round(d * g.scale[axis] + g.offset[axis])))).map((d, axis) => d + crop.start[axis]);
+                    const hu = state.raw.get(...voxel);
+                    const cpu = await nd.toCPU(nd.slice(state.img, `${k}:${k + 1}, ${j}:${j + 1}, ${i}:${i + 1}`));
+                    const value = cpu.get(0, 0, 0);
+                    cpu.destroy();
+                    if (generation !== state.generation) return;
+                    const huFromValue = toHU(s.normalize, value);
+                    state.probe = [
+                        `probe: ${target.where}, iso [${k}, ${j}, ${i}]`,
+                        `source voxel [${voxel.join(", ")}]: ${hu} HU`,
+                        `processed: ${fmt(value, 4)}${huFromValue === null ? "" : ` (${Math.round(huFromValue)} HU in window)`}`
+                    ];
+                    refreshReadout();
+                } finally { release(); }
+            });
+
+            try { await loadVolume(); } catch (error) { setStatus(`pipeline: error: ${error instanceof Error ? error.message : String(error)}`); }
+            if (state.rawGPU) request("full");
+        </script>
+    </body>
+</html>

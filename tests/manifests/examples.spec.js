@@ -74,6 +74,15 @@ const exerciseExample = async (page, example) => {
         await expect(page.locator("#scale-status")).toContainText("active mode/clamp: log / range");
         await page.locator("#scale-stats").dispatchEvent("click");
         await expect(page.locator("#scale-status")).toContainText("status: stats ready", { timeout: example.interactionTimeout });
+    } else if (file === "tomography.html") {
+        await page.locator("#normalize").selectOption("lung");
+        await expect(page.locator(".readout")).toContainText("normalize: lung");
+        await expect(page.locator(".readout")).toContainText("pipeline: ready", { timeout: example.interactionTimeout });
+        await page.locator("#axial").fill("40");
+        await expect(page.locator("#axial-value")).toHaveText("40");
+        await page.locator("#backend").selectOption("cpu");
+        await expect(page.locator(".readout")).toContainText("backend: cpu");
+        await expect(page.locator(".readout")).toContainText("pipeline: ready", { timeout: example.interactionTimeout });
     }
 };
 

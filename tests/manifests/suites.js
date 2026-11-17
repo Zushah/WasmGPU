@@ -26,7 +26,8 @@ export const examples = [
     { file: "protein.html", title: "WasmGPU | Protein Example", ready: [".info", "loaded"] },
     { file: "quantum.html", title: "WasmGPU | Quantum Example", ready: [".readout", "orbital: 3d_z²"] },
     { file: "scaling.html", title: "WasmGPU | Scaling Example", ready: ["#scale-status", "status: idle"], interactionTimeout: 120_000, timeout: 180_000 },
-    { file: "terrain.html", title: "WasmGPU | Terrain Example", ready: [".hud", "Click terrain to lock pointer"] }
+    { file: "terrain.html", title: "WasmGPU | Terrain Example", ready: [".hud", "Click terrain to lock pointer"] },
+    { file: "tomography.html", title: "WasmGPU | Tomography Example", ready: [".readout", "pipeline: ready"], readyTimeout: 180_000, interactionTimeout: 60_000, timeout: 300_000 },
 ];
 
 export const testFiles = readdirSync(TEST_DIR, { withFileTypes: true }).filter((entry) => entry.isFile() && entry.name.endsWith(".test.js")).map((entry) => entry.name).sort((a, b) => a.localeCompare(b));

@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Thursday, November 12, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Tuesday, November 17, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Tuesday, November 10, 2026, [**`9bd7aee`**](https://github.com/Zushah/WasmGPU/commit/9bd7aee).
+Parent commit: Thursday, November 12, 2026, [**`f7087c3`**](https://github.com/Zushah/WasmGPU/commit/f7087c3).
 
 Latest release: Monday, August 31, 2026, [**`v0.10.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.10.0).
 
@@ -924,7 +924,7 @@ Important files:
 - `./examples/overlay.html`: overlay layers.
 - `./examples/picking.html`: picking and selection.
 - `./examples/scaling.html`: scaling and colormap behavior.
-- `./examples/fluid.html`, `./examples/galaxy.html`, `./examples/graphing.html`, `./examples/mandelbulb.html`, `./examples/protein.html`, `./examples/terrain.html`, `./examples/lego.html`, and `./examples/quantum.html`: larger rendering and compute examples.
+- `./examples/fluid.html`, `./examples/galaxy.html`, `./examples/graphing.html`, `./examples/lego.html`, `./examples/mandelbulb.html`, `./examples/protein.html`, `./examples/quantum.html`, `./examples/terrain.html`, `./examples/tomography.html`: larger rendering and compute examples.
 
 Examples import built bundles from `./release/`. When source changes public behavior, update examples when preparing a release or when a specific example fix is needed.
 
