@@ -9,9 +9,7 @@ use crate::shared::{
     copy_f32, copy_f64, f32_slice_mut, f64_slice_mut, read_f32_array, read_f64_array,
     with_driver_call,
 };
-use crate::utils::{
-    rand_f32_01, rand_f64_01, rand_range_f32, rand_range_f64, round_f32, round_f64,
-};
+use crate::utils::{Rng, round_f32, round_f64};
 
 #[inline(always)]
 pub(crate) fn mat4f_det_from(m: &[f32; 16]) -> f32 {
@@ -1035,9 +1033,11 @@ pub unsafe extern "C" fn mat4d_perspective(
 pub unsafe extern "C" fn mat4f_random(out: u32) -> u32 {
     with_driver_call(|call| unsafe {
         let o = f32_slice_mut(call, out, 16);
+        let mut rng = Rng::load();
         for value in o {
-            *value = rand_f32_01();
+            *value = rng.f32_01();
         }
+        rng.store();
         0
     })
 }
@@ -1046,9 +1046,11 @@ pub unsafe extern "C" fn mat4f_random(out: u32) -> u32 {
 pub unsafe extern "C" fn mat4d_random(out: u32) -> u32 {
     with_driver_call(|call| unsafe {
         let o = f64_slice_mut(call, out, 16);
+        let mut rng = Rng::load();
         for value in o {
-            *value = rand_f64_01();
+            *value = rng.f64_01();
         }
+        rng.store();
         0
     })
 }
@@ -1057,9 +1059,11 @@ pub unsafe extern "C" fn mat4d_random(out: u32) -> u32 {
 pub unsafe extern "C" fn mat4f_random_range(out: u32, a: f32, b: f32) -> u32 {
     with_driver_call(|call| unsafe {
         let o = f32_slice_mut(call, out, 16);
+        let mut rng = Rng::load();
         for value in o {
-            *value = rand_range_f32(a, b);
+            *value = rng.range_f32(a, b);
         }
+        rng.store();
         0
     })
 }
@@ -1068,9 +1072,11 @@ pub unsafe extern "C" fn mat4f_random_range(out: u32, a: f32, b: f32) -> u32 {
 pub unsafe extern "C" fn mat4d_random_range(out: u32, a: f64, b: f64) -> u32 {
     with_driver_call(|call| unsafe {
         let o = f64_slice_mut(call, out, 16);
+        let mut rng = Rng::load();
         for value in o {
-            *value = rand_range_f64(a, b);
+            *value = rng.range_f64(a, b);
         }
+        rng.store();
         0
     })
 }

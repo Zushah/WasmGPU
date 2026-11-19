@@ -123,6 +123,36 @@ pub(crate) fn hermite(t: f32) -> (f32, f32, f32, f32) {
     (h00, h10, h01, h11)
 }
 
+#[inline(always)]
+fn sample_keys<const N: usize>(
+    values: &[f32],
+    interp: u32,
+    i0: usize,
+    i1: usize,
+    alpha: f32,
+    dt: f32,
+) -> [f32; N] {
+    let (keys, _) = values.as_chunks::<N>();
+    match interp {
+        INTERP_STEP => keys[i0],
+        INTERP_CUBIC => {
+            let (h00, h10, h01, h11) = hermite(alpha);
+            let p0 = keys[i0 * 3 + 1];
+            let m0 = keys[i0 * 3 + 2];
+            let p1 = keys[i1 * 3 + 1];
+            let m1 = keys[i1 * 3];
+            core::array::from_fn(|k| {
+                h00 * p0[k] + h10 * (m0[k] * dt) + h01 * p1[k] + h11 * (m1[k] * dt)
+            })
+        }
+        _ => {
+            let a = keys[i0];
+            let b = keys[i1];
+            core::array::from_fn(|k| a[k] + (b[k] - a[k]) * alpha)
+        }
+    }
+}
+
 #[inline]
 pub(crate) fn sample_vec(
     values: &[f32],
@@ -134,6 +164,11 @@ pub(crate) fn sample_vec(
     dt: f32,
     out: &mut [f32],
 ) {
+    if stride == 3 {
+        let v = sample_keys::<3>(values, interp, i0, i1, alpha, dt);
+        out[..3].copy_from_slice(&v);
+        return;
+    }
     match interp {
         INTERP_STEP => {
             let base0 = i0 * stride;
@@ -146,7 +181,7 @@ pub(crate) fn sample_vec(
             let base1 = i1 * stride * 3;
             let v0 = base0 + stride;
             let out0 = base0 + stride * 2;
-            let in1 = base1 + 0;
+            let in1 = base1;
             let v1 = base1 + stride;
             for k in 0..stride {
                 let p0 = values[v0 + k];
@@ -186,67 +221,19 @@ pub(crate) fn sample_quat(
     alpha: f32,
     dt: f32,
 ) -> (f32, f32, f32, f32) {
+    let (keys, _) = values.as_chunks::<4>();
     match interp {
         INTERP_STEP => {
-            let base0 = i0 * 4;
-            (
-                values[base0 + 0],
-                values[base0 + 1],
-                values[base0 + 2],
-                values[base0 + 3],
-            )
+            let [x, y, z, w] = keys[i0];
+            (x, y, z, w)
         }
         INTERP_CUBIC => {
-            let (h00, h10, h01, h11) = hermite(alpha);
-            let dt_scaled = dt;
-            let base0 = i0 * 4 * 3;
-            let base1 = i1 * 4 * 3;
-            let v0 = base0 + 4;
-            let out0 = base0 + 8;
-            let in1 = base1 + 0;
-            let v1 = base1 + 4;
-            let x = h00 * values[v0 + 0]
-                + h10 * (values[out0 + 0] * dt_scaled)
-                + h01 * values[v1 + 0]
-                + h11 * (values[in1 + 0] * dt_scaled);
-            let y = h00 * values[v0 + 1]
-                + h10 * (values[out0 + 1] * dt_scaled)
-                + h01 * values[v1 + 1]
-                + h11 * (values[in1 + 1] * dt_scaled);
-            let z = h00 * values[v0 + 2]
-                + h10 * (values[out0 + 2] * dt_scaled)
-                + h01 * values[v1 + 2]
-                + h11 * (values[in1 + 2] * dt_scaled);
-            let w = h00 * values[v0 + 3]
-                + h10 * (values[out0 + 3] * dt_scaled)
-                + h01 * values[v1 + 3]
-                + h11 * (values[in1 + 3] * dt_scaled);
+            let [x, y, z, w] = sample_keys::<4>(values, interp, i0, i1, alpha, dt);
             quat_normalize(x, y, z, w)
         }
-        INTERP_LINEAR => {
-            let base0 = i0 * 4;
-            let base1 = i1 * 4;
-            let ax = values[base0 + 0];
-            let ay = values[base0 + 1];
-            let az = values[base0 + 2];
-            let aw = values[base0 + 3];
-            let bx = values[base1 + 0];
-            let by = values[base1 + 1];
-            let bz = values[base1 + 2];
-            let bw = values[base1 + 3];
-            quat_slerp(ax, ay, az, aw, bx, by, bz, bw, alpha)
-        }
         _ => {
-            let base0 = i0 * 4;
-            let base1 = i1 * 4;
-            let ax = values[base0 + 0];
-            let ay = values[base0 + 1];
-            let az = values[base0 + 2];
-            let aw = values[base0 + 3];
-            let bx = values[base1 + 0];
-            let by = values[base1 + 1];
-            let bz = values[base1 + 2];
-            let bw = values[base1 + 3];
+            let [ax, ay, az, aw] = keys[i0];
+            let [bx, by, bz, bw] = keys[i1];
             quat_slerp(ax, ay, az, aw, bx, by, bz, bw, alpha)
         }
     }
@@ -265,30 +252,27 @@ pub unsafe extern "C" fn anim_sample_clip_trs(
     time: f32,
 ) -> u32 {
     with_driver_call(|call| unsafe {
-        let samplers = u32_slice(call, samplers_ptr, sampler_count as usize * 5);
-        let channels = u32_slice(call, channels_ptr, channel_count as usize * 3);
+        let (samplers, _) =
+            u32_slice(call, samplers_ptr, sampler_count as usize * 5).as_chunks::<5>();
+        let (channels, _) =
+            u32_slice(call, channels_ptr, channel_count as usize * 3).as_chunks::<3>();
         let tcount = transform_count as usize;
-        let pos = f32_slice_mut(call, pos_ptr, tcount * 3);
-        let rot = f32_slice_mut(call, rot_ptr, tcount * 4);
-        let scl = f32_slice_mut(call, scl_ptr, tcount * 3);
+        let (pos, _) = f32_slice_mut(call, pos_ptr, tcount * 3).as_chunks_mut::<3>();
+        let (rot, _) = f32_slice_mut(call, rot_ptr, tcount * 4).as_chunks_mut::<4>();
+        let (scl, _) = f32_slice_mut(call, scl_ptr, tcount * 3).as_chunks_mut::<3>();
         let mut tmp_vec = [0.0f32; 4];
-        for c in 0..(channel_count as usize) {
-            let co = c * 3;
-            let sampler_index = channels[co + 0] as usize;
+        for &[sampler_index, target, path] in channels {
+            let sampler_index = sampler_index as usize;
             if sampler_index >= sampler_count as usize {
                 continue;
             }
-            let target = channels[co + 1] as usize;
-            let path = channels[co + 2];
+            let target = target as usize;
             if target >= tcount {
                 continue;
             }
-            let so = sampler_index * 5;
-            let times_ptr = samplers[so + 0];
-            let count = samplers[so + 1] as usize;
-            let values_ptr = samplers[so + 2];
-            let stride = samplers[so + 3] as usize;
-            let interp = samplers[so + 4];
+            let [times_ptr, count, values_ptr, stride, interp] = samplers[sampler_index];
+            let count = count as usize;
+            let stride = stride as usize;
             if count == 0 {
                 continue;
             }
@@ -306,31 +290,21 @@ pub unsafe extern "C" fn anim_sample_clip_trs(
                         continue;
                     }
                     sample_vec(values, stride, interp, i0, i1, alpha, dt, &mut tmp_vec);
-                    let base = target * 3;
-                    pos[base + 0] = tmp_vec[0];
-                    pos[base + 1] = tmp_vec[1];
-                    pos[base + 2] = tmp_vec[2];
+                    pos[target] = [tmp_vec[0], tmp_vec[1], tmp_vec[2]];
                 }
                 PATH_SCALE => {
                     if stride != 3 {
                         continue;
                     }
                     sample_vec(values, stride, interp, i0, i1, alpha, dt, &mut tmp_vec);
-                    let base = target * 3;
-                    scl[base + 0] = tmp_vec[0];
-                    scl[base + 1] = tmp_vec[1];
-                    scl[base + 2] = tmp_vec[2];
+                    scl[target] = [tmp_vec[0], tmp_vec[1], tmp_vec[2]];
                 }
                 PATH_ROTATION => {
                     if stride != 4 {
                         continue;
                     }
                     let (x, y, z, w) = sample_quat(values, interp, i0, i1, alpha, dt);
-                    let base = target * 4;
-                    rot[base + 0] = x;
-                    rot[base + 1] = y;
-                    rot[base + 2] = z;
-                    rot[base + 3] = w;
+                    rot[target] = [x, y, z, w];
                 }
                 _ => {
                     // Weights/morph targets not supported here
@@ -373,26 +347,21 @@ pub unsafe extern "C" fn anim_compute_joint_matrices_to(
     with_driver_call(|call| unsafe {
         let joint_count_usize = joint_count as usize;
         let joint_indices = u32_slice(call, joint_indices_ptr, joint_count_usize);
-        let inv_bind = f32_slice(call, inv_bind_ptr, joint_count_usize * 16);
-        let out = f32_slice_mut(call, out_ptr, joint_count_usize * 16);
+        let (inv_bind, _) = f32_slice(call, inv_bind_ptr, joint_count_usize * 16).as_chunks::<16>();
+        let (out, _) = f32_slice_mut(call, out_ptr, joint_count_usize * 16).as_chunks_mut::<16>();
         let mesh_world = f32_slice(call, mesh_world_ptr, 16);
         let mut mesh_arr = [0.0f32; 16];
         mesh_arr.copy_from_slice(mesh_world);
         let mesh_inv = mat4f_invert_from(&mesh_arr);
         let mut jw = [0.0f32; 16];
-        let mut ib = [0.0f32; 16];
         let mut tmp = [0.0f32; 16];
-        let mut res = [0.0f32; 16];
-        for (i, &joint_index) in joint_indices.iter().enumerate() {
+        for ((&joint_index, ib), out) in joint_indices.iter().zip(inv_bind).zip(out) {
             let j_index = joint_index as usize;
             let joint_ptr = world_base_ptr.wrapping_add((j_index * 16 * 4) as u32);
             let joint_world = f32_slice(call, joint_ptr, 16);
             jw.copy_from_slice(joint_world);
-            let base = i * 16;
-            ib.copy_from_slice(&inv_bind[base..base + 16]);
-            mat4_mul_to(&mut tmp, &jw, &ib);
-            mat4_mul_to(&mut res, &mesh_inv, &tmp);
-            out[base..base + 16].copy_from_slice(&res);
+            mat4_mul_to(&mut tmp, &jw, ib);
+            mat4_mul_to(out, &mesh_inv, &tmp);
         }
         0
     })

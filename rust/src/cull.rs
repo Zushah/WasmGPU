@@ -13,14 +13,11 @@ pub(crate) fn write_all_visible(
     out_stats: Option<&mut [u32]>,
 ) -> u32 {
     let n = radii.len();
+    let centers = &centers.as_chunks::<3>().0[..n];
     let mut out_count: usize = 0;
     let mut tested: u32 = 0;
     let mut visible: u32 = 0;
-    for i in 0..n {
-        let r = radii[i];
-        let cx = centers[i * 3 + 0];
-        let cy = centers[i * 3 + 1];
-        let cz = centers[i * 3 + 2];
+    for (i, (&r, &[cx, cy, cz])) in radii.iter().zip(centers).enumerate() {
         if !r.is_finite() || !cx.is_finite() || !cy.is_finite() || !cz.is_finite() || r < 0.0 {
             continue;
         }
@@ -29,12 +26,12 @@ pub(crate) fn write_all_visible(
         out[out_count] = i as u32;
         out_count += 1;
     }
-    if let Some(stats) = out_stats {
-        if stats.len() >= 3 {
-            stats[0] = tested;
-            stats[1] = visible;
-            stats[2] = 0;
-        }
+    if let Some(stats) = out_stats
+        && stats.len() >= 3
+    {
+        stats[0] = tested;
+        stats[1] = visible;
+        stats[2] = 0;
     }
     out_count as u32
 }
@@ -106,13 +103,13 @@ pub(crate) fn write_planes_from_view_projection(out: &mut [f32], m: &[f32]) {
     out[23] = r3w - r2w;
     for p in 0..6 {
         let i = p * 4;
-        let nx = out[i + 0];
+        let nx = out[i];
         let ny = out[i + 1];
         let nz = out[i + 2];
         let len2 = nx * nx + ny * ny + nz * nz;
         if len2 > 0.0 {
             let inv = 1.0 / len2.sqrt();
-            out[i + 0] = nx * inv;
+            out[i] = nx * inv;
             out[i + 1] = ny * inv;
             out[i + 2] = nz * inv;
             out[i + 3] *= inv;
@@ -158,35 +155,31 @@ pub unsafe extern "C" fn cull_prepare_world_spheres_from_ptrs(
         if n == 0 {
             return 0;
         }
-        let out_centers = f32_slice_mut(call, out_centers_ptr, n * 3);
+        let (out_centers, _) = f32_slice_mut(call, out_centers_ptr, n * 3).as_chunks_mut::<3>();
         let out_radii = f32_slice_mut(call, out_radii_ptr, n);
         let world_ptrs = u32_slice(call, world_ptrs_u32_ptr, n);
-        let local_centers = f32_slice(call, local_centers_ptr, n * 3);
+        let (local_centers, _) = f32_slice(call, local_centers_ptr, n * 3).as_chunks::<3>();
         let local_radii = f32_slice(call, local_radii_ptr, n);
-        for i in 0..n {
-            let wptr = world_ptrs[i];
+        let spheres = out_centers.iter_mut().zip(out_radii).zip(world_ptrs);
+        for (((out_center, out_radius), &wptr), (&[lc0, lc1, lc2], &local_radius)) in
+            spheres.zip(local_centers.iter().zip(local_radii))
+        {
             if wptr == 0 {
-                out_centers[i * 3 + 0] = 0.0;
-                out_centers[i * 3 + 1] = 0.0;
-                out_centers[i * 3 + 2] = 0.0;
-                out_radii[i] = -1.0;
+                *out_center = [0.0; 3];
+                *out_radius = -1.0;
                 continue;
             }
-            let w = f32_slice(call, wptr, 16);
-            let lc0 = local_centers[i * 3 + 0];
-            let lc1 = local_centers[i * 3 + 1];
-            let lc2 = local_centers[i * 3 + 2];
+            let mut w = [0.0f32; 16];
+            w.copy_from_slice(f32_slice(call, wptr, 16));
             let cx = w[0] * lc0 + w[4] * lc1 + w[8] * lc2 + w[12];
             let cy = w[1] * lc0 + w[5] * lc1 + w[9] * lc2 + w[13];
             let cz = w[2] * lc0 + w[6] * lc1 + w[10] * lc2 + w[14];
-            out_centers[i * 3 + 0] = cx;
-            out_centers[i * 3 + 1] = cy;
-            out_centers[i * 3 + 2] = cz;
+            *out_center = [cx, cy, cz];
             let sx = (w[0] * w[0] + w[1] * w[1] + w[2] * w[2]).sqrt();
             let sy = (w[4] * w[4] + w[5] * w[5] + w[6] * w[6]).sqrt();
             let sz = (w[8] * w[8] + w[9] * w[9] + w[10] * w[10]).sqrt();
             let smax = sx.max(sy).max(sz);
-            out_radii[i] = local_radii[i] * smax;
+            *out_radius = local_radius * smax;
         }
         0
     })
@@ -208,41 +201,28 @@ pub unsafe extern "C" fn cull_spheres_frustum(
         if n == 0 {
             return 0;
         }
-        let centers = f32_slice(call, centers_ptr, n * 3);
+        let (centers, _) = f32_slice(call, centers_ptr, n * 3).as_chunks::<3>();
         let radii = f32_slice(call, radii_ptr, n);
-        let fr = f32_slice(call, frustum_ptr, 24);
+        let (fr, _) = f32_slice(call, frustum_ptr, 24).as_chunks::<4>();
         let out = u32_slice_mut(call, out_indices_ptr, n);
-        let mut planes = [0.0f32; 24];
+        let mut planes = [[0.0f32; 4]; 6];
         planes.copy_from_slice(fr);
-        for p in 0..6 {
-            let i = p * 4;
-            let nx = planes[i + 0];
-            let ny = planes[i + 1];
-            let nz = planes[i + 2];
-            let d = planes[i + 3];
+        for plane in &mut planes {
+            let [nx, ny, nz, d] = *plane;
             let len2 = nx * nx + ny * ny + nz * nz;
             if len2 > 0.0 {
                 let inv = 1.0 / len2.sqrt();
-                planes[i + 0] = nx * inv;
-                planes[i + 1] = ny * inv;
-                planes[i + 2] = nz * inv;
-                planes[i + 3] = d * inv;
+                *plane = [nx * inv, ny * inv, nz * inv, d * inv];
             }
         }
         let mut out_count: usize = 0;
-        for i in 0..n {
-            let r = radii[i];
+        for (i, (&r, &[cx, cy, cz])) in radii.iter().zip(centers).enumerate() {
             if r < 0.0 {
                 continue;
             }
-            let cx = centers[i * 3 + 0];
-            let cy = centers[i * 3 + 1];
-            let cz = centers[i * 3 + 2];
             let mut inside = true;
-            for p in 0..6 {
-                let j = p * 4;
-                let dist =
-                    planes[j + 0] * cx + planes[j + 1] * cy + planes[j + 2] * cz + planes[j + 3];
+            for &[px, py, pz, pd] in &planes {
+                let dist = px * cx + py * cy + pz * cz + pd;
                 if dist < -r {
                     inside = false;
                     break;
@@ -291,7 +271,7 @@ pub unsafe extern "C" fn cull_spheres_occlusion(
             }
             return 0;
         }
-        let centers = f32_slice(call, centers_ptr, n * 3);
+        let (centers, _) = f32_slice(call, centers_ptr, n * 3).as_chunks::<3>();
         let radii = f32_slice(call, radii_ptr, n);
         let out = u32_slice_mut(call, out_indices_ptr, n);
         let out_stats = if out_stats_ptr != 0 {
@@ -308,7 +288,7 @@ pub unsafe extern "C" fn cull_spheres_occlusion(
             || depth_values_ptr == 0
             || depth_values_len == 0
         {
-            return write_all_visible(out, centers, radii, out_stats);
+            return write_all_visible(out, centers.as_flattened(), radii, out_stats);
         }
         let view_proj = f32_slice(call, view_proj_ptr, 16);
         let mip_count_usize = mip_count as usize;
@@ -326,11 +306,7 @@ pub unsafe extern "C" fn cull_spheres_occlusion(
         let mut visible: u32 = 0;
         let mut occluded: u32 = 0;
         let mut out_count: usize = 0;
-        for i in 0..n {
-            let r = radii[i];
-            let cx = centers[i * 3 + 0];
-            let cy = centers[i * 3 + 1];
-            let cz = centers[i * 3 + 2];
+        for (i, (&r, &[cx, cy, cz])) in radii.iter().zip(centers).enumerate() {
             if !r.is_finite() || !cx.is_finite() || !cy.is_finite() || !cz.is_finite() || r <= 0.0 {
                 tested += 1;
                 visible += 1;
@@ -427,8 +403,8 @@ pub unsafe extern "C" fn cull_spheres_occlusion(
                 .floor()
                 .max(0.0)
                 .min((mip_count_usize - 1) as f32) as usize;
-            let mip_width = mip_widths[mip_level] as i32;
-            let mip_height = mip_heights[mip_level] as i32;
+            let mip_width = mip_widths[mip_level].cast_signed();
+            let mip_height = mip_heights[mip_level].cast_signed();
             let mip_offset = mip_offsets[mip_level] as usize;
             if mip_width <= 0 || mip_height <= 0 {
                 visible += 1;

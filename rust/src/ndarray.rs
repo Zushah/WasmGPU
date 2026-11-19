@@ -86,9 +86,8 @@ pub(crate) fn offset_bytes(
         if idx >= dim {
             return ND_ERROR;
         }
-        let term = match (strides[i] as i64).checked_mul(idx) {
-            Some(v) => v,
-            None => return ND_ERROR,
+        let Some(term) = (strides[i] as i64).checked_mul(idx) else {
+            return ND_ERROR;
         };
         off = match off.checked_add(term) {
             Some(v) => v,
@@ -316,10 +315,19 @@ type Loader = fn(&[u8], usize) -> f64;
 type Writer = fn(&mut [u8], usize, i64, &[f64]);
 
 fn read_run<S: Element>(src: &[u8], offset: usize, stride: i64, out: &mut [f64]) {
-    let mut at = offset as i64;
+    let size = size_of::<S>();
+    if stride == size as i64 {
+        let run = &src[offset..offset + out.len() * size];
+        for (v, raw) in out.iter_mut().zip(run.chunks_exact(size)) {
+            *v = S::load(raw, 0).to_f64();
+        }
+        return;
+    }
+    let step = stride as usize;
+    let mut at = offset;
     for v in out.iter_mut() {
-        *v = S::load(src, at as usize).to_f64();
-        at += stride;
+        *v = S::load(src, at).to_f64();
+        at = at.wrapping_add(step);
     }
 }
 
@@ -329,26 +337,53 @@ fn write_int_run<D: IntElement, const SATURATE: bool, const NEAREST: bool>(
     stride: i64,
     values: &[f64],
 ) {
-    let mut at = offset as i64;
+    let size = size_of::<D>();
+    if stride == size as i64 {
+        let run = &mut dst[offset..offset + values.len() * size];
+        for (raw, &v) in run.chunks_exact_mut(size).zip(values) {
+            to_int::<D, SATURATE, NEAREST>(v).store(raw, 0);
+        }
+        return;
+    }
+    let step = stride as usize;
+    let mut at = offset;
     for &v in values {
-        to_int::<D, SATURATE, NEAREST>(v).store(dst, at as usize);
-        at += stride;
+        to_int::<D, SATURATE, NEAREST>(v).store(dst, at);
+        at = at.wrapping_add(step);
     }
 }
 
 fn write_f32_run(dst: &mut [u8], offset: usize, stride: i64, values: &[f64]) {
-    let mut at = offset as i64;
+    let size = size_of::<f32>();
+    if stride == size as i64 {
+        let run = &mut dst[offset..offset + values.len() * size];
+        for (raw, &v) in run.chunks_exact_mut(size).zip(values) {
+            (v as f32).store(raw, 0);
+        }
+        return;
+    }
+    let step = stride as usize;
+    let mut at = offset;
     for &v in values {
-        (v as f32).store(dst, at as usize);
-        at += stride;
+        (v as f32).store(dst, at);
+        at = at.wrapping_add(step);
     }
 }
 
 fn write_f64_run(dst: &mut [u8], offset: usize, stride: i64, values: &[f64]) {
-    let mut at = offset as i64;
+    let size = size_of::<f64>();
+    if stride == size as i64 {
+        let run = &mut dst[offset..offset + size_of_val(values)];
+        for (raw, &v) in run.chunks_exact_mut(size).zip(values) {
+            v.store(raw, 0);
+        }
+        return;
+    }
+    let step = stride as usize;
+    let mut at = offset;
     for &v in values {
-        v.store(dst, at as usize);
-        at += stride;
+        v.store(dst, at);
+        at = at.wrapping_add(step);
     }
 }
 
@@ -419,9 +454,8 @@ pub(crate) fn layout_within(
     let mut lo = offset as i64;
     let mut hi = offset as i64;
     for (&n, &s) in shape.iter().zip(strides) {
-        let extent = match (n as i64 - 1).checked_mul(s as i64) {
-            Some(v) => v,
-            None => return false,
+        let Some(extent) = (n as i64 - 1).checked_mul(s as i64) else {
+            return false;
         };
         let bound = if extent < 0 { &mut lo } else { &mut hi };
         *bound = match bound.checked_add(extent) {
@@ -1838,7 +1872,7 @@ macro_rules! int_key {
         impl KeyElement for $t {
             #[inline(always)]
             fn order_key(self) -> u64 {
-                (self as i64 as u64) ^ KEY_SIGN
+                (self as i64).cast_unsigned() ^ KEY_SIGN
             }
         }
     };
@@ -1971,7 +2005,7 @@ macro_rules! store_exact_int {
 
 fn store_exact(out: &mut [u8], at: usize, dtype: DType, wide: u64, signed: bool, saturate: bool) {
     let exact = if signed {
-        wide as i64 as i128
+        wide.cast_signed() as i128
     } else {
         wide as i128
     };
@@ -1983,13 +2017,13 @@ fn store_exact(out: &mut [u8], at: usize, dtype: DType, wide: u64, signed: bool,
         DType::I32 => store_exact_int!(i32, exact, saturate, out, at),
         DType::U32 => store_exact_int!(u32, exact, saturate, out, at),
         DType::F32 => (if signed {
-            wide as i64 as f32
+            wide.cast_signed() as f32
         } else {
             wide as f32
         })
         .store(out, at),
         DType::F64 => (if signed {
-            wide as i64 as f64
+            wide.cast_signed() as f64
         } else {
             wide as f64
         })
@@ -2763,7 +2797,7 @@ fn reduce_int_totals(
         walk.tiles(1, |o, _, base, stride, width| {
             scan(&mut fold, walk, src.bytes, base, stride, width);
             let wide = if signed {
-                fold.acc as i32 as i64 as u64
+                (fold.acc.cast_signed() as i64).cast_unsigned()
             } else {
                 fold.acc as u64
             };
@@ -2781,12 +2815,12 @@ fn reduce_int_totals(
     let mut fold = IntFold::new(src.dtype, tile);
     walk.tiles(tile, |o, step, base, stride, width| {
         scan(&mut fold, walk, src.bytes, base, stride, width);
-        for j in 0..width {
+        for (j, &acc) in fold.acc[..width].iter().enumerate() {
             store_exact(
                 dst.bytes,
                 dst.offset as usize + (o + j * step) * size,
                 dst.dtype,
-                fold.acc[j],
+                acc,
                 signed,
                 spec.saturate,
             );
@@ -2904,7 +2938,7 @@ fn reduce_variance<const OMIT: bool>(
             scan(wide, walk, src.bytes, base, stride, width);
             for (total, &acc) in totals[..width].iter_mut().zip(&wide.acc[..width]) {
                 *total = if signed {
-                    acc as i64 as f64
+                    acc.cast_signed() as f64
                 } else {
                     acc as f64
                 };
@@ -2959,11 +2993,11 @@ fn reduce_int_means(dst: ReduceOutput, src: &Source, walk: &ReduceWalk, tile: us
     let mut fold = IntFold::new(src.dtype, tile);
     walk.tiles(tile, |o, step, base, stride, width| {
         scan(&mut fold, walk, src.bytes, base, stride, width);
-        for j in 0..width {
+        for (j, &acc) in fold.acc[..width].iter().enumerate() {
             let total = if signed {
-                fold.acc[j] as i64 as f64
+                acc.cast_signed() as f64
             } else {
-                fold.acc[j] as f64
+                acc as f64
             };
             store_float(
                 dst.bytes,
@@ -3109,7 +3143,7 @@ fn ranges_overlap(a_ptr: u32, a_len: usize, b_ptr: u32, b_len: usize) -> bool {
 }
 
 fn valid_descriptor(ptr: u32, bytes: usize, align: u32, dst_ptr: u32, dst_len: u32) -> bool {
-    ptr != 0 && ptr % align == 0 && !ranges_overlap(ptr, bytes, dst_ptr, dst_len as usize)
+    ptr != 0 && ptr.is_multiple_of(align) && !ranges_overlap(ptr, bytes, dst_ptr, dst_len as usize)
 }
 
 unsafe fn borrow_pair<'call>(
@@ -3144,7 +3178,7 @@ fn read_axes(layout: &[u32], start: usize, ndim: usize, out: &mut [u32; MAX_RANK
 
 fn read_strides(layout: &[u32], start: usize, ndim: usize, out: &mut [i32; MAX_RANK]) {
     for (s, &raw) in out.iter_mut().zip(&layout[start..start + ndim]) {
-        *s = raw as i32;
+        *s = raw.cast_signed();
     }
 }
 
@@ -3286,9 +3320,8 @@ pub unsafe extern "C" fn ndarray_pad(
     if nd > MAX_RANK {
         return STATUS_INVALID_RANK;
     }
-    let dtype = match DType::from_code(codes & 0xF) {
-        Some(v) => v,
-        None => return STATUS_INVALID_DTYPE,
+    let Some(dtype) = DType::from_code(codes & 0xF) else {
+        return STATUS_INVALID_DTYPE;
     };
     let mode = match PadMode::from_code((codes >> 8) & 0xF) {
         Some(v) if codes & !0xF0F == 0 => v,
@@ -3355,12 +3388,11 @@ pub unsafe extern "C" fn ndarray_affine(
     if nd > MAX_RANK {
         return STATUS_INVALID_RANK;
     }
-    let (dst_dtype, src_dtype) = match (
-        DType::from_code(codes & 0xF),
-        DType::from_code((codes >> 4) & 0xF),
-    ) {
-        (Some(d), Some(s)) => (d, s),
-        _ => return STATUS_INVALID_DTYPE,
+    let Some(dst_dtype) = DType::from_code(codes & 0xF) else {
+        return STATUS_INVALID_DTYPE;
+    };
+    let Some(src_dtype) = DType::from_code((codes >> 4) & 0xF) else {
+        return STATUS_INVALID_DTYPE;
     };
     let form = match AffineForm::from_code((codes >> 8) & 0x3) {
         Some(form) if codes >> 10 == 0 => form,
@@ -3636,8 +3668,9 @@ pub unsafe extern "C" fn ndarray_resize(
             (off, idx, w) = (rest_off, rest_idx, rest_w);
         }
         let mut constant = [0u8; 16];
-        for (bytes, &word) in constant.chunks_exact_mut(4).zip(constant_words) {
-            bytes.copy_from_slice(&word.to_le_bytes());
+        let (chunks, _) = constant.as_chunks_mut::<4>();
+        for (bytes, &word) in chunks.iter_mut().zip(constant_words) {
+            *bytes = word.to_le_bytes();
         }
         let (dst, src) = match unsafe { borrow_pair(call, dst_ptr, dst_len, src_ptr, src_len) } {
             Ok(v) => v,

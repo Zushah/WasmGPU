@@ -5,7 +5,6 @@
  */
 
 #![allow(non_snake_case)]
-#![allow(clippy::identity_op)]
 #![allow(clippy::too_many_arguments)]
 
 mod accessors;

@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Tuesday, November 17, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Thursday, November 19, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Thursday, November 12, 2026, [**`f7087c3`**](https://github.com/Zushah/WasmGPU/commit/f7087c3).
+Parent commit: Tuesday, November 17, 2026, [**`53cfd6d`**](https://github.com/Zushah/WasmGPU/commit/53cfd6d).
 
 Latest release: Monday, August 31, 2026, [**`v0.10.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.10.0).
 
@@ -1269,7 +1269,7 @@ Examples from repository history include:
 - `test(material): cover defaults, uniforms, shaders, data, colormaps, & cleanup`
 - `bench(suite): cover compute kernels, data transfer, render objects, culling, & effects`
 - `docs(examples): update terrain with fly controls`
-- `feat(rust): reclaim freed WebAssembly heap allocations`
+- `perf(rust): optimize transforms, cullings, animations, normals, & ndarrays`
 - `feat(effects): add directional shadow mapping`
 - `chore(build): bump Rust from v1.93.0-2021 to v1.97.1-2024`
 - `chore(release): v0.10.0`

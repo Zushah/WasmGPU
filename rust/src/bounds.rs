@@ -165,35 +165,26 @@ pub(crate) fn bounds_glyphs(
     if rotations.is_some_and(|values| values.len() < count * 4) {
         return BoundsResult::ZERO;
     }
+    let positions = &positions.as_chunks::<4>().0[..count];
+    let scales = &scales.as_chunks::<4>().0[..count];
+    let rotations = rotations.map(|values| &values.as_chunks::<4>().0[..count]);
     let mut min = [f32::INFINITY; 3];
     let mut max = [f32::NEG_INFINITY; 3];
-    for i in 0..count {
-        let base = i * 4;
-        let sx = scales[base + 0].abs();
-        let sy = scales[base + 1].abs();
-        let sz = scales[base + 2].abs();
+    for (i, (&[px, py, pz, _], &[sx, sy, sz, _])) in positions.iter().zip(scales).enumerate() {
+        let sx = sx.abs();
+        let sy = sy.abs();
+        let sz = sz.abs();
         let mut center = [
             glyph_center[0] * sx,
             glyph_center[1] * sy,
             glyph_center[2] * sz,
         ];
         if let Some(rot) = rotations {
-            let rotated = rotate_vector_by_quat(
-                center[0],
-                center[1],
-                center[2],
-                rot[base + 0],
-                rot[base + 1],
-                rot[base + 2],
-                rot[base + 3],
-            );
+            let [qx, qy, qz, qw] = rot[i];
+            let rotated = rotate_vector_by_quat(center[0], center[1], center[2], qx, qy, qz, qw);
             center = [rotated.0, rotated.1, rotated.2];
         }
-        let world_center = [
-            positions[base + 0] + center[0],
-            positions[base + 1] + center[1],
-            positions[base + 2] + center[2],
-        ];
+        let world_center = [px + center[0], py + center[1], pz + center[2]];
         let radius = glyph_radius * sx.max(sy).max(sz);
         for axis in 0..3 {
             min[axis] = min[axis].min(world_center[axis] - radius);

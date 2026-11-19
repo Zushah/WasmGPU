@@ -71,7 +71,7 @@ fn infinite_perspective_produces_inactive_far_plane_without_culling_distant_geom
     let mut inside = true;
     for p in 0..6 {
         let j = p * 4;
-        let dist = planes[j + 0] * cx + planes[j + 1] * cy + planes[j + 2] * cz + planes[j + 3];
+        let dist = planes[j] * cx + planes[j + 1] * cy + planes[j + 2] * cz + planes[j + 3];
         if dist < -r {
             inside = false;
             break;
