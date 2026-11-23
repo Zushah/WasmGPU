@@ -40,6 +40,8 @@ import computeDispatchBatch from "./compute/compute-dispatch-batch-throughput.be
 import ndarrayContiguousGPU from "./compute/ndarray-contiguous-gpu-f32-throughput.bench.js";
 import ndarrayContiguousCPU from "./compute/ndarray-contiguous-cpu-f32-throughput.bench.js";
 import ndarrayCastGPU from "./compute/ndarray-cast-gpu-u8-f32-throughput.bench.js";
+import ndarrayCastCPU from "./compute/ndarray-cast-cpu-u8-f32-throughput.bench.js";
+import ndarrayContiguousBroadcastCPU from "./compute/ndarray-contiguous-cpu-broadcast-f32-throughput.bench.js";
 import ndarrayResizeGPU from "./compute/ndarray-resize-gpu-linear-f32-throughput.bench.js";
 import ndarrayResizeCPU from "./compute/ndarray-resize-cpu-linear-f32-throughput.bench.js";
 import ndarrayResizeCubicAntialiasGPU from "./compute/ndarray-resize-gpu-cubic-antialias-f32-throughput.bench.js";
@@ -66,6 +68,11 @@ import transforms from "./math/transform-set-position-update-all-throughput.benc
 import wasmTransfer from "./interop/webassembly-view-copy-throughput.bench.js";
 import pythonToCPU from "./interop/python-to-cpundarray-throughput.bench.js";
 import pythonToGPU from "./interop/python-to-gpundarray-throughput.bench.js";
+import pythonToCPUFortran from "./interop/python-to-cpundarray-fortran-throughput.bench.js";
+import pythonToGPUStrided from "./interop/python-to-gpundarray-strided-throughput.bench.js";
+import pythonCopyIntoGPUView from "./interop/python-copyinto-gpundarray-view-throughput.bench.js";
+import pythonFromCPU from "./interop/python-from-cpundarray-throughput.bench.js";
+import pythonFromGPU from "./interop/python-from-gpundarray-throughput.bench.js";
 import scaling from "./scaling/scale-service-percentile-stats-latency.bench.js";
 import gltf from "./gltf/accessors-read-interleaved-vec3-throughput.bench.js";
 import pointcloud from "./objects/pointcloud-set-data-upload-throughput.bench.js";
@@ -133,6 +140,8 @@ export const benchmarks = [
     ndarrayContiguousGPU,
     ndarrayContiguousCPU,
     ndarrayCastGPU,
+    ndarrayCastCPU,
+    ndarrayContiguousBroadcastCPU,
     ndarrayResizeGPU,
     ndarrayResizeCPU,
     ndarrayResizeCubicAntialiasGPU,
@@ -162,6 +171,11 @@ export const benchmarks = [
     wasmTransfer,
     pythonToCPU,
     pythonToGPU,
+    pythonToCPUFortran,
+    pythonToGPUStrided,
+    pythonCopyIntoGPUView,
+    pythonFromCPU,
+    pythonFromGPU,
     renderMesh,
     renderPointCloud,
     renderGlyphField,

@@ -74,7 +74,7 @@ export type NdLayoutDescriptor = {
     offsetBytes?: number;
 };
 
-const validateShape = (shape: ReadonlyArray<number>, prefix: string = ""): number[] => {
+export const validateShape = (shape: ReadonlyArray<number>, prefix: string = ""): number[] => {
     assert(Array.isArray(shape), `${prefix}shape must be an array of dimension sizes`);
     const out: number[] = new Array(shape.length);
     for (let i = 0; i < shape.length; i++) {
@@ -86,7 +86,7 @@ const validateShape = (shape: ReadonlyArray<number>, prefix: string = ""): numbe
     return out;
 };
 
-const defaultRowMajorStridesBytes = (shape: ReadonlyArray<number>, bytesPerElement: number): number[] => {
+export const defaultRowMajorStridesBytes = (shape: ReadonlyArray<number>, bytesPerElement: number): number[] => {
     const ndim = shape.length;
     const strides: number[] = new Array(ndim);
     let stride = bytesPerElement;
@@ -101,7 +101,7 @@ const defaultRowMajorStridesBytes = (shape: ReadonlyArray<number>, bytesPerEleme
     return strides;
 };
 
-const validateStridesBytes = (stridesBytes: ReadonlyArray<number>, ndim: number, bytesPerElement: number, prefix: string = ""): number[] => {
+export const validateStridesBytes = (stridesBytes: ReadonlyArray<number>, ndim: number, bytesPerElement: number, prefix: string = ""): number[] => {
     assert(Array.isArray(stridesBytes), `${prefix}stridesBytes must be an array`);
     assert(stridesBytes.length === ndim, `${prefix}stridesBytes length (${stridesBytes.length}) must equal shape length (${ndim})`);
     const out: number[] = new Array(ndim);
@@ -122,7 +122,7 @@ const validateOffsetBytes = (offsetBytes: number | undefined, bytesPerElement: n
     return off;
 };
 
-const numelFromShape = (shape: ReadonlyArray<number>): number => {
+export const numelFromShape = (shape: ReadonlyArray<number>): number => {
     let n = 1;
     for (let i = 0; i < shape.length; i++) {
         n *= shape[i]!;
@@ -132,7 +132,7 @@ const numelFromShape = (shape: ReadonlyArray<number>): number => {
     return n;
 };
 
-const requiredBackingBytes = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, offsetBytes: number, bytesPerElement: number): number => {
+export const requiredBackingBytes = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, offsetBytes: number, bytesPerElement: number): number => {
     if (shape.length === 0) {
         const req = offsetBytes + bytesPerElement;
         assert(req <= 0xFFFFFFFF, `required backing bytes exceeds wasm32 address space (got ${req})`);
@@ -154,7 +154,7 @@ const requiredBackingBytes = (shape: ReadonlyArray<number>, stridesBytes: Readon
     return Number(req);
 };
 
-const isContiguousRowMajor = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, bytesPerElement: number): boolean => {
+export const isContiguousRowMajor = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, bytesPerElement: number): boolean => {
     if (numelFromShape(shape) === 0) return true;
     let expected = bytesPerElement;
     for (let i = shape.length - 1; i >= 0; i--) {
@@ -163,6 +163,54 @@ const isContiguousRowMajor = (shape: ReadonlyArray<number>, stridesBytes: Readon
         expected *= dim;
     }
     return true;
+};
+
+export const isContiguousColumnMajor = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, bytesPerElement: number): boolean => {
+    if (numelFromShape(shape) === 0) return true;
+    let expected = bytesPerElement;
+    for (let i = 0; i < shape.length; i++) {
+        const dim = shape[i]!;
+        if (dim !== 1 && stridesBytes[i] !== expected) return false;
+        expected *= dim;
+    }
+    return true;
+};
+
+export const sortedStridePermutation = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>): number[] => shape.map((_, i) => i).sort((a, b) => (Math.abs(stridesBytes[b]!) - Math.abs(stridesBytes[a]!)) || (a - b));
+
+export const denseStridesBytes = (shape: ReadonlyArray<number>, perm: ReadonlyArray<number>, bytesPerElement: number): number[] => {
+    const strides = new Array<number>(shape.length);
+    let stride = bytesPerElement;
+    for (let k = perm.length - 1; k >= 0; k--) {
+        const axis = perm[k]!;
+        assert(stride <= 0x7FFFFFFF, `dense stride exceeds i32 range (got ${stride})`);
+        strides[axis] = stride;
+        stride *= shape[axis]!;
+        assert(stride <= Number.MAX_SAFE_INTEGER, "Stride overflow while computing dense strides");
+    }
+    return strides;
+};
+
+export type NdLayoutClass = { numel: number; dense: boolean; positiveDense: boolean; overlapping: boolean; extentBytes: number; offsetBytes: number };
+
+export const classifyLayout = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, bytesPerElement: number): NdLayoutClass => {
+    const numel = numelFromShape(shape);
+    const extent = byteExtent(shape, stridesBytes, 0);
+    if (!extent) return { numel, dense: true, positiveDense: true, overlapping: false, extentBytes: 0, offsetBytes: 0 };
+    const overlapping = mayAddressTwice(shape, stridesBytes, bytesPerElement);
+    const extentBytes = extent.max - extent.min + bytesPerElement;
+    const dense = !overlapping && extentBytes === numel * bytesPerElement;
+    return { numel, dense, positiveDense: dense && shape.every((dim, i) => dim <= 1 || stridesBytes[i]! > 0), overlapping, extentBytes, offsetBytes: 0 - extent.min };
+};
+
+export type NdLayoutOrder = "K" | "C" | "F" | "A";
+
+export const orderedLayout = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, bytesPerElement: number, order: NdLayoutOrder, targetBytesPerElement: number = bytesPerElement): { perm: number[]; stridesBytes: number[] } => {
+    const identity = shape.map((_, i) => i);
+    const empty = numelFromShape(shape) === 0, rowMajor = empty || isContiguousRowMajor(shape, stridesBytes, bytesPerElement);
+    const columnMajor = !empty && (order === "F" || (order === "A" && !rowMajor && isContiguousColumnMajor(shape, stridesBytes, bytesPerElement)));
+    const perm = columnMajor ? identity.reverse() : (order === "K" && !rowMajor) ? sortedStridePermutation(shape, stridesBytes) : identity;
+    return { perm, stridesBytes: denseStridesBytes(shape, perm, targetBytesPerElement) };
 };
 
 const DTYPE_CODE: Record<DType, number> = { i8: 0, u8: 1, i16: 2, u16: 3, i32: 4, u32: 5, f32: 6, f64: 7, c64: 8, c128: 9 };
@@ -196,7 +244,7 @@ const normalizeAxes = (axes: number | ReadonlyArray<number>, ndim: number, op: s
     return out;
 };
 
-const byteExtent = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, offsetBytes: number): { min: number; max: number } | null => {
+export const byteExtent = (shape: ReadonlyArray<number>, stridesBytes: ReadonlyArray<number>, offsetBytes: number): { min: number; max: number } | null => {
     if (numelFromShape(shape) === 0) return null;
     let min = offsetBytes;
     let max = offsetBytes;
@@ -2707,7 +2755,7 @@ export class NdarrayNamespace {
         const cpu = CPUndarray.empty(src.dtype, { shape: src.shape, stridesBytes: src.stridesBytes, offsetBytes: src.offsetBytes });
         try {
             if (this.readback && !this.readback.isDestroyed) {
-                await this.readback.readIntoWasmMemory(wasm.memory(), cpu.basePtrBytes, src.buffer, src.baseOffsetBytes, src.byteLength, { label: "compute.ndarray.toCPU" });
+                await this.readback.snapshot(src.buffer, src.baseOffsetBytes, src.byteLength, (bytes) => cpu.backingBytes().set(bytes, 0), { label: "compute.ndarray.toCPU" });
             } else {
                 const bytes = await src.buffer.read(src.baseOffsetBytes, src.byteLength);
                 cpu.backingBytes().set(new Uint8Array(bytes), 0);

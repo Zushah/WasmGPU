@@ -536,6 +536,684 @@ fn copy_elements<const N: usize>(
     }
 }
 
+const TILE: usize = 64;
+const REPLICATE_MAX_BYTES: usize = 2048;
+
+pub(crate) trait Cast<D>: Element {
+    fn cast<const SATURATE: bool, const NEAREST: bool>(self) -> D;
+}
+
+macro_rules! cast_identity {
+    ($($t:ty),+) => {
+        $(impl Cast<$t> for $t {
+            #[inline(always)]
+            fn cast<const SATURATE: bool, const NEAREST: bool>(self) -> $t {
+                self
+            }
+        })+
+    };
+}
+
+macro_rules! cast_to_f32 {
+    ($($s:ty),+) => {
+        $(impl Cast<f32> for $s {
+            #[inline(always)]
+            fn cast<const SATURATE: bool, const NEAREST: bool>(self) -> f32 {
+                self.to_f64() as f32
+            }
+        })+
+    };
+}
+
+macro_rules! cast_to_f64 {
+    ($($s:ty),+) => {
+        $(impl Cast<f64> for $s {
+            #[inline(always)]
+            fn cast<const SATURATE: bool, const NEAREST: bool>(self) -> f64 {
+                self.to_f64()
+            }
+        })+
+    };
+}
+
+macro_rules! cast_float_to_int {
+    ($s:ty: $($d:ty),+) => {
+        $(impl Cast<$d> for $s {
+            #[inline(always)]
+            fn cast<const SATURATE: bool, const NEAREST: bool>(self) -> $d {
+                to_int::<$d, SATURATE, NEAREST>(self.to_f64())
+            }
+        })+
+    };
+}
+
+macro_rules! cast_int_to_int {
+    ($s:ty: $($d:ty),+) => {
+        $(impl Cast<$d> for $s {
+            #[inline(always)]
+            fn cast<const SATURATE: bool, const NEAREST: bool>(self) -> $d {
+                if SATURATE {
+                    (self as i64).clamp(<$d>::MIN as i64, <$d>::MAX as i64) as $d
+                } else {
+                    self as $d
+                }
+            }
+        })+
+    };
+}
+
+cast_identity!(i8, u8, i16, u16, i32, u32, f32, f64);
+cast_to_f32!(i8, u8, i16, u16, i32, u32, f64);
+cast_to_f64!(i8, u8, i16, u16, i32, u32, f32);
+cast_float_to_int!(f32: i8, u8, i16, u16, i32, u32);
+cast_float_to_int!(f64: i8, u8, i16, u16, i32, u32);
+cast_int_to_int!(i8: u8, i16, u16, i32, u32);
+cast_int_to_int!(u8: i8, i16, u16, i32, u32);
+cast_int_to_int!(i16: i8, u8, u16, i32, u32);
+cast_int_to_int!(u16: i8, u8, i16, i32, u32);
+cast_int_to_int!(i32: i8, u8, i16, u16, u32);
+cast_int_to_int!(u32: i8, u8, i16, u16, i32);
+
+type Run = fn(&mut [u8], i64, i64, &[u8], i64, i64, usize);
+
+fn strided_span(
+    src: &[u8],
+    at: i64,
+    stride: i64,
+    count: usize,
+    size: usize,
+) -> Option<(&[u8], usize, bool)> {
+    let step = stride.unsigned_abs() as usize;
+    if step < size || count == 0 {
+        return None;
+    }
+    let first = if stride < 0 {
+        at - (count as i64 - 1) * step as i64
+    } else {
+        at
+    } as usize;
+    Some((
+        &src[first..first + (count - 1) * step + size],
+        step,
+        stride < 0,
+    ))
+}
+
+fn cast_run<S: Cast<D>, D: Element, const SATURATE: bool, const NEAREST: bool>(
+    dst: &mut [u8],
+    dst_at: i64,
+    dst_stride: i64,
+    src: &[u8],
+    src_at: i64,
+    src_stride: i64,
+    count: usize,
+) {
+    let (ss, ds) = (size_of::<S>(), size_of::<D>());
+    if dst_stride == ds as i64 {
+        let out = &mut dst[dst_at as usize..dst_at as usize + count * ds];
+        if src_stride == ss as i64 {
+            let input = &src[src_at as usize..src_at as usize + count * ss];
+            for (o, i) in out.chunks_exact_mut(ds).zip(input.chunks_exact(ss)) {
+                S::load(i, 0).cast::<SATURATE, NEAREST>().store(o, 0);
+            }
+            return;
+        }
+        if src_stride == -(ss as i64) {
+            let first = (src_at - (count as i64 - 1) * ss as i64) as usize;
+            let input = &src[first..first + count * ss];
+            for (o, i) in out.chunks_exact_mut(ds).zip(input.chunks_exact(ss).rev()) {
+                S::load(i, 0).cast::<SATURATE, NEAREST>().store(o, 0);
+            }
+            return;
+        }
+        if src_stride == 0 {
+            let value = S::load(src, src_at as usize).cast::<SATURATE, NEAREST>();
+            for o in out.chunks_exact_mut(ds) {
+                value.store(o, 0);
+            }
+            return;
+        }
+        if let Some((span, step, reversed)) = strided_span(src, src_at, src_stride, count, ss) {
+            let items = span.chunks(step);
+            if reversed {
+                for (o, i) in out.chunks_exact_mut(ds).zip(items.rev()) {
+                    S::load(i, 0).cast::<SATURATE, NEAREST>().store(o, 0);
+                }
+            } else {
+                for (o, i) in out.chunks_exact_mut(ds).zip(items) {
+                    S::load(i, 0).cast::<SATURATE, NEAREST>().store(o, 0);
+                }
+            }
+            return;
+        }
+    }
+    let (mut d, mut s) = (dst_at, src_at);
+    for _ in 0..count {
+        S::load(src, s as usize)
+            .cast::<SATURATE, NEAREST>()
+            .store(dst, d as usize);
+        d += dst_stride;
+        s += src_stride;
+    }
+}
+
+fn copy_run<const N: usize>(
+    dst: &mut [u8],
+    dst_at: i64,
+    dst_stride: i64,
+    src: &[u8],
+    src_at: i64,
+    src_stride: i64,
+    count: usize,
+) {
+    if dst_stride == N as i64 {
+        let out = &mut dst[dst_at as usize..dst_at as usize + count * N];
+        if src_stride == N as i64 {
+            out.copy_from_slice(&src[src_at as usize..src_at as usize + count * N]);
+            return;
+        }
+        let out = out.as_chunks_mut::<N>().0;
+        if src_stride == -(N as i64) {
+            let first = (src_at - (count as i64 - 1) * N as i64) as usize;
+            let input = src[first..first + count * N].as_chunks::<N>().0;
+            for (o, i) in out.iter_mut().zip(input.iter().rev()) {
+                *o = *i;
+            }
+            return;
+        }
+        if src_stride == 0 {
+            let mut value = [0u8; N];
+            value.copy_from_slice(&src[src_at as usize..src_at as usize + N]);
+            out.fill(value);
+            return;
+        }
+        if let Some((span, step, reversed)) = strided_span(src, src_at, src_stride, count, N) {
+            let items = span.chunks(step);
+            if reversed {
+                for (o, i) in out.iter_mut().zip(items.rev()) {
+                    o.copy_from_slice(&i[..N]);
+                }
+            } else {
+                for (o, i) in out.iter_mut().zip(items) {
+                    o.copy_from_slice(&i[..N]);
+                }
+            }
+            return;
+        }
+    }
+    copy_elements::<N>(dst, dst_at, dst_stride, src, src_at, src_stride, count);
+}
+
+fn complex_run<S: Cast<D>, D: Element, const REAL: bool>(
+    dst: &mut [u8],
+    dst_at: i64,
+    dst_stride: i64,
+    src: &[u8],
+    src_at: i64,
+    src_stride: i64,
+    count: usize,
+) {
+    let (ss, ds) = (size_of::<S>(), size_of::<D>());
+    let parts = if REAL { 1 } else { 2 };
+    if dst_stride == 2 * ds as i64 && src_stride == parts * ss as i64 {
+        if !REAL {
+            cast_run::<S, D, false, false>(
+                dst,
+                dst_at,
+                ds as i64,
+                src,
+                src_at,
+                ss as i64,
+                2 * count,
+            );
+            return;
+        }
+        let out = &mut dst[dst_at as usize..dst_at as usize + count * 2 * ds];
+        let input = &src[src_at as usize..src_at as usize + count * ss];
+        for (o, i) in out.chunks_exact_mut(2 * ds).zip(input.chunks_exact(ss)) {
+            S::load(i, 0).cast::<false, false>().store(o, 0);
+            o[ds..].fill(0);
+        }
+        return;
+    }
+    let (mut d, mut s) = (dst_at, src_at);
+    for _ in 0..count {
+        let (du, su) = (d as usize, s as usize);
+        S::load(src, su).cast::<false, false>().store(dst, du);
+        if REAL {
+            dst[du + ds..du + 2 * ds].fill(0);
+        } else {
+            S::load(src, su + ss)
+                .cast::<false, false>()
+                .store(dst, du + ds);
+        }
+        d += dst_stride;
+        s += src_stride;
+    }
+}
+
+macro_rules! int_run {
+    (int $s:ty, $d:ty, $mode:expr) => {
+        if $mode.saturate {
+            cast_run::<$s, $d, true, false> as Run
+        } else {
+            cast_run::<$s, $d, false, false> as Run
+        }
+    };
+    (float $s:ty, $d:ty, $mode:expr) => {
+        match ($mode.saturate, $mode.nearest) {
+            (false, false) => cast_run::<$s, $d, false, false> as Run,
+            (false, true) => cast_run::<$s, $d, false, true> as Run,
+            (true, false) => cast_run::<$s, $d, true, false> as Run,
+            (true, true) => cast_run::<$s, $d, true, true> as Run,
+        }
+    };
+}
+
+macro_rules! real_run {
+    ($kind:ident $s:ty, $dst:expr, $mode:expr) => {
+        match $dst {
+            DType::I8 => int_run!($kind $s, i8, $mode),
+            DType::U8 => int_run!($kind $s, u8, $mode),
+            DType::I16 => int_run!($kind $s, i16, $mode),
+            DType::U16 => int_run!($kind $s, u16, $mode),
+            DType::I32 => int_run!($kind $s, i32, $mode),
+            DType::U32 => int_run!($kind $s, u32, $mode),
+            DType::F32 => cast_run::<$s, f32, false, false> as Run,
+            DType::F64 => cast_run::<$s, f64, false, false> as Run,
+            DType::C64 => complex_run::<$s, f32, true> as Run,
+            DType::C128 => complex_run::<$s, f64, true> as Run,
+        }
+    };
+}
+
+#[cfg(target_feature = "simd128")]
+mod simd {
+    use super::{Run, cast_run};
+    use crate::ndarray::{DType, IntMode};
+    use core::arch::wasm32::*;
+
+    #[inline(always)]
+    fn load(bytes: &[u8]) -> v128 {
+        let bytes = &bytes[..16];
+        // SAFETY: `bytes` holds 16 readable bytes, and v128 loads have no alignment requirement.
+        unsafe { v128_load(bytes.as_ptr().cast()) }
+    }
+
+    #[inline(always)]
+    fn store(bytes: &mut [u8], v: v128) {
+        let bytes = &mut bytes[..16];
+        // SAFETY: `bytes` holds 16 writable bytes, and v128 stores have no alignment requirement.
+        unsafe { v128_store(bytes.as_mut_ptr().cast(), v) }
+    }
+
+    macro_rules! simd_run {
+        ($name:ident, $s:ty, $d:ty, $sat:expr, $near:expr, $step:expr, |$o:ident, $i:ident| $body:block) => {
+            fn $name(dst: &mut [u8], dst_at: i64, dst_stride: i64, src: &[u8], src_at: i64, src_stride: i64, count: usize) {
+                let (ss, ds) = (size_of::<$s>(), size_of::<$d>());
+                let body = if dst_stride == ds as i64 && src_stride == ss as i64 { count / $step * $step } else { 0 };
+                let (s0, d0) = (src_at as usize, dst_at as usize);
+                let out = &mut dst[d0..d0 + body * ds];
+                for ($o, $i) in out.chunks_exact_mut($step * ds).zip(src[s0..s0 + body * ss].chunks_exact($step * ss)) $body
+                let done = body as i64;
+                cast_run::<$s, $d, $sat, $near>(dst, dst_at + done * dst_stride, dst_stride, src, src_at + done * src_stride, src_stride, count - body);
+            }
+        };
+    }
+
+    simd_run!(u8_f64, u8, f64, false, false, 16, |o, i| {
+        let v = load(i);
+        let mut k = 0;
+        for w in [u16x8_extend_low_u8x16(v), u16x8_extend_high_u8x16(v)] {
+            for q in [u32x4_extend_low_u16x8(w), u32x4_extend_high_u16x8(w)] {
+                store(&mut o[k..], f64x2_convert_low_u32x4(q));
+                store(
+                    &mut o[k + 16..],
+                    f64x2_convert_low_u32x4(i32x4_shuffle::<2, 3, 2, 3>(q, q)),
+                );
+                k += 32;
+            }
+        }
+    });
+
+    simd_run!(i8_f64, i8, f64, false, false, 16, |o, i| {
+        let v = load(i);
+        let mut k = 0;
+        for w in [i16x8_extend_low_i8x16(v), i16x8_extend_high_i8x16(v)] {
+            for q in [i32x4_extend_low_i16x8(w), i32x4_extend_high_i16x8(w)] {
+                store(&mut o[k..], f64x2_convert_low_i32x4(q));
+                store(
+                    &mut o[k + 16..],
+                    f64x2_convert_low_i32x4(i32x4_shuffle::<2, 3, 2, 3>(q, q)),
+                );
+                k += 32;
+            }
+        }
+    });
+
+    macro_rules! f32_int {
+        ($name:ident, $d:ty, $near:expr, |$o:ident, $t:ident| $body:block) => {
+            simd_run!($name, f32, $d, true, $near, 16, |$o, i| {
+                let lanes = |k: usize| {
+                    let v = load(&i[16 * k..]);
+                    i32x4_trunc_sat_f32x4(if $near { f32x4_nearest(v) } else { v })
+                };
+                let $t = [lanes(0), lanes(1), lanes(2), lanes(3)];
+                $body
+            });
+        };
+    }
+
+    f32_int!(f32_u8, u8, false, |o, t| {
+        store(
+            o,
+            u8x16_narrow_i16x8(
+                i16x8_narrow_i32x4(t[0], t[1]),
+                i16x8_narrow_i32x4(t[2], t[3]),
+            ),
+        );
+    });
+    f32_int!(f32_u8_near, u8, true, |o, t| {
+        store(
+            o,
+            u8x16_narrow_i16x8(
+                i16x8_narrow_i32x4(t[0], t[1]),
+                i16x8_narrow_i32x4(t[2], t[3]),
+            ),
+        );
+    });
+    f32_int!(f32_i8, i8, false, |o, t| {
+        store(
+            o,
+            i8x16_narrow_i16x8(
+                i16x8_narrow_i32x4(t[0], t[1]),
+                i16x8_narrow_i32x4(t[2], t[3]),
+            ),
+        );
+    });
+    f32_int!(f32_i8_near, i8, true, |o, t| {
+        store(
+            o,
+            i8x16_narrow_i16x8(
+                i16x8_narrow_i32x4(t[0], t[1]),
+                i16x8_narrow_i32x4(t[2], t[3]),
+            ),
+        );
+    });
+    f32_int!(f32_u16, u16, false, |o, t| {
+        store(o, u16x8_narrow_i32x4(t[0], t[1]));
+        store(&mut o[16..], u16x8_narrow_i32x4(t[2], t[3]));
+    });
+    f32_int!(f32_u16_near, u16, true, |o, t| {
+        store(o, u16x8_narrow_i32x4(t[0], t[1]));
+        store(&mut o[16..], u16x8_narrow_i32x4(t[2], t[3]));
+    });
+    f32_int!(f32_i16, i16, false, |o, t| {
+        store(o, i16x8_narrow_i32x4(t[0], t[1]));
+        store(&mut o[16..], i16x8_narrow_i32x4(t[2], t[3]));
+    });
+    f32_int!(f32_i16_near, i16, true, |o, t| {
+        store(o, i16x8_narrow_i32x4(t[0], t[1]));
+        store(&mut o[16..], i16x8_narrow_i32x4(t[2], t[3]));
+    });
+
+    pub(super) fn run_for(src: DType, dst: DType, mode: IntMode) -> Option<Run> {
+        Some(match (src, dst, mode.saturate, mode.nearest) {
+            (DType::U8, DType::F64, ..) => u8_f64,
+            (DType::I8, DType::F64, ..) => i8_f64,
+            (DType::F32, DType::U8, true, false) => f32_u8,
+            (DType::F32, DType::U8, true, true) => f32_u8_near,
+            (DType::F32, DType::I8, true, false) => f32_i8,
+            (DType::F32, DType::I8, true, true) => f32_i8_near,
+            (DType::F32, DType::U16, true, false) => f32_u16,
+            (DType::F32, DType::U16, true, true) => f32_u16_near,
+            (DType::F32, DType::I16, true, false) => f32_i16,
+            (DType::F32, DType::I16, true, true) => f32_i16_near,
+            _ => return None,
+        })
+    }
+
+    pub(super) struct Block {
+        pub(super) s: i64,
+        pub(super) d: i64,
+        pub(super) s_col: i64,
+        pub(super) d_row: i64,
+        pub(super) rows: usize,
+        pub(super) cols: usize,
+    }
+
+    pub(super) fn transpose4(dst: &mut [u8], src: &[u8], b: &Block) {
+        for i in (0..b.rows).step_by(4) {
+            for j in (0..b.cols).step_by(4) {
+                let at = |c: usize| {
+                    load(&src[(b.s + 4 * i as i64 + (j + c) as i64 * b.s_col) as usize..])
+                };
+                let (a0, a1, a2, a3) = (at(0), at(1), at(2), at(3));
+                let (t0, t1) = (
+                    i32x4_shuffle::<0, 4, 1, 5>(a0, a1),
+                    i32x4_shuffle::<2, 6, 3, 7>(a0, a1),
+                );
+                let (t2, t3) = (
+                    i32x4_shuffle::<0, 4, 1, 5>(a2, a3),
+                    i32x4_shuffle::<2, 6, 3, 7>(a2, a3),
+                );
+                let row = |r: usize| (b.d + (i + r) as i64 * b.d_row + 4 * j as i64) as usize;
+                store(&mut dst[row(0)..], i64x2_shuffle::<0, 2>(t0, t2));
+                store(&mut dst[row(1)..], i64x2_shuffle::<1, 3>(t0, t2));
+                store(&mut dst[row(2)..], i64x2_shuffle::<0, 2>(t1, t3));
+                store(&mut dst[row(3)..], i64x2_shuffle::<1, 3>(t1, t3));
+            }
+        }
+    }
+}
+
+fn copy_kernel(size: usize) -> Run {
+    match size {
+        1 => copy_run::<1>,
+        2 => copy_run::<2>,
+        4 => copy_run::<4>,
+        8 => copy_run::<8>,
+        16 => copy_run::<16>,
+        _ => unreachable!("DType::size() returns 1, 2, 4, 8, or 16 bytes"),
+    }
+}
+
+fn run_for(src: DType, dst: DType, mode: IntMode) -> Option<Run> {
+    if src == dst {
+        return Some(copy_kernel(src.size()));
+    }
+    #[cfg(target_feature = "simd128")]
+    if let Some(run) = simd::run_for(src, dst, mode) {
+        return Some(run);
+    }
+    Some(match (src, dst) {
+        (DType::C64, DType::C128) => complex_run::<f32, f64, false>,
+        (DType::C128, DType::C64) => complex_run::<f64, f32, false>,
+        (DType::C64 | DType::C128, _) => return None,
+        (DType::I8, _) => real_run!(int i8, dst, mode),
+        (DType::U8, _) => real_run!(int u8, dst, mode),
+        (DType::I16, _) => real_run!(int i16, dst, mode),
+        (DType::U16, _) => real_run!(int u16, dst, mode),
+        (DType::I32, _) => real_run!(int i32, dst, mode),
+        (DType::U32, _) => real_run!(int u32, dst, mode),
+        (DType::F32, _) => real_run!(float f32, dst, mode),
+        (DType::F64, _) => real_run!(float f64, dst, mode),
+    })
+}
+
+struct Walk {
+    run: Run,
+    rank: usize,
+    n: [usize; MAX_RANK],
+    ss: [i64; MAX_RANK],
+    ds: [i64; MAX_RANK],
+    tile: usize,
+    dense_from: usize,
+    transpose4: bool,
+}
+
+impl Walk {
+    fn new(run: Run, dst: &Destination, src: &Source, shape: &[u32]) -> Option<(Walk, i64, i64)> {
+        let mut w = Walk {
+            run,
+            rank: 0,
+            n: [1; MAX_RANK],
+            ss: [0; MAX_RANK],
+            ds: [0; MAX_RANK],
+            tile: MAX_RANK,
+            dense_from: MAX_RANK,
+            transpose4: cfg!(target_feature = "simd128")
+                && src.dtype == dst.dtype
+                && src.dtype.size() == 4,
+        };
+        let (mut s0, mut d0) = (src.offset as i64, dst.offset as i64);
+        for (k, &count) in shape.iter().enumerate() {
+            if count == 1 {
+                continue;
+            }
+            let (mut s, mut d) = (src.strides[k] as i64, dst.strides[k] as i64);
+            if d < 0 {
+                s0 += (count as i64 - 1) * s;
+                d0 += (count as i64 - 1) * d;
+                (s, d) = (-s, -d);
+            }
+            let mut at = w.rank;
+            while at > 0 && w.ds[at - 1] < d {
+                (w.n[at], w.ss[at], w.ds[at]) = (w.n[at - 1], w.ss[at - 1], w.ds[at - 1]);
+                at -= 1;
+            }
+            (w.n[at], w.ss[at], w.ds[at]) = (count as usize, s, d);
+            w.rank += 1;
+        }
+        let mut extent = dst.dtype.size() as i64;
+        for k in (0..w.rank).rev() {
+            if w.ds[k] < extent {
+                return None;
+            }
+            extent += (w.n[k] as i64 - 1) * w.ds[k];
+        }
+        let mut m = 0;
+        for k in 0..w.rank {
+            let n = w.n[k] as i64;
+            if m > 0 && w.ds[m - 1] == w.ds[k] * n && w.ss[m - 1] == w.ss[k] * n {
+                w.n[m - 1] *= w.n[k];
+                (w.ss[m - 1], w.ds[m - 1]) = (w.ss[k], w.ds[k]);
+            } else {
+                (w.n[m], w.ss[m], w.ds[m]) = (w.n[k], w.ss[k], w.ds[k]);
+                m += 1;
+            }
+        }
+        w.rank = m.max(1);
+        let last = w.rank - 1;
+        if m == 0 {
+            (w.n[0], w.ss[0], w.ds[0]) = (1, 0, 0);
+        }
+        if w.ss[last] != 0 {
+            let mut best = w.ss[last].abs();
+            for k in 0..last {
+                if w.ss[k] != 0 && w.ss[k].abs() < best {
+                    (w.tile, best) = (k, w.ss[k].abs());
+                }
+            }
+        }
+        let mut block = dst.dtype.size() as i64;
+        w.dense_from = w.rank;
+        while w.dense_from > 0 && w.ds[w.dense_from - 1] == block {
+            w.dense_from -= 1;
+            block *= w.n[w.dense_from] as i64;
+        }
+        Some((w, s0, d0))
+    }
+
+    fn walk(&self, dst: &mut [u8], src: &[u8], axis: usize, s: i64, d: i64) {
+        let last = self.rank - 1;
+        if axis == last {
+            if self.tile < last {
+                self.tiles(dst, src, s, d);
+            } else {
+                (self.run)(dst, d, self.ds[last], src, s, self.ss[last], self.n[last]);
+            }
+            return;
+        }
+        if axis == self.tile {
+            return self.walk(dst, src, axis + 1, s, d);
+        }
+        let (n, ss, ds) = (self.n[axis], self.ss[axis], self.ds[axis]);
+        let block = (self.ds[axis + 1] * self.n[axis + 1] as i64) as usize;
+        if ss == 0
+            && axis + 1 >= self.dense_from
+            && self.tile.min(last) > axis
+            && block <= REPLICATE_MAX_BYTES
+        {
+            self.walk(dst, src, axis + 1, s, d);
+            replicate(dst, d as usize, ds as usize, block, n);
+            return;
+        }
+        let (mut s, mut d) = (s, d);
+        for _ in 0..n {
+            self.walk(dst, src, axis + 1, s, d);
+            s += ss;
+            d += ds;
+        }
+    }
+
+    fn tiles(&self, dst: &mut [u8], src: &[u8], s: i64, d: i64) {
+        let (t, last) = (self.tile, self.rank - 1);
+        let (nt, nl) = (self.n[t], self.n[last]);
+        let blocks = self.transpose4 && self.ss[t] == 4 && self.ds[last] == 4;
+        for i0 in (0..nt).step_by(TILE) {
+            for j0 in (0..nl).step_by(TILE) {
+                let (rows, count) = (TILE.min(nt - i0), TILE.min(nl - j0));
+                let s0 = s + i0 as i64 * self.ss[t] + j0 as i64 * self.ss[last];
+                let d0 = d + i0 as i64 * self.ds[t] + j0 as i64 * self.ds[last];
+                let (bi, bj) = if blocks {
+                    (rows / 4 * 4, count / 4 * 4)
+                } else {
+                    (0, 0)
+                };
+                #[cfg(target_feature = "simd128")]
+                if bi > 0 && bj > 0 {
+                    let block = simd::Block {
+                        s: s0,
+                        d: d0,
+                        s_col: self.ss[last],
+                        d_row: self.ds[t],
+                        rows: bi,
+                        cols: bj,
+                    };
+                    simd::transpose4(dst, src, &block);
+                }
+                let (mut s1, mut d1) = (s0, d0);
+                for i in 0..rows {
+                    let skip = if i < bi { bj } else { 0 };
+                    if skip < count {
+                        let at = skip as i64;
+                        let (ss, ds) = (self.ss[last], self.ds[last]);
+                        (self.run)(dst, d1 + at * ds, ds, src, s1 + at * ss, ss, count - skip);
+                    }
+                    s1 += self.ss[t];
+                    d1 += self.ds[t];
+                }
+            }
+        }
+    }
+}
+
+fn replicate(dst: &mut [u8], at: usize, step: usize, block: usize, count: usize) {
+    if step == block {
+        let mut done = 1;
+        while done < count {
+            let k = done.min(count - done);
+            dst.copy_within(at..at + k * block, at + done * block);
+            done += k;
+        }
+        return;
+    }
+    for i in 1..count {
+        dst.copy_within(at..at + block, at + i * step);
+    }
+}
+
 pub(crate) fn copy_cast(dst: Destination, src: Source, shape: &[u32], mode: IntMode) -> u32 {
     let nd = shape.len();
     if nd > MAX_RANK || src.strides.len() != nd || dst.strides.len() != nd {
@@ -561,6 +1239,12 @@ pub(crate) fn copy_cast(dst: Destination, src: Source, shape: &[u32], mode: IntM
         dst.dtype.size(),
     ) {
         return STATUS_DESTINATION_BOUNDS;
+    }
+    if let Some(run) = run_for(src.dtype, dst.dtype, mode)
+        && let Some((walk, s0, d0)) = Walk::new(run, &dst, &src, shape)
+    {
+        walk.walk(dst.bytes, src.bytes, 0, s0, d0);
+        return STATUS_OK;
     }
     if src.dtype != dst.dtype && (src.dtype.is_complex() || dst.dtype.is_complex()) {
         return copy_complex(dst, src, shape, mode);

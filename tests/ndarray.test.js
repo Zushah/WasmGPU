@@ -223,6 +223,18 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     for (const a of cpu) a.destroy();
     for (const a of gpu) a.destroy();
     for (const a of arrays) a.destroy();
+
+    // toCPU() snapshots its source at call time, with the readback ring idle and with readbacks already pending.
+    const source = compute.ndarray.fromArray("u32", [64], new Uint32Array(64).fill(1), { residency: "gpu" });
+    const idle = compute.ndarray.toCPU(source);
+    source.buffer.write(new Uint32Array(64).fill(2));
+    const pending = Array.from({ length: 4 }, () => compute.ndarray.toCPU(source));
+    const busy = compute.ndarray.toCPU(source);
+    source.buffer.write(new Uint32Array(64).fill(3));
+    const snapshots = await Promise.all([idle, busy, ...pending]);
+    assert.deepStrictEqual(snapshots.map((a) => a.data()[63]), [1, 2, 2, 2, 2, 2], "toCPU() reads the values present when it was called");
+    for (const a of snapshots) a.destroy();
+    source.destroy();
 }
 
 // 11) Odd-byte and zero-byte ndarrays preserve logical lengths across aligned GPU storage/readback.
@@ -319,6 +331,22 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     const d = compute.ndarray.fromArray("f64", [4], [1 + 2 ** -24, 3.5e38, 1.5 * 2 ** -149, -0], { residency: "gpu" });
     assert.deepStrictEqual(await readGPU(compute.ndarray.cast(d, "f32")), Array.from(new Float32Array([1 + 2 ** -24, 3.5e38, 1.5 * 2 ** -149, -0])), "GPU f64-to-f32 casts round to nearest even");
     assert.throws(() => compute.ndarray.cast(d, "i32"), /f64 <-> integer casts are not supported on the GPU/);
+    // Contiguous CPU casts (vectorized in WebAssembly) write the same bytes as the element-by-element strided path.
+    const edges = [0.5, -0.5, 1.5, 2.5, -2.5, 254.6, 255.5, 256, -129, 32767.5, -32768.5, 7e4, NaN, Infinity, -Infinity, -0, 1e10, 3.99];
+    const run = Array.from({ length: 70 }, (_, i) => edges[i % edges.length] * (i % 3 === 2 ? -1 : 1));
+    const bytes = (x) => { const out = Array.from(x.backingBytes()); x.destroy(); return out; };
+    for (const [from, values] of [["f32", run], ["u8", run.map((_, i) => (i * 37) & 255)], ["i8", run.map((_, i) => ((i * 37) & 255) - 128)]]) {
+        const dense = compute.ndarray.fromArray(from, [70], values);
+        const pairs = compute.ndarray.fromArray(from, [70, 2], values.flatMap((v) => [v, 0]));
+        const strided = compute.ndarray.slice(pairs, [null, 0]);
+        for (const [dtype, options] of [["u8", {}], ["i8", {}], ["u16", { rounding: "nearest-even" }], ["i16", {}], ["f64", {}], ["f32", {}]]) {
+            if (dtype === from) continue;
+            assert.deepStrictEqual(bytes(compute.ndarray.cast(dense, dtype, options)), bytes(compute.ndarray.cast(strided, dtype, options)), `contiguous ${from} -> ${dtype} matches the strided path`);
+        }
+        strided.destroy();
+        pairs.destroy();
+        dense.destroy();
+    }
     a.destroy();
     g.destroy();
     d.destroy();

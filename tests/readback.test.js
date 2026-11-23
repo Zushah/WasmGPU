@@ -71,7 +71,48 @@ assert.ok(compute.readback, "Compute.readback is missing");
     buf.destroy();
 }
 
-// 6) Cleanup releases the shared compute context before its browser GPU device.
+// 6) Every ring read copies its source at call time: later writes miss the result with the ring idle and with every slot busy.
+{
+    const words = (v) => new Uint32Array(16).fill(v);
+    const src = compute.createStorageBuffer({ label: "readback:snapshot", data: words(1), copySrc: true, copyDst: true });
+    const one = compute.createReadbackRing({ slots: 1, labelPrefix: "test:readback:one" });
+    for (const rb of [compute.readback, one]) {
+        src.write(words(1));
+        const idle = rb.read(src);
+        src.write(words(2));
+        const busy = [rb.readAs(Uint32Array, src, 0, 16), rb.readScalarU32(src, 60), rb.read(src, 4, 8)];
+        src.write(words(3));
+        const [a, b, c, d] = await Promise.all([idle, ...busy]);
+        assert.deepStrictEqual([new Uint32Array(a)[15], b[3], c, Array.from(new Uint32Array(d))], [1, 2, 2, [2, 2]], `${rb === one ? "slots: 1" : "slots: 2"} reads see the values present when they were called`);
+        const many = Array.from({ length: 12 }, (_, i) => { src.write(words(10 + i)); return rb.readScalarU32(src, 4 * i); });
+        assert.deepStrictEqual(await Promise.all(many), Array.from({ length: 12 }, (_, i) => 10 + i), "concurrent reads each keep their own snapshot");
+    }
+    one.destroy();
+    src.destroy();
+}
+
+// 7) Concurrent reads take a free slot (one that already fits first) before a transient staging buffer and keep their snapshots.
+{
+    const rb = compute.createReadbackRing({ slots: 3, labelPrefix: "test:readback:scan" });
+    const src = compute.createStorageBuffer({ label: "readback:scan", data: new Uint32Array(1024).fill(5), copySrc: true, copyDst: true });
+    await rb.read(src);
+    const create = device.createBuffer.bind(device);
+    const created = [];
+    device.createBuffer = (desc) => { created.push(desc.label); return create(desc); };
+    try {
+        const reads = [rb.read(src), rb.readScalarU32(src, 4)];
+        src.write(new Uint32Array(1024).fill(6));
+        reads.push(rb.read(src), rb.readScalarU32(src, 8));
+        src.write(new Uint32Array(1024).fill(7));
+        const [a, b, c, d] = await Promise.all(reads);
+        assert.deepStrictEqual([new Uint32Array(a)[1023], b, new Uint32Array(c)[1023], d], [5, 5, 6, 6], "each read keeps the values present when it was called");
+        assert.deepStrictEqual(created, ["test:readback:scan:slot2", "test:readback:scan:snapshot"], "the fitting idle slot is reused, the next idle slot grows, and only a fully busy ring uses a transient buffer");
+    } finally { device.createBuffer = create; }
+    rb.destroy();
+    src.destroy();
+}
+
+// 8) Cleanup releases the shared compute context before its browser GPU device.
 {
     compute.destroy();
     await destroyTestDevice(device);

@@ -17,7 +17,7 @@ export type ReadbackRingDescriptor = {
 type ReadbackSlot = {
     buffer: GPUBuffer;
     capacityBytes: number;
-    tail: Promise<void>;
+    pending: number;
 };
 
 const resolveLogicalByteLength = (src: ReadbackSource): number => {
@@ -54,7 +54,7 @@ export class ReadbackRing {
             size,
             usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ
         });
-        return { buffer, capacityBytes: size, tail: Promise.resolve() };
+        return { buffer, capacityBytes: size, pending: 0 };
     }
 
     private ensureNotDestroyed(): void {
@@ -91,61 +91,73 @@ export class ReadbackRing {
         return size;
     }
 
-    private async copyMappedBytes(src: ReadbackSource, srcOffsetBytes: number, size: number, opts: { label?: string }, destination: () => Uint8Array): Promise<void> {
-        if (size === 0) return;
+    private acquireSlot(alignedSize: number): number {
+        let grow = -1;
+        for (let k = 0; k < this.slots.length; k++) {
+            const index = (this.cursor + k) % this.slots.length;
+            const slot = this.slots[index];
+            if (slot.pending !== 0 || slot.buffer.mapState !== "unmapped") continue;
+            if (alignedSize <= slot.capacityBytes) { this.cursor = (index + 1) % this.slots.length; return index; }
+            if (grow < 0) grow = index;
+        }
+        if (grow < 0) return -1;
+        const slot = this.slots[grow];
+        const grown = this.createSlot(alignedSize, grow);
+        try { slot.buffer.destroy(); } catch { /* ignore */ }
+        slot.buffer = grown.buffer;
+        slot.capacityBytes = grown.capacityBytes;
+        this.cursor = (grow + 1) % this.slots.length;
+        return grow;
+    }
+
+    private stage(src: ReadbackSource, srcOffsetBytes: number, size: number, consume: (bytes: Uint8Array) => void, opts: { label?: string }): Promise<void> {
+        if (size === 0) return Promise.resolve();
         const alignedSize = alignTo(size, 4);
         const physicalOffset = (src instanceof StorageBuffer ? src.offsetBytes : 0) + srcOffsetBytes;
         const physicalByteLength = Number(resolveGPUBuffer(src).size);
         assert(physicalOffset + alignedSize <= physicalByteLength, `Aligned copy range (offset ${physicalOffset}, size ${alignedSize}) exceeds physical source bytes (${physicalByteLength})`);
-        const slotIndex = this.cursor;
-        this.cursor = (this.cursor + 1) % this.slots.length;
-        const slot = this.slots[slotIndex];
-        const run = async (): Promise<void> => {
-            this.ensureNotDestroyed();
-            if (src instanceof StorageBuffer) assertStorageBufferAlive(src);
-            if (slot.buffer.mapState === "mapped" || slot.buffer.mapState === "pending") {
-                try { slot.buffer.unmap(); } catch { /* ignore */ }
-                assert(slot.buffer.mapState !== "mapped" && slot.buffer.mapState !== "pending", "ReadbackRing internal error: staging buffer is still mapped");
-            }
-            if (alignedSize > slot.capacityBytes) {
-                try { slot.buffer.destroy(); } catch { /* ignore */ }
-                const newSlot = this.createSlot(alignedSize, slotIndex);
-                slot.buffer = newSlot.buffer;
-                slot.capacityBytes = newSlot.capacityBytes; 
-            }
-            const srcBuf = resolveGPUBuffer(src);
+        const index = this.acquireSlot(alignedSize);
+        const slot = (index >= 0) ? this.slots[index] : null;
+        const staging = slot?.buffer ?? this.device.createBuffer({ label: `${this.labelPrefix}:snapshot`, size: alignedSize, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        try {
             const encoder = this.device.createCommandEncoder({ label: opts.label ? `${opts.label}:copyToStaging` : `${this.labelPrefix}:copyToStaging` });
-            encoder.copyBufferToBuffer(srcBuf, physicalOffset, slot.buffer, 0, alignedSize);
+            encoder.copyBufferToBuffer(resolveGPUBuffer(src), physicalOffset, staging, 0, alignedSize);
             this.queue.submit([encoder.finish()]);
+        } catch (error) { if (!slot) staging.destroy(); throw error; }
+        const run = async (): Promise<void> => {
             try {
-                await slot.buffer.mapAsync(GPUMapMode.READ, 0, alignedSize);
-                const mapped = slot.buffer.getMappedRange(0, alignedSize);
-                const out = destination();
-                assert(out.byteLength >= size, `readback destination is too small (${out.byteLength} bytes for ${size} bytes)`);
-                out.set(new Uint8Array(mapped, 0, size), 0);
-                slot.buffer.unmap();
-            } catch (e) { try { slot.buffer.unmap(); } catch { /* ignore */ } throw e; }
+                await staging.mapAsync(GPUMapMode.READ, 0, alignedSize);
+                consume(new Uint8Array(staging.getMappedRange(0, alignedSize), 0, size));
+            } finally {
+                if (staging.mapState === "mapped") staging.unmap();
+                if (!slot) staging.destroy();
+            }
         };
-        const job = slot.tail.then(run, run);
-        slot.tail = job.then(() => { /* done */ }, () => { /* done */ });
-        return job;
+        if (!slot) return run();
+        slot.pending++;
+        return run().finally(() => { slot.pending--; });
+    }
+
+    snapshot(src: ReadbackSource, srcOffsetBytes: number, sizeBytes: number, consume: (bytes: Uint8Array) => void, opts: { label?: string } = {}): Promise<void> {
+        const size = this.validateReadRange(src, srcOffsetBytes, sizeBytes);
+        return this.stage(src, srcOffsetBytes, size, consume, opts);
     }
 
     async read(src: ReadbackSource, srcOffsetBytes: number = 0, sizeBytes?: number, opts: { label?: string } = {}): Promise<ArrayBuffer> {
         const size = this.validateReadRange(src, srcOffsetBytes, sizeBytes);
         const out = new Uint8Array(size);
-        await this.copyMappedBytes(src, srcOffsetBytes, size, opts, () => out);
+        await this.stage(src, srcOffsetBytes, size, (bytes) => out.set(bytes, 0), opts);
         return out.buffer;
     }
 
     async readIntoWasmMemory(mem: WebAssembly.Memory, dstPtrBytes: number, src: ReadbackSource, srcOffsetBytes: number = 0, sizeBytes?: number, opts: { label?: string } = {}): Promise<void> {
         assert(isNonNegativeInt(dstPtrBytes), `dstPtrBytes must be an integer >= 0 (got ${dstPtrBytes})`);
         const size = this.validateReadRange(src, srcOffsetBytes, sizeBytes);
-        await this.copyMappedBytes(src, srcOffsetBytes, size, opts, () => {
+        await this.stage(src, srcOffsetBytes, size, (bytes) => {
             const buffer = mem.buffer as unknown as ArrayBuffer;
             assert(dstPtrBytes + size <= buffer.byteLength, `readback destination exceeds WebAssembly memory (${dstPtrBytes} + ${size} > ${buffer.byteLength})`);
-            return new Uint8Array(buffer, dstPtrBytes, size);
-        });
+            new Uint8Array(buffer, dstPtrBytes, size).set(bytes, 0);
+        }, opts);
     }
 
     async readAs<T extends ArrayBufferView<ArrayBuffer>>(ctor: TypedArrayConstructor<T>, src: ReadbackSource, srcOffsetBytes: number = 0, sizeBytes?: number, opts: { label?: string } = {}): Promise<T> {
@@ -186,7 +198,6 @@ export class ReadbackRing {
         for (const slot of this.slots) {
             try { if (slot.buffer.mapState === "mapped" || slot.buffer.mapState === "pending") slot.buffer.unmap(); } catch { /* ignore */ }
             try { slot.buffer.destroy(); } catch { /* ignore */ }
-            slot.tail = Promise.resolve();
         }
         this.slots.length = 0;
     }

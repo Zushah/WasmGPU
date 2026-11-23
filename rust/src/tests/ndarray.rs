@@ -257,6 +257,246 @@ fn casts_follow_rust_as_semantics() {
     assert_eq!(cast_one(&payload, F64, F64, WRAP), payload);
 }
 
+struct Layout<'a> {
+    dtype: DType,
+    offset: usize,
+    strides: &'a [i32],
+}
+
+fn reference(
+    out: &mut [u8],
+    to: &Layout,
+    bytes: &[u8],
+    from: &Layout,
+    shape: &[u32],
+    mode: IntMode,
+) {
+    let count: u32 = shape.iter().product();
+    for flat in 0..count {
+        let (mut rest, mut s, mut d) = (flat, from.offset as i64, to.offset as i64);
+        for k in (0..shape.len()).rev() {
+            let i = (rest % shape[k]) as i64;
+            rest /= shape[k];
+            s += i * from.strides[k] as i64;
+            d += i * to.strides[k] as i64;
+        }
+        let (s, d) = (s as usize, d as usize);
+        let value = cast_one(&bytes[s..s + from.dtype.size()], from.dtype, to.dtype, mode);
+        out[d..d + to.dtype.size()].copy_from_slice(&value);
+    }
+}
+
+type CopyCase<'a> = (&'a [u8], Layout<'a>, Layout<'a>, usize, &'a [u32], IntMode);
+
+fn check_copy((bytes, from, to, len, shape, mode): CopyCase) {
+    let fill: Vec<u8> = (0..len).map(|i| (i * 37 + 11) as u8).collect();
+    let (mut got, mut want) = (fill.clone(), fill);
+    let destination = Destination {
+        bytes: &mut got,
+        dtype: to.dtype,
+        offset: to.offset as u32,
+        strides: to.strides,
+    };
+    let source = src(bytes, from.dtype, from.offset as u32, from.strides);
+    assert_eq!(copy_cast(destination, source, shape, mode), 0);
+    reference(&mut want, &to, bytes, &from, shape, mode);
+    assert_eq!(got, want, "{:?} -> {:?} {shape:?}", from.dtype, to.dtype);
+}
+
+fn at(dtype: DType, offset: usize, strides: &[i32]) -> Layout<'_> {
+    Layout {
+        dtype,
+        offset,
+        strides,
+    }
+}
+
+#[test]
+fn copy_fast_paths_match_an_element_by_element_reference() {
+    let floats: Vec<f64> = (0..4096).map(|i| (i as f64 - 1900.5) * 0.75).collect();
+    let ints: Vec<i32> = floats.iter().map(|&v| v as i32).collect();
+    let (f64s, i32s) = (le(&floats), le(&ints));
+    let grid = le(&(0..9_100).collect::<Vec<i32>>());
+    let cases: [CopyCase; 12] = [
+        (
+            &f64s,
+            at(F64, 0, &[8, 296]),
+            at(F64, 0, &[360, 8]),
+            13_320,
+            &[37, 45],
+            WRAP,
+        ),
+        (
+            &f64s,
+            at(F64, 0, &[8, 296]),
+            at(F32, 0, &[180, 4]),
+            6_660,
+            &[37, 45],
+            WRAP,
+        ),
+        (
+            &grid,
+            at(I32, 0, &[4, 520]),
+            at(I32, 0, &[280, 4]),
+            36_400,
+            &[130, 70],
+            WRAP,
+        ),
+        (
+            &i32s,
+            at(I32, 0, &[4, 680, 20]),
+            at(I16, 0, &[330, 66, 2]),
+            1_650,
+            &[5, 5, 33],
+            WRAP,
+        ),
+        (
+            &i32s,
+            at(I32, 4092, &[-4]),
+            at(I8, 0, &[1]),
+            1_024,
+            &[1_024],
+            WRAP,
+        ),
+        (
+            &i32s,
+            at(I32, 4092, &[-4]),
+            at(U8, 0, &[1]),
+            1_024,
+            &[1_024],
+            SATURATE,
+        ),
+        (
+            &f64s,
+            at(F64, 8, &[640, 24]),
+            at(I16, 2_398, &[-2, -60]),
+            2_400,
+            &[30, 20],
+            SATURATE,
+        ),
+        (
+            &f64s,
+            at(F64, 64, &[8, 0]),
+            at(F64, 0, &[400, 8]),
+            2_400,
+            &[6, 50],
+            WRAP,
+        ),
+        (
+            &i32s,
+            at(I32, 64, &[4, 0]),
+            at(F32, 0, &[200, 4]),
+            1_200,
+            &[6, 50],
+            WRAP,
+        ),
+        (
+            &i32s,
+            at(I32, 0, &[0, 0, 4]),
+            at(F64, 0, &[312, 104, 8]),
+            1_248,
+            &[4, 3, 13],
+            WRAP,
+        ),
+        (
+            &i32s,
+            at(I32, 0, &[0, 4]),
+            at(U16, 0, &[60, 2]),
+            540,
+            &[9, 13],
+            SATURATE,
+        ),
+        (
+            &f64s,
+            at(F64, 0, &[0, 8]),
+            at(F64, 0, &[8, 72]),
+            936,
+            &[9, 13],
+            WRAP,
+        ),
+    ];
+    for case in cases {
+        check_copy(case);
+    }
+    let edges = le(&[
+        2.5,
+        -2.5,
+        3.5,
+        300.7,
+        -1e20,
+        f64::NAN,
+        f64::INFINITY,
+        127.5,
+        -128.5,
+        65_535.5,
+    ]);
+    let wide = le(&[-129i32, 128, 65_536, -1]);
+    for (saturate, nearest) in [(false, false), (false, true), (true, false), (true, true)] {
+        let mode = IntMode { saturate, nearest };
+        check_copy((&edges, at(F64, 0, &[8]), at(I8, 0, &[1]), 10, &[10], mode));
+        check_copy((
+            &edges,
+            at(F64, 72, &[-16]),
+            at(U16, 0, &[4]),
+            20,
+            &[5],
+            mode,
+        ));
+        check_copy((&wide, at(I32, 0, &[4]), at(U8, 0, &[1]), 4, &[4], mode));
+    }
+}
+
+#[test]
+fn complex_casts_take_one_pass_and_overlapping_destinations_keep_the_per_axis_order() {
+    let parts: Vec<f32> = (0..64).map(|i| i as f32 * 1.25 - 20.0).collect();
+    let mut c64s = le(&parts);
+    c64s[0..4].copy_from_slice(&0x7FA0_0001u32.to_le_bytes());
+    let ints = le(&[7i32, -9, i32::MIN]);
+    let cases: [CopyCase; 5] = [
+        (
+            &c64s,
+            at(C64, 0, &[8]),
+            at(C128, 0, &[16]),
+            512,
+            &[32],
+            WRAP,
+        ),
+        (
+            &c64s,
+            at(C64, 0, &[8, 32]),
+            at(C128, 0, &[64, 16]),
+            512,
+            &[8, 4],
+            WRAP,
+        ),
+        (&c64s, at(F32, 0, &[4]), at(C64, 0, &[8]), 512, &[64], WRAP),
+        (
+            &c64s,
+            at(F32, 252, &[-8]),
+            at(C64, 0, &[8]),
+            256,
+            &[32],
+            WRAP,
+        ),
+        (&ints, at(I32, 0, &[4]), at(C128, 0, &[16]), 48, &[3], WRAP),
+    ];
+    for case in cases {
+        check_copy(case);
+    }
+    let payload = cast_one(&c64s[0..4], F32, C64, WRAP);
+    assert_eq!(
+        &payload[..4],
+        &c64s[0..4],
+        "an f32 real part is copied bit for bit"
+    );
+    let (s, mut out) = (le(&[1i32, 2, 3]), vec![0; 4]);
+    let status = copy_cast(dst(&mut out, I32, &[0]), src(&s, I32, 0, &[4]), &[3], WRAP);
+    assert_eq!((status, from_le::<i32>(&out)), (0, vec![3]));
+    let (s, mut out) = (le(&[1.0f32, 2.0, 3.0, 4.0]), vec![0; 24]);
+    let status = copy_cast(dst(&mut out, C128, &[8]), src(&s, C64, 0, &[8]), &[2], WRAP);
+    assert_eq!((status, from_le::<f64>(&out)), (0, vec![1.0, 2.0, 4.0]));
+}
+
 #[test]
 fn pad_index_maps_and_constant_writes_match_numpy() {
     let map = |mode, n, lo, hi| (lo..hi).map(|i| pad_index(i, n, mode)).collect::<Vec<_>>();

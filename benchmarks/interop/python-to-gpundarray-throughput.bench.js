@@ -20,7 +20,6 @@ export default {
             result: null
         };
     },
-
     run(state) {
         state.result = state.python.toGPU(state.source);
     },
