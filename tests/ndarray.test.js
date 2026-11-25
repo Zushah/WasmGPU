@@ -315,7 +315,7 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     await assert.rejects(() => compute.ndarray.toCPU(crop), /destroyed/);
 }
 
-// 14) contiguous and cast return owned C-contiguous arrays in the input's residency with bit-exact CPU/GPU conversions.
+// 14) contiguous and cast return owned C-contiguous arrays in the input's residency with bit-exact CPU/GPU conversions and 4-byte transposes.
 {
     const a = compute.ndarray.fromArray("f32", [2, 3], [1.5, -2.5, 300.7, -1e10, NaN, Infinity]);
     const t = compute.ndarray.transpose(a);
@@ -331,22 +331,56 @@ const fromBits = (dtype, shape, words) => { const a = compute.ndarray.zeros(dtyp
     const d = compute.ndarray.fromArray("f64", [4], [1 + 2 ** -24, 3.5e38, 1.5 * 2 ** -149, -0], { residency: "gpu" });
     assert.deepStrictEqual(await readGPU(compute.ndarray.cast(d, "f32")), Array.from(new Float32Array([1 + 2 ** -24, 3.5e38, 1.5 * 2 ** -149, -0])), "GPU f64-to-f32 casts round to nearest even");
     assert.throws(() => compute.ndarray.cast(d, "i32"), /f64 <-> integer casts are not supported on the GPU/);
-    // Contiguous CPU casts (vectorized in WebAssembly) write the same bytes as the element-by-element strided path.
-    const edges = [0.5, -0.5, 1.5, 2.5, -2.5, 254.6, 255.5, 256, -129, 32767.5, -32768.5, 7e4, NaN, Infinity, -Infinity, -0, 1e10, 3.99];
+    // Contiguous CPU casts (vectorized in WebAssembly), aligned or not, write the same bytes as the element-by-element strided path.
+    const edges = [0.5, -0.5, 1.5, 2.5, -2.5, 127.5, 128.5, -128.5, 254.5, 254.6, 255.5, 256, -1, -129, 32767.5, -32768.5, 65535.5, 65536, 7e4, 2147483648, -2147483904, 1e10, 0.49999997, 1e-45, 3.4e38, -3.4e38, NaN, Infinity, -Infinity, -0, 3.99];
     const run = Array.from({ length: 70 }, (_, i) => edges[i % edges.length] * (i % 3 === 2 ? -1 : 1));
     const bytes = (x) => { const out = Array.from(x.backingBytes()); x.destroy(); return out; };
+    const targets = ["u8", "i8", "u16", "i16", "i32", "u32"].flatMap((dtype) => [[dtype, { rounding: "trunc" }], [dtype, { rounding: "nearest-even" }]]).concat([["f64", {}], ["f32", {}]]);
     for (const [from, values] of [["f32", run], ["u8", run.map((_, i) => (i * 37) & 255)], ["i8", run.map((_, i) => ((i * 37) & 255) - 128)]]) {
         const dense = compute.ndarray.fromArray(from, [70], values);
+        const padded = compute.ndarray.fromArray(from, [71], [0, ...values]);
+        const shifted = compute.ndarray.slice(padded, [[1, 71]]);
         const pairs = compute.ndarray.fromArray(from, [70, 2], values.flatMap((v) => [v, 0]));
         const strided = compute.ndarray.slice(pairs, [null, 0]);
-        for (const [dtype, options] of [["u8", {}], ["i8", {}], ["u16", { rounding: "nearest-even" }], ["i16", {}], ["f64", {}], ["f32", {}]]) {
+        for (const [dtype, options] of targets) {
             if (dtype === from) continue;
-            assert.deepStrictEqual(bytes(compute.ndarray.cast(dense, dtype, options)), bytes(compute.ndarray.cast(strided, dtype, options)), `contiguous ${from} -> ${dtype} matches the strided path`);
+            const expected = bytes(compute.ndarray.cast(strided, dtype, options));
+            assert.deepStrictEqual(bytes(compute.ndarray.cast(dense, dtype, options)), expected, `contiguous ${from} -> ${dtype} (${options.rounding ?? "default"}) matches the strided path`);
+            assert.deepStrictEqual(bytes(compute.ndarray.cast(shifted, dtype, options)), expected, `unaligned contiguous ${from} -> ${dtype} (${options.rounding ?? "default"}) matches the strided path`);
         }
         strided.destroy();
         pairs.destroy();
+        shifted.destroy();
+        padded.destroy();
         dense.destroy();
     }
+    // Contiguous and reversed f64 -> f32, c128 -> c64 (the same f64 stream), and f64 -> c64, i32, and u32, aligned or not, match the strided path, rounding ties, 32-bit bounds, and NaN payloads included.
+    const f64Edges = [1 + 2 ** -24, 1 + 3 * 2 ** -24, -(1 + 2 ** -24), 3.4028235677973366e38, -3.5e38, 1.5 * 2 ** -149, 2 ** -150, 1e300, 5e-324, -0, 2 ** 31, 2 ** 31 - 2 ** -21, -(2 ** 31) - 2 ** -21, 2 ** 31 - 0.5, -(2 ** 31) - 0.5, 2 ** 32 - 0.5, 2 ** 32];
+    const f64Words = Array.from(new Uint32Array(Float64Array.from(run, (v, i) => i % 3 === 1 ? f64Edges[i % f64Edges.length] : v).buffer));
+    for (const [i, hi, lo] of [[5, 0x7FF40000, 1], [20, 0xFFF00000, 0x20000000], [64, 0x7FFFFFFF, 0xFFFFFFFF]]) [f64Words[2 * i], f64Words[2 * i + 1]] = [lo, hi];
+    const f64Arrays = [fromBits("f64", [70], f64Words), fromBits("f64", [71], [0, 0, ...f64Words]), fromBits("f64", [70, 2], f64Words.flatMap((w, k) => k % 2 ? [w, 0, 0] : [w])), fromBits("c128", [35], f64Words)];
+    const f64Views = [compute.ndarray.slice(f64Arrays[1], [[1, 71]]), compute.ndarray.slice(f64Arrays[2], [null, 0])];
+    const f64Expected = bytes(compute.ndarray.cast(f64Views[1], "f32"));
+    assert.deepStrictEqual([bytes(compute.ndarray.cast(f64Arrays[0], "f32")), bytes(compute.ndarray.cast(f64Views[0], "f32")), bytes(compute.ndarray.cast(f64Arrays[3], "c64"))], [f64Expected, f64Expected, f64Expected], "contiguous f64 -> f32 and c128 -> c64, aligned or not, match the strided path");
+    const f64Flips = [compute.ndarray.flip(f64Arrays[0], 0), compute.ndarray.flip(f64Views[1], 0)];
+    assert.deepStrictEqual(bytes(compute.ndarray.cast(f64Flips[0], "f32")), bytes(compute.ndarray.cast(f64Flips[1], "f32")), "reversed contiguous f64 -> f32 matches the strided path");
+    for (const [dtype, options] of [["c64", {}], ...["i32", "u32"].flatMap((d) => [[d, { rounding: "trunc" }], [d, { rounding: "nearest-even" }]])]) {
+        const expected = bytes(compute.ndarray.cast(f64Views[1], dtype, options));
+        assert.deepStrictEqual([bytes(compute.ndarray.cast(f64Arrays[0], dtype, options)), bytes(compute.ndarray.cast(f64Views[0], dtype, options))], [expected, expected], `contiguous f64 -> ${dtype} (${options.rounding ?? "default"}), aligned or not, matches the strided path`);
+    }
+    [...f64Flips, ...f64Views, ...f64Arrays].forEach((x) => x.destroy());
+    // 4-byte transposes (vectorized 4x4 blocks in WebAssembly) move every bit pattern, NaN payloads included, to its permuted index.
+    const words = Array.from({ length: 67 * 70 }, (_, i) => [0x7FA00001, 0xFFC00001, 0x7F800001][i % 7] ?? (Math.imul(i, 0x9E3779B1) >>> 0));
+    const w = fromBits("f32", [67, 70], words);
+    const bitsOf = (x) => { const d = x.data(); const out = Array.from(new Uint32Array(d.buffer, d.byteOffset, x.numel)); x.destroy(); return out; };
+    const permuted = (at) => Array.from({ length: 70 * 67 }, (_, k) => words[at(k % 67, Math.floor(k / 67))]);
+    assert.deepStrictEqual(bitsOf(compute.ndarray.contiguous(compute.ndarray.transpose(w))), permuted((i, j) => i * 70 + j), "contiguous(transpose) moves 4-byte elements bit-exactly");
+    const into = compute.ndarray.zeros("f32", { shape: [70, 67] });
+    compute.ndarray.copyInto(compute.ndarray.transpose(into), w);
+    assert.deepStrictEqual(bitsOf(into), permuted((i, j) => i * 70 + j), "copyInto(transpose(dst)) moves 4-byte elements bit-exactly");
+    assert.deepStrictEqual(bitsOf(compute.ndarray.contiguous(compute.ndarray.flip(compute.ndarray.transpose(w), 0))), permuted((i, j) => i * 70 + 69 - j), "A flipped tile axis matches the permutation");
+    assert.deepStrictEqual(bitsOf(compute.ndarray.contiguous(compute.ndarray.flip(compute.ndarray.transpose(w), 1))), permuted((i, j) => (66 - i) * 70 + j), "A negative column stride matches the permutation");
+    w.destroy();
     a.destroy();
     g.destroy();
     d.destroy();

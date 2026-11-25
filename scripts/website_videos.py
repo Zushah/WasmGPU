@@ -2153,7 +2153,7 @@ result = await interop.from_gpu(gpu)
 
 # =============================== Video: math ================================
 # Sources: ./website/docs/math/*.md (wasmgpu-math, mat4-perspective, mat4-lookat, vec3-refract, mat4-rotatex),
-# ./typescript/wasm/driver.ts (mat4f/quatf/vec3f pointer namespaces), ./wasm/wasm.js (array wrappers over f32 scratch),
+# ./typescript/wasm/driver.ts (mat4f/quatf/vec3f pointer namespaces and the array wrappers over f32 scratch),
 # ./rust/src/mat4.rs (perspective, lookAt, decompose_trs), ./rust/src/quat.rs (fromAxisAngle, mul, slerp, toRotation),
 # ./rust/src/vec3.rs (proj, oproj, reflect, refract, ang, angBetween), ./typescript/world/camera.ts,
 # ./rust/src/transform.rs, ./rust/src/anim.rs, ./rust/src/cull.rs, and ./ARCHITECTURE.md §1.19.

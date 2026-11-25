@@ -540,12 +540,15 @@ const TILE: usize = 64;
 const REPLICATE_MAX_BYTES: usize = 2048;
 
 pub(crate) trait Cast<D>: Element {
+    const IDENTITY: bool = false;
     fn cast<const SATURATE: bool, const NEAREST: bool>(self) -> D;
 }
 
 macro_rules! cast_identity {
     ($($t:ty),+) => {
         $(impl Cast<$t> for $t {
+            const IDENTITY: bool = true;
+
             #[inline(always)]
             fn cast<const SATURATE: bool, const NEAREST: bool>(self) -> $t {
                 self
@@ -792,20 +795,28 @@ fn complex_run<S: Cast<D>, D: Element, const REAL: bool>(
     }
 }
 
+fn cast_kernel<S: Cast<D>, D: Element, const SATURATE: bool, const NEAREST: bool>() -> Run {
+    if <S as Cast<D>>::IDENTITY {
+        copy_kernel(size_of::<S>())
+    } else {
+        cast_run::<S, D, SATURATE, NEAREST>
+    }
+}
+
 macro_rules! int_run {
     (int $s:ty, $d:ty, $mode:expr) => {
         if $mode.saturate {
-            cast_run::<$s, $d, true, false> as Run
+            cast_kernel::<$s, $d, true, false>()
         } else {
-            cast_run::<$s, $d, false, false> as Run
+            cast_kernel::<$s, $d, false, false>()
         }
     };
     (float $s:ty, $d:ty, $mode:expr) => {
         match ($mode.saturate, $mode.nearest) {
-            (false, false) => cast_run::<$s, $d, false, false> as Run,
-            (false, true) => cast_run::<$s, $d, false, true> as Run,
-            (true, false) => cast_run::<$s, $d, true, false> as Run,
-            (true, true) => cast_run::<$s, $d, true, true> as Run,
+            (false, false) => cast_kernel::<$s, $d, false, false>(),
+            (false, true) => cast_kernel::<$s, $d, false, true>(),
+            (true, false) => cast_kernel::<$s, $d, true, false>(),
+            (true, true) => cast_kernel::<$s, $d, true, true>(),
         }
     };
 }
@@ -819,17 +830,42 @@ macro_rules! real_run {
             DType::U16 => int_run!($kind $s, u16, $mode),
             DType::I32 => int_run!($kind $s, i32, $mode),
             DType::U32 => int_run!($kind $s, u32, $mode),
-            DType::F32 => cast_run::<$s, f32, false, false> as Run,
-            DType::F64 => cast_run::<$s, f64, false, false> as Run,
+            DType::F32 => cast_kernel::<$s, f32, false, false>(),
+            DType::F64 => cast_kernel::<$s, f64, false, false>(),
             DType::C64 => complex_run::<$s, f32, true> as Run,
             DType::C128 => complex_run::<$s, f64, true> as Run,
         }
     };
 }
 
+// Below are explicit WebAssembly SIMD kernels for contiguous runs of some casts, and 4x4 blocks
+// for 4-byte transposes. Builds without SIMD (WASMGPU_SIMD=0) compile this module out and use only
+// the scalar kernels.
+//
+// These exists because, with SIMD128 enabled, LLVM auto-vectorizes the generic loops in `cast_run`
+// and `complex_run`, but for some conversions (f64 to f32 and c64, and saturating float to 32-bit
+// integer casts) it splits each vector back into lanes and converts one element at a time. Those
+// casts ran slower than in a build without SIMD. The kernels below call the vector conversions
+// directly (f32x4_demote_f64x2_zero, the i32x4/u32x4 trunc_sat conversions from f64x2 and f32x4,
+// and f64x2/f32x4_nearest for nearest-even rounding), which makes contiguous casts several to tens
+// of times faster.
+//
+// The invariant is that every kernel writes exactly the bytes its scalar kernel writes, NaN
+// payloads included, so CPU casts keep matching GPU casts (see the visible invariants in
+// ARCHITECTURE.md). Runs that are not contiguous go straight to the scalar kernel, and each
+// contiguous run's tail is finished by it. Block 14 of ./tests/ndarray.test.js compares these
+// kernels against the strided path.
+//
+// This is fragile as several kernels use deliberately unusual shapes (OR-merging demoted halves,
+// overlapping whole-vector stores, reversing lanes after merging) because the current LLVM folds
+// the obvious shapes back into per-element code. A newer Rust toolchain can undo this! If that
+// happens, the kernels will fall back to the scalar implementation, and the speedup will silently
+// disappear. So after a Rust toolchain bump, check that a SIMD build still emits the conversions
+// named above in these kernels, and that contiguous casts are still faster than in a non-SIMD
+// WasmGPU build.
 #[cfg(target_feature = "simd128")]
 mod simd {
-    use super::{Run, cast_run};
+    use super::{Run, cast_run, complex_run};
     use crate::ndarray::{DType, IntMode};
     use core::arch::wasm32::*;
 
@@ -847,11 +883,19 @@ mod simd {
         unsafe { v128_store(bytes.as_mut_ptr().cast(), v) }
     }
 
+    #[inline(always)]
+    fn merge(lo: v128, hi: v128) -> v128 {
+        v128_or(lo, i64x2_shuffle::<1, 0>(hi, hi))
+    }
+
     macro_rules! simd_run {
         ($name:ident, $s:ty, $d:ty, $sat:expr, $near:expr, $step:expr, |$o:ident, $i:ident| $body:block) => {
             fn $name(dst: &mut [u8], dst_at: i64, dst_stride: i64, src: &[u8], src_at: i64, src_stride: i64, count: usize) {
                 let (ss, ds) = (size_of::<$s>(), size_of::<$d>());
-                let body = if dst_stride == ds as i64 && src_stride == ss as i64 { count / $step * $step } else { 0 };
+                if dst_stride != ds as i64 || src_stride != ss as i64 {
+                    return cast_run::<$s, $d, $sat, $near>(dst, dst_at, dst_stride, src, src_at, src_stride, count);
+                }
+                let body = count / $step * $step;
                 let (s0, d0) = (src_at as usize, dst_at as usize);
                 let out = &mut dst[d0..d0 + body * ds];
                 for ($o, $i) in out.chunks_exact_mut($step * ds).zip(src[s0..s0 + body * ss].chunks_exact($step * ss)) $body
@@ -957,10 +1001,201 @@ mod simd {
         store(&mut o[16..], i16x8_narrow_i32x4(t[2], t[3]));
     });
 
+    macro_rules! f32_int32 {
+        ($name:ident, $d:ty, $near:expr, $conv:ident) => {
+            simd_run!($name, f32, $d, true, $near, 16, |o, i| {
+                for k in 0..4 {
+                    let v = load(&i[16 * k..]);
+                    store(
+                        &mut o[16 * k..],
+                        $conv(if $near { f32x4_nearest(v) } else { v }),
+                    );
+                }
+            });
+        };
+    }
+
+    f32_int32!(f32_i32, i32, false, i32x4_trunc_sat_f32x4);
+    f32_int32!(f32_i32_near, i32, true, i32x4_trunc_sat_f32x4);
+    f32_int32!(f32_u32, u32, false, u32x4_trunc_sat_f32x4);
+    f32_int32!(f32_u32_near, u32, true, u32x4_trunc_sat_f32x4);
+
+    macro_rules! f64_int32 {
+        ($name:ident, $d:ty, $near:expr, $conv:ident) => {
+            fn $name(
+                dst: &mut [u8],
+                dst_at: i64,
+                dst_stride: i64,
+                src: &[u8],
+                src_at: i64,
+                src_stride: i64,
+                count: usize,
+            ) {
+                if dst_stride != 4 || src_stride != 8 {
+                    return cast_run::<f64, $d, true, $near>(
+                        dst, dst_at, dst_stride, src, src_at, src_stride, count,
+                    );
+                }
+                let body = count.saturating_sub(2) / 16 * 16;
+                let (s0, d0) = (src_at as usize, dst_at as usize);
+                let out = &mut dst[d0..d0 + count * 4];
+                for (c, i) in src[s0..s0 + body * 8].chunks_exact(128).enumerate() {
+                    for k in 0..8 {
+                        let v = load(&i[16 * k..]);
+                        store(
+                            &mut out[64 * c + 8 * k..],
+                            $conv(if $near { f64x2_nearest(v) } else { v }),
+                        );
+                    }
+                }
+                let done = body as i64;
+                cast_run::<f64, $d, true, $near>(
+                    dst,
+                    dst_at + 4 * done,
+                    4,
+                    src,
+                    src_at + 8 * done,
+                    8,
+                    count - body,
+                );
+            }
+        };
+    }
+
+    f64_int32!(f64_i32, i32, false, i32x4_trunc_sat_f64x2_zero);
+    f64_int32!(f64_i32_near, i32, true, i32x4_trunc_sat_f64x2_zero);
+    f64_int32!(f64_u32, u32, false, u32x4_trunc_sat_f64x2_zero);
+    f64_int32!(f64_u32_near, u32, true, u32x4_trunc_sat_f64x2_zero);
+
+    fn f64_f32(
+        dst: &mut [u8],
+        dst_at: i64,
+        dst_stride: i64,
+        src: &[u8],
+        src_at: i64,
+        src_stride: i64,
+        count: usize,
+    ) {
+        if dst_stride != 4 || src_stride.unsigned_abs() != 8 {
+            return cast_run::<f64, f32, false, false>(
+                dst, dst_at, dst_stride, src, src_at, src_stride, count,
+            );
+        }
+        let body = count / 16 * 16;
+        if body > 0 {
+            let d0 = dst_at as usize;
+            let out = &mut dst[d0..d0 + body * 4];
+            let demote = |i: &[u8], at: usize| f32x4_demote_f64x2_zero(load(&i[at..]));
+            if src_stride < 0 {
+                let s0 = (src_at + 8) as usize - body * 8;
+                let input = src[s0..s0 + body * 8].as_rchunks::<128>().1;
+                for (o, i) in out
+                    .as_chunks_mut::<64>()
+                    .0
+                    .iter_mut()
+                    .zip(input.iter().rev())
+                {
+                    for k in 0..4 {
+                        let m = merge(demote(i, 96 - 32 * k), demote(i, 112 - 32 * k));
+                        store(&mut o[16 * k..], i32x4_shuffle::<3, 2, 1, 0>(m, m));
+                    }
+                }
+            } else {
+                let s0 = src_at as usize;
+                let input = src[s0..s0 + body * 8].as_chunks::<128>().0;
+                for (o, i) in out.as_chunks_mut::<64>().0.iter_mut().zip(input) {
+                    for k in 0..4 {
+                        store(
+                            &mut o[16 * k..],
+                            merge(demote(i, 32 * k), demote(i, 32 * k + 16)),
+                        );
+                    }
+                }
+            }
+        }
+        let done = body as i64;
+        cast_run::<f64, f32, false, false>(
+            dst,
+            dst_at + done * dst_stride,
+            dst_stride,
+            src,
+            src_at + done * src_stride,
+            src_stride,
+            count - body,
+        );
+    }
+
+    fn f64_c64(
+        dst: &mut [u8],
+        dst_at: i64,
+        dst_stride: i64,
+        src: &[u8],
+        src_at: i64,
+        src_stride: i64,
+        count: usize,
+    ) {
+        if dst_stride != 8 || src_stride != 8 {
+            return complex_run::<f64, f32, true>(
+                dst, dst_at, dst_stride, src, src_at, src_stride, count,
+            );
+        }
+        let body = count / 16 * 16;
+        let (s0, d0) = (src_at as usize, dst_at as usize);
+        let input = src[s0..s0 + body * 8].as_chunks::<128>().0;
+        for (o, i) in dst[d0..d0 + body * 8]
+            .as_chunks_mut::<128>()
+            .0
+            .iter_mut()
+            .zip(input)
+        {
+            for k in 0..8 {
+                let v = f32x4_demote_f64x2_zero(load(&i[16 * k..]));
+                store(&mut o[16 * k..], i32x4_shuffle::<0, 2, 1, 3>(v, v));
+            }
+        }
+        let done = body as i64;
+        complex_run::<f64, f32, true>(
+            dst,
+            dst_at + 8 * done,
+            8,
+            src,
+            src_at + 8 * done,
+            8,
+            count - body,
+        );
+    }
+
+    fn c128_c64(
+        dst: &mut [u8],
+        dst_at: i64,
+        dst_stride: i64,
+        src: &[u8],
+        src_at: i64,
+        src_stride: i64,
+        count: usize,
+    ) {
+        if dst_stride == 8 && src_stride == 16 {
+            f64_f32(dst, dst_at, 4, src, src_at, 8, 2 * count);
+        } else {
+            complex_run::<f64, f32, false>(dst, dst_at, dst_stride, src, src_at, src_stride, count);
+        }
+    }
+
     pub(super) fn run_for(src: DType, dst: DType, mode: IntMode) -> Option<Run> {
         Some(match (src, dst, mode.saturate, mode.nearest) {
             (DType::U8, DType::F64, ..) => u8_f64,
             (DType::I8, DType::F64, ..) => i8_f64,
+            (DType::F64, DType::F32, ..) => f64_f32,
+            (DType::F64, DType::C64, ..) => f64_c64,
+            (DType::C128, DType::C64, ..) => c128_c64,
+            (DType::F64, DType::I32, true, false) => f64_i32,
+            (DType::F64, DType::I32, true, true) => f64_i32_near,
+            (DType::F64, DType::U32, true, false) => f64_u32,
+            (DType::F64, DType::U32, true, true) => f64_u32_near,
+            (DType::F32, DType::I32, true, false) => f32_i32,
+            (DType::F32, DType::I32, true, true) => f32_i32_near,
+            (DType::F32, DType::U32, true, false) => f32_u32,
+            (DType::F32, DType::U32, true, true) => f32_u32_near,
             (DType::F32, DType::U8, true, false) => f32_u8,
             (DType::F32, DType::U8, true, true) => f32_u8_near,
             (DType::F32, DType::I8, true, false) => f32_i8,

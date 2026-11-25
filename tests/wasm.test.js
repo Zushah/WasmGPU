@@ -10,6 +10,8 @@ import * as generatedWasm from "../wasm/wasm.js";
 
 const encoder = new TextEncoder();
 
+const [f32view, f64view, u32view, i32view, u8view] = [Float32Array, Float64Array, Uint32Array, Int32Array, Uint8Array].map((View) => (ptr, len) => new View(generatedWasm.memory.buffer, ptr, len));
+
 const RUST_ABI = {
     accessor_apply_sparse: 8,
     accessor_convert_to_f32: 5,
@@ -393,6 +395,9 @@ const makeFixture = () => {
     const declarationsResponse = await fetch(new URL("../wasm/wasm.d.ts", import.meta.url));
     assert.ok(declarationsResponse.ok, `Failed to fetch ./wasm/wasm.d.ts: ${declarationsResponse.status}`);
     const declarations = await declarationsResponse.text();
+    const expectedExportNames = [...expectedFunctionNames, "memory"].sort();
+    assert.deepStrictEqual(Object.keys(generatedWasm).sort(), expectedExportNames, "The generated JavaScript bridge must export only memory and the raw Rust functions");
+    assert.deepStrictEqual(Array.from(declarations.matchAll(/^export (?:const|function) (\w+)/gm), (match) => match[1]).sort(), expectedExportNames, "Generated declarations must declare only memory and the raw Rust functions");
     for (const [name, arity] of Object.entries(RUST_ABI)) {
         assert.strictEqual(typeof rawInstance.exports[name], "function", `Raw Wasm export '${name}' must be a function`);
         assert.strictEqual(rawInstance.exports[name].length, arity, `Raw Wasm export '${name}' arity mismatch`);
@@ -431,18 +436,18 @@ const makeFixture = () => {
         }
     }
 
-    generatedWasm.u8view(bytePtr, 17).set(Array.from({ length: 17 }, (_, i) => i + 1));
-    generatedWasm.f32view(f32Ptr, 5).set([1.25, -2.5, 3.75, 4.5, 5.25]);
-    generatedWasm.u32view(u32Ptr, 5).set([1, 2, 3, 4, 0xffffffff]);
-    assert.deepStrictEqual(Array.from(generatedWasm.u8view(bytePtr, 17)), Array.from({ length: 17 }, (_, i) => i + 1));
-    assert.deepStrictEqual(Array.from(generatedWasm.f32view(f32Ptr, 5)), [1.25, -2.5, 3.75, 4.5, 5.25]);
-    assert.deepStrictEqual(Array.from(generatedWasm.u32view(u32Ptr, 5)), [1, 2, 3, 4, 0xffffffff]);
+    u8view(bytePtr, 17).set(Array.from({ length: 17 }, (_, i) => i + 1));
+    f32view(f32Ptr, 5).set([1.25, -2.5, 3.75, 4.5, 5.25]);
+    u32view(u32Ptr, 5).set([1, 2, 3, 4, 0xffffffff]);
+    assert.deepStrictEqual(Array.from(u8view(bytePtr, 17)), Array.from({ length: 17 }, (_, i) => i + 1));
+    assert.deepStrictEqual(Array.from(f32view(f32Ptr, 5)), [1.25, -2.5, 3.75, 4.5, 5.25]);
+    assert.deepStrictEqual(Array.from(u32view(u32Ptr, 5)), [1, 2, 3, 4, 0xffffffff]);
 
     const beforeBuffer = generatedWasm.memory.buffer;
     const growthPtr = generatedWasm.wasmgpu_alloc(beforeBuffer.byteLength);
     assert.ok(growthPtr > 0, "Heap allocation large enough to grow memory must succeed");
     assert.notStrictEqual(generatedWasm.memory.buffer, beforeBuffer, "Heap growth must replace the WebAssembly memory buffer");
-    assert.deepStrictEqual(Array.from(generatedWasm.f32view(f32Ptr, 5)), [1.25, -2.5, 3.75, 4.5, 5.25], "Typed views must remain readable when recreated after memory growth");
+    assert.deepStrictEqual(Array.from(f32view(f32Ptr, 5)), [1.25, -2.5, 3.75, 4.5, 5.25], "Typed views must remain readable when recreated after memory growth");
 
     assert.doesNotThrow(() => generatedWasm.wasmgpu_free(bytePtr, 17));
     assert.doesNotThrow(() => generatedWasm.wasmgpu_free_f32(f32Ptr, 5));
@@ -451,7 +456,7 @@ const makeFixture = () => {
 
     const guardPtr = generatedWasm.wasmgpu_alloc(64);
     assert.ok(guardPtr > 0, "Live-allocation guard must succeed");
-    generatedWasm.u8view(guardPtr, 64).fill(0x5a);
+    u8view(guardPtr, 64).fill(0x5a);
 
     const churnSizes = [257, 4096, 131072, 1024];
     const churnCycle = () => {
@@ -459,10 +464,10 @@ const makeFixture = () => {
         const f32 = generatedWasm.wasmgpu_alloc_f32(4096);
         const u32 = generatedWasm.wasmgpu_alloc_u32(4096);
         assert.ok(ptrs.every((ptr) => ptr > 0) && f32 > 0 && u32 > 0, "Heap churn allocations must succeed");
-        for (let i = 0; i < ptrs.length; i++) generatedWasm.u8view(ptrs[i], churnSizes[i]).fill(i + 1);
-        generatedWasm.f32view(f32, 4096).fill(1.25);
-        generatedWasm.u32view(u32, 4096).fill(0xdecafbad);
-        assert.deepStrictEqual(Array.from(generatedWasm.u8view(guardPtr, 64)), new Array(64).fill(0x5a), "Allocator churn must not corrupt a live neighboring allocation");
+        for (let i = 0; i < ptrs.length; i++) u8view(ptrs[i], churnSizes[i]).fill(i + 1);
+        f32view(f32, 4096).fill(1.25);
+        u32view(u32, 4096).fill(0xdecafbad);
+        assert.deepStrictEqual(Array.from(u8view(guardPtr, 64)), new Array(64).fill(0x5a), "Allocator churn must not corrupt a live neighboring allocation");
         generatedWasm.wasmgpu_free(ptrs[1], churnSizes[1]);
         generatedWasm.wasmgpu_free(ptrs[3], churnSizes[3]);
         generatedWasm.wasmgpu_free_f32(f32, 4096);
@@ -475,7 +480,7 @@ const makeFixture = () => {
     const stabilizedHeapBytes = generatedWasm.memory.buffer.byteLength;
     for (let i = 0; i < 64; i++) churnCycle();
     assert.strictEqual(generatedWasm.memory.buffer.byteLength, stabilizedHeapBytes, "Repeated mixed-size allocation/free cycles must reuse heap storage instead of growing memory linearly");
-    assert.deepStrictEqual(Array.from(generatedWasm.u8view(guardPtr, 64)), new Array(64).fill(0x5a), "The live guard must remain intact after stabilized churn");
+    assert.deepStrictEqual(Array.from(u8view(guardPtr, 64)), new Array(64).fill(0x5a), "The live guard must remain intact after stabilized churn");
     generatedWasm.wasmgpu_free(guardPtr, 64);
 }
 
@@ -528,44 +533,44 @@ const makeFixture = () => {
     const affineScalarsPtr = generatedWasm.wasmgpu_alloc_f64(3);
     const affineValuesPtr = generatedWasm.wasmgpu_alloc_f64(4);
     try {
-        generatedWasm.u32view(shapePtr, 3).set([2, 3, 4]);
+        u32view(shapePtr, 3).set([2, 3, 4]);
         assert.strictEqual(generatedWasm.ndarray_numel(shapePtr, 3), 24);
 
-        generatedWasm.i32view(gatherSourcePtr, 6).set([0, 1, 2, 3, 4, 5]);
-        generatedWasm.u32view(gatherLayoutPtr, 8).set([0, 0, 3, 2, 4, 12, 8, 4]);
+        i32view(gatherSourcePtr, 6).set([0, 1, 2, 3, 4, 5]);
+        u32view(gatherLayoutPtr, 8).set([0, 0, 3, 2, 4, 12, 8, 4]);
         assert.strictEqual(generatedWasm.ndarray_copy(gatherOutputPtr, 24, gatherSourcePtr, 24, gatherLayoutPtr, 2, 0x44), 0, "Strided i32 gather must succeed");
-        assert.deepStrictEqual(Array.from(generatedWasm.i32view(gatherOutputPtr, 6)), [0, 3, 1, 4, 2, 5], "Strided gather must transpose through byte strides");
+        assert.deepStrictEqual(Array.from(i32view(gatherOutputPtr, 6)), [0, 3, 1, 4, 2, 5], "Strided gather must transpose through byte strides");
         assert.strictEqual(generatedWasm.ndarray_copy(gatherSourcePtr, 24, gatherSourcePtr, 24, gatherLayoutPtr, 2, 0x44), 5, "Overlapping source and destination ranges must be rejected");
         assert.strictEqual(generatedWasm.ndarray_copy(gatherOutputPtr, 20, gatherSourcePtr, 24, gatherLayoutPtr, 2, 0x44), 7, "Destination layouts outside their byte range must be rejected");
 
-        generatedWasm.f32view(complexSourcePtr, 4).set([1, 2, 3, 4]);
-        generatedWasm.u32view(complexLayoutPtr, 5).set([0, 8, 2, -8 >>> 0, 8]);
+        f32view(complexSourcePtr, 4).set([1, 2, 3, 4]);
+        u32view(complexLayoutPtr, 5).set([0, 8, 2, -8 >>> 0, 8]);
         assert.strictEqual(generatedWasm.ndarray_copy(complexOutputPtr, 16, complexSourcePtr, 16, complexLayoutPtr, 1, 0x88), 0, "Reversed c64 copies must succeed");
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(complexOutputPtr, 4)), [3, 4, 1, 2], "c64 copies must move whole 8-byte elements");
-        generatedWasm.u32view(complexLayoutPtr, 5).set([0, 0, 2, 4, 8]);
+        assert.deepStrictEqual(Array.from(f32view(complexOutputPtr, 4)), [3, 4, 1, 2], "c64 copies must move whole 8-byte elements");
+        u32view(complexLayoutPtr, 5).set([0, 0, 2, 4, 8]);
         assert.strictEqual(generatedWasm.ndarray_copy(complexOutputPtr, 16, complexSourcePtr, 8, complexLayoutPtr, 1, 0x68), 0, "f32 -> c64 casts must succeed");
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(complexOutputPtr, 4)), [1, 0, 2, 0], "f32 -> c64 casts must write +0 imaginary parts");
-        generatedWasm.u32view(complexLayoutPtr, 5).set([0, 0, 2, 8, 4]);
+        assert.deepStrictEqual(Array.from(f32view(complexOutputPtr, 4)), [1, 0, 2, 0], "f32 -> c64 casts must write +0 imaginary parts");
+        u32view(complexLayoutPtr, 5).set([0, 0, 2, 8, 4]);
         assert.strictEqual(generatedWasm.ndarray_copy(complexOutputPtr, 8, complexSourcePtr, 16, complexLayoutPtr, 1, 0x86), 1, "c64 -> f32 casts must be rejected as an invalid dtype");
         assert.strictEqual(generatedWasm.ndarray_copy(complexOutputPtr, 8, complexSourcePtr, 16, complexLayoutPtr, 1, 0x0A), 1, "Dtype code 10 must be rejected");
-        generatedWasm.f64view(complexSourcePtr, 2).set([1.5, -2.5]);
-        generatedWasm.f64view(complexValuePtr, 2).set([7, -7]);
-        generatedWasm.u32view(complexLayoutPtr, 7).set([0, 0, 3, 1, 1, 16, 16]);
+        f64view(complexSourcePtr, 2).set([1.5, -2.5]);
+        f64view(complexValuePtr, 2).set([7, -7]);
+        u32view(complexLayoutPtr, 7).set([0, 0, 3, 1, 1, 16, 16]);
         assert.strictEqual(generatedWasm.ndarray_pad(complexOutputPtr, 48, complexSourcePtr, 16, complexLayoutPtr, 1, 0x09, complexValuePtr), 0, "c128 constant padding must succeed");
-        assert.deepStrictEqual(Array.from(generatedWasm.f64view(complexOutputPtr, 6)), [7, -7, 1.5, -2.5, 7, -7], "c128 padding must read a 16-byte constant");
+        assert.deepStrictEqual(Array.from(f64view(complexOutputPtr, 6)), [7, -7, 1.5, -2.5, 7, -7], "c128 padding must read a 16-byte constant");
         // Affine descriptors: [dst offset, src offset, (pointer, length, offset) x 4, shape, src/dst/parameter strides] and f64 [epsilon, r0, r1].
-        const affineLayout = (p0, p1, p2 = [0, 0, 0], p3 = [0, 0, 0], strides = [4, 4, 1, 0, 0, 0]) => generatedWasm.u32view(affineLayoutPtr, 21).set([0, 0, ...p0, ...p1, ...p2, ...p3, 2, ...strides.map((v) => v >>> 0)]);
-        generatedWasm.f32view(complexSourcePtr, 2).set([1, 2]);
-        generatedWasm.f64view(affineValuesPtr, 4).set([2, 3, 1, -1]);
-        generatedWasm.f64view(affineScalarsPtr, 3).set([0, 0, 1]);
+        const affineLayout = (p0, p1, p2 = [0, 0, 0], p3 = [0, 0, 0], strides = [4, 4, 1, 0, 0, 0]) => u32view(affineLayoutPtr, 21).set([0, 0, ...p0, ...p1, ...p2, ...p3, 2, ...strides.map((v) => v >>> 0)]);
+        f32view(complexSourcePtr, 2).set([1, 2]);
+        f64view(affineValuesPtr, 4).set([2, 3, 1, -1]);
+        f64view(affineScalarsPtr, 3).set([0, 0, 1]);
         affineLayout([affineValuesPtr, 2, 0], [affineValuesPtr + 16, 1, 0]);
         assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x66, affineScalarsPtr), 0, "Strided f64 parameters must succeed");
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(complexOutputPtr, 2)), [3, 7], "Parameters advance by their own element strides and broadcast with stride 0");
+        assert.deepStrictEqual(Array.from(f32view(complexOutputPtr, 2)), [3, 7], "Parameters advance by their own element strides and broadcast with stride 0");
         affineLayout([affineValuesPtr, 1, 0], [affineValuesPtr + 8, 1, 0], [0, 0, 0], [0, 0, 0], [4, 4, 0, 0, 0, 0]);
-        generatedWasm.f32view(complexSourcePtr, 2).set([3, 3]);
-        generatedWasm.f64view(affineValuesPtr, 2).set([3, 3]);
+        f32view(complexSourcePtr, 2).set([3, 3]);
+        f64view(affineValuesPtr, 2).set([3, 3]);
         assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x366, affineScalarsPtr), 0, "Min-max maps must succeed");
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(complexOutputPtr, 2)), [0, 0], "A constant min-max slice maps to the range start");
+        assert.deepStrictEqual(Array.from(f32view(complexOutputPtr, 2)), [0, 0], "A constant min-max slice maps to the range start");
         assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x68, affineScalarsPtr), 1, "Affine maps must reject complex dtypes");
         assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x466, affineScalarsPtr), 2, "Unknown affine code bits must be rejected");
         assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x266, affineScalarsPtr), 10, "z-score maps need all four parameters");
@@ -577,11 +582,11 @@ const makeFixture = () => {
         assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x66, affineScalarsPtr), 10, "Parameter layouts outside their values must be rejected");
         affineLayout([affineValuesPtr, 1, 0], [affineValuesPtr, 1, 0], [affineValuesPtr, 1, 0], [0, 0, 0], [4, 4, 0, 0, 0, 0]);
         assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x166, affineScalarsPtr), 10, "Parameters beyond the form's count must be absent");
-        generatedWasm.f64view(affineScalarsPtr, 3).set([0, 1, 1]);
+        f64view(affineScalarsPtr, 3).set([0, 1, 1]);
         affineLayout([affineValuesPtr, 1, 0], [affineValuesPtr, 1, 0], [0, 0, 0], [0, 0, 0], [4, 4, 0, 0, 0, 0]);
         assert.strictEqual(generatedWasm.ndarray_affine(complexOutputPtr, 8, complexSourcePtr, 8, affineLayoutPtr, 1, 0x366, affineScalarsPtr), 10, "Empty ranges must be rejected");
-        generatedWasm.f64view(complexSourcePtr, 2).set([1.5, -2.5]);
-        generatedWasm.u32view(complexLayoutPtr, 6).set([0, 0, 0, 2, 8, 1]);
+        f64view(complexSourcePtr, 2).set([1.5, -2.5]);
+        u32view(complexLayoutPtr, 6).set([0, 0, 0, 2, 8, 1]);
         assert.strictEqual(generatedWasm.ndarray_reduce(complexOutputPtr, 8, 0, 0, complexSourcePtr, 16, complexLayoutPtr, 1, 0x0066, 0), 0, "f64-backed f32 sums must succeed");
         assert.strictEqual(generatedWasm.ndarray_reduce(complexOutputPtr, 8, 0, 0, complexSourcePtr, 16, complexLayoutPtr, 1, 0x0588, 0), 1, "Complex minimums must be rejected as an invalid dtype");
         assert.strictEqual(generatedWasm.ndarray_reduce(complexOutputPtr, 8, 0, 0, complexSourcePtr, 16, complexLayoutPtr, 1, 0x0C66, 0), 2, "Reduction op code 12 must be rejected");
@@ -590,57 +595,57 @@ const makeFixture = () => {
         assert.strictEqual(generatedWasm.ndarray_reduce(complexOutputPtr, 8, complexSourcePtr, 8, complexSourcePtr, 16, complexLayoutPtr, 1, 0x0066, 0), 10, "Only fused reductions accept a second output");
 
         generatedWasm.mat4f_identity(matrixPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(matrixPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+        assert.deepStrictEqual(Array.from(f32view(matrixPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
         generatedWasm.mat4f_copy(copyPtr, matrixPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
         generatedWasm.mat4f_copy(copyPtr, copyPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], "Matrix self-copy must preserve its input");
-        generatedWasm.f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => i + 1));
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 16)), [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1], "Matrix self-copy must preserve its input");
+        f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => i + 1));
         generatedWasm.mat4f_copy(copyPtr + 4, copyPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 17)), [1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], "Matrix copy must support forward overlap");
-        generatedWasm.f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => i + 1));
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 17)), [1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], "Matrix copy must support forward overlap");
+        f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => i + 1));
         generatedWasm.mat4f_copy(copyPtr, copyPtr + 4);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 17)), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 17], "Matrix copy must support backward overlap");
-        generatedWasm.f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => -(i + 1)));
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 17)), [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 17], "Matrix copy must support backward overlap");
+        f32view(copyPtr, 17).set(Array.from({ length: 17 }, (_, i) => -(i + 1)));
         generatedWasm.mat4f_abs(copyPtr + 4, copyPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 17)), [-1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], "Fixed-width math kernels must stage inputs before partially overlapping output writes");
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 17)), [-1, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], "Fixed-width math kernels must stage inputs before partially overlapping output writes");
 
-        generatedWasm.f32view(matrixPtr, 4).set([0.25, -0.5, 0.75, 1]);
+        f32view(matrixPtr, 4).set([0.25, -0.5, 0.75, 1]);
         generatedWasm.quatf_copy(copyPtr, matrixPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [0.25, -0.5, 0.75, 1]);
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 4)), [0.25, -0.5, 0.75, 1]);
         generatedWasm.quatf_copy(copyPtr, copyPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [0.25, -0.5, 0.75, 1], "Quaternion self-copy must preserve its input");
-        generatedWasm.f32view(copyPtr, 5).set([1, 2, 3, 4, 5]);
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 4)), [0.25, -0.5, 0.75, 1], "Quaternion self-copy must preserve its input");
+        f32view(copyPtr, 5).set([1, 2, 3, 4, 5]);
         generatedWasm.quatf_copy(copyPtr + 4, copyPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 5)), [1, 1, 2, 3, 4], "Quaternion copy must support forward overlap");
-        generatedWasm.f32view(copyPtr, 5).set([1, 2, 3, 4, 5]);
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 5)), [1, 1, 2, 3, 4], "Quaternion copy must support forward overlap");
+        f32view(copyPtr, 5).set([1, 2, 3, 4, 5]);
         generatedWasm.quatf_copy(copyPtr, copyPtr + 4);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 5)), [2, 3, 4, 5, 5], "Quaternion copy must support backward overlap");
-        generatedWasm.f32view(copyPtr, 8).set([0, 0, 0, 1, 1, 0, 0, 0]);
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 5)), [2, 3, 4, 5, 5], "Quaternion copy must support backward overlap");
+        f32view(copyPtr, 8).set([0, 0, 0, 1, 1, 0, 0, 0]);
         generatedWasm.quatf_mul(copyPtr, copyPtr, copyPtr + 16);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [1, 0, 0, 0], "Quaternion multiplication must support an in-place left operand");
-        generatedWasm.f32view(copyPtr, 4).set([0, 0, 0, 2]);
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 4)), [1, 0, 0, 0], "Quaternion multiplication must support an in-place left operand");
+        f32view(copyPtr, 4).set([0, 0, 0, 2]);
         generatedWasm.quatf_normalize(copyPtr, copyPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [0, 0, 0, 1], "Quaternion normalization must support in-place output");
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 4)), [0, 0, 0, 1], "Quaternion normalization must support in-place output");
 
-        generatedWasm.f32view(matrixPtr, 3).set([1.25, -2.5, 3.75]);
+        f32view(matrixPtr, 3).set([1.25, -2.5, 3.75]);
         generatedWasm.vec3f_copy(copyPtr, matrixPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 3)), [1.25, -2.5, 3.75]);
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 3)), [1.25, -2.5, 3.75]);
         generatedWasm.vec3f_copy(copyPtr, copyPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 3)), [1.25, -2.5, 3.75], "Vector self-copy must preserve its input");
-        generatedWasm.f32view(copyPtr, 4).set([1, 2, 3, 4]);
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 3)), [1.25, -2.5, 3.75], "Vector self-copy must preserve its input");
+        f32view(copyPtr, 4).set([1, 2, 3, 4]);
         generatedWasm.vec3f_copy(copyPtr + 4, copyPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [1, 1, 2, 3], "Vector copy must support forward overlap");
-        generatedWasm.f32view(copyPtr, 4).set([1, 2, 3, 4]);
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 4)), [1, 1, 2, 3], "Vector copy must support forward overlap");
+        f32view(copyPtr, 4).set([1, 2, 3, 4]);
         generatedWasm.vec3f_copy(copyPtr, copyPtr + 4);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 4)), [2, 3, 4, 4], "Vector copy must support backward overlap");
-        generatedWasm.f32view(copyPtr, 3).set([2, 0, 0]);
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 4)), [2, 3, 4, 4], "Vector copy must support backward overlap");
+        f32view(copyPtr, 3).set([2, 0, 0]);
         generatedWasm.vec3f_normalize(copyPtr, copyPtr);
-        assert.deepStrictEqual(Array.from(generatedWasm.f32view(copyPtr, 3)), [1, 0, 0], "Vector normalization must support in-place output");
+        assert.deepStrictEqual(Array.from(f32view(copyPtr, 3)), [1, 0, 0], "Vector normalization must support in-place output");
 
-        generatedWasm.u8view(sourcePtr, 12).set([1, 2, 3, 4, 90, 91, 5, 6, 7, 8, 92, 93]);
+        u8view(sourcePtr, 12).set([1, 2, 3, 4, 90, 91, 5, 6, 7, 8, 92, 93]);
         generatedWasm.accessor_deinterleave(outputPtr, sourcePtr, 2, 2, 2, 6);
-        assert.deepStrictEqual(Array.from(generatedWasm.u8view(outputPtr, 8)), [1, 2, 3, 4, 5, 6, 7, 8]);
+        assert.deepStrictEqual(Array.from(u8view(outputPtr, 8)), [1, 2, 3, 4, 5, 6, 7, 8]);
     } finally {
         generatedWasm.wasmgpu_free_u32(shapePtr, 3);
         generatedWasm.wasmgpu_free_f32(matrixPtr, 16);
@@ -660,9 +665,12 @@ const makeFixture = () => {
     }
 }
 
-// 12) Driver-owned heap slices and heap arenas enforce deterministic lifetimes and reclaim their allocations.
+// 12) The driver downloads one module copy, and its heap slices and heap arenas enforce deterministic lifetimes and reclaim their allocations.
 {
-    await initWebAssembly(new URL("../wasm/", import.meta.url).toString());
+    await initWebAssembly(new URL("../release/", import.meta.url).toString());
+    const loaded = performance.getEntriesByType("resource").map((entry) => new URL(entry.name).pathname);
+    assert.ok(loaded.some((path) => path.endsWith("/release/wasm.wasm")), "The driver must instantiate wasm.wasm when it can fetch it");
+    assert.ok(!loaded.some((path) => path.endsWith("/release/wasm.js")), "The driver must not also download the base64 copy in wasm.js");
 
     frameArena.reset();
     const frameF64Slice = driver.frame.allocF64(2);
@@ -735,7 +743,7 @@ const makeFixture = () => {
     };
 
     arenaChurn();
-    const stabilizedArenaBytes = generatedWasm.memory.buffer.byteLength;
+    const stabilizedArenaBytes = wasm.memory().buffer.byteLength;
     for (let i = 0; i < 64; i++) arenaChurn();
-    assert.strictEqual(generatedWasm.memory.buffer.byteLength, stabilizedArenaBytes, "Repeated heap-arena destruction must release backing blocks for reuse");
+    assert.strictEqual(wasm.memory().buffer.byteLength, stabilizedArenaBytes, "Repeated heap-arena destruction must release backing blocks for reuse");
 }

@@ -6,7 +6,7 @@
 
 declare const __WASMGPU_BASE_URL__: string;
 
-type WebAssemblyDriver = typeof import("../../wasm/wasm.js");
+type WebAssemblyExports = typeof import("../../wasm/wasm.js");
 
 export type WasmPtr = number;
 
@@ -383,11 +383,128 @@ const IIFE_SCRIPT_URL: string | null = (() => { if (typeof document === "undefin
 
 const defaultBaseURL = (): string => { if (__WASMGPU_BASE_URL__ !== "__CURRENT_SCRIPT__") return new URL(".", __WASMGPU_BASE_URL__).toString(); const base = IIFE_SCRIPT_URL ?? location.href; return new URL(".", base).toString(); };
 
+const bridgeWebAssembly = (raw: WebAssemblyExports) => {
+    const memory = raw.memory;
+    const f32view = (ptr: number, len: number): Float32Array => new Float32Array(memory.buffer, ptr, len);
+    const f64view = (ptr: number, len: number): Float64Array => new Float64Array(memory.buffer, ptr, len);
+    const u32view = (ptr: number, len: number): Uint32Array => new Uint32Array(memory.buffer, ptr, len);
+    const i32view = (ptr: number, len: number): Int32Array => new Int32Array(memory.buffer, ptr, len);
+    const u8view = (ptr: number, len: number): Uint8Array => new Uint8Array(memory.buffer, ptr, len);
+    const [M0, M1, M2, Q0, Q1, Q2, V0, V1, V2, V40, V42] = [16, 16, 16, 4, 4, 4, 3, 3, 3, 4, 4].map((len) => raw.wasmgpu_alloc_f32(len));
+    const write = (ptr: number, len: number, arr: ArrayLike<number> | null | undefined): void => { const v = f32view(ptr, len); for (let i = 0; i < len; i++) v[i] = (arr && i < arr.length) ? arr[i] : 0; };
+    const read = (ptr: number, len: number): number[] => Array.from(f32view(ptr, len));
+    const unary = (len: number, a: number, out: number) => (fn: (out: number, a: number) => number, x: number[]): number[] => { write(a, len, x); fn(out, a); return read(out, len); };
+    const binary = (len: number, a: number, b: number, out: number) => (fn: (out: number, a: number, b: number) => number, x: number[], y: number[]): number[] => { write(a, len, x); write(b, len, y); fn(out, a, b); return read(out, len); };
+    const [mat4Unary, quatUnary, vec3Unary] = [unary(16, M0, M2), unary(4, Q0, Q2), unary(3, V0, V2)];
+    const [mat4Binary, quatBinary, vec3Binary] = [binary(16, M0, M1, M2), binary(4, Q0, Q1, Q2), binary(3, V0, V1, V2)];
+    return {
+        ...raw,
+        f32view, f64view, u32view, i32view, u8view,
+        mat4abs: (m: number[]): number[] => mat4Unary(raw.mat4f_abs, m),
+        mat4add: (m1: number[], m2: number[]): number[] => mat4Binary(raw.mat4f_add, m1, m2),
+        mat4copy: (m: number[]): number[] => mat4Unary(raw.mat4f_copy, m),
+        mat4det: (m: number[]): number => { write(M0, 16, m); return raw.mat4f_det(M0); },
+        mat4identity: (): number[] => { raw.mat4f_identity(M2); return read(M2, 16); },
+        mat4init: (...m: number[]): number[] => { const mm = new Array<number>(16); for (let i = 0; i < 16; i++) mm[i] = (i < m.length ? m[i] : 0); raw.mat4f_init(M2, mm[0], mm[1], mm[2], mm[3], mm[4], mm[5], mm[6], mm[7], mm[8], mm[9], mm[10], mm[11], mm[12], mm[13], mm[14], mm[15]); return read(M2, 16); },
+        mat4invert: (m: number[]): number[] => mat4Unary(raw.mat4f_invert, m),
+        mat4isEqual: (m1: number[], m2: number[]): boolean => { write(M0, 16, m1); write(M1, 16, m2); return !!raw.mat4f_isEqual(M0, M1); },
+        mat4isIdentity: (m: number[]): boolean => { write(M0, 16, m); return !!raw.mat4f_isIdentity(M0); },
+        mat4isInverse: (m1: number[], m2: number[]): boolean => { write(M0, 16, m1); write(M1, 16, m2); return !!raw.mat4f_isInverse(M0, M1); },
+        mat4isZero: (m: number[]): boolean => { write(M0, 16, m); return !!raw.mat4f_isZero(M0); },
+        mat4lookAt: (eye: number[], center: number[], up: number[]): number[] => { write(V0, 3, eye); write(V1, 3, center); write(V2, 3, up); raw.mat4f_lookAt(M2, V0, V1, V2); return read(M2, 16); },
+        mat4mul: (m1: number[], m2: number[]): number[] => { write(M0, 16, m1); if (m2 && m2.length === 4) { write(V40, 4, m2); raw.mat4f_mul_vec4(V42, M0, V40); return read(V42, 4); } write(M1, 16, m2); raw.mat4f_mul(M2, M0, M1); return read(M2, 16); },
+        mat4neg: (m: number[]): number[] => mat4Unary(raw.mat4f_neg, m),
+        mat4norm: (m: number[]): number => { write(M0, 16, m); return raw.mat4f_norm(M0); },
+        mat4normalize: (m: number[]): number[] => mat4Unary(raw.mat4f_normalize, m),
+        mat4normsq: (m: number[]): number => { write(M0, 16, m); return raw.mat4f_normsq(M0); },
+        mat4perspective: (fovY: number, aspect: number, near: number, far: number): number[] => { raw.mat4f_perspective(M2, fovY, aspect, near, far); return read(M2, 16); },
+        mat4print: (m: number[]): void => { console.log(`[ ${m[0]} ${m[1]} ${m[2]} ${m[3]} ]\n[ ${m[4]} ${m[5]} ${m[6]} ${m[7]} ]\n[ ${m[8]} ${m[9]} ${m[10]} ${m[11]} ]\n[ ${m[12]} ${m[13]} ${m[14]} ${m[15]} ]`); },
+        mat4random: (a: number, b: number): number[] => { raw.mat4f_random_range(M2, a, b); return read(M2, 16); },
+        mat4rotateX: (m: number[], angle: number): number[] => { write(M0, 16, m); raw.mat4f_rotateX(M2, M0, angle); return read(M2, 16); },
+        mat4rotateY: (m: number[], angle: number): number[] => { write(M0, 16, m); raw.mat4f_rotateY(M2, M0, angle); return read(M2, 16); },
+        mat4rotateZ: (m: number[], angle: number): number[] => { write(M0, 16, m); raw.mat4f_rotateZ(M2, M0, angle); return read(M2, 16); },
+        mat4round: (m: number[]): number[] => mat4Unary(raw.mat4f_round, m),
+        mat4scl: (m: number[], n: number): number[] => { write(M0, 16, m); raw.mat4f_scl(M2, M0, n); return read(M2, 16); },
+        mat4sub: (m1: number[], m2: number[]): number[] => mat4Binary(raw.mat4f_sub, m1, m2),
+        mat4trace: (m: number[]): number => { write(M0, 16, m); return raw.mat4f_trace(M0); },
+        mat4translate: (m: number[], v: number[]): number[] => { write(M0, 16, m); write(V0, 3, v); raw.mat4f_translate(M2, M0, V0); return read(M2, 16); },
+        mat4transpose: (m: number[]): number[] => mat4Unary(raw.mat4f_transpose, m),
+        quatabs: (q: number[]): number[] => quatUnary(raw.quatf_abs, q),
+        quatadd: (q1: number[], q2: number[]): number[] => quatBinary(raw.quatf_add, q1, q2),
+        quatcopy: (q: number[]): number[] => quatUnary(raw.quatf_copy, q),
+        quatdist: (q1: number[], q2: number[]): number => { write(Q0, 4, q1); write(Q1, 4, q2); return raw.quatf_dist(Q0, Q1); },
+        quatdistsq: (q1: number[], q2: number[]): number => { write(Q0, 4, q1); write(Q1, 4, q2); return raw.quatf_distsq(Q0, Q1); },
+        quatfromAxisAngle: (axis: number[], angle: number): number[] => { write(V0, 3, axis); raw.quatf_fromAxisAngle(Q2, V0, angle); return read(Q2, 4); },
+        quatinit: (x = 0, y = 0, z = 0, w = 0): number[] => { raw.quatf_init(Q2, x, y, z, w); return read(Q2, 4); },
+        quatinvert: (q: number[]): number[] => quatUnary(raw.quatf_invert, q),
+        quatisEqual: (q1: number[], q2: number[]): boolean => { write(Q0, 4, q1); write(Q1, 4, q2); return !!raw.quatf_isEqual(Q0, Q1); },
+        quatisNormalized: (q: number[]): boolean => { write(Q0, 4, q); return !!raw.quatf_isNormalized(Q0); },
+        quatisZero: (q: number[]): boolean => { write(Q0, 4, q); return !!raw.quatf_isZero(Q0); },
+        quatmul: (q1: number[], q2: number[]): number[] => quatBinary(raw.quatf_mul, q1, q2),
+        quatneg: (q: number[]): number[] => quatUnary(raw.quatf_neg, q),
+        quatnorm: (q: number[]): number => { write(Q0, 4, q); return raw.quatf_norm(Q0); },
+        quatnormalize: (q: number[]): number[] => quatUnary(raw.quatf_normalize, q),
+        quatnormscl: (q: number[], scalar: number): number[] => { write(Q0, 4, q); raw.quatf_normscl(Q2, Q0, scalar); return read(Q2, 4); },
+        quatnormsq: (q: number[]): number => { write(Q0, 4, q); return raw.quatf_normsq(Q0); },
+        quatprint: (q: number[]): void => { console.log(`${q[0]} ${q[1] < 0 ? "-" : "+"} ${Math.abs(q[1])}i ${q[2] < 0 ? "-" : "+"} ${Math.abs(q[2])}j ${q[3] < 0 ? "-" : "+"} ${Math.abs(q[3])}k`); },
+        quatrandom: (a: number, b: number): number[] => { raw.quatf_random_range(Q2, a, b); return read(Q2, 4); },
+        quatround: (q: number[]): number[] => quatUnary(raw.quatf_round, q),
+        quatscl: (q: number[], scalar: number): number[] => { write(Q0, 4, q); raw.quatf_scl(Q2, Q0, scalar); return read(Q2, 4); },
+        quatslerp: (q1: number[], q2: number[], t: number): number[] => { write(Q0, 4, q1); write(Q1, 4, q2); raw.quatf_slerp(Q2, Q0, Q1, t); return read(Q2, 4); },
+        quatsub: (q1: number[], q2: number[]): number[] => quatBinary(raw.quatf_sub, q1, q2),
+        quattoRotation: (q: number[], v: number[]): number[] => { write(Q0, 4, q); write(V0, 3, v); raw.quatf_toRotation(V2, Q0, V0); return read(V2, 3); },
+        vec3abs: (v: number[]): number[] => vec3Unary(raw.vec3f_abs, v),
+        vec3add: (v1: number[], v2: number[]): number[] => vec3Binary(raw.vec3f_add, v1, v2),
+        vec3ang: (v: number[]): number[] => { write(V0, 3, v); raw.vec3f_ang(V2, V0); return read(V2, 3); },
+        vec3angBetween: (v1: number[], v2: number[]): number => { write(V0, 3, v1); write(V1, 3, v2); return raw.vec3f_angBetween(V0, V1); },
+        vec3copy: (v: number[]): number[] => vec3Unary(raw.vec3f_copy, v),
+        vec3cross: (v1: number[], v2: number[]): number[] => vec3Binary(raw.vec3f_cross, v1, v2),
+        vec3dist: (v1: number[], v2: number[]): number => { write(V0, 3, v1); write(V1, 3, v2); return raw.vec3f_dist(V0, V1); },
+        vec3distsq: (v1: number[], v2: number[]): number => { write(V0, 3, v1); write(V1, 3, v2); return raw.vec3f_distsq(V0, V1); },
+        vec3dot: (v1: number[], v2: number[]): number => { write(V0, 3, v1); write(V1, 3, v2); return raw.vec3f_dot(V0, V1); },
+        vec3init: (x = 0, y = 0, z = 0): number[] => { raw.vec3f_init(V2, x, y, z); return read(V2, 3); },
+        vec3interp: (v: number[], a: number, b: number, c: number): number[] => { write(V0, 3, v); raw.vec3f_interp(V2, V0, a, b, c); return read(V2, 3); },
+        vec3isEqual: (v1: number[], v2: number[]): boolean => { write(V0, 3, v1); write(V1, 3, v2); return !!raw.vec3f_isEqual(V0, V1); },
+        vec3isNormalized: (v: number[]): boolean => { write(V0, 3, v); return !!raw.vec3f_isNormalized(V0); },
+        vec3isOrthogonal: (v1: number[], v2: number[]): boolean => { write(V0, 3, v1); write(V1, 3, v2); return !!raw.vec3f_isOrthogonal(V0, V1); },
+        vec3isParallel: (v1: number[], v2: number[]): boolean => { write(V0, 3, v1); write(V1, 3, v2); return !!raw.vec3f_isParallel(V0, V1); },
+        vec3isZero: (v: number[]): boolean => { write(V0, 3, v); return !!raw.vec3f_isZero(V0); },
+        vec3neg: (v: number[]): number[] => vec3Unary(raw.vec3f_neg, v),
+        vec3norm: (v: number[]): number => { write(V0, 3, v); return raw.vec3f_norm(V0); },
+        vec3normalize: (v: number[]): number[] => vec3Unary(raw.vec3f_normalize, v),
+        vec3normscl: (v: number[], scalar: number): number[] => { write(V0, 3, v); raw.vec3f_normscl(V2, V0, scalar); return read(V2, 3); },
+        vec3normsq: (v: number[]): number => { write(V0, 3, v); return raw.vec3f_normsq(V0); },
+        vec3oproj: (v1: number[], v2: number[]): number[] => vec3Binary(raw.vec3f_oproj, v1, v2),
+        vec3print: (v: number[]): void => { console.log(`(${v[0]}, ${v[1]}, ${v[2]})`); },
+        vec3proj: (v1: number[], v2: number[]): number[] => vec3Binary(raw.vec3f_proj, v1, v2),
+        vec3random: (a: number, b: number): number[] => { raw.vec3f_random_range(V2, a, b); return read(V2, 3); },
+        vec3reflect: (v1: number[], v2: number[]): number[] => vec3Binary(raw.vec3f_reflect, v1, v2),
+        vec3refract: (v1: number[], v2: number[], refractiveIndex: number): number[] => { write(V0, 3, v1); write(V1, 3, v2); raw.vec3f_refract(V2, V0, V1, refractiveIndex); return read(V2, 3); },
+        vec3round: (v: number[]): number[] => vec3Unary(raw.vec3f_round, v),
+        vec3scl: (v: number[], scalar: number): number[] => { write(V0, 3, v); raw.vec3f_scl(V2, V0, scalar); return read(V2, 3); },
+        vec3sub: (v1: number[], v2: number[]): number[] => vec3Binary(raw.vec3f_sub, v1, v2)
+    };
+};
+
+type WebAssemblyDriver = ReturnType<typeof bridgeWebAssembly>;
+
+const loadWebAssembly = async (binaryURL: string, loaderURL: string): Promise<WebAssemblyDriver> => {
+    try {
+        const response = await fetch(binaryURL);
+        if (response.ok) {
+            const streaming = typeof WebAssembly.instantiateStreaming === "function" && response.headers.get("Content-Type")?.trim().toLowerCase() === "application/wasm";
+            const { instance } = streaming ? await WebAssembly.instantiateStreaming(response, {}) : await WebAssembly.instantiate(await response.arrayBuffer(), {});
+            return bridgeWebAssembly(instance.exports as WebAssemblyExports);
+        }
+    } catch { /* fallback to the base64 copy in ./release/wasm.js */ }
+    return bridgeWebAssembly(await import(loaderURL));
+};
+
 export const initWebAssembly = async (baseURL?: string): Promise<void> => {
     if (mod) return;
     const base = baseURL ?? defaultBaseURL();
-    const wasmURL = new URL("wasm.js", base).toString();
-    modPromise ??= import(wasmURL) as Promise<WebAssemblyDriver>;
+    const binaryURL = new URL("wasm.wasm", base).toString(), loaderURL = new URL("wasm.js", base).toString();
+    modPromise ??= loadWebAssembly(binaryURL, loaderURL);
     mod = await modPromise;
     mod.wasmgpu_frame_arena_init(DEFAULT_FRAME_ARENA_BYTES);
     frameArenaEpoch = mod.wasmgpu_frame_arena_epoch() >>> 0;

@@ -48,7 +48,7 @@
     "fmt": "npm run fmt:rs",
     "fmt:rs": "cargo fmt --manifest-path ./rust/Cargo.toml -- --check",
     "lint": "npm run lint:rs",
-    "lint:rs": "cargo clippy --manifest-path ./rust/Cargo.toml --all-targets --all-features -- -D warnings && cargo clippy --manifest-path ./rust/Cargo.toml --target wasm32-unknown-unknown --lib --all-features -- -D warnings",
+    "lint:rs": "cargo clippy --manifest-path ./rust/Cargo.toml --all-targets --all-features -- -D warnings && cargo clippy --manifest-path ./rust/Cargo.toml --target wasm32-unknown-unknown --lib --all-features -- -D warnings && cargo clippy --manifest-path ./rust/Cargo.toml --target wasm32-unknown-unknown --lib --all-features --config \"target.wasm32-unknown-unknown.rustflags=['-Ctarget-feature=+simd128']\" -- -D warnings",
     "bench": "node ./benchmarks/harness/run.js",
     "bench:render": "node ./benchmarks/harness/run.js --subsystem=render",
     "bench:compute": "node ./benchmarks/harness/run.js --subsystem=compute",

@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Monday, November 23, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Wednesday, November 25, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Thursday, November 19, 2026, [**`bdaa20b`**](https://github.com/Zushah/WasmGPU/commit/bdaa20b).
+Parent commit: Monday, November 23, 2026, [**`302395b`**](https://github.com/Zushah/WasmGPU/commit/302395b).
 
 Latest release: Monday, August 31, 2026, [**`v0.10.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.10.0).
 
@@ -522,7 +522,7 @@ The Python helper owns only the work that needs NumPy: casts that must follow Nu
 
 ### 1.19. WebAssembly driver
 
-WebAssembly driver initialization is implemented in `./typescript/wasm/driver.ts` and exported through `./typescript/wasm/index.ts`. It imports the generated loader from `./wasm/wasm.js`, creates the frame arena, and exposes grouped Rust functions for accessors, animation, bounds, culling, matrix math, mesh normals, ndarray indexing and transformations, quaternion math, transforms, and mathematics, which includes `vec3`, `vec3f`, `vec3d`, `mat4`, `mat4f`, `mat4d`, `quat`, `quatf`, and `quatd` namespaces.
+WebAssembly driver initialization is implemented in `./typescript/wasm/driver.ts` and exported through `./typescript/wasm/index.ts`. It instantiates `./wasm/wasm.wasm` directly when it can fetch it, compiling it while it streams when the response is served as `application/wasm`, and otherwise imports the generated loader `./wasm/wasm.js`, which carries the same module as base64 for environments that block binary fetches and never fetches itself, so a page downloads one copy of the module either way. `./wasm/wasm.js` exports only the memory and the raw Rust functions next to its base64, and the driver builds its typed views, scratch buffers, and array wrappers over the exports of whichever path loaded, so both paths expose the same bindings and heap layout. It then creates the frame arena and exposes grouped Rust functions for accessors, animation, bounds, culling, matrix math, mesh normals, ndarray indexing and transformations, quaternion math, transforms, and mathematics, which includes `vec3`, `vec3f`, `vec3d`, `mat4`, `mat4f`, `mat4d`, `quat`, `quatf`, and `quatd` namespaces.
 
 `WasmSlice`, `WasmHeapArena`, `frameArena`, `wasm`, and the `driver` namespace are part of the WebAssembly driver. `WasmSlice` records pointer, length, dtype, allocation kind, and epoch. Frame arena and heap arena slices check epochs so callers do not reuse memory after a reset or destroyed arena, and freed slices reject later view or handle creation. `WasmHeapArena` allocates a WebAssembly heap block and provides bump allocation within that block. Explicit release remains retryable if its allocator call throws; garbage-collection finalization is only a fallback for abandoned heap slices.
 
@@ -576,6 +576,7 @@ The code contains several performance-sensitive patterns: reusable draw-list arr
 These invariants are visible in the current code:
 
 - WebAssembly must be initialized before code calls Rust-backed functions or reads `wasm` exports.
+- `initWebAssembly()` downloads one copy of the WebAssembly module per page: `./wasm/wasm.wasm` when it can be fetched and instantiated, otherwise the base64 copy in `./wasm/wasm.js`, and both paths expose the same bindings.
 - Frame arena memory is valid only for the current frame arena epoch.
 - `WasmHeapArena` slices are invalid after the arena is reset or destroyed.
 - Python imports return owning canonical roots that never alias Python memory, and Python interop never returns or retains views of its own temporaries.
@@ -866,14 +867,14 @@ Architectural role:
 
 Important files:
 
-- `./typescript/wasm/driver.ts`: internal "glue" between the TypeScript and Rust sides of the overall system, `WasmSlice`, `WasmHeapArena`, frame arena helpers, loader integration, and grouped Rust function wrappers.
+- `./typescript/wasm/driver.ts`: internal "glue" between the TypeScript and Rust sides of the overall system, `WasmSlice`, `WasmHeapArena`, frame arena helpers, loader integration that instantiates `./wasm/wasm.wasm` directly or falls back to `./wasm/wasm.js`, the typed views and array wrappers it builds over the raw exports of either path, and grouped Rust function wrappers.
 - `./rust/Cargo.toml`: Rust crate metadata and release profile.
 - `./rust/src/lib.rs`: module wiring and exported entry points.
 - `./rust/src/heap.rs`: checked heap allocation and reclamation through Rust's global allocator.
 - `./rust/src/frame_arena.rs`: resettable per-frame bump allocator.
 - `./rust/src/transform.rs`: transform composition and world propagation.
 - `./rust/src/mat4.rs`, `./rust/src/vec3.rs`, and `./rust/src/quat.rs`: math helpers.
-- `./rust/src/ndarray.rs`: shape, stride, and offset helpers; strided copies and casts that walk the destination in its memory order through one kernel per dtype pair, with cache-blocked transposes, broadcast fills, and explicit WebAssembly SIMD for a few contiguous casts and 4-byte transposes, keeping the generic per-axis path for destinations that may overlap themselves, so every path writes the same bytes; and padding, affine normalization, multi-axis resizing and resampling, and axis reductions in one canonical order.
+- `./rust/src/ndarray.rs`: shape, stride, and offset helpers; strided copies and casts that walk the destination in its memory order through one kernel per dtype pair, identity pairs sharing one copy kernel per element size, with cache-blocked transposes, broadcast fills, and explicit WebAssembly SIMD for 4-byte transposes and for contiguous runs of these casts: `u8` and `i8` to `f64`, saturating `f32` to 8-, 16-, and 32-bit integers, saturating `f64` to 32-bit integers, `f64` to `f32` (including reversed sources and `c128` to `c64`), and `f64` to `c64`, keeping the generic per-axis path for destinations that may overlap themselves, so every path writes the same bytes; and padding, affine normalization, multi-axis resizing and resampling, and axis reductions in one canonical order.
 - `./rust/src/mesh.rs`: normal generation.
 - `./rust/src/accessors.rs`: glTF accessor conversion, generalized padded-layout compaction/deinterleaving, sparse patching, and numeric conversion.
 - `./rust/src/anim.rs`: animation sampling and joint matrix generation.
@@ -884,10 +885,10 @@ Important files:
 
 Common interactions:
 
-- TypeScript calls Rust through generated bindings from `./wasm/wasm.js`.
+- TypeScript calls Rust through the bindings that `./typescript/wasm/driver.ts` builds over the raw exports of `./wasm/wasm.wasm` or, as a fallback, of the generated `./wasm/wasm.js`.
 - `./scripts/build-rust-wasm.js` compiles the Rust crate and emits generated files under `./wasm/`.
 - Native tests exercise portable Rust computation without converting native pointers to the WebAssembly ABI's 32-bit offsets.
-- `./tests/wasm.test.js` validates the compiled function ABI, generated bridge and declarations, heap allocations, frame-arena behavior, and representative pointer-based calls.
+- `./tests/wasm.test.js` validates the compiled function ABI, that the generated bridge and declarations expose exactly the memory and the raw Rust functions, heap allocations, frame-arena behavior, representative pointer-based calls, and that the driver downloads only `wasm.wasm` when it can fetch it.
 - Changes to Rust exports must be reflected in TypeScript wrappers and tests.
 
 ### 2.10. WGSL shaders
@@ -983,11 +984,11 @@ The CI selection table below makes the platform decision explicit instead of tre
 | MacOS 26 ARM64 Firefox | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 | MacOS 26 ARM64 WebKit | ✅ | ✅ | ❌ | ✅ | ❌ | ❌ |
 
-`npm run test` first removes prior aggregate artifacts, then uses an ordinary npm command chain to check Rust formatting, run Clippy over all native targets and the WebAssembly library, run the Rust tests, run the setup checks, the fast browser-module tests, and the slower example tests, and merge reports. The chain stops at the first failing command. `npm run test:setup`, `npm run test:js`, and `npm run test:ex` select only their respective Playwright projects, so development iteration does not implicitly rerun setup or examples. The full command and CI explicitly sequence setup before the primary suites. In CI, setup is a prerequisite for the browser-module, example, and merge steps, preventing an unavailable WebGPU implementation from turning every subsequent test into a timeout; after setup passes, the browser-module and example suites still run independently so both can retain diagnostics if either fails.
+`npm run test` first removes prior aggregate artifacts, then uses an ordinary npm command chain to check Rust formatting, run Clippy over all native targets and the WebAssembly library with and without SIMD, run the Rust tests, run the setup checks, the fast browser-module tests, and the slower example tests, and merge reports. The chain stops at the first failing command. `npm run test:setup`, `npm run test:js`, and `npm run test:ex` select only their respective Playwright projects, so development iteration does not implicitly rerun setup or examples. The full command and CI explicitly sequence setup before the primary suites. In CI, setup is a prerequisite for the browser-module, example, and merge steps, preventing an unavailable WebGPU implementation from turning every subsequent test into a timeout; after setup passes, the browser-module and example suites still run independently so both can retain diagnostics if either fails.
 
 Playwright owns each test server it starts and shuts it down after its suite; a server explicitly started with `npm run test:js:serve` remains open until that command is stopped. Each invocation writes separate HTML, blob, attachment, and provenance records; merging rejects missing, filtered, listed-only, or incomplete runs before combining all three blob reports under `./playwright-report/combined/`. Before diagnostics are asserted, every monitored queue is settled so late uncaptured WebGPU errors and device losses are observable.
 
-The CI workflow in `./.github/workflows/test.yaml` runs seven explicit platform/browser entries. Every entry uses one short-circuiting command chain to check Rust formatting, run Clippy over all native targets and the WebAssembly library with warnings denied, and run the native Rust tests before the browser suites; this preserves fail-fast behavior under the Windows PowerShell runner as well as Unix shells. A successful Rust step is an explicit prerequisite for browser setup, while the browser-module and example suites remain independent after setup succeeds so both can retain diagnostics if either fails.
+The CI workflow in `./.github/workflows/test.yaml` runs seven explicit platform/browser entries. Every entry uses one short-circuiting command chain to check Rust formatting, run Clippy with warnings denied over all native targets and the WebAssembly library with and without SIMD, and run the native Rust tests before the browser suites; this preserves fail-fast behavior under the Windows PowerShell runner as well as Unix shells. A successful Rust step is an explicit prerequisite for browser setup, while the browser-module and example suites remain independent after setup succeeds so both can retain diagnostics if either fails.
 
 CI runs on software WebGPU adapters: Chromium uses bundled SwiftShader on Windows and MacOS and Mesa Lavapipe inside Xvfb on Linux, while Firefox uses its own WebGPU implementation, and the Windows Firefox job, whose VM has no Firefox-compatible hardware adapter, selects Firefox's WARP fallback adapter through the startup preferences of `./scripts/configure-firefox-webgpu.js` and `WASMGPU_FORCE_FALLBACK_ADAPTER=1`. `./playwright.config.js` and `./.github/workflows/test.yaml` hold the per-platform launch details. This is test-harness policy rather than a WasmGPU public API change, and applies consistently to setup, browser modules, renderer creation, and examples.
 
@@ -1060,7 +1061,7 @@ Important files and directories:
 - `./rust/Cargo.toml`: Rust crate metadata and release profile.
 - `./tsconfig.json`: TypeScript compiler settings.
 - `./esbuild.config.js`: bundle configuration, release banner metadata, WGSL loader, minification, and copy steps from `./wasm/` to `./release/`.
-- `./scripts/build-rust-wasm.js`: Rust-to-WebAssembly build script. It invokes Cargo, generates `.wasm`, `.wat`, JavaScript loader, and declaration output, and can run WebAssembly optimization tooling.
+- `./scripts/build-rust-wasm.js`: Rust-to-WebAssembly build script. It invokes Cargo, generates `.wasm`, `.wat`, a JavaScript loader that embeds the binary as base64 and exports only the memory and the raw Rust functions, and matching declaration output, can run WebAssembly optimization tooling, and reports the raw, gzip, and brotli sizes of the binary and the loader on every build.
 - `./wasm/`: generated WebAssembly loader, binary, text format, and declarations.
 - `./release/`: bundled ESM and IIFE JavaScript files plus WebAssembly copies.
 - `./.agents/skills/prepare-release/`: OpenAI Codex skill for auditing, preparing, and verifying versioned WasmGPU releases after engine source is finalized.
@@ -1070,7 +1071,7 @@ Important files and directories:
 
 The `$prepare-release` skill exists to coordinate versioned release housekeeping around engine source that the human considers finalized. Its `audit`, `prepare`, and `verify` modes, defined in `./.agents/skills/prepare-release/SKILL.md`, respectively audit the release delta and stop for approval, update versions, release-facing files, release metadata in this file, and the checked-in release artifacts, and check release readiness without editing. The skill treats engine source defects as release blockers, does not perform Markdown documentation maintenance, does not run benchmarks, and does not commit, tag, push, publish, or create a GitHub release.
 
-Cargo commands invoked from the repository root or `./rust/` inherit the repository Cargo policy and rustup toolchain selection. Package and release-profile settings remain in `./rust/Cargo.toml`, while dynamic WebAssembly SIMD, shared-memory, memory-limit, and post-processing variants remain owned by `./scripts/build-rust-wasm.js`.
+Cargo commands invoked from the repository root or `./rust/` inherit the repository Cargo policy and rustup toolchain selection. Package and release-profile settings remain in `./rust/Cargo.toml`, while dynamic WebAssembly SIMD, shared-memory, memory-limit, and post-processing variants remain owned by `./scripts/build-rust-wasm.js`. `npm run lint:rs` also lints the SIMD build through a `target.wasm32-unknown-unknown.rustflags` override, which an exported `RUSTFLAGS` would silently replace.
 
 ### 2.16. Assets and repository metadata
 
@@ -1104,7 +1105,7 @@ For history context, inspect recent commits touching the same area. History is u
 
 Match the code around the change. The TypeScript source currently uses strict compiler settings, explicit descriptor types, classes for runtime objects, private fields where useful, and targeted helper functions. Rust code uses small modules with exported `extern "C"` functions for WebAssembly entry points. WGSL files keep shader logic close to the subsystem that imports it.
 
-`./package.json` defines `npm run fmt:rs` for checking Rust formatting and `npm run lint:rs` for running Clippy over all native targets and the WebAssembly library with warnings denied. Use TypeScript, Rust, and WGSL formatting that is consistent with nearby lines and files.
+`./package.json` defines `npm run fmt:rs` for checking Rust formatting and `npm run lint:rs` for running Clippy over all native targets and the WebAssembly library, with and without SIMD, with warnings denied. Use TypeScript, Rust, and WGSL formatting that is consistent with nearby lines and files.
 
 Do not add broad rewrites while making a focused change. Renderer, transform, compute, glTF, and shader changes should stay close to the behavior being changed.
 
