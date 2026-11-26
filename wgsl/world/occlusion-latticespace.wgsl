@@ -37,9 +37,6 @@ struct LatticeUniforms {
 struct VertexOutput {
     @builtin(position) position: vec4<f32>,
     @location(0) local_position: vec3<f32>,
-    @location(1) @interpolate(flat) cell: vec3<u32>,
-    @location(2) @interpolate(flat) cell_index: u32,
-    @location(3) @interpolate(flat) face: u32,
 }
 
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
@@ -194,6 +191,13 @@ fn internal_face(cell: vec3<u32>, face: u32) -> bool {
     return cell_visible(cell_to_linear(vec3<u32>(neighbor)));
 }
 
+fn invalid_vertex() -> VertexOutput {
+    var out: VertexOutput;
+    out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    out.local_position = vec3<f32>(0);
+    return out;
+}
+
 @vertex
 fn vs_2d(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     let uv = array<vec2<f32>, 6>(
@@ -212,9 +216,6 @@ fn vs_2d(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     var out: VertexOutput;
     out.position = camera.view_proj * model.model * vec4<f32>(local, 1);
     out.local_position = local;
-    out.cell = vec3<u32>(0);
-    out.cell_index = 0u;
-    out.face = 5u;
     return out;
 }
 
@@ -224,47 +225,49 @@ fn vs_3d(
     @builtin(instance_index) instance_index: u32,
 ) -> VertexOutput {
     let cell = ordinal_to_cell(instance_index);
+    if (!cell_visible(cell_to_linear(cell))) {
+        return invalid_vertex();
+    }
+    if (internal_face(cell, vertex_index / 6u)) {
+        return invalid_vertex();
+    }
     let local = lattice.origin.xyz
             + vec3<f32>(cell) * lattice.spacing.xyz
             + cube_vertex(vertex_index) * lattice.spacing.xyz * lattice.cell_scale.xyz;
     var out: VertexOutput;
     out.position = camera.view_proj * model.model * vec4<f32>(local, 1);
     out.local_position = local;
-    out.cell = cell;
-    out.cell_index = cell_to_linear(cell);
-    out.face = vertex_index / 6u;
     return out;
 }
 
 @fragment
-fn fs_main(in: VertexOutput) -> @location(0) f32 {
-    var cell = in.cell;
-    var index = in.cell_index;
-    if (u32(lattice.dimensions.w + 0.5) == 2u) {
-        let relative = (in.local_position.xy - (lattice.origin.xy - 0.5 * lattice.spacing.xy))
-                / lattice.spacing.xy;
-        cell = vec3<u32>(vec2<u32>(floor(relative)), 0u);
-        if (
-            any(cell.xy < vec2<u32>(lattice.range_min.xy))
-                || any(cell.xy >= vec2<u32>(lattice.range_max.xy))
-        ) {
-            discard;
-        }
-        index = cell_to_linear(cell);
-        let center = lattice.origin.xy + vec2<f32>(cell.xy) * lattice.spacing.xy;
-        if (
-            any(
-                abs((in.local_position.xy - center) / lattice.spacing.xy)
-                    > 0.5 * lattice.cell_scale.xy,
-            )
-        ) {
-            discard;
-        }
-    } else if (internal_face(cell, in.face)) {
+fn fs_2d(in: VertexOutput) -> @location(0) f32 {
+    let relative = (in.local_position.xy - (lattice.origin.xy - 0.5 * lattice.spacing.xy))
+            / lattice.spacing.xy;
+    let cell = vec3<u32>(vec2<u32>(floor(relative)), 0u);
+    if (
+        any(cell.xy < vec2<u32>(lattice.range_min.xy))
+            || any(cell.xy >= vec2<u32>(lattice.range_max.xy))
+    ) {
+        discard;
+    }
+    let index = cell_to_linear(cell);
+    let center = lattice.origin.xy + vec2<f32>(cell.xy) * lattice.spacing.xy;
+    if (
+        any(
+            abs((in.local_position.xy - center) / lattice.spacing.xy)
+                > 0.5 * lattice.cell_scale.xy,
+        )
+    ) {
         discard;
     }
     if (!cell_visible(index)) {
         discard;
     }
+    return in.position.z;
+}
+
+@fragment
+fn fs_3d(in: VertexOutput) -> @location(0) f32 {
     return in.position.z;
 }

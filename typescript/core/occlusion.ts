@@ -936,7 +936,7 @@ const getOrCreateOcclusionLatticeSpacePipeline = (ctx: RendererContext, space: L
     const pipeline = ctx.device.createRenderPipeline({
         layout: ctx.device.createPipelineLayout({ bindGroupLayouts: [ctx.globalBindGroupLayout, getLatticeSpaceBindGroupLayout(ctx)] }),
         vertex: { module, entryPoint: space.dimensionCount === 2 ? "vs_2d" : "vs_3d", buffers: [] },
-        fragment: { module, entryPoint: "fs_main", targets: [{ format: "r32float" }] },
+        fragment: { module, entryPoint: space.dimensionCount === 2 ? "fs_2d" : "fs_3d", targets: [{ format: "r32float" }] },
         primitive: { topology: "triangle-list", cullMode },
         depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" }
     });

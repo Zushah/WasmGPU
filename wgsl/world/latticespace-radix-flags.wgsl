@@ -4,22 +4,36 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-override BIT: u32 = 0u;
-
 const WORKGROUP_SIZE: u32 = 256u;
 const ELEMENTS_PER_INVOCATION: u32 = 4u;
 const ELEMENTS_PER_WORKGROUP: u32 = WORKGROUP_SIZE * ELEMENTS_PER_INVOCATION;
+const RADIX: u32 = 16u;
+const NO_DIGIT: u32 = 0xffffffffu;
 
 @group(0) @binding(0) var<storage, read> keys: array<u32>;
-@group(0) @binding(1) var<storage, read_write> prefix: array<u32>;
-@group(0) @binding(2) var<storage, read_write> block_sums: array<u32>;
-var<workgroup> temp: array<u32, 256>;
+@group(0) @binding(1) var<storage, read_write> ranks: array<u32>;
+@group(0) @binding(2) var<storage, read_write> counts: array<u32>;
+@group(0) @binding(3) var<uniform> shift: u32;
+var<workgroup> low: array<vec4<u32>, 256>;
+var<workgroup> high: array<vec4<u32>, 256>;
+var<workgroup> totals: array<vec4<u32>, 2>;
 
-fn zero_bit(i: u32, n: u32) -> u32 {
+fn digit(i: u32, n: u32) -> u32 {
     if (i >= n) {
-        return 0u;
+        return NO_DIGIT;
     }
-    return select(0u, 1u, ((keys[i] >> BIT) & 1u) == 0u);
+    return (keys[i] >> shift) & (RADIX - 1u);
+}
+
+fn lanes(d: u32, word: u32) -> vec4<u32> {
+    let words = vec4<u32>(word, word + 1u, word + 2u, word + 3u);
+    return select(vec4<u32>(0u), vec4<u32>(1u << ((d & 1u) * 16u)), words == vec4<u32>(d >> 1u));
+}
+
+fn count_of(lo: vec4<u32>, hi: vec4<u32>, d: u32) -> u32 {
+    let word = d >> 1u;
+    let packed = select(hi[(word - 4u) & 3u], lo[word & 3u], word < 4u);
+    return (packed >> ((d & 1u) * 16u)) & 0xffffu;
 }
 
 fn workgroup_index(wid: vec3<u32>, nwg: vec3<u32>) -> u32 {
@@ -35,16 +49,16 @@ fn main(
     let tid = lid.x;
     let n = arrayLength(&keys);
     let block = workgroup_index(wid, nwg);
-    let base = block * ELEMENTS_PER_WORKGROUP;
-    let i0 = base + tid * ELEMENTS_PER_INVOCATION;
+    let i0 = block * ELEMENTS_PER_WORKGROUP + tid * ELEMENTS_PER_INVOCATION;
     let i1 = i0 + 1u;
     let i2 = i0 + 2u;
     let i3 = i0 + 3u;
-    let v0 = zero_bit(i0, n);
-    let v1 = zero_bit(i1, n);
-    let v2 = zero_bit(i2, n);
-    let v3 = zero_bit(i3, n);
-    temp[tid] = v0 + v1 + v2 + v3;
+    let d0 = digit(i0, n);
+    let d1 = digit(i1, n);
+    let d2 = digit(i2, n);
+    let d3 = digit(i3, n);
+    low[tid] = lanes(d0, 0u) + lanes(d1, 0u) + lanes(d2, 0u) + lanes(d3, 0u);
+    high[tid] = lanes(d0, 4u) + lanes(d1, 4u) + lanes(d2, 4u) + lanes(d3, 4u);
     var offset = 1u;
     var d = WORKGROUP_SIZE / 2u;
     loop {
@@ -55,16 +69,17 @@ fn main(
         if (tid < d) {
             let ai = offset * ((tid * 2u) + 1u) - 1u;
             let bi = offset * ((tid * 2u) + 2u) - 1u;
-            temp[bi] = temp[bi] + temp[ai];
+            low[bi] = low[bi] + low[ai];
+            high[bi] = high[bi] + high[ai];
         }
         offset = offset * 2u;
         d = d / 2u;
     }
     if (tid == 0u) {
-        if (block < arrayLength(&block_sums)) {
-            block_sums[block] = temp[WORKGROUP_SIZE - 1u];
-        }
-        temp[WORKGROUP_SIZE - 1u] = 0u;
+        totals[0] = low[WORKGROUP_SIZE - 1u];
+        totals[1] = high[WORKGROUP_SIZE - 1u];
+        low[WORKGROUP_SIZE - 1u] = vec4<u32>(0u);
+        high[WORKGROUP_SIZE - 1u] = vec4<u32>(0u);
     }
     d = 1u;
     loop {
@@ -76,24 +91,35 @@ fn main(
         if (tid < d) {
             let ai = offset * ((tid * 2u) + 1u) - 1u;
             let bi = offset * ((tid * 2u) + 2u) - 1u;
-            let t = temp[ai];
-            temp[ai] = temp[bi];
-            temp[bi] = temp[bi] + t;
+            let t_low = low[ai];
+            let t_high = high[ai];
+            low[ai] = low[bi];
+            high[ai] = high[bi];
+            low[bi] = low[bi] + t_low;
+            high[bi] = high[bi] + t_high;
         }
         d = d * 2u;
     }
     workgroupBarrier();
-    let thread_offset = temp[tid];
+    let lo = low[tid];
+    let hi = high[tid];
     if (i0 < n) {
-        prefix[i0] = thread_offset;
+        ranks[i0] = count_of(lo, hi, d0);
     }
     if (i1 < n) {
-        prefix[i1] = thread_offset + v0;
+        ranks[i1] = count_of(lo, hi, d1) + select(0u, 1u, d0 == d1);
     }
     if (i2 < n) {
-        prefix[i2] = thread_offset + v0 + v1;
+        ranks[i2] = count_of(lo, hi, d2) + select(0u, 1u, d0 == d2) + select(0u, 1u, d1 == d2);
     }
     if (i3 < n) {
-        prefix[i3] = thread_offset + v0 + v1 + v2;
+        ranks[i3] = count_of(lo, hi, d3)
+            + select(0u, 1u, d0 == d3)
+            + select(0u, 1u, d1 == d3)
+            + select(0u, 1u, d2 == d3);
+    }
+    let num_blocks = arrayLength(&counts) / RADIX;
+    if (tid < RADIX && block < num_blocks) {
+        counts[tid * num_blocks + block] = count_of(totals[0], totals[1], tid);
     }
 }

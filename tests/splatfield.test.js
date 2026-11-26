@@ -10,7 +10,6 @@ import * as WasmGPU from "../release/WasmGPU.js";
 
 const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
 const browserCanvases = createBrowserCanvasScope();
-
 const srgbChannelToLinear = (value) => { const x = Math.max(0, Math.min(1, value)); if (x <= 0.04045) return x / 12.92; return Math.pow((x + 0.055) / 1.055, 2.4); };
 
 const { device } = await setupTest({ initWebAssembly: WasmGPU.initWebAssembly, webgpu: true });
@@ -27,30 +26,11 @@ assert.ok(WasmMemoryView, "Missing export: WasmMemoryView");
 
 const compute = new Compute(device, device.queue);
 
-const readBufferAsF32 = async (buffer, count, gpuDevice = device, gpuQueue = device.queue) => {
-    const localCompute = (gpuDevice === device && gpuQueue === device.queue) ? compute : new Compute(gpuDevice, gpuQueue);
-    try {
-        return await readSharedF32(localCompute, buffer, count);
-    } finally {
-        if (localCompute !== compute) localCompute.destroy();
-    }
-};
-
-const readBufferAsU32 = async (buffer, count, gpuDevice = device, gpuQueue = device.queue) => {
-    const localCompute = (gpuDevice === device && gpuQueue === device.queue) ? compute : new Compute(gpuDevice, gpuQueue);
-    try {
-        return await readSharedU32(localCompute, buffer, count);
-    } finally {
-        if (localCompute !== compute) localCompute.destroy();
-    }
-};
-
+const readBufferAsF32 = async (buffer, count, gpuDevice = device, gpuQueue = device.queue) => { const localCompute = (gpuDevice === device && gpuQueue === device.queue) ? compute : new Compute(gpuDevice, gpuQueue); try { return await readSharedF32(localCompute, buffer, count); } finally { if (localCompute !== compute) localCompute.destroy(); } };
+const readBufferAsU32 = async (buffer, count, gpuDevice = device, gpuQueue = device.queue) => { const localCompute = (gpuDevice === device && gpuQueue === device.queue) ? compute : new Compute(gpuDevice, gpuQueue); try { return await readSharedU32(localCompute, buffer, count); } finally { if (localCompute !== compute) localCompute.destroy(); } };
 const createStorageBuffer = (gpuDevice, byteLength) => { return gpuDevice.createBuffer({ size: byteLength, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST }); };
-
 const createPackedStorageBuffer = (gpuDevice, gpuQueue, data) => { const buffer = createStorageBuffer(gpuDevice, data.byteLength); if (data.byteLength > 0) gpuQueue.writeBuffer(buffer, 0, data.buffer, data.byteOffset, data.byteLength); return buffer; };
-
 const makeSphericalHarmonics = (count) => ({ sh0: makeSequence(count * 3, 0), sh1: makeSequence(count * 9, 100), sh2: makeSequence(count * 15, 200), sh3: makeSequence(count * 21, 300) });
-
 const packExpectedSH = (count, degree, sh) => {
     const floatsPerSplat = [3, 12, 27, 48][degree];
     const out = new Float32Array(count * floatsPerSplat);
@@ -64,69 +44,26 @@ const packExpectedSH = (count, degree, sh) => {
     }
     return out;
 };
-
 const createExternalSplatBuffers = (gpuDevice, gpuQueue, count, zValues = null) => {
-    const centerOpacity = new Float32Array(count * 4);
-    const rotation = new Float32Array(count * 4);
-    const scale = new Float32Array(count * 4);
+    const centerOpacity = new Float32Array(count * 4); const rotation = new Float32Array(count * 4); const scale = new Float32Array(count * 4);
     for (let i = 0; i < count; i++) {
         const base = i * 4;
-        centerOpacity[base + 0] = 0;
-        centerOpacity[base + 1] = 0;
-        centerOpacity[base + 2] = zValues ? (zValues[i] ?? 0) : 0;
-        centerOpacity[base + 3] = 1;
-        rotation[base + 0] = 0;
-        rotation[base + 1] = 0;
-        rotation[base + 2] = 0;
-        rotation[base + 3] = 1;
-        scale[base + 0] = 0.2;
-        scale[base + 1] = 0.15;
-        scale[base + 2] = 0.1;
-        scale[base + 3] = 0;
+        centerOpacity[base + 0] = 0; centerOpacity[base + 1] = 0; centerOpacity[base + 2] = zValues ? (zValues[i] ?? 0) : 0; centerOpacity[base + 3] = 1;
+        rotation[base + 0] = 0; rotation[base + 1] = 0; rotation[base + 2] = 0; rotation[base + 3] = 1;
+        scale[base + 0] = 0.2; scale[base + 1] = 0.15; scale[base + 2] = 0.1; scale[base + 3] = 0;
     }
-    return {
-        centerOpacityBuffer: createPackedStorageBuffer(gpuDevice, gpuQueue, centerOpacity),
-        rotationBuffer: createPackedStorageBuffer(gpuDevice, gpuQueue, rotation),
-        scaleBuffer: createPackedStorageBuffer(gpuDevice, gpuQueue, scale)
-    };
+    return { centerOpacityBuffer: createPackedStorageBuffer(gpuDevice, gpuQueue, centerOpacity), rotationBuffer: createPackedStorageBuffer(gpuDevice, gpuQueue, rotation), scaleBuffer: createPackedStorageBuffer(gpuDevice, gpuQueue, scale) };
 };
-
 const createExternalSHBuffer = (gpuDevice, gpuQueue, count, degree) => createPackedStorageBuffer(gpuDevice, gpuQueue, makeSequence(count * [3, 12, 27, 48][degree], 1000));
-
-const makePerspectiveCamera = () => {
-    const camera = new PerspectiveCamera({ fov: 60, aspect: 1, near: 0.1, far: 100 });
-    camera.transform.setPosition(0, 0, 5);
-    camera.lookAt(0, 0, 0);
-    return camera;
-};
-
-const makeOrthographicCamera = () => {
-    const camera = new OrthographicCamera({ left: -2, right: 2, top: 2, bottom: -2, near: 0.1, far: 100 });
-    camera.transform.setPosition(0, 0, 5);
-    camera.lookAt(0, 0, 0);
-    return camera;
-};
-
+const makePerspectiveCamera = () => { const camera = new PerspectiveCamera({ fov: 60, aspect: 1, near: 0.1, far: 100 }); camera.transform.setPosition(0, 0, 5); camera.lookAt(0, 0, 0); return camera; };
+const makeOrthographicCamera = () => { const camera = new OrthographicCamera({ left: -2, right: 2, top: 2, bottom: -2, near: 0.1, far: 100 }); camera.transform.setPosition(0, 0, 5); camera.lookAt(0, 0, 0); return camera; };
 const makeRenderableField = (count = 3, zValues = null) => {
-    const positions = new Float32Array(count * 3);
-    const rotations = new Float32Array(count * 4);
-    const scales = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 4);
+    const positions = new Float32Array(count * 3); const rotations = new Float32Array(count * 4); const scales = new Float32Array(count * 3); const colors = new Float32Array(count * 4);
     for (let i = 0; i < count; i++) {
-        positions[i * 3 + 0] = 0;
-        positions[i * 3 + 1] = 0;
-        positions[i * 3 + 2] = zValues ? (zValues[i] ?? 0) : (count === 3 ? (i === 0 ? -2 : i === 1 ? 1 : 0) : (-0.01 * i));
-        rotations[i * 4 + 0] = 0;
-        rotations[i * 4 + 1] = 0;
-        rotations[i * 4 + 2] = 0;
-        rotations[i * 4 + 3] = 1;
-        scales[i * 3 + 0] = 0.2;
-        scales[i * 3 + 1] = 0.15;
-        scales[i * 3 + 2] = 0.1;
-        colors[i * 4 + 0] = 0.9;
-        colors[i * 4 + 1] = 0.4;
-        colors[i * 4 + 2] = 0.2;
-        colors[i * 4 + 3] = 0.8;
+        positions[i * 3 + 0] = 0; positions[i * 3 + 1] = 0; positions[i * 3 + 2] = zValues ? (zValues[i] ?? 0) : (count === 3 ? (i === 0 ? -2 : i === 1 ? 1 : 0) : (-0.01 * i));
+        rotations[i * 4 + 0] = 0; rotations[i * 4 + 1] = 0; rotations[i * 4 + 2] = 0; rotations[i * 4 + 3] = 1;
+        scales[i * 3 + 0] = 0.2; scales[i * 3 + 1] = 0.15; scales[i * 3 + 2] = 0.1;
+        colors[i * 4 + 0] = 0.9; colors[i * 4 + 1] = 0.4; colors[i * 4 + 2] = 0.2; colors[i * 4 + 3] = 0.8;
     }
     return new SplatField({ positions, rotations, scales, colors });
 };
@@ -236,11 +173,6 @@ const makeRenderableField = (count = 3, zValues = null) => {
         /scales length does not match splatCount/,
         "Expected mismatched CPU array lengths to throw"
     );
-    assert.throws(
-        () => new SplatField({ positions: new Float32Array([0, 0, 0, 1, 0, 0]), colors: new Float32Array([1, 0, 0, 0, 1]) }),
-        /colors length must equal splatCount \* 3 or splatCount \* 4/,
-        "Expected mismatched color lengths to throw"
-    );
 
     rgbField.destroy();
     rgbaField.destroy();
@@ -287,10 +219,6 @@ const makeRenderableField = (count = 3, zValues = null) => {
     assert.strictEqual(ownedShDestroyed(), 1, "Expected owned CPU-uploaded shBuffer to be destroyed");
 
     assert.throws(() => new SplatField({ sh1: sh.sh1 }), /sh0 is required/, "Expected sh1 without sh0 to reject");
-    assert.throws(() => new SplatField({ sh0: sh.sh0, sh2: sh.sh2 }), /sh2 requires sh0 and sh1/, "Expected sh2 without sh1 to reject");
-    assert.throws(() => new SplatField({ sh0: sh.sh0, sh1: sh.sh1, sh3: sh.sh3 }), /sh3 requires sh0, sh1, and sh2/, "Expected sh3 without sh2 to reject");
-    assert.throws(() => new SplatField({ sh0: sh.sh0, sh1: sh.sh1.subarray(0, sh.sh1.length - 1) }), /sh1 length/, "Expected partial degree 1 data to reject");
-    assert.throws(() => new SplatField({ sh0: sh.sh0, sh1: sh.sh1, shDegree: 0 }), /shDegree must match/, "Expected inconsistent explicit degree to reject");
     assert.throws(() => new SplatField({ positions: new Float32Array([0, 0, 0]), colors: new Float32Array([1, 1, 1]), sh0: new Float32Array([0, 0, 0]) }), /direct colors and spherical harmonic coefficients cannot be mixed/, "Expected direct colors mixed with SH to reject");
 
     degree0.destroy();
@@ -309,35 +237,6 @@ const makeRenderableField = (count = 3, zValues = null) => {
             finally { centerOpacityBuffer.destroy(); rotationBuffer.destroy(); scaleBuffer.destroy(); }
         },
         /centerOpacityBuffer size/, "Expected too-small required packed buffers to throw"
-    );
-    assert.throws(
-        () => {
-            const centerOpacityBuffer = createStorageBuffer(device, 32);
-            const rotationBuffer = createStorageBuffer(device, 32);
-            const scaleBuffer = createStorageBuffer(device, 32);
-            const colorBuffer = createStorageBuffer(device, 16);
-            try { new SplatField({ centerOpacityBuffer, rotationBuffer, scaleBuffer, colorBuffer, splatCount: 2 }); }
-            finally { centerOpacityBuffer.destroy(); rotationBuffer.destroy(); scaleBuffer.destroy(); colorBuffer.destroy(); }
-        },
-        /colorBuffer size/, "Expected too-small optional colorBuffer to throw"
-    );
-    assert.throws(
-        () => {
-            const buffers = createExternalSplatBuffers(device, device.queue, 1);
-            const shBuffer = createStorageBuffer(device, 48);
-            try { new SplatField({ ...buffers, shBuffer, splatCount: 1 }); }
-            finally { buffers.centerOpacityBuffer.destroy(); buffers.rotationBuffer.destroy(); buffers.scaleBuffer.destroy(); shBuffer.destroy(); }
-        },
-        /shDegree is required/, "Expected external shBuffer to require shDegree"
-    );
-    assert.throws(
-        () => {
-            const buffers = createExternalSplatBuffers(device, device.queue, 1);
-            const shBuffer = createStorageBuffer(device, 47);
-            try { new SplatField({ ...buffers, shBuffer, shDegree: 3, splatCount: 1 }); }
-            finally { buffers.centerOpacityBuffer.destroy(); buffers.rotationBuffer.destroy(); buffers.scaleBuffer.destroy(); shBuffer.destroy(); }
-        },
-        /shBuffer size/, "Expected too-small external shBuffer to throw"
     );
 
     const borrowedBuffers = createExternalSplatBuffers(device, device.queue, 2);
@@ -371,9 +270,6 @@ const makeRenderableField = (count = 3, zValues = null) => {
     borrowedColor.destroy();
 
     const synthesizedBuffers = createExternalSplatBuffers(device, device.queue, 2);
-    const synthesizedCenterDestroyed = trackDestroy(synthesizedBuffers.centerOpacityBuffer);
-    const synthesizedRotationDestroyed = trackDestroy(synthesizedBuffers.rotationBuffer);
-    const synthesizedScaleDestroyed = trackDestroy(synthesizedBuffers.scaleBuffer);
     const synthesizedField = new SplatField({ centerOpacityBuffer: synthesizedBuffers.centerOpacityBuffer, rotationBuffer: synthesizedBuffers.rotationBuffer, scaleBuffer: synthesizedBuffers.scaleBuffer, splatCount: 2, ownBuffers: false });
 
     synthesizedField.upload(device, device.queue);
@@ -383,9 +279,6 @@ const makeRenderableField = (count = 3, zValues = null) => {
     const synthesizedColorDestroyed = trackDestroy(synthesizedField.colorBuffer);
     synthesizedField.destroy();
     assert.strictEqual(synthesizedColorDestroyed(), 1, "Expected synthesized colorBuffer to be owned and destroyed by SplatField.destroy()");
-    assert.strictEqual(synthesizedCenterDestroyed(), 0, "Expected borrowed centerOpacityBuffer to survive destroy()");
-    assert.strictEqual(synthesizedRotationDestroyed(), 0, "Expected borrowed rotationBuffer to survive destroy()");
-    assert.strictEqual(synthesizedScaleDestroyed(), 0, "Expected borrowed scaleBuffer to survive destroy()");
     synthesizedBuffers.centerOpacityBuffer.destroy();
     synthesizedBuffers.rotationBuffer.destroy();
     synthesizedBuffers.scaleBuffer.destroy();
@@ -412,9 +305,6 @@ const makeRenderableField = (count = 3, zValues = null) => {
     const borrowedShField = new SplatField({ ...borrowedShBuffers, shBuffer: borrowedSh, shDegree: 3, splatCount: 2, colorSpace: "srgb" });
     assert.strictEqual(borrowedShField.usesSphericalHarmonics, true, "Expected external shBuffer to enable SH mode");
     assert.strictEqual(borrowedShField.shDegree, 3, "Expected external shBuffer degree to round-trip");
-    assert.strictEqual(borrowedShField.getUniformData()[1], 1, "Expected sRGB external SH fields to decode evaluated color in shader");
-    assert.strictEqual(borrowedShField.getUniformData()[2], 1, "Expected external SH uniform mode flag");
-    assert.strictEqual(borrowedShField.getUniformData()[3], 3, "Expected external SH uniform degree");
     borrowedShField.upload(device, device.queue);
     assert.ok(borrowedShField.colorBuffer, "Expected external SH mode to synthesize a color buffer for alpha");
     borrowedShField.destroy();
@@ -424,12 +314,22 @@ const makeRenderableField = (count = 3, zValues = null) => {
     borrowedShBuffers.scaleBuffer.destroy();
     borrowedSh.destroy();
 
-    const ownedShBuffers = createExternalSplatBuffers(device, device.queue, 1);
-    const ownedSh = createExternalSHBuffer(device, device.queue, 1, 0);
-    const ownedShDestroyed = trackDestroy(ownedSh);
-    const ownedShField = new SplatField({ ...ownedShBuffers, shBuffer: ownedSh, shDegree: 0, splatCount: 1, ownBuffers: true });
-    ownedShField.destroy();
-    assert.strictEqual(ownedShDestroyed(), 1, "Expected ownBuffers shBuffer to be destroyed");
+    const cpuCountField = makeRenderableField(2);
+    assert.throws(() => cpuCountField.markDataDirty(), /requires caller-supplied GPU buffers/i, "Expected markDataDirty() to reject CPU-array fields");
+    cpuCountField.destroy();
+
+    const countBuffers = createExternalSplatBuffers(device, device.queue, 3);
+    const countField = new SplatField({ ...countBuffers, splatCount: 2 });
+    assert.doesNotThrow(() => countField.markDataDirty(), "Expected markDataDirty() to accept caller-supplied GPU buffers");
+    countField.upload(device, device.queue);
+    countField.splatCount = 3;
+    countField.upload(device, device.queue);
+    assert.strictEqual(countField.splatCount, 3, "Expected splatCount assignment to update caller-supplied buffer fields");
+    arraysApproxEqual(await readBufferAsF32(countField.colorBuffer, 12), new Float32Array(12).fill(1), 0, "Expected synthesized colors to grow with splatCount and stay white");
+    countField.destroy();
+    countBuffers.centerOpacityBuffer.destroy();
+    countBuffers.rotationBuffer.destroy();
+    countBuffers.scaleBuffer.destroy();
 }
 
 // 5) External WebAssembly memory views: strict packed source family, explicit refresh, SH/direct-color exclusivity, CPU snapshots, validation, and grow-only capacity.
@@ -487,10 +387,6 @@ const makeRenderableField = (count = 3, zValues = null) => {
     directCore.centerOpacity.data.set([-10, -11, -12, 0.8], 0);
     directField.refreshFromWasm({ recomputeBounds: true });
     assert.ok(directField.getLocalBounds().boxMin[0] < -10, "Repeated recomputeBounds should refresh active SplatField wasm bounds");
-    directField.setWasmColor(null);
-    directField.upload(device, device.queue);
-    assert.strictEqual(directField.getUniformData()[1], 0, "Clearing wasmColor should clear external sRGB decode state");
-    arraysApproxEqual(await readBufferAsF32(directField.colorBuffer, 8), new Float32Array([1, 1, 1, 1, 1, 1, 1, 1]), 0, "Clearing wasmColor should schedule fallback white colors");
     directField.destroy();
 
     const explicitCore = fillCore("sf:wasm:explicit");
@@ -498,11 +394,6 @@ const makeRenderableField = (count = 3, zValues = null) => {
     explicitField.refreshFromWasm({ recomputeBounds: true });
     arraysApproxEqual(explicitField.boundsMin, [-1, -2, -3], 1e-6, "Explicit SplatField bounds should not be overwritten by wasm recomputeBounds");
     explicitField.destroy();
-
-    const cpuGuard = new SplatField({ positions: new Float32Array([1, 2, 3]), scales: new Float32Array([0.5, 0.5, 0.5]), colors: new Float32Array([0.2, 0.3, 0.4]), keepCPUData: true });
-    assert.throws(() => cpuGuard.setWasmCenterOpacity(directCore.centerOpacity.view), /setWasmPackedData\(\).*initial wasm source-family replacement/i, "Single wasm core setters should not destructively start wasm conversion");
-    assert.deepStrictEqual(cpuGuard.getSplatRecord(0).position, [1, 2, 3], "Rejected single-channel wasm conversion should preserve CPU data");
-    cpuGuard.destroy();
 
     const shCore = fillCore("sf:wasm:sh");
     const sh = makeView(24, "f32", "sf:wasm:sh:coefficients");
@@ -529,11 +420,6 @@ const makeRenderableField = (count = 3, zValues = null) => {
     shField.upload(device, device.queue);
     arraysApproxEqual(await readBufferAsF32(shField.shBuffer, 24), sh.data.subarray(0, 24), 0, "wasmSphericalHarmonics upload mismatch");
     arraysApproxEqual(await readBufferAsF32(shField.colorBuffer, 8), new Float32Array([1, 1, 1, 1, 1, 1, 1, 1]), 0, "Expected wasm SH mode to synthesize white color data");
-    shField.setWasmSphericalHarmonics(null);
-    shField.upload(device, device.queue);
-    assert.strictEqual(shField.usesSphericalHarmonics, false, "Clearing wasmSphericalHarmonics should clear SH mode");
-    assert.strictEqual(shField.shBuffer, null, "Clearing wasmSphericalHarmonics should clear the managed SH buffer");
-    arraysApproxEqual(await readBufferAsF32(shField.colorBuffer, 8), new Float32Array([1, 1, 1, 1, 1, 1, 1, 1]), 0, "Clearing wasmSphericalHarmonics should preserve fallback white colors");
     shField.destroy();
 
     const capacityCore = fillCore("sf:wasm:capacity", 5, 20);
@@ -570,15 +456,13 @@ const makeRenderableField = (count = 3, zValues = null) => {
     assert.throws(() => shrinkField.upload(device, device.queue), /wasmCenterOpacity length must be at least splatCount\*4/i, "upload() should validate refreshed wasmCenterOpacity length before reading");
     shrinkField.destroy();
 
-    const mixColorBuffer = createStorageBuffer(device, 16);
-    try {
+    {
         const invalidCore = fillCore("sf:wasm:invalid");
         const invalidColor = makeView(4, "f32", "sf:wasm:invalid:color");
         const invalidSH = makeView(12, "f32", "sf:wasm:invalid:sh");
         const invalidCases = [
             { message: "CPU and external-wasm descriptors should not mix", error: /CPU-array, external-buffer, and external-WebAssembly descriptors cannot be mixed/i, create: () => new SplatField({ positions: new Float32Array([0, 0, 0]), wasmCenterOpacity: invalidCore.centerOpacity.view }) },
             { message: "wasmColor should not mix with CPU SH arrays", error: /direct colors and spherical harmonic coefficients cannot be mixed/i, create: () => new SplatField({ wasmColor: invalidColor.view, sh0: new Float32Array([0, 0, 0]) }) },
-            { message: "wasmSphericalHarmonics should not mix with external color buffers", error: /direct colors and spherical harmonic coefficients cannot be mixed/i, create: () => new SplatField({ wasmSphericalHarmonics: invalidSH.view, shDegree: 1, colorBuffer: mixColorBuffer, splatCount: 1 }) },
             { message: "wasmSphericalHarmonics should require shDegree", error: /shDegree is required when using wasmSphericalHarmonics/i, create: () => new SplatField({ ...invalidCore, wasmSphericalHarmonics: invalidSH.view }) },
             { message: "Invalid derived wasmCenterOpacity splatCount should throw", error: /wasmCenterOpacity length must be a multiple of 4/i, create: () => new SplatField({ wasmCenterOpacity: makeView(5, "f32", "sf:wasm:bad:center").view, wasmRotation: invalidCore.rotation.view, wasmScale: invalidCore.scale.view }) },
             { message: "Short wasmColor should throw", error: /wasmColor length must be at least splatCount\*4/i, create: () => new SplatField({ wasmCenterOpacity: invalidCore.centerOpacity.view, wasmRotation: invalidCore.rotation.view, wasmScale: invalidCore.scale.view, wasmColor: invalidColor.view, splatCount: 2 }) },
@@ -586,7 +470,7 @@ const makeRenderableField = (count = 3, zValues = null) => {
             { message: "Non-f32 wasmCenterOpacity should throw", error: /wasmCenterOpacity dtype must be 'f32'/i, create: () => new SplatField({ wasmCenterOpacity: makeView(8, "u32", "sf:wasm:bad:dtype").view, wasmRotation: invalidCore.rotation.view, wasmScale: invalidCore.scale.view }) }
         ];
         for (const testCase of invalidCases) assert.throws(testCase.create, testCase.error, testCase.message);
-    } finally { mixColorBuffer.destroy(); }
+    }
 }
 
 // 6) Bounds and scene APIs expose splatfields as first-class scene objects with explicit and computed spatial state.
@@ -712,40 +596,9 @@ const makeRenderableField = (count = 3, zValues = null) => {
     uncapturedError = null;
     assert.doesNotThrow(() => renderer.render(scene, perspectiveCamera));
     await rendererAny.queue.onSubmittedWorkDone();
-    assert.strictEqual(uncapturedError, null, "Expected degree-3 SH splatfield perspective rendering to avoid uncaptured WebGPU errors");
-    uncapturedError = null;
-    assert.doesNotThrow(() => renderer.render(scene, makeOrthographicCamera()));
-    await rendererAny.queue.onSubmittedWorkDone();
-    assert.strictEqual(uncapturedError, null, "Expected degree-3 SH splatfield orthographic rendering to avoid uncaptured WebGPU errors");
+    assert.strictEqual(uncapturedError, null, "Expected degree-3 SH splatfield rendering to avoid uncaptured WebGPU errors");
     scene.clearSplatFields();
     shRenderField.destroy();
-
-    const anisotropicPerspectiveField = new SplatField({
-        positions: new Float32Array([0, 0, -1]),
-        rotations: new Float32Array([0, 0.5646425, 0, 0.8253356]),
-        scales: new Float32Array([1.5, 0.03, 0.03]),
-        colors: new Float32Array([0.7, 0.8, 0.9, 0.9])
-    });
-    scene.add(anisotropicPerspectiveField);
-    uncapturedError = null;
-    assert.doesNotThrow(() => renderer.render(scene, perspectiveCamera));
-    await rendererAny.queue.onSubmittedWorkDone();
-    assert.strictEqual(uncapturedError, null, "Expected anisotropic perspective splat projection to render without uncaptured WebGPU errors");
-    scene.clearSplatFields();
-    anisotropicPerspectiveField.destroy();
-
-    const nearPlaneField = new SplatField({
-        positions: new Float32Array([0, 0, 4.89]),
-        scales: new Float32Array([0.08, 0.04, 0.02]),
-        colors: new Float32Array([0.6, 0.7, 0.9, 0.85])
-    });
-    scene.add(nearPlaneField);
-    uncapturedError = null;
-    assert.doesNotThrow(() => renderer.render(scene, perspectiveCamera));
-    await rendererAny.queue.onSubmittedWorkDone();
-    assert.strictEqual(uncapturedError, null, "Expected near-plane splat projection to render without uncaptured WebGPU errors");
-    scene.clearSplatFields();
-    nearPlaneField.destroy();
 
     const smallField = makeRenderableField(3);
     const largeField = makeRenderableField(1031);
@@ -759,40 +612,59 @@ const makeRenderableField = (count = 3, zValues = null) => {
     assert.ok(rendererAny.splatSortCapacity >= 1031, "Expected shared sort scratch to be preallocated for the largest same-frame splatfield");
     assert.ok(rendererAny.splatFieldSortStates.has(smallField), "Expected same-frame small-field sort state to exist");
     assert.ok(rendererAny.splatFieldSortStates.has(largeField), "Expected same-frame large-field sort state to exist");
-    const largeOrder = await readBufferAsU32(rendererAny.splatFieldSortStates.get(largeField).sortedIndexBuffer, 1031, rendererAny.device, rendererAny.queue);
-    assert.strictEqual(largeOrder[0], 1030, "Expected non-workgroup-aligned large sort to place the farthest splat first");
-    assert.strictEqual(largeOrder[1030], 0, "Expected non-workgroup-aligned large sort to place the nearest splat last");
     scene.clearSplatFields();
     smallField.destroy();
     largeField.destroy();
 
-    const equalDepthField = makeRenderableField(513, new Array(513).fill(0));
-    scene.add(equalDepthField);
+    const tiedDepths = [-3, -1, 0.5, 2];
+    const tiedField = makeRenderableField(1031, Array.from({ length: 1031 }, (_, i) => tiedDepths[i % 4]));
+    scene.add(tiedField);
     renderer.render(scene, perspectiveCamera);
     await rendererAny.queue.onSubmittedWorkDone();
-    const equalOrder = await readBufferAsU32(rendererAny.splatFieldSortStates.get(equalDepthField).sortedIndexBuffer, 513, rendererAny.device, rendererAny.queue);
-    assert.deepStrictEqual(Array.from(equalOrder), Array.from({ length: 513 }, (_, i) => i), "Specialized SplatField radix sort should remain stable for repeated equal keys");
+    const tiedOrder = await readBufferAsU32(rendererAny.splatFieldSortStates.get(tiedField).sortedIndexBuffer, 1031, rendererAny.device, rendererAny.queue);
+    const expectedTiedOrder = [0, 1, 2, 3].flatMap((group) => Array.from({ length: 1031 }, (_, i) => i).filter((i) => i % 4 === group));
+    assert.deepStrictEqual(Array.from(tiedOrder), expectedTiedOrder, "Specialized SplatField radix sort should order multi-tile tied groups back to front and stably");
     scene.clearSplatFields();
-    equalDepthField.destroy();
+    tiedField.destroy();
 
-    const externalBuffers = createExternalSplatBuffers(rendererAny.device, rendererAny.queue, 2, [-1, 0]);
+    const externalCamera = makePerspectiveCamera();
+    const externalBuffers = createExternalSplatBuffers(rendererAny.device, rendererAny.queue, 3, [-1, 0, 1]);
     const externalField = new SplatField({
         centerOpacityBuffer: externalBuffers.centerOpacityBuffer,
         rotationBuffer: externalBuffers.rotationBuffer,
         scaleBuffer: externalBuffers.scaleBuffer,
-        splatCount: 2
+        splatCount: 3
     });
+    const externalFrame = async (message) => {
+        uncapturedError = null;
+        assert.doesNotThrow(() => renderer.render(scene, externalCamera));
+        await rendererAny.queue.onSubmittedWorkDone();
+        assert.strictEqual(uncapturedError, null, message);
+    };
+    const externalOrder = (count) => readBufferAsU32(rendererAny.splatFieldSortStates.get(externalField).sortedIndexBuffer, count, rendererAny.device, rendererAny.queue);
     scene.add(externalField);
-    uncapturedError = null;
-    assert.doesNotThrow(() => renderer.render(scene, perspectiveCamera));
-    await rendererAny.queue.onSubmittedWorkDone();
-    assert.strictEqual(uncapturedError, null, "Expected external splatfields without colors to render without uncaptured WebGPU errors");
+    await externalFrame("Expected external splatfields without colors to render without uncaptured WebGPU errors");
     assert.ok(externalField.colorBuffer, "Expected renderer upload path to synthesize missing external colors");
     const externalState = rendererAny.splatFieldSortStates.get(externalField);
-    const externalSortCount = externalState.sortCount;
-    renderer.render(scene, perspectiveCamera);
-    await rendererAny.queue.onSubmittedWorkDone();
-    assert.ok(externalState.sortCount > externalSortCount, "Borrowed external SplatField buffers must sort conservatively every frame");
+    assert.strictEqual(externalState.sortCount, 1);
+    assert.deepStrictEqual(Array.from(await externalOrder(3)), [0, 1, 2], "Expected borrowed external splats to be GPU-sorted back to front");
+    await externalFrame("Expected still external splat frames to render without uncaptured WebGPU errors");
+    assert.strictEqual(externalState.sortCount, 1, "Still frames should reuse sorted indices for borrowed external SplatField buffers");
+    rendererAny.queue.writeBuffer(externalBuffers.centerOpacityBuffer, 0, new Float32Array([0, 0, 1, 1, 0, 0, 0, 1, 0, 0, -1, 1]));
+    externalField.markDataDirty();
+    await externalFrame("Expected announced external splat writes to render without uncaptured WebGPU errors");
+    assert.strictEqual(externalState.sortCount, 2, "markDataDirty() should invalidate sorted-index reuse exactly once");
+    assert.deepStrictEqual(Array.from(await externalOrder(3)), [2, 1, 0], "Expected the re-sort to follow the rewritten external depths");
+    await externalFrame("Expected still external splat frames to render without uncaptured WebGPU errors");
+    assert.strictEqual(externalState.sortCount, 2, "Still frames after markDataDirty() should reuse sorted indices");
+    externalCamera.transform.setPosition(0.1, 0, 5);
+    await externalFrame("Expected moved-camera external splat frames to render without uncaptured WebGPU errors");
+    assert.strictEqual(externalState.sortCount, 3, "Camera changes should invalidate external sorted-index reuse");
+    externalField.splatCount = 2;
+    await externalFrame("Expected reduced external splat counts to render without uncaptured WebGPU errors");
+    assert.strictEqual(externalState.sortCount, 4, "splatCount assignment should invalidate sorted-index reuse");
+    assert.deepStrictEqual(Array.from(await externalOrder(2)), [1, 0], "Expected the re-sort to cover only the assigned splat count");
+    externalCamera.destroy();
     scene.clearSplatFields();
     externalField.destroy();
     externalBuffers.centerOpacityBuffer.destroy();

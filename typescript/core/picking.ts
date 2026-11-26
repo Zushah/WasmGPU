@@ -839,7 +839,7 @@ const getOrCreatePickLatticeSpacePipeline = (ctx: RendererContext, space: Lattic
         label: key,
         layout: ctx.device.createPipelineLayout({ bindGroupLayouts: [ctx.globalBindGroupLayout, getLatticeSpaceBindGroupLayout(ctx), getPickBindGroupLayout(ctx)] }),
         vertex: { module, entryPoint: space.dimensionCount === 2 ? "vs_2d" : "vs_3d", buffers: [] },
-        fragment: { module, entryPoint: "fs_main", targets: [{ format: "rg32uint" }, { format: "r32float" }] },
+        fragment: { module, entryPoint: space.dimensionCount === 2 ? "fs_2d" : "fs_3d", targets: [{ format: "rg32uint" }, { format: "r32float" }] },
         primitive: { topology: "triangle-list", cullMode },
         depthStencil: { format: "depth24plus", depthWriteEnabled: true, depthCompare: "less" }
     });

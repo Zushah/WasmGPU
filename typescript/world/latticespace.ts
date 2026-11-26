@@ -377,13 +377,32 @@ export class LatticeSpace {
         hash = mixRevision(hash, this._scaleTransform.valueMode === "magnitude" ? 1 : 0);
         hash = mixRevision(hash, this._scaleTransform.componentCount);
         hash = mixRevision(hash, this._scaleTransform.componentIndex);
-        for (const value of [...this.dimensions, ...this._indexRange.min, ...this._indexRange.max]) hash = mixRevision(hash, value);
-        for (const value of [...this._origin, ...this._spacing, ...this._cellScale]) hash = mixRevisionF32(hash, value);
+        for (let axis = 0; axis < this.dimensionCount; axis++) hash = mixRevision(hash, this.dimensions[axis]);
+        for (let axis = 0; axis < this.dimensionCount; axis++) hash = mixRevision(hash, this._indexRange.min[axis]);
+        for (let axis = 0; axis < this.dimensionCount; axis++) hash = mixRevision(hash, this._indexRange.max[axis]);
+        for (let axis = 0; axis < 3; axis++) hash = mixRevisionF32(hash, this._origin[axis]);
+        for (let axis = 0; axis < 3; axis++) hash = mixRevisionF32(hash, this._spacing[axis]);
+        for (let axis = 0; axis < 3; axis++) hash = mixRevisionF32(hash, this._cellScale[axis]);
+        return hash >>> 0;
+    }
+
+    get identityRevision(): number {
+        let hash = 2166136261 >>> 0;
+        for (let axis = 0; axis < this.dimensionCount; axis++) {
+            hash = mixRevision(hash, this.dimensions[axis]);
+            hash = mixRevision(hash, this._indexRange.min[axis]);
+            hash = mixRevision(hash, this._indexRange.max[axis]);
+        }
         return hash >>> 0;
     }
 
     get sortRevision(): number {
-        return this.occluderRevision;
+        let hash = this.identityRevision;
+        for (let axis = 0; axis < 3; axis++) {
+            hash = mixRevisionF32(hash, this._origin[axis]);
+            hash = mixRevisionF32(hash, this._spacing[axis]);
+        }
+        return hash >>> 0;
     }
 
     setScaleTransform(transform: ScaleTransformDescriptor | ScaleTransform): void {
@@ -516,6 +535,7 @@ export class LatticeSpace {
         this._keepCPUData = options.keepCPUData ?? this._keepCPUData;
         this._maskDirty = true;
         this._maskRevision++;
+        this._uniformDirty = true;
         this.bindGroupKey = null;
     }
     
@@ -536,6 +556,7 @@ export class LatticeSpace {
         this._wasmMaskCapacity = 0;
         this.replaceMaskBuffer(buffer, !!buffer && !!options.ownBuffer);
         this._maskRevision++;
+        this._uniformDirty = true;
     }
     
     markMaskDirty(): void {
@@ -552,6 +573,7 @@ export class LatticeSpace {
     }
     
     setWasmMask(source: WasmMemoryView<Uint32Array> | null, options: LatticeSpaceWasmSourceOptions = {}): void {
+        this._uniformDirty = true;
         if (!source) { this._wasmMaskSource = null; return; }
         this._wasmMaskSource = assertWasmU32View(source, "LatticeSpace: wasmMask");
         this._wasmCapacityHint = assertWasmCapacity(options.capacity, "LatticeSpace: wasmMask capacity");
@@ -592,11 +614,13 @@ export class LatticeSpace {
     clearWasmSources(): void {
         this._wasmDataSource = null;
         this._wasmMaskSource = null;
+        this._uniformDirty = true;
     }
     
     dropCPUData(): void {
         this._dataCPU = null;
         this._maskCPU = null;
+        this._uniformDirty = true;
     }
 
     getLocalBounds(): Bounds3 {

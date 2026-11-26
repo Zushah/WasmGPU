@@ -5,7 +5,7 @@
  */
 
 import type { Geometry } from "../graphics/geometry";
-import type { Material } from "../graphics/material";
+import type { BlendMode, CullMode, Material, StandardMaterialLayoutPlan } from "../graphics/material";
 import type { GlyphField } from "../world/glyphfield";
 import type { Mesh } from "../world/mesh";
 import type { NodeLink } from "../world/nodelink";
@@ -56,6 +56,15 @@ export type DrawItem = {
     sortKey: number;
 };
 
+export type MaterialPipelineMemo = {
+    blendMode: BlendMode;
+    cullMode: CullMode;
+    depthWrite: boolean;
+    depthTest: boolean;
+    plan: StandardMaterialLayoutPlan | null;
+    pipeline: GPURenderPipeline;
+};
+
 export type PointCloudDrawItem = {
     cloud: PointCloud;
     pipeline: GPURenderPipeline;
@@ -103,6 +112,12 @@ export type LatticeSpaceDrawItem = {
 
 export type TransparentDrawItem = DrawItem | PointCloudDrawItem | SplatFieldDrawItem | GlyphFieldDrawItem | NodeLinkDrawItem | LatticeSpaceDrawItem;
 
+export type SortScanStep = {
+    pipeline: GPUComputePipeline;
+    bindGroup: GPUBindGroup;
+    workgroups: WorkgroupCounts;
+};
+
 export type SplatFieldSortState = {
     sortedIndexBuffer: GPUBuffer | null;
     sortedIndexCapacity: number;
@@ -114,6 +129,7 @@ export type SplatFieldSortState = {
     sortCount: number;
     radixBindGroupKey: string | null;
     radixBindGroups: Array<GPUBindGroup | null>;
+    scanSteps: SortScanStep[];
     elementWorkgroups: WorkgroupCounts;
     blockWorkgroups: WorkgroupCounts;
 };
@@ -123,15 +139,14 @@ export type SplatFieldSortScanLevel = {
     blockSumsCapacity: number;
     blockOffsets: GPUBuffer | null;
     blockOffsetsCapacity: number;
-    dispatchCount: number;
-    elementWorkgroups: WorkgroupCounts;
-    blockWorkgroups: WorkgroupCounts;
 };
 
 export type LatticeSpaceSortState = {
     sortedIndexBuffer: GPUBuffer | null;
     sortedIndexCapacity: number;
-    identityKey: string | null;
+    identityRevision: number;
+    identityBindGroup: GPUBindGroup | null;
+    identityBindGroupKey: string | null;
     transformBuffer: GPUBuffer | null;
     lastMvp: Float32Array;
     lastRevision: number;
@@ -140,6 +155,7 @@ export type LatticeSpaceSortState = {
     sortCount: number;
     radixBindGroupKey: string | null;
     radixBindGroups: Array<GPUBindGroup | null>;
+    scanSteps: SortScanStep[];
     elementWorkgroups: WorkgroupCounts;
     blockWorkgroups: WorkgroupCounts;
 };
@@ -149,9 +165,6 @@ export type LatticeSpaceSortScanLevel = {
     blockSumsCapacity: number;
     blockOffsets: GPUBuffer | null;
     blockOffsetsCapacity: number;
-    dispatchCount: number;
-    elementWorkgroups: WorkgroupCounts;
-    blockWorkgroups: WorkgroupCounts;
 };
 
 export type OcclusionCandidateKind = "mesh" | "pointcloud" | "glyphfield" | "nodelink" | "latticespace";

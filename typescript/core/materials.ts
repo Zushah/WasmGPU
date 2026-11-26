@@ -12,9 +12,16 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
     if (instanced && skinned) throw new Error("Renderer: instanced + skinned pipelines are not supported (attribute layout conflict).");
     if (skinned8 && !skinned) skinned = true;
     const shadows = receiveShadow && material instanceof StandardMaterial && ctx.shadowRenderer.activeViewCount > 0;
+    const plan = material instanceof StandardMaterial ? material.getLayoutPlan() : null;
+    const variant = (instanced ? 1 : 0) | (skinned ? 2 : 0) | (skinned8 ? 4 : 0) | (mirrored ? 8 : 0) | (forceNoDepthWrite ? 16 : 0) | (shadows ? 32 : 0);
+    let memos = ctx.materialPipelineMemos.get(material);
+    const memo = memos?.[variant];
+    if (memo && memo.blendMode === material.blendMode && memo.cullMode === material.cullMode && memo.depthWrite === material.depthWrite && memo.depthTest === material.depthTest && memo.plan === plan) return memo.pipeline;
+    if (!memos) { memos = []; ctx.materialPipelineMemos.set(material, memos); }
+    const remember = (pipeline: GPURenderPipeline): GPURenderPipeline => { memos[variant] = { blendMode: material.blendMode, cullMode: material.cullMode, depthWrite: material.depthWrite, depthTest: material.depthTest, plan, pipeline }; return pipeline; };
     const key = getPipelineCacheKey(ctx, material, instanced, skinned, skinned8, mirrored, forceNoDepthWrite, shadows);
     let pipeline = ctx.pipelineCache.get(key);
-    if (pipeline) return pipeline;
+    if (pipeline) return remember(pipeline);
     const shaderCode = material.getShaderCode({ instanced, skinned, skinned8, shadows, shadowGroup: skinned ? 3 : 2 });
     let shaderModule = ctx.shaderCache.get(shaderCode);
     if (!shaderModule) {
@@ -176,7 +183,7 @@ export const getOrCreatePipeline = (ctx: RendererContext, material: Material, in
         }
     });
     ctx.pipelineCache.set(key, pipeline);
-    return pipeline;
+    return remember(pipeline);
 };
 
 export const getPipelineCacheKey = (ctx: RendererContext, material: Material, instanced: boolean, skinned: boolean, skinned8: boolean, mirrored: boolean, forceNoDepthWrite: boolean = false, receiveShadow: boolean = false): string => {

@@ -5,17 +5,14 @@
  */
 
 import assert from "./utils/assert.js";
-import { createApproxHelpers, createBrowserCanvasScope, destroyTestDevice, readBufferAsF32, readBufferAsU32, runIntentionalWebGPUTeardown, setupTest, trackDestroy } from "./utils/helpers.js";
+import { createApproxHelpers, createBrowserCanvasScope, createWebGPUCanvasDouble, destroyTestDevice, readBufferAsF32, readBufferAsU32, runIntentionalWebGPUTeardown, setupTest, trackDestroy } from "./utils/helpers.js";
 import * as WasmGPU from "../release/WasmGPU.js";
 
 const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
 const browserCanvases = createBrowserCanvasScope();
 
 let uncapturedError = null;
-const { device } = await setupTest({
-    initWebAssembly: WasmGPU.initWebAssembly,
-    webgpu: { onUncapturedError: (event) => { uncapturedError = event.error?.message ?? String(event.error); } }
-});
+const { device } = await setupTest({ initWebAssembly: WasmGPU.initWebAssembly, webgpu: { onUncapturedError: (event) => { uncapturedError = event.error?.message ?? String(event.error); } } });
 
 const { LatticeSpace, Scene, Renderer, PerspectiveCamera, BlendMode, CullMode, Compute, WasmMemoryView } = WasmGPU;
 assert.ok(LatticeSpace, "Missing export: LatticeSpace");
@@ -276,7 +273,134 @@ const readU32 = (buffer, count, localCompute = compute) => readBufferAsU32(local
     localCompute.destroy();
 }
 
-// 9) Cleanup removes real canvases and releases the shared compute context before its browser GPU device.
+// 9) Masked 3D cells are hidden from rendering and picking, including masks set after the first frame.
+{
+    const size = 64;
+    const canvas = createWebGPUCanvasDouble(size, size, { additionalUsage: GPUTextureUsage.COPY_SRC });
+    const renderer = await Renderer.create(canvas, { antialias: false, frustumCulling: false });
+    const rendererAny = renderer;
+    rendererAny.device.addEventListener("uncapturederror", (event) => { uncapturedError = event?.error?.message ?? String(event); });
+    const swapRedBlue = renderer.gpu.format.startsWith("bgra");
+    const readRgb = async () => {
+        const bytesPerRow = Math.ceil((size * 4) / 256) * 256;
+        const buffer = rendererAny.device.createBuffer({ size: size * bytesPerRow, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        const encoder = rendererAny.device.createCommandEncoder();
+        encoder.copyTextureToBuffer({ texture: canvas.lastCurrentTexture }, { buffer, bytesPerRow, rowsPerImage: size }, { width: size, height: size, depthOrArrayLayers: 1 });
+        rendererAny.queue.submit([encoder.finish()]);
+        await buffer.mapAsync(GPUMapMode.READ);
+        const bytes = new Uint8Array(buffer.getMappedRange());
+        const rgb = new Uint8Array(size * size * 3);
+        for (let i = 0; i < size * size; i++) { const source = Math.floor(i / size) * bytesPerRow + (i % size) * 4; rgb[i * 3] = bytes[source + (swapRedBlue ? 2 : 0)]; rgb[i * 3 + 1] = bytes[source + 1]; rgb[i * 3 + 2] = bytes[source + (swapRedBlue ? 0 : 2)]; }
+        buffer.unmap();
+        buffer.destroy();
+        return rgb;
+    };
+    const pixel = (rgb, x, y) => Array.from(rgb.subarray((y * size + x) * 3, (y * size + x) * 3 + 3));
+    const camera = new PerspectiveCamera({ fov: 40, aspect: 1, near: 0.1, far: 100 });
+    camera.transform.setPosition(0, 0, 8);
+    camera.lookAt(0, 0, 0);
+    const center = size / 2;
+    const renderAndPick = async (scene) => {
+        renderer.render(scene, camera);
+        await rendererAny.queue.onSubmittedWorkDone();
+        return renderer.pick(scene, camera, center, center);
+    };
+    const column = (descriptor) => new LatticeSpace({ dimensions: [1, 1, 3], origin: [0, 0, 0], spacing: [1, 1, 1], cellScale: 1, keepCPUData: true, ...descriptor });
+
+    {
+        const space = column({ data: new Float32Array([0.2, 0.5, 0.9]), mask: new Uint32Array([1, 1, 0]) });
+        const scene = new Scene(); scene.add(space);
+        uncapturedError = null;
+        const hit = await renderAndPick(scene);
+        assert.strictEqual(uncapturedError, null, "Masked lattice emitted an uncaptured WebGPU error");
+        assert.ok(hit && hit.object === space && hit.elementIndex === 1, "Expected picking to pass through the masked front cell");
+        scene.destroy();
+    }
+
+    const colors = new Float32Array([1, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 1]);
+    const visibleColumn = column({ componentCount: 4, colorMode: "rgba", data: colors });
+    const maskedColumn = column({ componentCount: 4, colorMode: "rgba", data: colors, mask: new Uint32Array([1, 1, 0]) });
+    const emptyColumn = column({ componentCount: 4, colorMode: "rgba", data: colors, mask: new Uint32Array(3) });
+    for (const [space, expected, message] of [[visibleColumn, [0, 0, 255], "front cell"], [maskedColumn, [0, 255, 0], "middle cell behind the masked front cell"]]) {
+        const scene = new Scene(); scene.add(space);
+        renderer.render(scene, camera);
+        await rendererAny.queue.onSubmittedWorkDone();
+        const rgb = await readRgb();
+        assert.deepStrictEqual(pixel(rgb, center, center), expected, `Expected the center pixel to show the ${message}`);
+        assert.deepStrictEqual(pixel(rgb, 2, 2), [0, 0, 0], "Expected off-lattice pixels to show the background");
+        scene.remove(space);
+        scene.destroy();
+        space.destroy();
+    }
+    const emptyScene = new Scene(); emptyScene.add(emptyColumn);
+    renderer.render(emptyScene, camera);
+    await rendererAny.queue.onSubmittedWorkDone();
+    assert.ok((await readRgb()).every((value) => value === 0), "Expected a fully masked lattice to draw nothing");
+    emptyScene.destroy();
+
+    {
+        const space = column({ data: new Float32Array([0.2, 0.5, 0.9]) });
+        const scene = new Scene(); scene.add(space);
+        const shown = await renderAndPick(scene);
+        assert.ok(shown && shown.object === space && shown.elementIndex === 2, "Expected the unmasked lattice to hit its front cell");
+        space.setMask(new Uint32Array([1, 1, 0]));
+        const masked = await renderAndPick(scene);
+        assert.ok(masked && masked.object === space && masked.elementIndex === 1, "Expected a mask set after the first frame to hide the front cell");
+        space.setMaskBuffer(null);
+        const unmasked = await renderAndPick(scene);
+        assert.ok(unmasked && unmasked.object === space && unmasked.elementIndex === 2, "Expected removing the mask to restore the front cell");
+        scene.destroy();
+    }
+
+    uncapturedError = null;
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
+    camera.destroy();
+}
+
+// 10) Transparent 3D sort reuse follows only the geometry its keys read, and never reuses identity indices.
+{
+    const renderer = await Renderer.create(browserCanvases.createCanvas(96, 96), { antialias: false, frustumCulling: false });
+    const rendererAny = renderer;
+    const localCompute = new Compute(rendererAny.device, rendererAny.queue);
+    rendererAny.device.addEventListener("uncapturederror", (event) => { uncapturedError = event?.error?.message ?? String(event); });
+    const camera = new PerspectiveCamera({ fov: 40, aspect: 1, near: 0.1, far: 100 });
+    camera.transform.setPosition(0, 0, -8);
+    camera.lookAt(0, 0, 0);
+    const space = new LatticeSpace({ dimensions: [1, 1, 3], data: new Float32Array([0.2, 0.5, 0.9]), mask: new Uint32Array([1, 1, 1]), keepCPUData: true, blendMode: BlendMode.Transparent, depthWrite: false, opacity: 0.5 });
+    const scene = new Scene(); scene.add(space);
+    const frame = async () => { renderer.render(scene, camera); await rendererAny.queue.onSubmittedWorkDone(); return rendererAny.latticeSpaceSortStates.get(space); };
+    uncapturedError = null;
+    const state = await frame();
+    assert.strictEqual(state.sortCount, 1);
+    assert.deepStrictEqual(Array.from(await readU32(state.sortedIndexBuffer, 3, localCompute)), [2, 1, 0], "Expected a camera behind the column to sort its last cell first");
+    const flat = [
+        ["mask", () => space.setMask(new Uint32Array([1, 0, 1]))],
+        ["data", () => space.setData(new Float32Array([0.9, 0.1, 0.4]))]
+    ];
+    for (const [label, change] of flat) {
+        change();
+        assert.strictEqual((await frame()).sortCount, 1, `LatticeSpace ${label} changes should not invalidate sorted-index reuse`);
+    }
+    space.origin = [0, 0, 0.25];
+    assert.strictEqual((await frame()).sortCount, 2, "LatticeSpace origin changes should invalidate sorted-index reuse");
+    space.spacing = [1, 1, 1.5];
+    assert.strictEqual((await frame()).sortCount, 3, "LatticeSpace spacing changes should invalidate sorted-index reuse");
+    space.blendMode = BlendMode.Opaque;
+    space.depthWrite = true;
+    await frame();
+    assert.deepStrictEqual(Array.from(await readU32(state.sortedIndexBuffer, 3, localCompute)), [0, 1, 2], "Expected opaque LatticeSpaces to draw identity indices");
+    space.blendMode = BlendMode.Transparent;
+    space.depthWrite = false;
+    assert.strictEqual((await frame()).sortCount, 4, "Expected a return to transparency to re-sort after identity indices were written");
+    assert.deepStrictEqual(Array.from(await readU32(state.sortedIndexBuffer, 3, localCompute)), [2, 1, 0], "Expected the re-sorted order rather than stale identity indices");
+    assert.strictEqual(uncapturedError, null, "LatticeSpace sort reuse frames emitted an uncaptured WebGPU error");
+    await runIntentionalWebGPUTeardown(() => renderer.destroy());
+    scene.destroy();
+    camera.destroy();
+    localCompute.destroy();
+}
+
+// 11) Cleanup removes real canvases and releases the shared compute context before its browser GPU device.
 {
     browserCanvases.restore();
     compute.destroy();

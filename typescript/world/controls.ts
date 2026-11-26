@@ -1031,6 +1031,8 @@ export class NavigationControls {
             this._phi += this._phiDelta * damping;
             this._thetaDelta *= (1 - damping);
             this._phiDelta *= (1 - damping);
+            if (Math.abs(this._thetaDelta) <= EPSILON) this._thetaDelta = 0;
+            if (Math.abs(this._phiDelta) <= EPSILON) this._phiDelta = 0;
         } else {
             this._thetaDelta = 0;
             this._phiDelta = 0;
@@ -1128,6 +1130,8 @@ export class NavigationControls {
         this.target[1] += this._panOffset[1] * damping;
         this.target[2] += this._panOffset[2] * damping;
         this._panOffset = vec3scl(this._panOffset, 1 - damping);
+        const viewHeight = this.camera.type === "orthographic" ? (this._orthoBaseTop - this._orthoBaseBottom) / Math.max(EPSILON, this._zoom) : 2 * this._radius * Math.tan(((this.camera as PerspectiveCamera).fov * Math.PI / 180) * 0.5);
+        if (vec3mag(this._panOffset) <= EPSILON * viewHeight) this._panOffset = [0, 0, 0];
     }
 
     private panOrbit(deltaX: number, deltaY: number): void {

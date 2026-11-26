@@ -28,6 +28,7 @@ import type {
     LatticeSpaceDrawItem,
     LatticeSpaceSortScanLevel,
     LatticeSpaceSortState,
+    MaterialPipelineMemo,
     NodeLinkDrawItem,
     OcclusionCandidate,
     OcclusionFrameState,
@@ -111,7 +112,6 @@ import {
     drawInstancedRun as drawInstancedRunImpl,
     encodeSplatFieldSort as encodeSplatFieldSortImpl,
     encodeSplatFieldSorts as encodeSplatFieldSortsImpl,
-    encodeSplatSortScanExclusive as encodeSplatSortScanExclusiveImpl,
     ensureGlyphFieldBindGroup as ensureGlyphFieldBindGroupImpl,
     ensureNodeLinkBindGroup as ensureNodeLinkBindGroupImpl,
     ensurePointCloudBindGroup as ensurePointCloudBindGroupImpl,
@@ -240,7 +240,7 @@ export class Renderer {
     instanceBufferGeneration: number = 0;
     instanceRunCacheIndex: number = 0;
     instanceRunUploadCount: number = 0;
-    readonly instanceRunCache: Array<{ generation: number; offset: number; count: number; meshes: Mesh[]; matrices: Float32Array }> = [];
+    readonly instanceRunCache: Array<{ generation: number; offset: number; count: number; meshes: Mesh[]; matrices: Uint32Array }> = [];
     readonly INSTANCE_STRIDE_BYTES = 128;
     readonly framePreparedSkins: Set<object> = new Set();
     frameSkinPreparationCount: number = 0;
@@ -314,6 +314,11 @@ export class Renderer {
     latticeSortScanBlockBindGroupLayout: GPUBindGroupLayout | null = null;
     latticeSortScanAddBindGroupLayout: GPUBindGroupLayout | null = null;
     latticeSortScatterBindGroupLayout: GPUBindGroupLayout | null = null;
+    latticeSortIdentityBindGroupLayout: GPUBindGroupLayout | null = null;
+    sortShiftBuffer: GPUBuffer | null = null;
+    pointCloudPipelines: Map<number, GPURenderPipeline> = new Map();
+    latticeSpacePipelines: Map<number, GPURenderPipeline> = new Map();
+    materialPipelineMemos: WeakMap<Material, Array<MaterialPipelineMemo | undefined>> = new WeakMap();
     cullGlyphFieldScratch: GlyphField[] = [];
     transparentMergedDrawList: TransparentDrawItem[] = [];
     cullPointCloudScratch: PointCloud[] = [];
@@ -845,6 +850,9 @@ export class Renderer {
         this.instanceBufferCapacityBytes = 0;
         this.instanceRunCache.length = 0;
         this.pipelineCache.clear();
+        this.pointCloudPipelines.clear();
+        this.latticeSpacePipelines.clear();
+        this.materialPipelineMemos = new WeakMap();
         this.computePipelineCache.clear();
         this.shaderCache.clear();
         this.pointCloudBindGroupLayout = null;
@@ -902,6 +910,9 @@ export class Renderer {
         this.latticeSortScanBlockBindGroupLayout = null;
         this.latticeSortScanAddBindGroupLayout = null;
         this.latticeSortScatterBindGroupLayout = null;
+        this.latticeSortIdentityBindGroupLayout = null;
+        this.sortShiftBuffer?.destroy();
+        this.sortShiftBuffer = null;
         this.nodeLinkSphereGeometry = null;
         this.nodeLinkCubeGeometry = null;
         this.nodeLinkCylinderGeometry = null;
@@ -1215,8 +1226,8 @@ export class Renderer {
         return ensureSplatSortScanLevelImpl(this, level, count);
     }
 
-    private ensureSplatSortFrameCapacity(count: number, level: number = 0): void {
-        ensureSplatSortFrameCapacityImpl(this, count, level);
+    private ensureSplatSortFrameCapacity(count: number): void {
+        ensureSplatSortFrameCapacityImpl(this, count);
     }
 
     private getSplatFieldBindGroupLayout(): GPUBindGroupLayout {
@@ -1259,8 +1270,8 @@ export class Renderer {
         return getOrCreateSplatSortKeygenPipelineImpl(this);
     }
 
-    private getOrCreateSplatSortFlagsPipeline(bit: number): GPUComputePipeline {
-        return getOrCreateSplatSortFlagsPipelineImpl(this, bit);
+    private getOrCreateSplatSortFlagsPipeline(): GPUComputePipeline {
+        return getOrCreateSplatSortFlagsPipelineImpl(this);
     }
 
     private getOrCreateSplatSortScanBlockPipeline(): GPUComputePipeline {
@@ -1271,12 +1282,8 @@ export class Renderer {
         return getOrCreateSplatSortScanAddPipelineImpl(this);
     }
 
-    private getOrCreateSplatSortScatterPipeline(bit: number): GPUComputePipeline {
-        return getOrCreateSplatSortScatterPipelineImpl(this, bit);
-    }
-
-    private encodeSplatSortScanExclusive(pass: GPUComputePassEncoder, input: GPUBuffer, count: number, out: GPUBuffer, level: number = 0): void {
-        encodeSplatSortScanExclusiveImpl(this, pass, input, count, out, level);
+    private getOrCreateSplatSortScatterPipeline(shift: number): GPUComputePipeline {
+        return getOrCreateSplatSortScatterPipelineImpl(this, shift);
     }
 
     private encodeSplatFieldSort(pass: GPUComputePassEncoder, field: SplatField, state: SplatFieldSortState): GPUBuffer | null {

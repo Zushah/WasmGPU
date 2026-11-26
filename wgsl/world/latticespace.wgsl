@@ -52,9 +52,7 @@ struct VertexOutput {
     @location(0) world_position: vec3<f32>,
     @location(1) normal: vec3<f32>,
     @location(2) local_position: vec3<f32>,
-    @location(3) @interpolate(flat) cell_index: u32,
-    @location(4) @interpolate(flat) cell: vec3<u32>,
-    @location(5) @interpolate(flat) face: u32,
+    @location(3) @interpolate(flat) value: vec4<f32>,
 }
 
 @group(0) @binding(0) var<uniform> camera: CameraUniforms;
@@ -207,16 +205,6 @@ fn face_normal(face: u32) -> vec3<f32> {
     )[face];
 }
 
-fn resolve_fragment_cell(in: VertexOutput) -> vec4<u32> {
-    if (u32(lattice.dimensions.w + 0.5) == 3u) {
-        return vec4<u32>(in.cell, in.cell_index);
-    }
-    let relative = (in.local_position.xy - (lattice.origin.xy - 0.5 * lattice.spacing.xy))
-            / lattice.spacing.xy;
-    let cell = vec2<u32>(floor(relative));
-    return vec4<u32>(cell, 0u, cell.x + u32(lattice.dimensions.x) * cell.y);
-}
-
 fn internal_face(cell: vec3<u32>, face: u32) -> bool {
     if (any(lattice.cell_scale.xyz < vec3<f32>(0.999999))) {
         return false;
@@ -336,6 +324,16 @@ fn apply_lighting(position: vec3<f32>, normal: vec3<f32>, color: vec3<f32>) -> v
     return result;
 }
 
+fn invalid_vertex() -> VertexOutput {
+    var out: VertexOutput;
+    out.position = vec4<f32>(2.0, 2.0, 2.0, 1.0);
+    out.world_position = vec3<f32>(0.0);
+    out.normal = vec3<f32>(0.0, 0.0, 1.0);
+    out.local_position = vec3<f32>(0.0);
+    out.value = vec4<f32>(0.0);
+    return out;
+}
+
 @vertex
 fn vs_2d(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     let uv = array<vec2<f32>, 6>(
@@ -357,9 +355,7 @@ fn vs_2d(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
     out.world_position = world.xyz;
     out.normal = normalize((model.normal * vec4<f32>(0, 0, 1, 0)).xyz);
     out.local_position = local;
-    out.cell_index = 0u;
-    out.cell = vec3<u32>(0u);
-    out.face = 5u;
+    out.value = vec4<f32>(0.0);
     return out;
 }
 
@@ -375,7 +371,17 @@ fn vs_3d(
         use_sorted,
     );
     let cell = linear_to_cell(index);
+    var value = vec4<f32>(0);
+    if (u32(lattice.data_config.y + 0.5) != 2u) {
+        value = load_value(index);
+    }
+    if (!cell_visible(index, value)) {
+        return invalid_vertex();
+    }
     let face = vertex_index / 6u;
+    if (internal_face(cell, face)) {
+        return invalid_vertex();
+    }
     let local = lattice.origin.xyz
             + vec3<f32>(cell) * lattice.spacing.xyz
             + cube_vertex(vertex_index) * lattice.spacing.xyz * lattice.cell_scale.xyz;
@@ -385,40 +391,12 @@ fn vs_3d(
     out.world_position = world.xyz;
     out.normal = normalize((model.normal * vec4<f32>(face_normal(face), 0.0)).xyz);
     out.local_position = local;
-    out.cell_index = index;
-    out.cell = cell;
-    out.face = face;
+    out.value = value;
     return out;
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let resolved = resolve_fragment_cell(in);
-    let cell = resolved.xyz;
-    let index = resolved.w;
-    if (u32(lattice.dimensions.w + 0.5) == 2u) {
-        if (
-            any(cell.xy < vec2<u32>(lattice.range_min.xy))
-                || any(cell.xy >= vec2<u32>(lattice.range_max.xy))
-        ) {
-            discard;
-        }
-        let center = lattice.origin.xy + vec2<f32>(cell.xy) * lattice.spacing.xy;
-        let normalized = abs((in.local_position.xy - center) / lattice.spacing.xy);
-        if (any(normalized > 0.5 * lattice.cell_scale.xy)) {
-            discard;
-        }
-    } else if (internal_face(cell, in.face)) {
-        discard;
-    }
+fn shade_cell(in: VertexOutput, value: vec4<f32>) -> vec4<f32> {
     let mode = u32(lattice.data_config.y + 0.5);
-    var value = vec4<f32>(0);
-    if (mode != 2u) {
-        value = load_value(index);
-    }
-    if (!cell_visible(index, value)) {
-        discard;
-    }
     var color: vec4<f32>;
     if (mode == 0u) {
         color = map_color(scale_value(select_scalar(value)));
@@ -438,4 +416,36 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         srgb_from_linear(rgb),
         clamp(color.a, 0.0, 1.0) * clamp(lattice.visual.x, 0.0, 1.0),
     );
+}
+
+@fragment
+fn fs_2d(in: VertexOutput) -> @location(0) vec4<f32> {
+    let relative = (in.local_position.xy - (lattice.origin.xy - 0.5 * lattice.spacing.xy))
+            / lattice.spacing.xy;
+    let cell = vec2<u32>(floor(relative));
+    let index = cell.x + u32(lattice.dimensions.x) * cell.y;
+    if (
+        any(cell < vec2<u32>(lattice.range_min.xy))
+            || any(cell >= vec2<u32>(lattice.range_max.xy))
+    ) {
+        discard;
+    }
+    let center = lattice.origin.xy + vec2<f32>(cell) * lattice.spacing.xy;
+    let normalized = abs((in.local_position.xy - center) / lattice.spacing.xy);
+    if (any(normalized > 0.5 * lattice.cell_scale.xy)) {
+        discard;
+    }
+    var value = vec4<f32>(0);
+    if (u32(lattice.data_config.y + 0.5) != 2u) {
+        value = load_value(index);
+    }
+    if (!cell_visible(index, value)) {
+        discard;
+    }
+    return shade_cell(in, value);
+}
+
+@fragment
+fn fs_3d(in: VertexOutput) -> @location(0) vec4<f32> {
+    return shade_cell(in, in.value);
 }

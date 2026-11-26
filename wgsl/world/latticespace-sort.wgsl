@@ -70,3 +70,18 @@ fn main(
     keys_out[ordinal] = u32(round((1.0 - depth) * 4294967040.0));
     indices_out[ordinal] = index;
 }
+
+@compute @workgroup_size(256)
+fn identity(
+    @builtin(workgroup_id) wid: vec3<u32>,
+    @builtin(num_workgroups) nwg: vec3<u32>,
+    @builtin(local_invocation_index) lid: u32,
+) {
+    let ordinal = invocation_index(wid, nwg, lid);
+    if (ordinal >= arrayLength(&indices_out)) {
+        return;
+    }
+    let cell = ordinal_to_cell(ordinal);
+    let dims = vec3<u32>(lattice.dimensions.xyz);
+    indices_out[ordinal] = cell.x + dims.x * (cell.y + dims.y * cell.z);
+}

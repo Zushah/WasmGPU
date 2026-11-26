@@ -458,7 +458,7 @@
             };
 
             // Splat volume: an example-local kernel maps a downsampled ndarray through the shared scale transform and colormap,
-            // and compacts the visible voxels to the front of the splat buffers so the per-frame depth sort only covers those
+            // and compacts the visible voxels to the front of the splat buffers so the field only draws and depth-sorts those
             const SPLAT_WGSL = /* wgsl */`
                 struct Params {
                     dims: vec4<u32>,
@@ -548,14 +548,14 @@
                 splatParams.write(splatParamData);
                 splat.counter.buffer.write(ZERO_U32);
                 wgpu.compute.dispatchBatch([{ pipeline: splatPipeline, bindGroups: [splat.bindGroup], workgroups: wgpu.compute.workgroups1D(splat.count, 256) }]);
+                // The atomic compaction reorders the slots on every run, so announce the rewrite before frames render during the readback
+                splat.field?.markDataDirty();
                 const counted = await nd.toCPU(splat.counter);
                 const visible = counted.get(0);
                 counted.destroy();
-                // A field draws the first `visible` slots of the borrowed buffers; it is replaced only when that count changes
-                if (splat.field && visible === splat.visible) return;
-                retireField(splat);
+                // One field per grid draws the first `visible` slots of the borrowed buffers, which are allocated at full grid capacity
                 splat.visible = visible;
-                if (visible === 0) return;
+                if (splat.field) { splat.field.splatCount = visible; return; }
                 splat.field = wgpu.createSplatField({
                     centerOpacityBuffer: splat.buffers.centerOpacity,
                     rotationBuffer: splat.buffers.rotation,

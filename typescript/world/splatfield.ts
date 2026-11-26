@@ -70,6 +70,7 @@ export type SplatFieldDescriptor = {
 };
 
 type BoundsSourceMode = "none" | "explicit" | "computed";
+type ExternalBufferMode = "none" | "colors" | "white";
 type SplatFieldWasmChannel = "centerOpacity" | "rotation" | "scale" | "color" | "sphericalHarmonics";
 
 const UNIFORM_FLOAT_COUNT = 4;
@@ -224,7 +225,7 @@ export class SplatField {
     private _shDegree: SplatFieldSHDegree = 0;
     private _usesSphericalHarmonics: boolean = false;
     private _sortRevision: number = 0;
-    private _sortCacheable: boolean = true;
+    private _externalBufferMode: ExternalBufferMode = "none";
 
     constructor(desc: SplatFieldDescriptor = {}) {
         if (desc.name !== undefined) this.name = desc.name;
@@ -345,6 +346,7 @@ export class SplatField {
         this._shDegree = 0;
         this._uniformDirty = true;
         this._dataDirty = false;
+        this._externalBufferMode = "none";
         this.bindGroupKey = null;
     }
 
@@ -634,7 +636,7 @@ export class SplatField {
     }
 
     private setCPUData(desc: SplatFieldDescriptor): void {
-        this._sortCacheable = true;
+        this._externalBufferMode = "none";
         this._sortRevision++;
         this.clearAllWasmState(true);
         const positions = desc.positions ?? null;
@@ -719,7 +721,6 @@ export class SplatField {
     }
 
     private setExternalData(desc: SplatFieldDescriptor): void {
-        this._sortCacheable = false;
         this._sortRevision++;
         this.clearAllWasmState(true);
         assert(!!desc.centerOpacityBuffer && !!desc.rotationBuffer && !!desc.scaleBuffer, "SplatField: centerOpacityBuffer, rotationBuffer, and scaleBuffer are required when using external buffers.");
@@ -753,12 +754,33 @@ export class SplatField {
         this._usesSphericalHarmonics = !!shBuffer;
         this._dataDirty = !colorBuffer && splatCount > 0;
         this._uniformDirty = true;
+        this._externalBufferMode = colorBuffer ? "colors" : "white";
         this.bindGroupKey = null;
         this.clearComputedBoundsIfNeeded();
     }
 
     get splatCount(): number {
         return this._splatCount;
+    }
+
+    set splatCount(value: number) {
+        assert(Number.isInteger(value) && value >= 0, "SplatField: splatCount must be an integer >= 0.");
+        assert(this._externalBufferMode !== "none", "SplatField: splatCount can only be assigned when the field uses caller-supplied GPU buffers.");
+        if (value === this._splatCount) return;
+        validateExternalPackedBufferSize(this.centerOpacityBuffer!, value, "centerOpacityBuffer");
+        validateExternalPackedBufferSize(this.rotationBuffer!, value, "rotationBuffer");
+        validateExternalPackedBufferSize(this.scaleBuffer!, value, "scaleBuffer");
+        if (this._externalBufferMode === "colors") validateExternalPackedBufferSize(this.colorBuffer!, value, "colorBuffer");
+        if (this.shBuffer) validateExternalSHBufferSize(this.shBuffer, value, this._shDegree);
+        const whiteCapacity = this.colorBuffer ? this.colorBuffer.size / SPLAT_VEC4_BYTES : (this._colorCPU?.length ?? 0) / SPLAT_VEC4_FLOATS;
+        if (this._externalBufferMode === "white" && value > whiteCapacity) {
+            this.replaceColorBuffer(null, false);
+            this._colorCPU = makeWhiteColorData(value);
+            this._dataDirty = true;
+            this.bindGroupKey = null;
+        }
+        this._splatCount = value;
+        this._sortRevision++;
     }
 
     get colorSpace(): SplatFieldColorSpace {
@@ -864,7 +886,6 @@ export class SplatField {
         else this._centerOpacityCPU = null;
         this.updateWasmBounds(options);
         this._wasmCenterOpacityDirty = true;
-        this._sortCacheable = true;
         this._sortRevision++;
         this.assertWasmCoreSourcesAvailable("refreshWasmCenterOpacity");
     }
@@ -953,6 +974,11 @@ export class SplatField {
     clearWasmSources(): void {
         this.clearAllWasmState(true);
         this._dataDirty = false;
+    }
+
+    markDataDirty(): void {
+        assert(this._externalBufferMode !== "none", "SplatField: markDataDirty() requires caller-supplied GPU buffers; use refreshFromWasm() for WebAssembly sources.");
+        this._sortRevision++;
     }
 
     getSplatRecord(index: number): {
@@ -1270,10 +1296,6 @@ export class SplatField {
         return this._sortRevision;
     }
 
-    get sortCacheable(): boolean {
-        return this._sortCacheable;
-    }
-
     markUniformsClean(): void {
         this._uniformDirty = false;
     }
@@ -1333,6 +1355,7 @@ export class SplatField {
         this._externalColorBufferSrgb = false;
         this._usesSphericalHarmonics = false;
         this._shDegree = 0;
+        this._externalBufferMode = "none";
         this.transform.dispose();
     }
 }

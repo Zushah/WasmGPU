@@ -4,13 +4,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-override BIT: u32 = 0u;
+override SHIFT: u32 = 0u;
+const RADIX: u32 = 16u;
 
 @group(0) @binding(0) var<storage, read> keys_in: array<u32>;
 @group(0) @binding(1) var<storage, read> values_in: array<u32>;
-@group(0) @binding(2) var<storage, read> prefix: array<u32>;
+@group(0) @binding(2) var<storage, read> ranks: array<u32>;
 @group(0) @binding(3) var<storage, read_write> keys_out: array<u32>;
 @group(0) @binding(4) var<storage, read_write> values_out: array<u32>;
+@group(0) @binding(5) var<storage, read> offsets: array<u32>;
 
 fn invocation_index(wid: vec3<u32>, nwg: vec3<u32>, lid: u32) -> u32 {
     return (wid.y * nwg.x + wid.x) * 256u + lid;
@@ -28,12 +30,8 @@ fn main(
         return;
     }
     let k = keys_in[i];
-    let is_zero = ((k >> BIT) & 1u) == 0u;
-    let zero_pos = prefix[i];
-    let last_key = keys_in[n - 1u];
-    let zero_count = prefix[n - 1u] + select(0u, 1u, ((last_key >> BIT) & 1u) == 0u);
-    let one_pos = zero_count + (i - zero_pos);
-    let dst = select(one_pos, zero_pos, is_zero);
+    let d = (k >> SHIFT) & (RADIX - 1u);
+    let dst = offsets[d * (arrayLength(&offsets) / RADIX) + i / 1024u] + ranks[i];
     keys_out[dst] = k;
     values_out[dst] = values_in[i];
 }
