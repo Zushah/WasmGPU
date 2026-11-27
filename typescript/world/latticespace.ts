@@ -4,10 +4,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { assert, clamp01, normalizeColorStops, resolveGPUBuffer } from "../utils";
+import { assert, clamp01, resolveGPUBuffer } from "../utils";
 import { Transform } from "../core/transform";
 import { BlendMode, CullMode, type Color4 } from "../graphics/material";
-import { Colormap, type BuiltinColormapName } from "../graphics/colormap";
+import { Colormap, type BuiltinColormapName } from "../graphics/color";
 import { cloneScaleTransform, normalizeScaleTransform, packScaleTransform, SCALE_UNIFORM_FLOAT_COUNT } from "../scaling";
 import type { ScaleSourceDescriptor, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor } from "../scaling";
 import { WasmMemoryView, assertWasmCapacity, assertWasmF32View, assertWasmU32View, growWasmCapacity } from "../wasm";
@@ -21,7 +21,7 @@ export type LatticeSpaceColorMode = "scalar" | "rgba" | "solid";
 
 export type LatticeSpaceColorSpace = "linear" | "srgb";
 
-export type LatticeSpaceColormap = BuiltinColormapName | "custom";
+export type LatticeSpaceColormap = BuiltinColormapName;
 
 export type LatticeSpaceVisualChangeKind = "scale" | "colormap" | "visual";
 
@@ -63,7 +63,6 @@ export type LatticeSpaceDescriptor = {
     colorSpace?: LatticeSpaceColorSpace;
     solidColor?: Color4;
     colormap?: LatticeSpaceColormap | Colormap;
-    colormapStops?: Color4[];
     scaleTransform?: ScaleTransformDescriptor;
     visible?: boolean;
     name?: string;
@@ -72,9 +71,8 @@ export type LatticeSpaceDescriptor = {
 };
 
 const BASE_UNIFORM_FLOAT_COUNT = 10 * 4;
-const UNIFORM_FLOAT_COUNT = BASE_UNIFORM_FLOAT_COUNT + SCALE_UNIFORM_FLOAT_COUNT + (8 * 4);
+const UNIFORM_FLOAT_COUNT = BASE_UNIFORM_FLOAT_COUNT + SCALE_UNIFORM_FLOAT_COUNT;
 const UNIFORM_BYTE_SIZE = UNIFORM_FLOAT_COUNT * 4;
-const DEFAULT_STOPS: Color4[] = [[0.26700, 0.00487, 0.32942, 1.0], [0.99325, 0.90616, 0.14394, 1.0]];
 
 const colorModeId = (mode: LatticeSpaceColorMode): number => mode === "scalar" ? 0 : mode === "rgba" ? 1 : 2;
 const colorSpaceId = (space: LatticeSpaceColorSpace): number => space === "srgb" ? 1 : 0;
@@ -119,7 +117,6 @@ export class LatticeSpace {
     private _colorSpace: LatticeSpaceColorSpace = "linear";
     private _solidColor: Color4 = [1, 1, 1, 1];
     private _colormap: LatticeSpaceColormap | Colormap = "viridis";
-    private _colormapStops: Color4[] = DEFAULT_STOPS.map((stop) => [stop[0], stop[1], stop[2], stop[3]]);
     private _scaleTransform: ScaleTransform;
     private _dataCPU: Float32Array | null = null;
     private _maskCPU: Uint32Array | null = null;
@@ -167,7 +164,6 @@ export class LatticeSpace {
         if (desc.colorSpace !== undefined) this.colorSpace = desc.colorSpace;
         if (desc.solidColor !== undefined) this.solidColor = desc.solidColor;
         if (desc.colormap !== undefined) this._colormap = desc.colormap;
-        if (desc.colormapStops !== undefined) this._colormapStops = normalizeColorStops(desc.colormapStops);
         if (desc.valueRange !== undefined) this.valueRange = desc.valueRange;
         this._keepCPUData = !!desc.keepCPUData;
         const dataSources = Number(!!desc.data) + Number(!!desc.wasmData) + Number(!!desc.dataBuffer);
@@ -337,16 +333,6 @@ export class LatticeSpace {
         this.emitVisualChange("colormap");
     }
     
-    get colormapStops(): ReadonlyArray<Color4> {
-        return this._colormapStops;
-    }
-    
-    set colormapStops(value: ReadonlyArray<Color4>) {
-        this._colormapStops = normalizeColorStops(value);
-        this._uniformDirty = true;
-        this.emitVisualChange("colormap");
-    }
-    
     get scaleTransform(): ScaleTransform {
         return cloneScaleTransform(this._scaleTransform);
     }
@@ -451,7 +437,7 @@ export class LatticeSpace {
     
     getColormapForBinding(): Colormap {
         if (this._colormap instanceof Colormap) return this._colormap;
-        return this._colormap === "custom" ? Colormap.builtin("grayscale") : Colormap.builtin(this._colormap);
+        return Colormap.builtin(this._colormap);
     }
 
     mapLinearIndexToCell(index: number): LatticeSpaceIndex | null {
@@ -713,12 +699,9 @@ export class LatticeSpace {
         out.set([max[0], max[1], max[2] ?? 1, 0], 20);
         out.set([this.componentCount, colorModeId(this._colorMode), colorSpaceId(this._colorSpace), this.hasMask ? 1 : 0], 24);
         out.set([clamp01(this._opacity), this._lit ? 1 : 0, this._valueRange ? this._valueRange[0] : 0, this._valueRange ? this._valueRange[1] : 0], 28);
-        out.set([this._valueRange ? 1 : 0, this._colormap === "custom" ? Math.min(8, Math.max(2, this._colormapStops.length)) : 0, this.dimensionCount === 3 ? 1 : 0, 0], 32);
+        out.set([this._valueRange ? 1 : 0, 0, this.dimensionCount === 3 ? 1 : 0, 0], 32);
         out.set(this._solidColor, 36);
         packScaleTransform(this._scaleTransform, out, BASE_UNIFORM_FLOAT_COUNT);
-        const stopsOffset = BASE_UNIFORM_FLOAT_COUNT + SCALE_UNIFORM_FLOAT_COUNT;
-        const count = Math.min(8, Math.max(2, this._colormapStops.length));
-        for (let i = 0; i < 8; i++) out.set(this._colormapStops[Math.min(i, count - 1)], stopsOffset + i * 4);
         return out;
     }
     

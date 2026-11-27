@@ -300,6 +300,15 @@ const glyphScaleTransform = { componentCount: 4, componentIndex: 0, stride: 4, o
     const orthoControls = new NavigationControls(orthographic, canvas, { target: Array.from(controls.target), mode: "orbit" });
     orthoControls.fitScene(scene, { animate: false, padding: 1.1, view: "front" });
     assert.ok((orthographic.right - orthographic.left) >= (orthographic.top - orthographic.bottom), "Orthographic fit should respect wide aspect framing");
+    numberApproxEqual((orthographic.right - orthographic.left) / (orthographic.top - orthographic.bottom), 3, 1e-6, "Orthographic fit should keep the viewport aspect so world units stay square");
+    const wide = { empty: false, boxMin: [-6, -1, 0], boxMax: [6, 1, 0], sphereCenter: [0, 0, 0], sphereRadius: Math.hypot(6, 1) };
+    orthoControls.fitToBounds(wide, { animate: false, view: "front", padding: 1 });
+    numberApproxEqual((orthographic.right - orthographic.left) / (orthographic.top - orthographic.bottom), 3, 1e-6, "Content wider than the viewport must not stretch the orthographic projection");
+    assert.ok(orthographic.right >= 6 - 1e-6 && orthographic.top >= 1 - 1e-6, "Aspect-corrected orthographic fits must still contain the bounds");
+    const tall = { empty: false, boxMin: [-0.5, -4, 0], boxMax: [0.5, 4, 0], sphereCenter: [0, 0, 0], sphereRadius: Math.hypot(0.5, 4) };
+    orthoControls.fitToBounds(tall, { animate: false, view: "front", padding: 1 });
+    numberApproxEqual((orthographic.right - orthographic.left) / (orthographic.top - orthographic.bottom), 3, 1e-6, "Content taller than the viewport must not stretch the orthographic projection");
+    assert.ok(orthographic.top >= 4 - 1e-6, "Tall orthographic fits must still contain the bounds");
     assert.ok(orthographic.far > orthographic.near, "Orthographic fit should stabilize depth range");
 }
 

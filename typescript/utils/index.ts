@@ -34,8 +34,6 @@ export const isGPUBuffer = (x: unknown): x is GPUBuffer => typeof x === "object"
 
 export const resolveGPUBuffer = (x: GPUBuffer | { buffer: GPUBuffer }): GPUBuffer => isGPUBuffer(x) ? x : x.buffer;
 
-export type ColorStop4 = [number, number, number, number];
-
 export const normalizePositiveIntShape = (shape: ReadonlyArray<number> | null | undefined, label: string = "shape"): number[] | null => {
     if (!shape) return null;
     const out: number[] = [];
@@ -58,34 +56,6 @@ export const linearIndexToNdIndex = (shape: ReadonlyArray<number> | null, index:
         remaining = Math.floor(remaining / dim);
     }
     return remaining === 0 ? out : null;
-};
-
-export const normalizeColorStops = (stops: ReadonlyArray<readonly [number, number, number, number]> | undefined | null, fallback: ReadonlyArray<readonly [number, number, number, number]> = [[0, 0, 0, 1], [1, 1, 1, 1]], maxStops: number = 8): ColorStop4[] => {
-    const source = (!stops || stops.length === 0) ? fallback : stops;
-    const limit = Math.max(0, maxStops | 0);
-    const count = Math.min(limit, Math.max(2, source.length));
-    const out: ColorStop4[] = [];
-    for (let i = 0; i < count; i++) {
-        const c = source[Math.min(i, source.length - 1)] ?? fallback[Math.min(i, fallback.length - 1)] ?? [0, 0, 0, 1];
-        out.push([c[0], c[1], c[2], c[3]]);
-    }
-    return out;
-};
-
-export const sampleColorStops = (tIn: number, stopsIn: ReadonlyArray<readonly [number, number, number, number]>, maxStops: number = 8): ColorStop4 => {
-    const count = Math.min(Math.max(2, maxStops | 0), Math.max(2, stopsIn.length));
-    const stops = normalizeColorStops(stopsIn, [[0, 0, 0, 1], [1, 1, 1, 1]], count);
-    const x = clamp01(tIn) * (count - 1);
-    const i0 = Math.floor(x);
-    const i1 = Math.min(count - 1, i0 + 1);
-    const f = x - i0;
-    if (i0 >= count - 1) return stops[count - 1]!;
-    return [
-        lerp(stops[i0]![0], stops[i1]![0], f),
-        lerp(stops[i0]![1], stops[i1]![1], f),
-        lerp(stops[i0]![2], stops[i1]![2], f),
-        lerp(stops[i0]![3], stops[i1]![3], f)
-    ];
 };
 
 export const createBuffer = (device: GPUDevice, data: ArrayBufferView, usage: GPUBufferUsageFlags, label?: string): GPUBuffer => {

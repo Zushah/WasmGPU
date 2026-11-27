@@ -19,10 +19,10 @@ export { readAccessor, readAccessorAsFloat32, readAccessorAsUint16, readIndicesA
 export type { DecodedDataUri } from "./gltf";
 export { AnimationClip, AnimationPlayer, Skin, SkinInstance } from "./graphics/animation";
 export type { AnimationClipDescriptor } from "./graphics/animation";
-export { Colormap } from "./graphics/colormap";
-export type { BuiltinColormapName, ColormapFilter, ColormapStop, ColormapDescriptor } from "./graphics/colormap";
+export { Colormap, parseColor, srgbToLinear, linearToSrgb, toOklab, fromOklab, paletteSwatch, domainColor } from "./graphics/color";
+export type { BuiltinColormapName, BuiltinPaletteName, ColormapColorSpace, ColormapFilter, ColormapInterpolation, ColormapStop, ColormapDescriptor, DomainColorMode, DomainColorDescriptor } from "./graphics/color";
 export { Geometry } from "./graphics/geometry";
-export type { GeometryDescriptor, GeometryAttribute, GeometryBoundsDescriptor, GeometryMorphTargetDescriptor, GeometryWasmVertexRefreshOptions, GeometryWasmIndexRefreshOptions, GeometryWasmAttributeOptions, GeometryWasmIndexOptions, GeometryWasmAttributeSetOptions, GeometryWasmSources } from "./graphics/geometry";
+export type { GeometryDescriptor, GeometryAttribute, GeometryBoundsDescriptor, GeometryMorphTargetDescriptor, GeometryWasmVertexRefreshOptions, GeometryWasmIndexRefreshOptions, GeometryWasmAttributeOptions, GeometryWasmIndexOptions, GeometryWasmAttributeSetOptions, GeometryWasmSources, CartesianCurveDescriptor, CartesianSurfaceDescriptor, ParametricCurveDescriptor, ParametricSurfaceDescriptor, CurveProfile, GeometryColorDescriptor, ComplexSurfaceDescriptor } from "./graphics/geometry";
 export { Material, UnlitMaterial, StandardMaterial, DataMaterial, CustomMaterial, BlendMode, CullMode } from "./graphics/material";
 export type { Color, Color4, TextureCoordinateSet, TextureTransform, TextureTransformDescriptor, MaterialDescriptor, UnlitMaterialDescriptor, StandardMaterialDescriptor, StandardMaterialExtensionsDescriptor, StandardMaterialExtensions, StandardMaterialClearcoatExtensionDescriptor, StandardMaterialTransmissionExtensionDescriptor, StandardMaterialVolumeExtensionDescriptor, StandardMaterialDiffuseTransmissionExtensionDescriptor, StandardMaterialDispersionExtensionDescriptor, StandardMaterialSpecularExtensionDescriptor, StandardMaterialSheenExtensionDescriptor, StandardMaterialIridescenceExtensionDescriptor, StandardMaterialAnisotropyExtensionDescriptor, StandardMaterialIorExtensionDescriptor, StandardMaterialEmissiveStrengthExtensionDescriptor, DataMaterialDescriptor, DataMaterialVisualChangeKind, CustomMaterialDescriptor } from "./graphics/material";
 export { Texture2D } from "./graphics/texture";

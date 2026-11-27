@@ -4,17 +4,17 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { assert, clamp01, createBuffer, linearIndexToNdIndex, normalizeColorStops, normalizePositiveIntShape, resolveGPUBuffer } from "../utils";
+import { assert, clamp01, createBuffer, linearIndexToNdIndex, normalizePositiveIntShape, resolveGPUBuffer } from "../utils";
 import { Transform } from "../core/transform";
 import { BlendMode, CullMode, type Color4 } from "../graphics/material";
-import { Colormap, type BuiltinColormapName } from "../graphics/colormap";
+import { Colormap, type BuiltinColormapName } from "../graphics/color";
 import { cloneScaleTransform, normalizeScaleTransform, packScaleTransform } from "../scaling";
 import type { ScaleSourceDescriptor, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor } from "../scaling";
 import { Geometry } from "../graphics/geometry";
 import { driver, WasmMemoryView, assertWasmF32View, assertWasmRecordCount, assertWasmCapacity, resolveWasmRecordCount, validateWasmRecordRange, growWasmCapacity, type WasmPtr } from "../wasm";
 import { Bounds3, boundsFromBox, boundsFromSphere, emptyBounds, transformBounds } from "./bounds";
 
-export type GlyphColormap = BuiltinColormapName | "custom";
+export type GlyphColormap = BuiltinColormapName;
 
 export type GlyphFieldVisualChangeKind = "scale" | "colormap" | "visual";
 
@@ -67,7 +67,6 @@ export type GlyphFieldDescriptor = {
     depthTest?: boolean;
     colorMode?: GlyphColorMode;
     colormap?: GlyphColormap | Colormap;
-    colormapStops?: Color4[];
     scaleTransform: ScaleTransformDescriptor;
     opacity?: number;
     lit?: boolean;
@@ -79,7 +78,7 @@ export type GlyphFieldDescriptor = {
     ndShape?: number[];
 };
 
-const UNIFORM_FLOAT_COUNT = (5 * 4) + 4 + 4 + (8 * 4);
+const UNIFORM_FLOAT_COUNT = (5 * 4) + 4 + 4;
 const UNIFORM_BYTE_SIZE = UNIFORM_FLOAT_COUNT * 4;
 const GLYPH_RECORD_FLOATS = 4;
 const GLYPH_RECORD_BYTES = GLYPH_RECORD_FLOATS * 4;
@@ -345,7 +344,6 @@ export class GlyphField {
     private _uniformDirty: boolean = true;
     private _colorMode: GlyphColorMode = "rgba";
     private _colormap: GlyphColormap | Colormap = "viridis";
-    private _colormapStops: Color4[] = [[0.26700, 0.00487, 0.32942, 1.0], [0.99325, 0.90616, 0.14394, 1.0]];
     private _scaleTransform: ScaleTransform = normalizeGlyphScaleTransform({});
     private _scaleRevision: number = 0;
     private readonly _visualChangeListeners: Set<(kind: GlyphFieldVisualChangeKind) => void> = new Set();
@@ -388,7 +386,6 @@ export class GlyphField {
         if (desc.depthTest !== undefined) this.depthTest = !!desc.depthTest;
         if (desc.colorMode !== undefined) this._colorMode = desc.colorMode;
         if (desc.colormap !== undefined) this._colormap = desc.colormap;
-        if (desc.colormapStops !== undefined) this._colormapStops = normalizeColorStops(desc.colormapStops);
         if (desc.opacity !== undefined) this._opacity = desc.opacity;
         if (desc.lit !== undefined) this._lit = !!desc.lit;
         if (desc.solidColor !== undefined) this._solidColor = [desc.solidColor[0], desc.solidColor[1], desc.solidColor[2], desc.solidColor[3]];
@@ -932,16 +929,6 @@ export class GlyphField {
         this.emitVisualChange("colormap");
     }
 
-    get colormapStops(): Color4[] {
-        return this._colormapStops;
-    }
-
-    set colormapStops(v: Color4[]) {
-        this._colormapStops = normalizeColorStops(v);
-        this._uniformDirty = true;
-        this.emitVisualChange("colormap");
-    }
-
     getColormapKey(): string {
         const c = this._colormap;
         return (c instanceof Colormap) ? `cm:${c.id}` : `cm:${c}`;
@@ -950,7 +937,6 @@ export class GlyphField {
     getColormapForBinding(): Colormap {
         const c = this._colormap;
         if (c instanceof Colormap) return c;
-        if (c === "custom") return Colormap.builtin("grayscale");
         return Colormap.builtin(c);
     }
     get opacity(): number {
@@ -1396,23 +1382,13 @@ export class GlyphField {
         out.fill(0);
         packScaleTransform(this._scaleTransform, out, 0);
         out[20] = clamp01(this._opacity);
-        out[21] = (typeof this._colormap === "string" && this._colormap === "custom") ? Math.min(8, Math.max(2, this._colormapStops.length)) : 0;
+        out[21] = 0;
         out[22] = colorModeId(this._colorMode);
         out[23] = this._lit ? 1.0 : 0.0;
         out[24] = this._solidColor[0];
         out[25] = this._solidColor[1];
         out[26] = this._solidColor[2];
         out[27] = this._solidColor[3];
-        const stops = this._colormapStops;
-        const nStops = Math.min(8, Math.max(2, stops.length));
-        for (let i = 0; i < 8; i++) {
-            const src = stops[Math.min(i, nStops - 1)];
-            const o = 28 + i * 4;
-            out[o + 0] = src[0];
-            out[o + 1] = src[1];
-            out[o + 2] = src[2];
-            out[o + 3] = src[3];
-        }
         return out;
     }
 

@@ -177,13 +177,7 @@
             const displayExtent = 6;
             const volumeSpacing = (2 * displayExtent) / (volumeDimensions[0] - 1);
             const sliceSpacing = (2 * displayExtent) / (sliceDimensions[0] - 1);
-            const colormapStops = [
-                [0.025, 0.08, 0.48, 1],
-                [0.04, 0.55, 1.0, 1],
-                [0.015, 0.02, 0.035, 1],
-                [1.0, 0.18, 0.035, 1],
-                [1.0, 0.82, 0.12, 1]
-            ];
+            const amplitudeColormap = WasmGPU.color.map.fromStops([[0.025, 0.08, 0.48, 1], [0.04, 0.55, 1.0, 1], [0.015, 0.02, 0.035, 1], [1.0, 0.18, 0.035, 1], [1.0, 0.82, 0.12, 1]]);
 
             const sampleOrbital = (orbital) => {
                 const volumeValues = new Float32Array(volumeDimensions[0] * volumeDimensions[1] * volumeDimensions[2]);
@@ -258,8 +252,7 @@
                 depthWrite: false,
                 opacity: Number(ui.opacity.value),
                 lit: true,
-                colormap: "custom",
-                colormapStops,
+                colormap: amplitudeColormap,
                 scaleTransform: { domainMin: -1, domainMax: 1 },
                 keepCPUData: true,
                 name: "orbital probability volume"
@@ -273,8 +266,7 @@
                 origin: [-displayExtent, -displayExtent, 0],
                 spacing: [sliceSpacing, sliceSpacing, 1],
                 cellScale: 1,
-                colormap: "custom",
-                colormapStops,
+                colormap: amplitudeColormap,
                 scaleTransform: { domainMin: -1, domainMax: 1 },
                 keepCPUData: true,
                 name: "y = 0 signed-amplitude cross-section"

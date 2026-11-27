@@ -52,15 +52,29 @@
                 const text = String(proxy);
                 return JSON.parse(text);
             };
+            const finiteRange = (values, stride = 1, offset = 0) => {
+                let min = Infinity;
+                let max = -Infinity;
+                for (let i = offset; i < values.length; i += stride) {
+                    const v = values[i];
+                    if (!Number.isFinite(v)) continue;
+                    if (v < min) min = v;
+                    if (v > max) max = v;
+                }
+                return min <= max ? [min, max] : [0, 0];
+            };
 
-            // Python code to compile mathematical expressions into sampled data for plotting
+            // Python code to compile mathematical expressions into callbacks and sampled data for plotting
             const py = `
             import json
             import numpy as np
             import sympy as sp
             from sympy.printing.jscode import jscode
             SYMS = {name: sp.Symbol(name, real=True) for name in ("x", "z", "t", "u", "v")}
-            LOCALS = { **SYMS, "pi": sp.pi, "E": sp.E, "sin": sp.sin, "cos": sp.cos, "tan": sp.tan, "asin": sp.asin, "acos": sp.acos, "atan": sp.atan, "atan2": sp.atan2, "sinh": sp.sinh, "cosh": sp.cosh, "tanh": sp.tanh, "exp": sp.exp, "sqrt": sp.sqrt, "log": sp.log, "abs": sp.Abs, "sign": sp.sign, "floor": sp.floor, "ceiling": sp.ceiling, "min": sp.Min, "max": sp.Max }
+            FUNCS = { "pi": sp.pi, "E": sp.E, "sin": sp.sin, "cos": sp.cos, "tan": sp.tan, "asin": sp.asin, "acos": sp.acos, "atan": sp.atan, "sinh": sp.sinh, "cosh": sp.cosh, "tanh": sp.tanh, "exp": sp.exp, "sqrt": sp.sqrt, "log": sp.log, "abs": sp.Abs }
+            LOCALS = { **SYMS, **FUNCS, "atan2": sp.atan2, "sign": sp.sign, "floor": sp.floor, "ceiling": sp.ceiling, "min": sp.Min, "max": sp.Max }
+            ZSYM = sp.Symbol("z")
+            COMPLEX_LOCALS = { **FUNCS, "z": ZSYM, "I": sp.I, "re": sp.re, "im": sp.im, "conj": sp.conjugate, "arg": sp.arg }
             def _reshape_like(values, template):
                 arr = np.asarray(values, dtype=np.float64)
                 if arr.shape == ():
@@ -73,91 +87,87 @@
                 items = list(parsed)
                 if len(items) not in (2, 3):
                     raise ValueError("parametric definitions must have 2 or 3 components")
-                if len(items) == 2:
-                    items.append(sp.Integer(0))
                 return items
-            def _finite_minmax(values):
-                finite = values[np.isfinite(values)]
-                if finite.size == 0:
-                    raise ValueError("expression produced no finite samples")
-                return float(np.min(finite)), float(np.max(finite))
-            def compile_plot(mode, expr, spec_json):
+            def _require_finite(values, what="expression"):
+                if not np.any(np.isfinite(values)):
+                    raise ValueError(f"{what} produced no finite samples")
+            def compile_plot(mode, expr, spec_json, derivative):
                 spec = json.loads(spec_json)
-                if mode == "cartesianCurve":
-                    parsed = sp.sympify(expr, locals=LOCALS)
-                    xs = np.linspace(spec["xMin"], spec["xMax"], int(spec["segments"]) + 1, dtype=np.float64)
-                    fn = sp.lambdify(SYMS["x"], parsed, modules="numpy")
-                    ys = _reshape_like(fn(xs), xs)
-                    positions = np.stack([xs, ys, np.zeros_like(xs)], axis=1)
-                    scalars = ys
-                    params = xs.reshape(-1, 1)
-                    js = { "f": jscode(parsed) }
-                    scalar_label = "y"
-                    param_labels = ["x"]
-                elif mode == "cartesianSurface":
-                    parsed = sp.sympify(expr, locals=LOCALS)
-                    xs = np.linspace(spec["xMin"], spec["xMax"], int(spec["xSegments"]) + 1, dtype=np.float64)
-                    zs = np.linspace(spec["zMin"], spec["zMax"], int(spec["zSegments"]) + 1, dtype=np.float64)
-                    X, Z = np.meshgrid(xs, zs, indexing="xy")
-                    fn = sp.lambdify((SYMS["x"], SYMS["z"]), parsed, modules="numpy")
-                    Y = _reshape_like(fn(X, Z), X)
-                    positions = np.stack([X, Y, Z], axis=-1).reshape(-1, 3)
-                    scalars = Y.reshape(-1)
-                    params = np.stack([X, Z], axis=-1).reshape(-1, 2)
-                    js = { "f": jscode(parsed) }
-                    scalar_label = "y"
-                    param_labels = ["x", "z"]
-                elif mode == "parametricCurve":
-                    items = _parse_parametric(expr)
-                    ts = np.linspace(spec["tMin"], spec["tMax"], int(spec["segments"]) + 1, dtype=np.float64)
-                    fn = sp.lambdify(SYMS["t"], items, modules="numpy")
-                    px, py, pz = fn(ts)
-                    px = _reshape_like(px, ts)
-                    py = _reshape_like(py, ts)
-                    pz = _reshape_like(pz, ts)
-                    positions = np.stack([px, py, pz], axis=1)
-                    if np.allclose(pz, 0.0):
-                        scalars = py
-                        scalar_label = "y"
+                samples = np.zeros(1, dtype=np.float32)
+                re_grid = np.zeros(1, dtype=np.float32)
+                im_grid = np.zeros(1, dtype=np.float32)
+                js = {}
+                components = 3
+                with np.errstate(all="ignore"):
+                    if mode == "cartesianCurve":
+                        x = SYMS["x"]
+                        parsed = sp.sympify(expr, locals=LOCALS)
+                        xs = np.linspace(spec["xMin"], spec["xMax"], int(spec["segments"]) + 1, dtype=np.float64)
+                        ys = _reshape_like(sp.lambdify(x, parsed, modules="numpy")(xs), xs)
+                        _require_finite(ys)
+                        js["f"] = jscode(parsed)
+                        if derivative in ("d1", "d2"):
+                            g = sp.diff(parsed, x, 1 if derivative == "d1" else 2)
+                            _require_finite(_reshape_like(sp.lambdify(x, g, modules="numpy")(xs), xs), "derivative")
+                            js["g"] = jscode(g)
+                        elif derivative == "int":
+                            dx = (spec["xMax"] - spec["xMin"]) / int(spec["segments"])
+                            pieces = 0.5 * (ys[1:] + ys[:-1]) * dx
+                            pieces = np.where(np.isfinite(pieces), pieces, 0.0)
+                            integral = np.concatenate([[0.0], np.cumsum(pieces)])
+                            if spec["xMin"] <= 0.0 <= spec["xMax"]:
+                                integral = integral - np.interp(0.0, xs, integral)
+                            samples = np.asarray(integral, dtype=np.float32)
+                    elif mode == "cartesianSurface":
+                        x, z = SYMS["x"], SYMS["z"]
+                        parsed = sp.sympify(expr, locals=LOCALS)
+                        if derivative == "dx":
+                            parsed = sp.diff(parsed, x)
+                        elif derivative == "dz":
+                            parsed = sp.diff(parsed, z)
+                        elif derivative == "grad":
+                            parsed = sp.sqrt(sp.diff(parsed, x) ** 2 + sp.diff(parsed, z) ** 2)
+                        xs = np.linspace(spec["xMin"], spec["xMax"], int(spec["xSegments"]) + 1, dtype=np.float64)
+                        zs = np.linspace(spec["zMin"], spec["zMax"], int(spec["zSegments"]) + 1, dtype=np.float64)
+                        X, Z = np.meshgrid(xs, zs, indexing="xy")
+                        _require_finite(_reshape_like(sp.lambdify((x, z), parsed, modules="numpy")(X, Z), X))
+                        js["f"] = jscode(parsed)
+                    elif mode == "parametricCurve":
+                        items = _parse_parametric(expr)
+                        components = len(items)
+                        ts = np.linspace(spec["tMin"], spec["tMax"], int(spec["segments"]) + 1, dtype=np.float64)
+                        values = sp.lambdify(SYMS["t"], items, modules="numpy")(ts)
+                        _require_finite(np.stack([_reshape_like(v, ts) for v in values]))
+                        js = { "x": jscode(items[0]), "y": jscode(items[1]), "z": jscode(items[2]) if components == 3 else "0" }
+                    elif mode == "parametricSurface":
+                        items = _parse_parametric(expr)
+                        components = len(items)
+                        us = np.linspace(spec["uMin"], spec["uMax"], int(spec["uSegments"]) + 1, dtype=np.float64)
+                        vs = np.linspace(spec["vMin"], spec["vMax"], int(spec["vSegments"]) + 1, dtype=np.float64)
+                        U, V = np.meshgrid(us, vs, indexing="xy")
+                        values = sp.lambdify((SYMS["u"], SYMS["v"]), items, modules="numpy")(U, V)
+                        _require_finite(np.stack([_reshape_like(v, U) for v in values]))
+                        js = { "x": jscode(items[0]), "y": jscode(items[1]), "z": jscode(items[2]) if components == 3 else "0" }
+                    elif mode == "complex":
+                        parsed = sp.sympify(expr, locals=COMPLEX_LOCALS)
+                        if derivative == "d1":
+                            parsed = sp.diff(parsed, ZSYM)
+                        res = np.linspace(spec["reMin"], spec["reMax"], int(spec["reSegments"]) + 1, dtype=np.float64)
+                        ims = np.linspace(spec["imMin"], spec["imMax"], int(spec["imSegments"]) + 1, dtype=np.float64)
+                        RE, IM = np.meshgrid(res, ims, indexing="xy")
+                        W = np.asarray(sp.lambdify(ZSYM, parsed, modules="numpy")(RE + 1j * IM), dtype=np.complex128)
+                        W = np.broadcast_to(W, RE.shape)
+                        _require_finite(np.abs(W))
+                        re_grid = np.ascontiguousarray(W.real, dtype=np.float32).reshape(-1)
+                        im_grid = np.ascontiguousarray(W.imag, dtype=np.float32).reshape(-1)
                     else:
-                        scalars = pz
-                        scalar_label = "z"
-                    params = ts.reshape(-1, 1)
-                    js = { "x": jscode(items[0]), "y": jscode(items[1]), "z": jscode(items[2]) }
-                    param_labels = ["t"]
-                elif mode == "parametricSurface":
-                    items = _parse_parametric(expr)
-                    us = np.linspace(spec["uMin"], spec["uMax"], int(spec["uSegments"]) + 1, dtype=np.float64)
-                    vs = np.linspace(spec["vMin"], spec["vMax"], int(spec["vSegments"]) + 1, dtype=np.float64)
-                    U, V = np.meshgrid(us, vs, indexing="xy")
-                    fn = sp.lambdify((SYMS["u"], SYMS["v"]), items, modules="numpy")
-                    px, py, pz = fn(U, V)
-                    px = _reshape_like(px, U)
-                    py = _reshape_like(py, U)
-                    pz = _reshape_like(pz, U)
-                    positions = np.stack([px, py, pz], axis=-1).reshape(-1, 3)
-                    scalars = pz.reshape(-1)
-                    params = np.stack([U, V], axis=-1).reshape(-1, 2)
-                    js = { "x": jscode(items[0]), "y": jscode(items[1]), "z": jscode(items[2]) }
-                    scalar_label = "z"
-                    param_labels = ["u", "v"]
-                else:
-                    raise ValueError(f"unsupported mode: {mode}")
-                scalar_min, scalar_max = _finite_minmax(np.asarray(scalars, dtype=np.float64))
-                meta = {
-                    "scalarLabel": scalar_label,
-                    "paramLabels": param_labels,
-                    "sampleCount": int(positions.shape[0]),
-                    "paramWidth": int(params.shape[1]),
-                    "scalarMin": scalar_min,
-                    "scalarMax": scalar_max
-                }
+                        raise ValueError(f"unsupported mode: {mode}")
                 return {
-                    "positions": np.asarray(positions, dtype=np.float32).reshape(-1),
-                    "scalars": np.asarray(scalars, dtype=np.float32).reshape(-1),
-                    "params": np.asarray(params, dtype=np.float32).reshape(-1),
+                    "samples": samples,
+                    "re": re_grid,
+                    "im": im_grid,
                     "js_json": json.dumps(js),
-                    "meta_json": json.dumps(meta)
+                    "meta_json": json.dumps({ "components": components })
                 }
             `;
 
@@ -191,7 +201,8 @@
                     tMax: 12.566370614359172,
                     segments: 320,
                     radius: 0.05,
-                    radialSegments: 10
+                    radialSegments: 10,
+                    plane: "xy"
                 },
                 parametricSurface: {
                     key: "4",
@@ -201,15 +212,41 @@
                     vMin: 0,
                     vMax: 6.283185307179586,
                     uSegments: 88,
-                    vSegments: 44
+                    vSegments: 44,
+                    plane: "xy"
+                },
+                complex: {
+                    key: "5",
+                    label: "complex function",
+                    reMin: -2,
+                    reMax: 2,
+                    imMin: -2,
+                    imMax: 2,
+                    reSegments: 256,
+                    imSegments: 256,
+                    heightRange: [0, 4],
+                    plane: "xz"
                 }
             };
             const modePresets = {
                 cartesianCurve: "sin(x) * exp(-(x**2) / 18)",
                 cartesianSurface: "sin(sqrt(x**2 + z**2) * 1.8) / (1 + 0.18 * (x**2 + z**2))",
                 parametricCurve: "(cos(t), sin(t), 0.35 * sin(3*t))",
-                parametricSurface: "((1 + 0.3*cos(v)) * cos(u), 0.45 * sin(v), (1 + 0.3*cos(v)) * sin(u))"
+                parametricSurface: "((1 + 0.3*cos(v)) * cos(u), 0.45 * sin(v), (1 + 0.3*cos(v)) * sin(u))",
+                complex: "(z**2 - 1) / (z**2 + 1)"
             };
+
+            // Options cycled from the keyboard: curve profiles, colormaps, materials, and derivative views
+            const PROFILE_SIDES = [1, 3, 4, 6];
+            const REAL_COLORMAPS = ["viridis", "plasma", "inferno", "magma", "cividis", "turbo", "coolwarm", "twilight", "hsv", "grayscale"];
+            const COMPLEX_COLORMAPS = ["hsv", "twilight", "viridis", "plasma", "inferno", "magma", "cividis", "turbo", "coolwarm", "grayscale"];
+            const MATERIAL_KINDS = ["data", "unlit", "standard"];
+            const DERIVATIVES = {
+                cartesianCurve: ["none", "d1", "d2", "int"],
+                cartesianSurface: ["none", "dx", "dz", "grad"],
+                complex: ["none", "d1"]
+            };
+            const DERIVATIVE_LABELS = { none: "none", d1: "f′", d2: "f″", int: "∫f", dx: "∂f/∂x", dz: "∂f/∂z", grad: "|∇f|" };
 
             // WasmGPU setup
             const wgpu = await WasmGPU.create(canvas, { powerPreference: "high-performance", antialias: true, frustumCulling: true });
@@ -282,15 +319,19 @@
                 formatValue: (value) => fmt(value, 4)
             });
             overlaySystem.addLayer(grid).addLayer(worldTriad).addLayer(screenTriad).addLayer(legend);
-            const configureGraphOverlays = (mode, scalarLabel) => {
+            const configureGraphOverlays = (mode, legendTitle) => {
                 if (mode === "cartesianCurve") {
                     overlaySystem.setLayerEnabled("graph-grid", true);
                     grid.setPlane("xy").setAxisMetadata("u", { name: "x", labelSide: "both" }).setAxisMetadata("v", { name: "y", labelSide: "both" });
                 } else if (mode === "cartesianSurface") {
                     overlaySystem.setLayerEnabled("graph-grid", true);
-                    grid.setPlane("xz").setAxisMetadata("u", { name: "x", labelSide: "both" }).setAxisMetadata("v", { name: "z", labelSide: "both" });
+                    grid.setPlane(plotPlane(mode)).setAxisMetadata("u", { name: "x", labelSide: "both" }).setAxisMetadata("v", { name: "z", labelSide: "both" });
+                } else if (mode === "complex") {
+                    overlaySystem.setLayerEnabled("graph-grid", true);
+                    grid.setPlane(plotPlane(mode)).setAxisMetadata("u", { name: "re", labelSide: "both" }).setAxisMetadata("v", { name: "im", labelSide: "both" });
                 } else overlaySystem.setLayerEnabled("graph-grid", false);
-                legend.setTitle(`Mapped ${scalarLabel}`).setSubtitle(modeSpecs[mode].label);
+                overlaySystem.setLayerEnabled("graph-legend", legendTitle !== null);
+                if (legendTitle !== null) legend.setTitle(legendTitle).setSubtitle(modeSpecs[mode].label);
             };
 
             // Pyodide setup
@@ -298,127 +339,191 @@
             await pyodide.loadPackage(["numpy", "sympy"]);
             pyodide.runPython(py);
 
-            // State variables for the active camera, current view, active mesh and plot data, and the probe for inspecting sampled values
+            // State variables for the active camera, current view, active meshes, the probe, and the cycled options
             let activeMode = "cartesianSurface";
             let activeCamera = perspective;
             let currentView = null;
             let lastMessage = "pyodide + sympy ready";
-            let activeMesh = null;
-            let activePlot = null;
+            let activeMeshes = [];
             let activeProbe = null;
             let applyToken = 0;
+            let view2d = false;
+            let savedCamera = null;
+            let savedView = null;
+            let restoreView = null;
+            let profileIndex = 0;
+            const colormapByKey = { cartesianCurve: "plasma", cartesianSurface: "viridis", parametricCurve: "plasma", parametricSurface: "twilight", complex: "hsv", complexData: "viridis" };
+            const materialByMode = { cartesianCurve: "data", cartesianSurface: "data", parametricCurve: "data", parametricSurface: "data", complex: "unlit" };
+            const derivativeByMode = { cartesianCurve: "none", cartesianSurface: "none", complex: "none" };
+            const meshInfo = new Map();
+            const isCurveMode = (mode) => mode === "cartesianCurve" || mode === "parametricCurve";
+            const colormapKey = () => (activeMode === "complex" && materialByMode.complex === "data") ? "complexData" : activeMode;
+            const colormapList = () => colormapKey() === "complex" ? COMPLEX_COLORMAPS : REAL_COLORMAPS;
+            const derivativeLabel = (mode) => {
+                const d = derivativeByMode[mode] ?? "none";
+                return mode === "complex" && d === "d1" ? "f′(z)" : DERIVATIVE_LABELS[d];
+            };
+            const profileLabel = () => {
+                if (!isCurveMode(activeMode)) return "n/a";
+                if (view2d) return "ribbon (2d)";
+                const sides = PROFILE_SIDES[profileIndex];
+                return sides === 1 ? "round" : `${sides}-sided prism`;
+            };
+            const curveProfile = () => view2d ? { profile: "2d" } : { profile: "3d", profileSides: PROFILE_SIDES[profileIndex] };
+            const plotPlane = (mode) => view2d ? "xy" : modeSpecs[mode].plane;
 
             // Utility for compiling JavaScript functions for evaluating the mathematical expressions at runtime
-            const compileCallbacks = (mode, jsExprs) => {
+            const compileCallbacks = (mode, jsExprs, components) => {
                 if (mode === "cartesianCurve") return new Function("x", `"use strict"; return ${jsExprs.f};`);
                 if (mode === "cartesianSurface") return new Function("x", "z", `"use strict"; return ${jsExprs.f};`);
-                if (mode === "parametricCurve") return new Function("t", `"use strict"; return [${jsExprs.x}, ${jsExprs.y}, ${jsExprs.z}];`);
-                return new Function("u", "v", `"use strict"; return [${jsExprs.x}, ${jsExprs.y}, ${jsExprs.z}];`);
+                const tuple = components === 2 ? `[${jsExprs.x}, ${jsExprs.y}]` : `[${jsExprs.x}, ${jsExprs.y}, ${jsExprs.z}]`;
+                if (mode === "parametricCurve") return new Function("t", `"use strict"; return ${tuple};`);
+                return new Function("u", "v", `"use strict"; return ${tuple};`);
             };
 
-            // Utility for building an array of scalar values for each vertex of a mesh
-            const buildCurveData = (positions, scalars, radialSegments) => {
-                const ring = radialSegments + 1;
-                const packed = [];
-                for (let i = 0; i < scalars.length; i++) {
-                    const o = i * 3;
-                    const scalar = scalars[i];
-                    if (!Number.isFinite(positions[o + 0]) || !Number.isFinite(positions[o + 1]) || !Number.isFinite(positions[o + 2]) || !Number.isFinite(scalar)) continue;
-                    for (let j = 0; j < ring; j++) packed.push(scalar);
-                }
-                return new Float32Array(packed);
+            // Utilities for sampled callbacks: a linear interpolant over curve samples and a nearest lookup into a complex grid
+            const sampledCurve = (samples, xMin, xMax) => {
+                const segments = samples.length - 1;
+                const dx = (xMax - xMin) / segments;
+                return (x) => {
+                    const s = clamp((x - xMin) / dx, 0, segments);
+                    const i0 = Math.min(Math.floor(s), segments - 1);
+                    const f = s - i0;
+                    return samples[i0] + (samples[i0 + 1] - samples[i0]) * f;
+                };
+            };
+            const sampledComplex = (re, im, spec) => {
+                const columns = spec.reSegments + 1;
+                const dRe = (spec.reMax - spec.reMin) / spec.reSegments;
+                const dIm = (spec.imMax - spec.imMin) / spec.imSegments;
+                return (x, y) => {
+                    const i = clamp(Math.round((x - spec.reMin) / dRe), 0, spec.reSegments);
+                    const j = clamp(Math.round((y - spec.imMin) / dIm), 0, spec.imSegments);
+                    const k = i + columns * j;
+                    return [re[k], im[k]];
+                };
             };
 
             // Utility for reading the compiled plot data from Python, copying it into JavaScript arrays, and returning it in a structured format
-            const readPlotFromPython = (mode, expr) => {
-                const result = pyodide.globals.get("compile_plot")(mode, expr, JSON.stringify(modeSpecs[mode]));
+            const readPlotFromPython = (mode, expr, derivative) => {
+                const result = pyodide.globals.get("compile_plot")(mode, expr, JSON.stringify(modeSpecs[mode]), derivative);
                 const plot = {
                     meta: copyJsonFromPy(result.get("meta_json")),
                     jsExprs: copyJsonFromPy(result.get("js_json")),
-                    positions: copyFloat32FromPy(wgpu, result.get("positions")),
-                    scalars: copyFloat32FromPy(wgpu, result.get("scalars")),
-                    params: copyFloat32FromPy(wgpu, result.get("params"))
+                    samples: copyFloat32FromPy(wgpu, result.get("samples")),
+                    re: copyFloat32FromPy(wgpu, result.get("re")),
+                    im: copyFloat32FromPy(wgpu, result.get("im"))
                 };
                 result.destroy();
                 return plot;
             };
 
-            // Utility for creating a WasmGPU mesh for a given graphing mode and mathematical expression
-            const createMeshForMode = async (mode, expr) => {
-                const plot = readPlotFromPython(mode, expr);
+            // Utility for creating a WasmGPU geometry for a given graphing mode, with per-vertex values and colors from the factory
+            const createGeometry = (mode, f, color, components) => {
                 const spec = modeSpecs[mode];
-                const callback = compileCallbacks(mode, plot.jsExprs);
-                let geometry;
-                let materialData;
                 if (mode === "cartesianCurve") {
-                    geometry = wgpu.geometry.cartesianCurve({
-                        f: callback,
+                    return wgpu.geometry.cartesianCurve({
+                        f,
                         xMin: spec.xMin,
                         xMax: spec.xMax,
                         segments: spec.segments,
                         radius: spec.radius,
                         radialSegments: spec.radialSegments,
                         plane: spec.plane,
-                        breakOnInvalid: true
+                        breakOnInvalid: true,
+                        ...curveProfile(),
+                        color: { by: "y", ...color }
                     });
-                    materialData = buildCurveData(plot.positions, plot.scalars, spec.radialSegments);
-                } else if (mode === "cartesianSurface") {
-                    geometry = wgpu.geometry.cartesianSurface({
-                        f: callback,
+                }
+                if (mode === "cartesianSurface") {
+                    return wgpu.geometry.cartesianSurface({
+                        f,
                         xMin: spec.xMin,
                         xMax: spec.xMax,
                         zMin: spec.zMin,
                         zMax: spec.zMax,
                         xSegments: spec.xSegments,
                         zSegments: spec.zSegments,
-                        plane: spec.plane,
-                        skipInvalid: true
+                        plane: plotPlane(mode),
+                        skipInvalid: true,
+                        heightScale: view2d ? 0 : 1,
+                        color: { by: "y", ...color }
                     });
-                    materialData = plot.scalars;
-                } else if (mode === "parametricCurve") {
-                    geometry = wgpu.geometry.parametricCurve({
-                        f: callback,
+                }
+                if (mode === "parametricCurve") {
+                    return wgpu.geometry.parametricCurve({
+                        f,
                         tMin: spec.tMin,
                         tMax: spec.tMax,
                         segments: spec.segments,
                         radius: spec.radius,
                         radialSegments: spec.radialSegments,
-                        breakOnInvalid: true
+                        plane: spec.plane,
+                        breakOnInvalid: true,
+                        ...curveProfile(),
+                        color: { by: components === 2 ? "y" : "z", ...color }
                     });
-                    materialData = buildCurveData(plot.positions, plot.scalars, spec.radialSegments);
-                } else {
-                    geometry = wgpu.geometry.parametricSurface({
-                        f: callback,
+                }
+                if (mode === "parametricSurface") {
+                    return wgpu.geometry.parametricSurface({
+                        f,
                         uMin: spec.uMin,
                         uMax: spec.uMax,
                         vMin: spec.vMin,
                         vMax: spec.vMax,
                         uSegments: spec.uSegments,
                         vSegments: spec.vSegments,
-                        skipInvalid: true
+                        plane: spec.plane,
+                        skipInvalid: true,
+                        color: { by: "z", ...color }
                     });
-                    materialData = plot.scalars;
                 }
+                return wgpu.geometry.complexSurface({
+                    f,
+                    reMin: spec.reMin,
+                    reMax: spec.reMax,
+                    imMin: spec.imMin,
+                    imMax: spec.imMax,
+                    reSegments: spec.reSegments,
+                    imSegments: spec.imSegments,
+                    plane: plotPlane(mode),
+                    height: view2d ? "none" : "modulus",
+                    heightRange: spec.heightRange,
+                    coloring: "domain",
+                    colormap: color.colormap
+                });
+            };
+
+            // Utility for creating the active material: a data material over geometry.values, or unlit and standard materials over the factory's vertex colors
+            const createMaterial = async (mode, geometry, kind, colormap, valueLabel) => {
+                const surface = mode.includes("Surface") || mode === "complex";
+                const cullMode = surface ? "none" : "back";
+                if (kind === "unlit" || kind === "standard") {
+                    const material = kind === "unlit"
+                        ? wgpu.material.unlit({ color: [1, 1, 1], cullMode })
+                        : wgpu.material.standard({ color: [1, 1, 1], roughness: 0.55, metallic: 0.0, cullMode });
+                    if (mode === "complex") return { material, legendSource: { scaleTransform: { mode: "linear", domainMin: 0, domainMax: 2 * Math.PI }, colormap }, legendTitle: "arg f (rad)" };
+                    const [min, max] = finiteRange(geometry.values);
+                    return { material, legendSource: { scaleTransform: { mode: "linear", domainMin: min, domainMax: max }, colormap }, legendTitle: `Mapped ${valueLabel}` };
+                }
+                const complex = mode === "complex";
                 const material = wgpu.material.data({
-                    data: materialData,
+                    data: geometry.values,
                     keepCPUData: false,
                     scaleTransform: {
-                        componentCount: 1,
+                        componentCount: complex ? 2 : 1,
                         componentIndex: 0,
-                        valueMode: "component",
-                        stride: 1,
+                        valueMode: complex ? "magnitude" : "component",
+                        stride: complex ? 2 : 1,
                         offset: 0,
                         mode: "linear",
                         clampMode: "range",
-                        domainMin: plot.meta.scalarMin,
-                        domainMax: plot.meta.scalarMax,
-                        clampMin: plot.meta.scalarMin,
-                        clampMax: plot.meta.scalarMax,
-                        gamma: mode.includes("Surface") ? 1.0 : 0.9
+                        gamma: isCurveMode(mode) ? 0.9 : 1.0
                     },
-                    colormap: mode.includes("Surface") ? "viridis" : "plasma",
-                    shading: mode.includes("Surface") ? 0.8 : 0.35,
-                    opacity: 1.0
+                    colormap,
+                    shading: isCurveMode(mode) ? 0.35 : 0.8,
+                    opacity: 1.0,
+                    cullMode
                 });
                 material.upload(device, queue);
                 const stats = await wgpu.scale.requestStats({
@@ -432,29 +537,58 @@
                     clampMin: stats.percentileMin ?? stats.min,
                     clampMax: stats.percentileMax ?? stats.max
                 });
-                const mesh = wgpu.createMesh(geometry, material);
-                mesh.name = `graph-${mode}`;
-                return { mesh, plot };
+                return { material, legendSource: material, legendTitle: complex ? "Mapped |f|" : `Mapped ${valueLabel}` };
             };
 
-            // Utility for finding the nearest sampled point in the active plot to a given world position
-            const nearestSample = (worldPosition) => {
-                if (!activePlot) return null;
-                const positions = activePlot.positions;
-                const scalars = activePlot.scalars;
-                const params = activePlot.params;
-                const paramWidth = activePlot.meta.paramWidth;
+            // Utility for creating the WasmGPU meshes for a given graphing mode and mathematical expression
+            const createMeshesForMode = async (mode, expr) => {
+                const derivative = derivativeByMode[mode] ?? "none";
+                const plot = readPlotFromPython(mode, expr, derivative);
+                const spec = modeSpecs[mode];
+                const meshes = [];
+                const info = new Map();
+                if (mode === "cartesianCurve" && derivative !== "none") {
+                    const derived = derivative === "int" ? sampledCurve(plot.samples, spec.xMin, spec.xMax) : new Function("x", `"use strict"; return ${plot.jsExprs.g};`);
+                    const curves = [
+                        { f: compileCallbacks(mode, plot.jsExprs), swatch: 1, valueLabel: "f(x)" },
+                        { f: derived, swatch: 2, valueLabel: `${DERIVATIVE_LABELS[derivative]}(x)` }
+                    ];
+                    for (const curve of curves) {
+                        const swatch = wgpu.color.palette.swatch("okabeito", curve.swatch);
+                        const geometry = createGeometry(mode, curve.f, { colormap: wgpu.color.map.fromPalette([swatch], { colorSpace: "linear" }) });
+                        const mesh = wgpu.createMesh(geometry, wgpu.material.unlit({ color: [1, 1, 1] }));
+                        mesh.name = `graph-${mode}-${curve.swatch}`;
+                        meshes.push(mesh);
+                        info.set(mesh, { valueLabel: curve.valueLabel, complex: false });
+                    }
+                    return { meshes, info, legendSource: null, legendTitle: null };
+                }
+                const kind = materialByMode[mode];
+                const colormap = colormapByKey[(mode === "complex" && kind === "data") ? "complexData" : mode];
+                const f = mode === "complex" ? sampledComplex(plot.re, plot.im, spec) : compileCallbacks(mode, plot.jsExprs, plot.meta.components);
+                const geometry = createGeometry(mode, f, { colormap }, plot.meta.components);
+                if (geometry.vertexCount === 0) throw new Error("expression produced no drawable geometry");
+                const valueLabel = derivative !== "none" ? derivativeLabel(mode) : mode === "parametricCurve" ? (plot.meta.components === 2 ? "y" : "z") : mode === "parametricSurface" ? "z" : "y";
+                const { material, legendSource, legendTitle } = await createMaterial(mode, geometry, kind, colormap, valueLabel);
+                const mesh = wgpu.createMesh(geometry, material);
+                mesh.name = `graph-${mode}`;
+                meshes.push(mesh);
+                info.set(mesh, { valueLabel, complex: mode === "complex" });
+                return { meshes, info, legendSource, legendTitle };
+            };
+
+            // Utility for finding the nearest vertex of a picked mesh to a given world position, using the geometry's own positions and values
+            const nearestVertex = (mesh, worldPosition) => {
+                const geometry = mesh?.geometry;
+                if (!geometry || !geometry.positions || geometry.positions.length === 0) return null;
+                const positions = geometry.positions;
                 let bestIndex = -1;
                 let bestDistSq = Infinity;
-                for (let i = 0; i < scalars.length; i++) {
+                for (let i = 0; i < geometry.vertexCount; i++) {
                     const p = i * 3;
-                    const x = positions[p + 0];
-                    const y = positions[p + 1];
-                    const z = positions[p + 2];
-                    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) continue;
-                    const dx = x - worldPosition[0];
-                    const dy = y - worldPosition[1];
-                    const dz = z - worldPosition[2];
+                    const dx = positions[p + 0] - worldPosition[0];
+                    const dy = positions[p + 1] - worldPosition[1];
+                    const dz = positions[p + 2] - worldPosition[2];
                     const d2 = (dx * dx) + (dy * dy) + (dz * dz);
                     if (d2 < bestDistSq) {
                         bestDistSq = d2;
@@ -463,12 +597,11 @@
                 }
                 if (bestIndex < 0) return null;
                 const o3 = bestIndex * 3;
-                const oP = bestIndex * paramWidth;
+                const c = geometry.valueComponents;
                 return {
-                    sampleIndex: bestIndex,
+                    vertexIndex: bestIndex,
                     position: [positions[o3 + 0], positions[o3 + 1], positions[o3 + 2]],
-                    scalar: scalars[bestIndex],
-                    params: Array.from(params.slice(oP, oP + paramWidth))
+                    values: geometry.values ? Array.from(geometry.values.slice(bestIndex * c, bestIndex * c + c)) : []
                 };
             };
 
@@ -492,19 +625,29 @@
                 updateHud();
             };
             const updateHud = () => {
+                const values = activeMeshes[0]?.geometry.values;
+                const range = values ? finiteRange(values, activeMeshes[0].geometry.valueComponents) : null;
                 statusHud.textContent = [
                     `mode: ${modeSpecs[activeMode].label}`,
+                    `view: ${view2d ? "2d" : "3d"}`,
+                    `profile: ${profileLabel()}`,
+                    `material: ${activeMode === "cartesianCurve" && derivativeByMode.cartesianCurve !== "none" ? "unlit (palette)" : materialByMode[activeMode]}`,
+                    `colormap: ${colormapByKey[colormapKey()]}`,
+                    `derivative: ${DERIVATIVES[activeMode] ? derivativeLabel(activeMode) : "n/a"}`,
                     `controls: ${controls.mode}`,
                     `camera: ${activeCamera.type}`,
-                    `view: ${currentView ?? "fit"}`,
-                    `samples: ${activePlot?.meta.sampleCount ?? 0}`,
-                    activePlot ? `${activePlot.meta.scalarLabel} range: ${fmt(activePlot.meta.scalarMin)}..${fmt(activePlot.meta.scalarMax)}` : "range: n/a",
+                    `orientation: ${currentView ?? "fit"}`,
+                    `vertices: ${activeMeshes.reduce((sum, mesh) => sum + mesh.geometry.vertexCount, 0)}`,
+                    range ? `${activeMode === "complex" ? "re" : "value"} range: ${fmt(range[0])}..${fmt(range[1])}` : "range: n/a",
                     "",
                     "1 cartesian curve",
                     "2 cartesian surface",
                     "3 parametric curve",
                     "4 parametric surface",
+                    "5 complex function",
                     "Enter replot current textbox",
+                    "F 2d/3d | P profile | M colormap",
+                    "L material | G derivative",
                     "O orbit | T trackball",
                     "W/S/A/D/Q/E views",
                     "X fit | R reset | C camera",
@@ -515,23 +658,25 @@
                 if (!activeProbe) {
                     probeHud.textContent = [
                         "Probe",
-                        "click a plotted object to inspect the nearest sampled value"
+                        "click a plotted object to inspect the nearest vertex"
                     ].join("\n");
                     return;
                 }
-                const sample = nearestSample(activeProbe.worldPosition);
-                if (!sample) {
-                    probeHud.textContent = "Probe\nno finite sampled point was found";
+                const sample = nearestVertex(activeProbe.object, activeProbe.worldPosition);
+                const info = meshInfo.get(activeProbe.object);
+                if (!sample || !info) {
+                    probeHud.textContent = "Probe\nno vertex was found";
                     return;
                 }
-                const paramLines = activePlot.meta.paramLabels.map((label, index) => `${label}: ${fmt(sample.params[index])}`);
+                const valueLines = info.complex
+                    ? [`re: ${fmt(sample.values[0])}`, `im: ${fmt(sample.values[1])}`, `|f|: ${fmt(Math.hypot(sample.values[0], sample.values[1]))}`, `arg f (rad): ${fmt(((Math.atan2(sample.values[1], sample.values[0]) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI))}`]
+                    : [`${info.valueLabel}: ${fmt(sample.values[0])}`];
                 probeHud.textContent = [
                     "Probe",
                     `world: ${fmtVec3(activeProbe.worldPosition)}`,
-                    `nearest sample: ${fmtVec3(sample.position)}`,
-                    `sample index: ${sample.sampleIndex}`,
-                    `${activePlot.meta.scalarLabel}: ${fmt(sample.scalar)}`,
-                    ...paramLines
+                    `nearest vertex: ${fmtVec3(sample.position)}`,
+                    `vertex index: ${sample.vertexIndex}`,
+                    ...valueLines
                 ].join("\n");
             };
 
@@ -541,23 +686,25 @@
                 lastMessage = `compiling ${modeSpecs[mode].label}...`;
                 updateHud();
                 try {
-                    const built = await createMeshForMode(mode, expr);
+                    const built = await createMeshesForMode(mode, expr);
                     if (token !== applyToken) {
-                        built.mesh.destroy();
+                        for (const mesh of built.meshes) mesh.destroy();
                         return;
                     }
-                    if (activeMesh) {
-                        scene.remove(activeMesh);
-                        activeMesh.destroy();
+                    for (const mesh of activeMeshes) {
+                        scene.remove(mesh);
+                        mesh.destroy();
                     }
-                    activeMesh = built.mesh;
-                    activePlot = built.plot;
+                    meshInfo.clear();
+                    activeMeshes = built.meshes;
+                    for (const [mesh, info] of built.info) meshInfo.set(mesh, info);
                     activeProbe = null;
-                    configureGraphOverlays(mode, activePlot.meta.scalarLabel);
-                    scene.add(activeMesh);
-                    legend.setSource(activeMesh.material);
+                    configureGraphOverlays(mode, built.legendTitle);
+                    for (const mesh of activeMeshes) scene.add(mesh);
+                    if (built.legendSource) legend.setSource(built.legendSource);
                     overlaySystem.setView(activeCamera, scene);
-                    fitCurrent(null, false);
+                    fitCurrent(view2d ? "front" : restoreView, false);
+                    restoreView = null;
                     controls.saveState();
                     lastMessage = `rendering ${modeSpecs[mode].label}`;
                 } catch (error) {
@@ -565,10 +712,30 @@
                 }
                 updateHud();
             };
+            const replot = () => replacePlot(activeMode, exprInput.value.trim());
+
+            // Utilities for toggling the 2D view, which lays every plot in the xy plane and uses an orthographic camera looking straight at it
+            const enter2d = () => {
+                view2d = true;
+                savedCamera = activeCamera;
+                savedView = currentView;
+                currentView = "front";
+                switchCamera(orthographic);
+            };
+            const leave2d = () => {
+                view2d = false;
+                currentView = savedView;
+                restoreView = savedView;
+                switchCamera(savedCamera ?? perspective);
+                savedCamera = null;
+                savedView = null;
+            };
 
             // Utility for setting the active graphing mode
             const setMode = async (mode, usePreset = true) => {
                 activeMode = mode;
+                if (DERIVATIVES[mode]) derivativeByMode[mode] = "none";
+                if (view2d && mode === "parametricSurface") leave2d();
                 if (usePreset || !exprInput.value.trim()) exprInput.value = modePresets[mode];
                 await replacePlot(mode, exprInput.value.trim());
             };
@@ -581,11 +748,11 @@
                 await replacePlot(activeMode, exprInput.value.trim());
             });
             canvas.addEventListener("click", async (event) => {
-                if (!activeMesh) return;
+                if (activeMeshes.length === 0) return;
                 const rect = canvas.getBoundingClientRect();
                 const hit = await wgpu.pick(scene, activeCamera, event.clientX - rect.left, event.clientY - rect.top, { includeAttributes: true });
-                activeProbe = hit && hit.kind === "mesh" ? hit : null;
-                lastMessage = activeProbe ? "probe updated from nearest sampled point" : "probe cleared";
+                activeProbe = hit && hit.kind === "mesh" && meshInfo.has(hit.object) ? hit : null;
+                lastMessage = activeProbe ? "probe updated from nearest vertex" : "probe cleared";
                 updateHud();
             });
             window.addEventListener("keydown", async (event) => {
@@ -596,6 +763,48 @@
                 else if (key === "2") await setMode("cartesianSurface", true);
                 else if (key === "3") await setMode("parametricCurve", true);
                 else if (key === "4") await setMode("parametricSurface", true);
+                else if (key === "5") await setMode("complex", true);
+                else if (key === "f") {
+                    if (activeMode === "parametricSurface") lastMessage = "2d view is not available for parametric surfaces";
+                    else {
+                        if (view2d) leave2d();
+                        else enter2d();
+                        updateHud();
+                        await replot();
+                    }
+                }
+                else if (key === "p") {
+                    if (!isCurveMode(activeMode)) lastMessage = "profiles apply to curves only";
+                    else {
+                        profileIndex = (profileIndex + 1) % PROFILE_SIDES.length;
+                        if (view2d) lastMessage = "profile applies to the 3d view";
+                        else await replot();
+                    }
+                }
+                else if (key === "m") {
+                    if (activeMode === "cartesianCurve" && derivativeByMode.cartesianCurve !== "none") lastMessage = "derivative views use palette colors";
+                    else {
+                        const list = colormapList();
+                        const k = colormapKey();
+                        colormapByKey[k] = list[(list.indexOf(colormapByKey[k]) + 1) % list.length];
+                        await replot();
+                    }
+                }
+                else if (key === "l") {
+                    if (activeMode === "cartesianCurve" && derivativeByMode.cartesianCurve !== "none") lastMessage = "derivative views use palette colors";
+                    else {
+                        materialByMode[activeMode] = MATERIAL_KINDS[(MATERIAL_KINDS.indexOf(materialByMode[activeMode]) + 1) % MATERIAL_KINDS.length];
+                        await replot();
+                    }
+                }
+                else if (key === "g") {
+                    const list = DERIVATIVES[activeMode];
+                    if (!list) lastMessage = "derivatives are not available for parametric plots";
+                    else {
+                        derivativeByMode[activeMode] = list[(list.indexOf(derivativeByMode[activeMode]) + 1) % list.length];
+                        await replot();
+                    }
+                }
                 else if (key === "o") controls.setMode("orbit");
                 else if (key === "t") controls.setMode("trackball");
                 else if (key === "w") { currentView = "front"; fitCurrent(currentView, true); controls.saveState(); }

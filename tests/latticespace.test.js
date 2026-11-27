@@ -108,6 +108,8 @@ const readU32 = (buffer, count, localCompute = compute) => readBufferAsU32(local
     assert.strictEqual(space.getScaleSourceDescriptor().stride, 2);
     const uniforms = space.getUniformData();
     assert.strictEqual(uniforms.length * 4, space.getUniformBufferSize());
+    assert.strictEqual(space.getUniformBufferSize(), 240, "LatticeSpace uniform buffer size should be 240 bytes (15 vec4<f32>)");
+    assert.strictEqual(uniforms[33], 0, "filters reserved slot must stay zero");
     assert.deepStrictEqual(Array.from(uniforms.slice(0, 4)), [2, 2, 1, 2]);
     numberApproxEqual(uniforms[28], 0.75);
     space.dropCPUData();

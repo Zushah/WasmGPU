@@ -48,6 +48,15 @@ const exerciseExample = async (page, example) => {
         await expect(page.locator(".info")).toContainText("tracers: off");
         await page.keyboard.press("m");
         await expect(page.locator(".info")).toContainText("measure mode: distance");
+    } else if (file === "graphing.html") {
+        await page.keyboard.press("5");
+        await expect(page.locator(".status")).toContainText("rendering complex", { timeout: example.interactionTimeout });
+        await expect(page.locator(".status")).not.toContainText("plot failed");
+        await page.keyboard.press("f");
+        await expect(page.locator(".status")).toContainText("view: 2d");
+        await expect(page.locator(".status")).not.toContainText("compiling", { timeout: example.interactionTimeout });
+        await expect(page.locator(".status")).toContainText("rendering complex");
+        await expect(page.locator(".status")).not.toContainText("plot failed");
     } else if (file === "overlay.html") {
         await page.locator("#ann-marker").dispatchEvent("click");
         await expect(page.locator("#ann-status")).toContainText("mode: marker");

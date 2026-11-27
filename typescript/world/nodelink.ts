@@ -4,10 +4,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { assert, clamp01, createBuffer, linearIndexToNdIndex, normalizeColorStops, normalizePositiveIntShape, resolveGPUBuffer } from "../utils";
+import { assert, clamp01, createBuffer, linearIndexToNdIndex, normalizePositiveIntShape, resolveGPUBuffer } from "../utils";
 import { Transform } from "../core/transform";
 import { BlendMode, CullMode, type Color4 } from "../graphics/material";
-import { Colormap, type BuiltinColormapName } from "../graphics/colormap";
+import { Colormap, type BuiltinColormapName } from "../graphics/color";
 import { cloneScaleTransform, normalizeScaleTransform, packScaleTransform } from "../scaling";
 import type { ScaleSourceDescriptor, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor } from "../scaling";
 import { WasmMemoryView, assertWasmF32View, assertWasmU32View, assertWasmRecordCount, assertWasmCapacity, resolveWasmRecordCount, validateWasmRecordRange, growWasmCapacity } from "../wasm";
@@ -16,7 +16,7 @@ import { Bounds3, boundsFromBox, boundsFromSphere, emptyBounds, transformBounds 
 export type NodeLinkNodeGeometryMode = "points" | "spheres" | "ellipsoids" | "cubes";
 export type NodeLinkEdgeGeometryMode = "lines" | "cylinders";
 export type NodeLinkColorMode = "rgba" | "scalar" | "solid";
-export type NodeLinkColormap = BuiltinColormapName | "custom";
+export type NodeLinkColormap = BuiltinColormapName;
 export type NodeLinkComponentKind = "node" | "edge";
 export type NodeLinkVisualChangeKind = "scale" | "colormap" | "visual";
 
@@ -87,8 +87,6 @@ export type NodeLinkDescriptor = {
     edgeScaleTransform?: ScaleTransformDescriptor;
     nodeColormap?: NodeLinkColormap | Colormap;
     edgeColormap?: NodeLinkColormap | Colormap;
-    nodeColormapStops?: Color4[];
-    edgeColormapStops?: Color4[];
     nodeSolidColor?: Color4;
     edgeSolidColor?: Color4;
     nodeSize?: number;
@@ -120,7 +118,7 @@ type NodeLinkWasmNodeChannel = "nodePositions" | "nodeScalars" | "nodeColors" | 
 type NodeLinkWasmEdgeChannel = "edges" | "edgeScalars" | "edgeColors";
 type NodeLinkWasmChannel = NodeLinkWasmNodeChannel | NodeLinkWasmEdgeChannel;
 
-const UNIFORM_FLOAT_COUNT = 128;
+const UNIFORM_FLOAT_COUNT = 64;
 const UNIFORM_BYTE_SIZE = UNIFORM_FLOAT_COUNT * 4;
 const NODELINK_VEC4_FLOATS = 4;
 const NODELINK_U32_EDGE_COMPONENTS = 2;
@@ -252,8 +250,6 @@ export class NodeLink {
     private _edgeScaleRevision: number = 0;
     private _nodeColormap: NodeLinkColormap | Colormap = "viridis";
     private _edgeColormap: NodeLinkColormap | Colormap = "viridis";
-    private _nodeColormapStops: Color4[] = [[0.267, 0.00487, 0.32942, 1], [0.99325, 0.90616, 0.14394, 1]];
-    private _edgeColormapStops: Color4[] = [[0.267, 0.00487, 0.32942, 1], [0.99325, 0.90616, 0.14394, 1]];
     private _nodeSolidColor: Color4 = [1, 1, 1, 1];
     private _edgeSolidColor: Color4 = [0.8, 0.8, 0.8, 1];
     private _nodeSize: number = 1;
@@ -290,8 +286,6 @@ export class NodeLink {
         if (desc.edgeColorMode !== undefined) this._edgeColorMode = desc.edgeColorMode;
         if (desc.nodeColormap !== undefined) this._nodeColormap = desc.nodeColormap;
         if (desc.edgeColormap !== undefined) this._edgeColormap = desc.edgeColormap;
-        if (desc.nodeColormapStops !== undefined) this._nodeColormapStops = normalizeColorStops(desc.nodeColormapStops);
-        if (desc.edgeColormapStops !== undefined) this._edgeColormapStops = normalizeColorStops(desc.edgeColormapStops);
         if (desc.nodeSolidColor !== undefined) this._nodeSolidColor = [desc.nodeSolidColor[0], desc.nodeSolidColor[1], desc.nodeSolidColor[2], desc.nodeSolidColor[3]];
         if (desc.edgeSolidColor !== undefined) this._edgeSolidColor = [desc.edgeSolidColor[0], desc.edgeSolidColor[1], desc.edgeSolidColor[2], desc.edgeSolidColor[3]];
         if (desc.nodeSize !== undefined) this._nodeSize = Math.max(0, desc.nodeSize);
@@ -1039,26 +1033,6 @@ export class NodeLink {
         this._edgeColormap = v;
         this._uniformDirty = true;
         this.bindGroupKey = null;
-        this.emitVisualChange("colormap");
-    }
-
-    get nodeColormapStops(): Color4[] {
-        return this._nodeColormapStops;
-    }
-
-    set nodeColormapStops(v: Color4[]) {
-        this._nodeColormapStops = normalizeColorStops(v);
-        this._uniformDirty = true;
-        this.emitVisualChange("colormap");
-    }
-
-    get edgeColormapStops(): Color4[] {
-        return this._edgeColormapStops;
-    }
-
-    set edgeColormapStops(v: Color4[]) {
-        this._edgeColormapStops = normalizeColorStops(v);
-        this._uniformDirty = true;
         this.emitVisualChange("colormap");
     }
 
@@ -1924,30 +1898,18 @@ export class NodeLink {
         out[3] = this._lit ? 1 : 0;
         packScaleTransform(this._nodeScaleTransform, out, 4);
         out[24] = colorModeId(this._nodeColorMode);
-        out[25] = (typeof this._nodeColormap === "string" && this._nodeColormap === "custom") ? Math.min(8, Math.max(2, this._nodeColormapStops.length)) : 0;
+        out[25] = 0;
         out[26] = nodeGeometryModeId(this._nodeGeometryMode);
         out[27] = this.nodeRadiiBuffer ? 1 : 0;
         packScaleTransform(this._edgeScaleTransform, out, 28);
         out[48] = colorModeId(this._edgeColorMode);
-        out[49] = (typeof this._edgeColormap === "string" && this._edgeColormap === "custom") ? Math.min(8, Math.max(2, this._edgeColormapStops.length)) : 0;
+        out[49] = 0;
         out[50] = edgeGeometryModeId(this._edgeGeometryMode);
         out[52] = this._nodeSolidColor[0]; out[53] = this._nodeSolidColor[1]; out[54] = this._nodeSolidColor[2]; out[55] = this._nodeSolidColor[3];
         out[56] = this._edgeSolidColor[0]; out[57] = this._edgeSolidColor[1]; out[58] = this._edgeSolidColor[2]; out[59] = this._edgeSolidColor[3];
         out[60] = this._minPointSize;
         out[61] = this._maxPointSize;
         out[62] = this._pointSizeAttenuation;
-        const nodeStops = this._nodeColormapStops;
-        for (let i = 0; i < 8; i++) {
-            const s = nodeStops[Math.min(i, Math.max(1, nodeStops.length - 1))];
-            const o = 64 + i * 4;
-            out[o + 0] = s[0]; out[o + 1] = s[1]; out[o + 2] = s[2]; out[o + 3] = s[3];
-        }
-        const edgeStops = this._edgeColormapStops;
-        for (let i = 0; i < 8; i++) {
-            const s = edgeStops[Math.min(i, Math.max(1, edgeStops.length - 1))];
-            const o = 96 + i * 4;
-            out[o + 0] = s[0]; out[o + 1] = s[1]; out[o + 2] = s[2]; out[o + 3] = s[3];
-        }
         return out;
     }
 
@@ -1972,13 +1934,13 @@ export class NodeLink {
     getNodeColormapForBinding(): Colormap {
         const c = this._nodeColormap;
         if (c instanceof Colormap) return c;
-        return c === "custom" ? Colormap.builtin("grayscale") : Colormap.builtin(c);
+        return Colormap.builtin(c);
     }
 
     getEdgeColormapForBinding(): Colormap {
         const c = this._edgeColormap;
         if (c instanceof Colormap) return c;
-        return c === "custom" ? Colormap.builtin("grayscale") : Colormap.builtin(c);
+        return Colormap.builtin(c);
     }
 
     private destroyOwnedBuffer(buffer: GPUBuffer | null, owned: boolean): void {

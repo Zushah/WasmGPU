@@ -1,8 +1,8 @@
 # WasmGPU Architecture
 
-Latest commit: Thursday, November 26, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
+Latest commit: Friday, November 27, 2026, [**`current`**](https://github.com/Zushah/WasmGPU/commit/HEAD).
 
-Parent commit: Wednesday, November 25, 2026, [**`3e10a61`**](https://github.com/Zushah/WasmGPU/commit/3e10a61).
+Parent commit: Thursday, November 26, 2026, [**`6ca4812`**](https://github.com/Zushah/WasmGPU/commit/6ca4812).
 
 Latest release: Monday, August 31, 2026, [**`v0.10.0`**](https://github.com/Zushah/WasmGPU/releases/tag/v0.10.0).
 
@@ -15,7 +15,7 @@ Latest release: Monday, August 31, 2026, [**`v0.10.0`**](https://github.com/Zush
   - [1.4. WebGPU engine](#14-webgpu-engine)
   - [1.5. Scene and object model](#15-scene-and-object-model)
   - [1.6. Transforms](#16-transforms)
-  - [1.7. Geometry, materials, textures, and colormaps](#17-geometry-materials-textures-and-colormaps)
+  - [1.7. Geometry, materials, textures, and colors](#17-geometry-materials-textures-and-colors)
   - [1.8. Pointcloud, glyphfield, nodelink, splatfield, and latticespace data](#18-pointcloud-glyphfield-nodelink-splatfield-and-latticespace-data)
   - [1.9. Lights, cameras, and controls](#19-lights-cameras-and-controls)
   - [1.10. Rendering pipeline](#110-rendering-pipeline)
@@ -97,7 +97,7 @@ flowchart LR
         TSTORE["Transform store in SoA memory"]
         MESH["Mesh with geometry, material, texture, morphing, & skinning"]
         PGN["Pointcloud, glyphfield, nodelink, splatfield, & latticespace"]
-        CMAP["Colormapping"]
+        CMAP["Color maps, palettes, & conversions"]
         SKIN["Skinning instance data"]
         ASTORE["Annotation store"]
         ALOAD["Loader for glTF 2.0 asset data"]
@@ -246,7 +246,7 @@ This diagram describes the current source tree, including [unreleased work](http
 
 The public API is exported from `./typescript/index.ts`. It exports the `WasmGPU` class, the renderer, compute helpers including the type of the per-instance `compute.ndarray` namespace, scaling helpers, world objects, graphics objects, glTF helpers, rendering effects, overlay and annotation types, Python interop, WebAssembly interop, WebGPU interop, and math helpers.
 
-Applications normally enter through `WasmGPU.create(canvas, descriptor)` in `./typescript/core/engine.ts`. The runtime initializes WebAssembly, creates a WebGPU renderer, constructs the compute subsystem, and exposes factories for scenes, cameras, controls, geometry, materials, textures, meshes, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, lights, effects, glTF loading, animation, overlays, and annotations.
+Applications normally enter through `WasmGPU.create(canvas, descriptor)` in `./typescript/core/engine.ts`. The runtime initializes WebAssembly, creates a WebGPU renderer, constructs the compute subsystem, and exposes factories for scenes, cameras, controls, geometry, materials, colors, textures, meshes, pointclouds, glyphfields, nodelinks, splatfields, latticespaces, lights, effects, glTF loading, animation, overlays, and annotations.
 
 The public API reads and writes data owned by the objects it creates. For example, a `Mesh` owns a transform, references geometry and material objects, and may own skin or morph runtime state. `Geometry`, `PointCloud`, `GlyphField`, `NodeLink`, `SplatField`, and `LatticeSpace` keep CPU-side records for external WebAssembly memory upload paths only when configured to retain CPU data. `PointCloud`, `GlyphField`, `NodeLink`, `SplatField`, and `LatticeSpace` follow an explicit external-buffer ownership model of owning GPU buffers they create internally and destroying caller-supplied external buffers only when constructed with `ownBuffers: true`. `PointCloud` supports setter-level `ownBuffer: true` on point and color buffer replacement, `GlyphField` supports setter-level `ownBuffers: true` on instance-buffer replacement, `NodeLink` supports setter-level `ownBuffer: true` on per-channel node and edge buffer replacement, and `LatticeSpace` supports setter-level `ownBuffer: true` on data and mask buffer replacement. `DataMaterial` handles externally supplied data buffers differently because it does not destroy a `dataBuffer` supplied by the caller.
 
@@ -313,11 +313,11 @@ The transform store mutates:
 
 Capacity growth allocates and copies replacement structure-of-arrays blocks before releasing the superseded WebAssembly allocations. Capacity-independent temporary vector and quaternion blocks remain attached to the active global store rather than being reallocated during growth. The renderer calls `Transform.updateAll()` before gathering draw lists. Cameras, scene objects, controls, animation clips, and glTF import all write transform data. Contributors changing transform behavior should preserve parent cycle checks, dirty marking, disposal checks, allocation replacement ordering, and the index mapping between TypeScript objects and WebAssembly slots.
 
-### 1.7. Geometry, materials, textures, and colormaps
+### 1.7. Geometry, materials, textures, and colors
 
 Graphics data is implemented under `./typescript/graphics/`.
 
-`./typescript/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, RGBA vertex colors, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It can also borrow external `WasmMemoryView` sources for mesh vertex attributes, colors, and indices, explicitly refresh them, and upload active ranges into geometry-owned GPU buffers without owning or freeing the external WebAssembly memory. It calls Rust bounds and normal-generation functions through `./typescript/wasm/index.ts`; these synchronous operations use scoped WebAssembly heap scratch that is released after results are copied into JavaScript-owned arrays. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry.
+`./typescript/graphics/geometry.ts` owns vertex arrays, index arrays, optional tangents, RGBA vertex colors, skinning attributes, morph target arrays, GPU vertex and index buffers, bounds, and reference counts. It can also borrow external `WasmMemoryView` sources for mesh vertex attributes, colors, and indices, explicitly refresh them, and upload active ranges into geometry-owned GPU buffers without owning or freeing the external WebAssembly memory. It calls Rust bounds and normal-generation functions through `./typescript/wasm/index.ts`; these synchronous operations use scoped WebAssembly heap scratch that is released after results are copied into JavaScript-owned arrays. Geometry factories create primitives such as boxes, spheres, cylinders, curves, surfaces, torus geometry, and prism geometry. The plotting factories for cartesian and parametric curves and surfaces and for complex functions sample caller callbacks into indexed meshes: curves take round, flat-ribbon, or flat-faced prism profiles with flat end caps on open pieces, cartesian surfaces can be flattened through a height scale, and complex surfaces combine an optional height with domain coloring. When asked to color, these factories bake per-vertex RGBA colors for unlit and standard materials and keep a CPU-only `values` array aligned with vertex order for data materials. This baking is the color-map-to-mesh relationship in the diagram.
 
 `./typescript/graphics/material.ts` implements `Material`, `UnlitMaterial`, `StandardMaterial`, `DataMaterial`, and `CustomMaterial`. Built-in materials own their managed uniform buffers, bind groups, texture references, WebGPU state, and dirty state, while standard materials expose glTF-style physically based rendering properties. Standard material layouts and imported WGSL shaders are specialized and cached by material features and mesh variant, with resource-limit validation before layout creation.
 
@@ -325,11 +325,11 @@ Graphics data is implemented under `./typescript/graphics/`.
 
 `./typescript/graphics/texture.ts` wraps image bytes, URLs, `ImageBitmap` sources, sampler descriptors, GPU textures, and mipmap generation. Texture upload is asynchronous, supports configurable browser decoding and safe cancellation, and exposes terminal upload errors while renderer paths use fallback resources. Shared URL and glTF sources reuse encoded image data, while differing linear and sRGB uses receive separate GPU textures and mip chains.
 
-`./typescript/graphics/colormap.ts` stores built-in or caller-provided color stops, optional CPU lookup tables, and optional caller-provided GPU texture views and samplers. It can create cached GPU lookup resources for a device, and CPU sampling works only for colormaps that have CPU lookup data.
+`./typescript/graphics/color.ts` owns `Colormap` and the color utilities. Built-in color maps, built-in palettes, and caller-built maps from stops or palettes are stored as sRGB-encoded RGBA8 lookup tables and uploaded as `rgba8unorm-srgb` 1D textures, so every shader that samples them receives linear values. CPU sampling follows the same texel addressing and filtering as the GPU sampler and returns linear colors by default. Built-in maps and palettes are created lazily as singletons, and per-device GPU resources are cached. The module also parses CSS colors, converts between sRGB, linear, and OKLab, resolves palette swatches, and computes domain colors for complex values. Colormaps wrapping caller-provided GPU texture views and samplers are GPU-only, and those views must sample to linear values.
 
 ### 1.8. Pointcloud, glyphfield, nodelink, splatfield, and latticespace data
 
-Pointclouds, glyphfields, nodelinks, splatfields, and latticespaces are separate scene object types. They share several patterns: a transform, visibility flags, GPU buffer references, uniform buffers, bind groups, bounds, and renderer-owned draw-list state. Pointclouds, glyphfields, nodelinks, and latticespaces carry scale transform state plus optional CPU records for picking, while splatfields carry packed Gaussian attributes, optional CPU records for picking, and private renderer-side GPU sort state for transparent rendering.
+Pointclouds, glyphfields, nodelinks, splatfields, and latticespaces are separate scene object types. They share several patterns: a transform, visibility flags, GPU buffer references, uniform buffers, bind groups, bounds, and renderer-owned draw-list state. Pointclouds, glyphfields, nodelinks, and latticespaces carry scale transform state, colormap state that is either a built-in colormap name or a `Colormap` object, and optional CPU records for picking, while splatfields carry packed Gaussian attributes, optional CPU records for picking, and private renderer-side GPU sort state for transparent rendering.
 
 `./typescript/world/pointcloud.ts` handles point records. It reads packed point attributes from typed arrays, borrowed external `WasmMemoryView<Float32Array>` sources, or an external GPU buffer, writes point and uniform GPU buffers, and computes bounds through Rust bounds helpers when CPU data is available or external WebAssembly data is explicitly refreshed with bounds recomputation. Pointcloud WebAssembly sources are borrowed, refresh is explicit, and upload copies the active packed f32 vec4 ranges into pointcloud-owned GPU buffers without freeing or owning the external WebAssembly memory. It owns GPU buffers it creates from CPU data or external WebAssembly sources and destroys caller-supplied external point and color buffers only when `ownBuffers: true` or setter-level `ownBuffer: true` is used. Its `destroy()` method always destroys the stored uniform buffer.
 
@@ -404,7 +404,7 @@ The runtime exposes `pick()`, `pickRect()`, and `pickLasso()` from `./typescript
 
 The overlay framework lives under `./typescript/overlay/`. `./typescript/overlay/system.ts` creates a DOM overlay root next to the canvas, registers discoverable layers by ID, and gives each registration a system-owned wrapper so all present and future layer output can be hidden without detaching it or rewriting child display styles. The update context still exposes the real system root. Removal remains the resource-lifecycle boundary. The system observes resize and scroll changes, listens to controls when attached, and collects dirty reasons for camera, viewport, layout, scale, colormap, or interaction changes.
 
-Built-in axis triad, grid, and legend layers retain their optional system relationship and self-invalidate after typed runtime mutations. They are DOM/canvas overlays with fixed or pooled node bounds.
+Built-in axis triad, grid, and legend layers retain their optional system relationship and self-invalidate after typed runtime mutations. They are DOM/canvas overlays with fixed or pooled node bounds. Legend layers resolve the same `Colormap` the bound object or material renders with and sample it on the CPU in sRGB, so legend gradients match rendered colormap colors.
 
 Annotations live under `./typescript/overlay/annotation/`. The annotation toolkit owns an `AnnotationStore`; `Scene` does not own annotation records. The store owns marker, distance, and angle records. The toolkit reads picking results, creates marker objects in the scene through the marker renderer, and creates labels through the label layer.
 
@@ -632,6 +632,7 @@ These invariants are visible in the current code:
 - Picking attributes for pointclouds, glyphfields, nodelinks, splatfields, and latticespaces depend on retained CPU-side records.
 - Pointcloud, glyphfield, nodelink, splatfield, and latticespace external GPU buffers are borrowed by default and are destroyed only when their ownership options request it.
 - Shader uniform layouts, TypeScript packing code, and WGSL structs must match.
+- Colormap lookup tables are sRGB-encoded RGBA8 uploaded as `rgba8unorm-srgb`, so every colormap-sampling shader receives linear values, and caller-supplied external colormap views must also sample to linear values; see `./typescript/graphics/color.ts` and `./tests/color.test.js`.
 
 ## 2. Codebase
 
@@ -716,17 +717,17 @@ Common interactions:
 
 Architectural role:
 
-- Implements mesh data, materials, textures, color maps, animation, skinning, and morph target support.
+- Implements mesh data, materials, textures, color maps, color palettes, color conversions, animation, skinning, and morph target support.
 - Supplies GPU resources and uniform data to the renderer.
 - Reads WebAssembly helpers for bounds, normals, animation, and math.
 
 Important files:
 
-- `./typescript/graphics/geometry.ts`: vertex data, index data, RGBA color channels, WASM-memory upload, tangent generation, normal generation, bounds, morph target arrays, GPU buffers, reference counting, and primitive geometry factories.
+- `./typescript/graphics/geometry.ts`: vertex data, index data, RGBA color channels, CPU-only per-vertex values, WASM-memory upload, tangent generation, normal generation, bounds, morph target arrays, GPU buffers, reference counting, primitive geometry factories, and plotting factories for curves with profiles and end caps, height-scaled surfaces, parametric surfaces, and complex surfaces.
 - `./typescript/graphics/material.ts`: material base class, unlit material, standard material, data material, custom material, layout planning, uniform packing, texture references, bind groups, and reference counting.
 - `./wgsl/graphics/standard*.wgsl`: canonical standard material mesh, instanced, skinned-4, skinned-8, and transmission shader bodies, while `material.ts` performs narrow declaration/sample-path specialization from these sources.
 - `./typescript/graphics/texture.ts`: texture descriptors, image loading, strict decode policy, GPU texture upload, mipmap generation, sampler setup, fallback behavior, and destruction.
-- `./typescript/graphics/colormap.ts`: built-in and caller-provided color stops, CPU lookup tables, optional external GPU texture views, GPU resource caching, and CPU sampling helpers.
+- `./typescript/graphics/color.ts`: built-in color maps and color palettes, caller-built maps from stops and palettes, sRGB-encoded lookup tables, optional external GPU texture views, GPU resource caching, GPU-matching CPU sampling, and color utilities for CSS parsing, sRGB and OKLab conversion, palette swatches, and domain coloring.
 - `./typescript/graphics/animation.ts`: animation clips, players, skins, skin instances, transform sampling, morph weight sampling, and bone buffer updates.
 
 Common interactions:
@@ -734,7 +735,7 @@ Common interactions:
 - `./typescript/core/renderer.ts` reads graphics data and binds buffers, textures, samplers, and material uniforms.
 - `./typescript/gltf/import.ts` creates geometry, materials, textures, animations, skins, and morph data.
 - `./wgsl/graphics/` must match material and geometry layouts.
-- Tests under `./tests/material.test.js`, `./tests/geometry.test.js`, `./tests/mesh.test.js`, `./tests/renderer.test.js`, and `./tests/gltf.test.js` cover important behavior.
+- Tests under `./tests/material.test.js`, `./tests/color.test.js`, `./tests/geometry.test.js`, `./tests/mesh.test.js`, `./tests/renderer.test.js`, and `./tests/gltf.test.js` cover important behavior.
 
 ### 2.5. Compute, ndarray, and scaling
 

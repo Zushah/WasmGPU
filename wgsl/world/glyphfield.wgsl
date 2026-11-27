@@ -12,7 +12,6 @@ struct GlyphFieldUniforms {
     scale_flags: vec4<f32>,
     visual: vec4<f32>,
     solid_color: vec4<f32>,
-    colors: array<vec4<f32>, 8>,
 }
 
 struct VertexInput {
@@ -186,27 +185,8 @@ fn rotate_by_quat(v: vec3<f32>, q: vec4<f32>) -> vec3<f32> {
     return v + s * t + cross(u, t);
 }
 
-fn sample_custom_stops(t: f32) -> vec4<f32> {
-    let count = u32(glyph.visual.y + 0.5);
-    if (count <= 1u) {
-        return glyph.colors[0u];
-    }
-    let n = min(count, 8u);
-    let x = scale_clamp01(t) * f32(n - 1u);
-    let i = u32(floor(x));
-    let f = x - f32(i);
-    if (i >= n - 1u) {
-        return glyph.colors[n - 1u];
-    }
-    return glyph.colors[i] + f * (glyph.colors[i + 1u] - glyph.colors[i]);
-}
-
 fn colormap(t_in: f32) -> vec4<f32> {
     let t = scale_clamp01(t_in);
-    let stop_count = u32(glyph.visual.y + 0.5);
-    if (stop_count >= 2u) {
-        return sample_custom_stops(t);
-    }
     return textureSample(colormap_tex, colormap_sampler, t);
 }
 

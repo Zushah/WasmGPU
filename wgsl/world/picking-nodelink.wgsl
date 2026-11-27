@@ -39,8 +39,6 @@ struct NodeLinkUniforms {
     node_solid: vec4<f32>,
     edge_solid: vec4<f32>,
     point_params: vec4<f32>,
-    node_stops: array<vec4<f32>, 8>,
-    edge_stops: array<vec4<f32>, 8>,
 }
 
 struct PickOutput {

@@ -31,7 +31,6 @@ struct LatticeUniforms {
     scale_clamp: vec4<f32>,
     scale_params: vec4<f32>,
     scale_flags: vec4<f32>,
-    colors: array<vec4<f32>, 8>,
 }
 
 struct VertexOutput {

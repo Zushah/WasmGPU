@@ -47,8 +47,6 @@ struct NodeLinkUniforms {
     node_solid: vec4<f32>,
     edge_solid: vec4<f32>,
     point_params: vec4<f32>,
-    node_stops: array<vec4<f32>, 8>,
-    edge_stops: array<vec4<f32>, 8>,
 }
 
 struct NodeVertexOutput {
@@ -199,30 +197,11 @@ fn srgb_from_linear(linear: vec3<f32>) -> vec3<f32> {
     return select(lo, hi, use_hi);
 }
 
-fn sample_custom_stops(t_in: f32, stops: array<vec4<f32>, 8>, stop_count_in: u32) -> vec4<f32> {
-    let n = min(8u, max(2u, stop_count_in));
-    let x = scale_clamp01(t_in) * f32(n - 1u);
-    let i = u32(floor(x));
-    let f = x - f32(i);
-    if (i >= n - 1u) {
-        return stops[n - 1u];
-    }
-    return stops[i] + f * (stops[i + 1u] - stops[i]);
-}
-
 fn sample_node_colormap(t: f32) -> vec4<f32> {
-    let stop_count = u32(nl.node_visual.y + 0.5);
-    if (stop_count >= 2u) {
-        return sample_custom_stops(t, nl.node_stops, stop_count);
-    }
     return textureSampleLevel(node_colormap_tex, node_colormap_sampler, scale_clamp01(t), 0.0);
 }
 
 fn sample_edge_colormap(t: f32) -> vec4<f32> {
-    let stop_count = u32(nl.edge_visual.y + 0.5);
-    if (stop_count >= 2u) {
-        return sample_custom_stops(t, nl.edge_stops, stop_count);
-    }
     return textureSampleLevel(edge_colormap_tex, edge_colormap_sampler, scale_clamp01(t), 0.0);
 }
 

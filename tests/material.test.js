@@ -538,8 +538,7 @@ let cleanupPipeline = null;
     assert.equal(builtin.width, 256);
     assert.equal(builtin.filter, "linear");
     assert.equal(builtin.canSampleCPU, true);
-    assert.equal(builtin.getRGBA8LinearLUT().length, builtin.width * 4);
-    assert.equal(builtin.toUniformStops(99).length, 8);
+    assert.equal(builtin.getLUT().length, builtin.width * 4);
 
     const stops = Colormap.fromStops([{ t: 0, color: [0, 0, 0, 1] }, { t: 0.5, color: [0.5, 0.5, 0, 1] }, { t: 1, color: [1, 1, 1, 1] }], { resolution: 3, filter: "linear", colorSpace: "linear" });
     arraysApproxEqual(stops.sampleCPU(0.5), [128 / 255, 128 / 255, 0, 1], 1 / 255);
@@ -551,7 +550,6 @@ let cleanupPipeline = null;
 
     const palette = Colormap.fromPalette([[0, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]], { filter: "nearest", colorSpace: "linear" });
     arraysApproxEqual(palette.sampleCPU(0.9), [0, 0, 1, 1]);
-    assert.equal(palette.toUniformStops(3, "linear").length, 3);
 
     const externalTexture = device.createTexture({ size: { width: 2, height: 1, depthOrArrayLayers: 1 }, dimension: "1d", format: "rgba8unorm", usage: GPUTextureUsage.TEXTURE_BINDING });
     const externalView = externalTexture.createView({ dimension: "1d" });

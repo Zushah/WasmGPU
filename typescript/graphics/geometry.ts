@@ -5,6 +5,7 @@
  */
 
 import { assert, createBuffer } from "../utils";
+import { Colormap, domainColor, type BuiltinColormapName, type DomainColorMode } from "./color";
 import { boundsf, meshf, wasm, WasmMemoryView, assertWasmF32View, assertWasmU16View, assertWasmU32View, assertWasmRecordCount, assertWasmCapacity, resolveWasmRecordCount, validateWasmRecordRange, growWasmCapacity } from "../wasm";
 
 export type GeometryAttribute = {
@@ -49,6 +50,8 @@ export type GeometryDescriptor = {
     keepCPUData?: boolean;
     morphTargets?: ReadonlyArray<GeometryMorphTargetDescriptor>;
     authoredNormals?: boolean;
+    values?: Float32Array;
+    valueComponents?: number;
 };
 
 export type GeometryWasmVertexRefreshOptions = {
@@ -84,6 +87,14 @@ export type GeometryWasmSources = {
     indices?: WasmMemoryView<Uint32Array> | null;
 };
 
+export type CurveProfile = "2d" | "3d";
+
+export type GeometryColorDescriptor<K extends string = string, A extends number[] = number[]> = {
+    by?: K | ((...args: A) => number);
+    colormap?: BuiltinColormapName | Colormap;
+    range?: [number, number];
+};
+
 export type CartesianCurveDescriptor = {
     f: (x: number) => number;
     xMin?: number;
@@ -95,6 +106,12 @@ export type CartesianCurveDescriptor = {
     plane?: "xy" | "xz" | "yz";
     up?: [number, number, number];
     breakOnInvalid?: boolean;
+    profile?: CurveProfile;
+    profileSides?: number;
+    profileRotation?: number;
+    doubleSided?: boolean;
+    endcaps?: boolean;
+    color?: GeometryColorDescriptor<"x" | "y", [x: number, y: number]>;
 };
 
 export type CartesianSurfaceDescriptor = {
@@ -108,6 +125,8 @@ export type CartesianSurfaceDescriptor = {
     plane?: "xy" | "xz" | "yz";
     skipInvalid?: boolean;
     doubleSided?: boolean;
+    heightScale?: number;
+    color?: GeometryColorDescriptor<"x" | "z" | "y", [x: number, z: number, y: number]>;
 };
 
 export type ParametricCurveDescriptor = {
@@ -121,10 +140,16 @@ export type ParametricCurveDescriptor = {
     plane?: "xy" | "xz" | "yz";
     up?: [number, number, number];
     breakOnInvalid?: boolean;
+    profile?: CurveProfile;
+    profileSides?: number;
+    profileRotation?: number;
+    doubleSided?: boolean;
+    endcaps?: boolean;
+    color?: GeometryColorDescriptor<"t" | "x" | "y" | "z", [t: number, x: number, y: number, z: number]>;
 };
 
 export type ParametricSurfaceDescriptor = {
-    f: (u: number, v: number) => [number, number, number];
+    f: (u: number, v: number) => [number, number] | [number, number, number];
     uMin?: number;
     uMax?: number;
     vMin?: number;
@@ -134,6 +159,27 @@ export type ParametricSurfaceDescriptor = {
     plane?: "xy" | "xz" | "yz";
     skipInvalid?: boolean;
     doubleSided?: boolean;
+    color?: GeometryColorDescriptor<"u" | "v" | "x" | "y" | "z", [u: number, v: number, x: number, y: number, z: number]>;
+};
+
+export type ComplexSurfaceDescriptor = {
+    f: (re: number, im: number) => [number, number];
+    reMin?: number;
+    reMax?: number;
+    imMin?: number;
+    imMax?: number;
+    reSegments?: number;
+    imSegments?: number;
+    height?: "none" | "modulus" | "logModulus" | "real" | "imaginary";
+    heightScale?: number;
+    heightRange?: [number, number];
+    coloring?: DomainColorMode;
+    colormap?: BuiltinColormapName | Colormap;
+    range?: [number, number];
+    plane?: "xy" | "xz" | "yz";
+    skipInvalid?: boolean;
+    doubleSided?: boolean;
+    color?: never;
 };
 
 export type GeometryBoundsDescriptor = {
@@ -368,6 +414,98 @@ const createFallbackColors = (vertexCount: number): Float32Array => {
     return out;
 };
 
+type CurveOutput = {
+    positions: number[];
+    normals: number[];
+    uvs: number[];
+    indices: number[];
+    values: number[] | null;
+};
+
+type ResolvedGeometryColor = {
+    colormap: Colormap;
+    range: [number, number] | null;
+    value: (args: number[]) => number;
+};
+
+const resolveCurveSides = (label: string, profile: CurveProfile | undefined, profileSides: number | undefined): number => {
+    const resolved = profile ?? "3d";
+    assert(resolved === "2d" || resolved === "3d", `${label}: profile must be '2d' or '3d'.`);
+    if (profileSides !== undefined) assert(Number.isInteger(profileSides) && profileSides >= 1, `${label}: profileSides must be an integer >= 1.`);
+    if (resolved === "2d") {
+        assert(profileSides === undefined || profileSides === 2, `${label}: profile '2d' is a flat ribbon, so profileSides must be 2 or omitted.`);
+        return 2;
+    }
+    assert(profileSides !== 2, `${label}: profileSides 2 is a flat ribbon; use profile '2d' instead.`);
+    return profileSides ?? 1;
+};
+
+const resolveRange = (label: string, range: unknown): [number, number] | null => {
+    if (range === undefined) return null;
+    assert(Array.isArray(range) && range.length === 2 && Number.isFinite(range[0]) && Number.isFinite(range[1]), `${label} must be two finite numbers.`);
+    return [range[0], range[1]];
+};
+
+const resolveColormapSource = (label: string, source: BuiltinColormapName | Colormap): Colormap => {
+    const colormap = typeof source === "string" ? Colormap.builtin(source) : source;
+    assert(colormap instanceof Colormap, `${label} must be a built-in colormap name or a Colormap.`);
+    return colormap;
+};
+
+const resolveGeometryColor = (label: string, color: GeometryColorDescriptor<string, any> | undefined, keys: ReadonlyArray<string>, defaultKey: string): ResolvedGeometryColor | null => {
+    if (color === undefined) return null;
+    assert(color !== null && typeof color === "object", `${label}: color must be an object.`);
+    const by = color.by ?? defaultKey;
+    let value: (args: number[]) => number;
+    if (typeof by === "function") value = (args) => by(...args);
+    else {
+        const k = keys.indexOf(by);
+        assert(k >= 0, `${label}: color.by must be a function or one of ${keys.map((key) => `'${key}'`).join(", ")}.`);
+        value = (args) => args[k];
+    }
+    return {
+        colormap: resolveColormapSource(`${label}: color.colormap`, color.colormap ?? "viridis"),
+        range: resolveRange(`${label}: color.range`, color.range),
+        value
+    };
+};
+
+const finiteRange = (values: ArrayLike<number>, stride: number = 1, offset: number = 0): [number, number] => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (let i = offset; i < values.length; i += stride) {
+        const v = values[i];
+        if (!Number.isFinite(v)) continue;
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+    }
+    return lo <= hi ? [lo, hi] : [0, 0];
+};
+
+const bakeGeometryColors = (values: Float32Array, colormap: Colormap, range: [number, number] | null): Float32Array => {
+    const [lo, hi] = range ?? finiteRange(values);
+    const span = hi - lo;
+    const out = new Float32Array(values.length * 4);
+    for (let i = 0; i < values.length; i++) {
+        const v = values[i];
+        if (!Number.isFinite(v)) continue;
+        const c = colormap.sampleCPU(span === 0 ? 0.5 : (v - lo) / span, "linear");
+        out.set(c, i * 4);
+    }
+    return out;
+};
+
+const mapPlanePoint = (plane: "xy" | "xz" | "yz", x: number, y: number, z: number): [number, number, number] => {
+    switch (plane) {
+        case "xy":
+            return [x, y, z];
+        case "xz":
+            return [x, z, y];
+        case "yz":
+            return [z, x, y];
+    }
+};
+
 export type GeometryWasmAttributeSetOptions = GeometryWasmVertexRefreshOptions & GeometryWasmIndexRefreshOptions & {
     capacity?: number;
     vertexCapacity?: number;
@@ -391,6 +529,8 @@ export class Geometry {
     private _weights1Buffer: GPUBuffer | null = null;
     private _skinInfluenceBuffer: GPUBuffer | null = null;
     indices: Uint32Array | null = null;
+    values: Float32Array | null = null;
+    valueComponents: number = 0;
     readonly morphTargets: ReadonlyArray<GeometryMorphTargetDescriptor>;
     authoredNormals: boolean = false;
     vertexCount: number = 0;
@@ -517,6 +657,16 @@ export class Geometry {
             colors = createFallbackColors(this.vertexCount);
         } else if (descriptor.colors) this._cpuProvided.colors = true;
         this.colors = colors;
+        if (descriptor.values) {
+            const valueComponents = descriptor.valueComponents ?? 1;
+            const expectedValueLength = this.vertexCount * valueComponents;
+            if (!Number.isInteger(valueComponents) || valueComponents < 1 || valueComponents > 4) console.warn(`[Geometry] valueComponents must be an integer from 1 to 4 (got ${valueComponents}). Values dropped.`);
+            else if (descriptor.values.length !== expectedValueLength) console.warn(`[Geometry] values length mismatch (got ${descriptor.values.length}, expected ${expectedValueLength}). Values dropped.`);
+            else {
+                this.values = descriptor.values;
+                this.valueComponents = valueComponents;
+            }
+        }
         let uvs1 = descriptor.uvs1 ?? (descriptor.wasmUvs1 ? new Float32Array(0) : new Float32Array(expectedUvLength));
         if (descriptor.uvs1 && uvs1.length !== expectedUvLength) {
             console.warn(`[Geometry] uvs1 length mismatch (got ${uvs1.length}, expected ${expectedUvLength}). TEXCOORD_1 disabled.`);
@@ -848,6 +998,8 @@ export class Geometry {
         this.validateNonWasmVertexChannels(count);
         if (count !== this.vertexCount) {
             this.vertexCount = count;
+            this.values = null;
+            this.valueComponents = 0;
             this.resizeFallbackVertexChannels(count);
             if (!this.indices && !this._wasm.indices.source) this.indexCount = count;
             for (const channel of GEOMETRY_WASM_VERTEX_CHANNELS) if (this.wasmState(channel).source) this.wasmState(channel).dirty = true;
@@ -1926,98 +2078,247 @@ export class Geometry {
     }
 
     static cartesianCurve(descriptor: CartesianCurveDescriptor): Geometry {
+        const label = "Geometry.cartesianCurve";
         const f = descriptor.f;
         const xMin = descriptor.xMin ?? -1;
         const xMax = descriptor.xMax ?? 1;
         const segments = Math.max(2, Math.floor(descriptor.segments ?? 256));
-        const radius = descriptor.radius ?? 0.01;
-        const radialSegments = Math.max(3, Math.floor(descriptor.radialSegments ?? 8));
         const closed = descriptor.closed ?? false;
         const plane: "xy" | "xz" | "yz" = descriptor.plane ?? "xy";
         const upLocal: [number, number, number] = descriptor.up ?? [0, 0, 1];
-        let up: [number, number, number];
-        switch (plane) {
-            case "xy":
-                up = upLocal;
-                break;
-            case "xz":
-                up = [upLocal[0], upLocal[2], upLocal[1]];
-                break;
-            case "yz":
-                up = [upLocal[2], upLocal[0], upLocal[1]];
-                break;
-        }
-        const breakOnInvalid = descriptor.breakOnInvalid ?? true;
-        const positions: number[] = [];
-        const normals: number[] = [];
-        const uvs: number[] = [];
-        const indices: number[] = [];
-        let vertexOffset = 0;
+        const up = mapPlanePoint(plane, upLocal[0], upLocal[1], upLocal[2]);
+        const color = resolveGeometryColor(label, descriptor.color, ["x", "y"], "y");
         const sampleCount = closed ? segments : segments + 1;
-        let segmentPoints: number[] = [];
-        let anyInvalid = false;
-        const flushSegment = (close: boolean) => {
-            const pointCount = segmentPoints.length / 3;
-            if (pointCount >= 2) {
-                vertexOffset = Geometry._appendTubeSegment(new Float32Array(segmentPoints), radius, radialSegments, close, up, positions, normals, uvs, indices, vertexOffset);
-            }
-            segmentPoints = [];
-        };
+        const points: Array<[number, number, number] | null> = new Array(sampleCount);
+        const values = color ? new Float64Array(sampleCount) : null;
         const range = xMax - xMin;
         for (let i = 0; i < sampleCount; i++) {
             const u = segments > 0 ? (i / segments) : 0;
             const x = xMin + range * u;
             const y = f(x);
             if (!Number.isFinite(y)) {
-                anyInvalid = true;
-                if (breakOnInvalid) flushSegment(false);
+                points[i] = null;
                 continue;
             }
-            let wx: number;
-            let wy: number;
-            let wz: number;
             switch (plane) {
                 case "xy":
-                    wx = x;
-                    wy = y;
-                    wz = 0;
+                    points[i] = [x, y, 0];
                     break;
                 case "xz":
-                    wx = x;
-                    wy = 0;
-                    wz = y;
+                    points[i] = [x, 0, y];
                     break;
                 case "yz":
-                    wx = 0;
-                    wy = x;
-                    wz = y;
+                    points[i] = [0, x, y];
                     break;
             }
-            segmentPoints.push(wx, wy, wz);
+            if (values) values[i] = color!.value([x, y]);
         }
-        flushSegment(closed && !anyInvalid);
-        if (positions.length === 0) return new Geometry({ positions: new Float32Array(0) });
-        return new Geometry({
-            positions: new Float32Array(positions),
-            normals: new Float32Array(normals),
-            uvs: new Float32Array(uvs),
-            indices: new Uint32Array(indices)
-        });
+        return Geometry._curveGeometry(label, descriptor, points, values, up, color);
     }
 
     static cartesianSurface(descriptor: CartesianSurfaceDescriptor): Geometry {
+        const label = "Geometry.cartesianSurface";
         const f = descriptor.f;
-        const xMin = descriptor.xMin ?? -1;
-        const xMax = descriptor.xMax ?? 1;
-        const zMin = descriptor.zMin ?? -1;
-        const zMax = descriptor.zMax ?? 1;
         const xSegments = Math.max(1, Math.floor(descriptor.xSegments ?? 128));
         const zSegments = Math.max(1, Math.floor(descriptor.zSegments ?? 128));
+        const heightScale = descriptor.heightScale ?? 1;
+        assert(typeof heightScale === "number" && Number.isFinite(heightScale), `${label}: heightScale must be a finite number.`);
+        const color = resolveGeometryColor(label, descriptor.color, ["x", "z", "y"], "y");
+        const values = color ? new Float32Array((xSegments + 1) * (zSegments + 1)) : null;
+        const base = Geometry._heightGrid(
+            descriptor.xMin ?? -1, descriptor.xMax ?? 1, descriptor.zMin ?? -1, descriptor.zMax ?? 1,
+            xSegments, zSegments, descriptor.plane ?? "xz", descriptor.skipInvalid ?? true,
+            (x, z, i) => {
+                const y = f(x, z);
+                if (values) values[i] = color!.value([x, z, y]);
+                return Number.isFinite(y) ? y * heightScale : NaN;
+            }
+        );
+        if (!base) return new Geometry({ positions: new Float32Array(0) });
+        if (values) {
+            base.values = values;
+            base.valueComponents = 1;
+            base.colors = bakeGeometryColors(values, color!.colormap, color!.range);
+        }
+        return new Geometry((descriptor.doubleSided ?? false) ? Geometry._makeDoubleSided(base) : base);
+    }
+
+    static parametricCurve(descriptor: ParametricCurveDescriptor): Geometry {
+        const label = "Geometry.parametricCurve";
+        const f = descriptor.f;
+        const tMin = descriptor.tMin ?? 0;
+        const tMax = descriptor.tMax ?? 1;
+        const segments = Math.max(2, Math.floor(descriptor.segments ?? 256));
+        const closed = descriptor.closed ?? false;
+        const plane: "xy" | "xz" | "yz" = descriptor.plane ?? "xy";
+        const color = resolveGeometryColor(label, descriptor.color, ["t", "x", "y", "z"], "t");
+        const sampleCount = closed ? segments : segments + 1;
+        const points: Array<[number, number, number] | null> = new Array(sampleCount);
+        const values = color ? new Float64Array(sampleCount) : null;
+        let upLocal: [number, number, number] | null = descriptor.up ?? null;
+        const range = tMax - tMin;
+        for (let i = 0; i < sampleCount; i++) {
+            const s = segments > 0 ? (i / segments) : 0;
+            const t = tMin + range * s;
+            const p = f(t);
+            const x = p[0];
+            const y = p[1];
+            const z = p.length === 2 ? 0 : p[2];
+            if (!upLocal) upLocal = p.length === 2 ? [0, 0, 1] : [0, 1, 0];
+            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+                points[i] = null;
+                continue;
+            }
+            points[i] = mapPlanePoint(plane, x, y, z);
+            if (values) values[i] = color!.value([t, x, y, z]);
+        }
+        const up = upLocal ? mapPlanePoint(plane, upLocal[0], upLocal[1], upLocal[2]) : [0, 1, 0] as [number, number, number];
+        return Geometry._curveGeometry(label, descriptor, points, values, up, color);
+    }
+
+    static parametricSurface(descriptor: ParametricSurfaceDescriptor): Geometry {
+        const label = "Geometry.parametricSurface";
+        const f = descriptor.f;
+        const uMin = descriptor.uMin ?? 0;
+        const uMax = descriptor.uMax ?? 1;
+        const vMin = descriptor.vMin ?? 0;
+        const vMax = descriptor.vMax ?? 1;
+        const uSegments = Math.max(1, Math.floor(descriptor.uSegments ?? 128));
+        const vSegments = Math.max(1, Math.floor(descriptor.vSegments ?? 128));
         const skipInvalid = descriptor.skipInvalid ?? true;
         const doubleSided = descriptor.doubleSided ?? false;
-        const plane: "xy" | "xz" | "yz" = descriptor.plane ?? "xz";
-        const gridX = xSegments;
-        const gridZ = zSegments;
+        const plane: "xy" | "xz" | "yz" = descriptor.plane ?? "xy";
+        const color = resolveGeometryColor(label, descriptor.color, ["u", "v", "x", "y", "z"], "z");
+        const gridU = uSegments;
+        const gridV = vSegments;
+        const gridU1 = gridU + 1;
+        const gridV1 = gridV + 1;
+        const positions = new Float32Array(gridU1 * gridV1 * 3);
+        const normals = new Float32Array(gridU1 * gridV1 * 3);
+        const uvs = new Float32Array(gridU1 * gridV1 * 2);
+        const valid = new Uint8Array(gridU1 * gridV1);
+        const values = color ? new Float32Array(gridU1 * gridV1) : null;
+        const uRange = uMax - uMin;
+        const vRange = vMax - vMin;
+        for (let iv = 0; iv < gridV1; iv++) {
+            const vv = gridV > 0 ? (iv / gridV) : 0;
+            const v = vMin + vRange * vv;
+            for (let iu = 0; iu < gridU1; iu++) {
+                const uu = gridU > 0 ? (iu / gridU) : 0;
+                const u = uMin + uRange * uu;
+                const i = iu + gridU1 * iv;
+                const p = f(u, v);
+                const x = p[0];
+                const y = p[1];
+                const z = p.length === 2 ? 0 : p[2];
+                const ok = Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z);
+                valid[i] = ok ? 1 : 0;
+                const o = i * 3;
+                if (ok) positions.set(mapPlanePoint(plane, x, y, z), o);
+                else {
+                    positions[o + 0] = 0;
+                    positions[o + 1] = 0;
+                    positions[o + 2] = 0;
+                }
+                if (values) values[i] = color!.value([u, v, x, y, z]);
+                const t = i * 2;
+                uvs[t + 0] = uu;
+                uvs[t + 1] = 1 - vv;
+            }
+        }
+        Geometry._computeGridNormals(positions, valid, gridU, gridV, normals);
+        const indices: number[] = [];
+        for (let iv = 0; iv < gridV; iv++) {
+            for (let iu = 0; iu < gridU; iu++) {
+                const a = iu + gridU1 * iv;
+                const b = iu + gridU1 * (iv + 1);
+                const c = (iu + 1) + gridU1 * (iv + 1);
+                const d = (iu + 1) + gridU1 * iv;
+                if (skipInvalid && (!valid[a] || !valid[b] || !valid[c] || !valid[d])) continue;
+                indices.push(a, b, d, b, c, d);
+            }
+        }
+        if (indices.length === 0) return new Geometry({ positions: new Float32Array(0) });
+        const base: GeometryDescriptor = {
+            positions,
+            normals,
+            uvs,
+            indices: new Uint32Array(indices)
+        };
+        if (values) {
+            base.values = values;
+            base.valueComponents = 1;
+            base.colors = bakeGeometryColors(values, color!.colormap, color!.range);
+        }
+        return new Geometry(doubleSided ? Geometry._makeDoubleSided(base) : base);
+    }
+
+    static complexSurface(descriptor: ComplexSurfaceDescriptor): Geometry {
+        const label = "Geometry.complexSurface";
+        assert((descriptor as { color?: unknown }).color === undefined, `${label}: color is not supported; use coloring, colormap, and range instead.`);
+        const f = descriptor.f;
+        const reSegments = Math.max(1, Math.floor(descriptor.reSegments ?? 256));
+        const imSegments = Math.max(1, Math.floor(descriptor.imSegments ?? 256));
+        const height = descriptor.height ?? "none";
+        assert(height === "none" || height === "modulus" || height === "logModulus" || height === "real" || height === "imaginary", `${label}: height must be 'none', 'modulus', 'logModulus', 'real', or 'imaginary'.`);
+        const heightScale = descriptor.heightScale ?? 1;
+        assert(typeof heightScale === "number" && Number.isFinite(heightScale), `${label}: heightScale must be a finite number.`);
+        const heightRange = resolveRange(`${label}: heightRange`, descriptor.heightRange);
+        if (heightRange) assert(heightRange[0] <= heightRange[1], `${label}: heightRange must satisfy min <= max.`);
+        const coloring = descriptor.coloring ?? "domain";
+        assert(coloring === "domain" || coloring === "argument" || coloring === "modulus", `${label}: coloring must be 'domain', 'argument', or 'modulus'.`);
+        const colormap = resolveColormapSource(`${label}: colormap`, descriptor.colormap ?? (coloring === "modulus" ? "viridis" : "hsv"));
+        const range = resolveRange(`${label}: range`, descriptor.range);
+        const reMin = descriptor.reMin ?? -2;
+        const reMax = descriptor.reMax ?? 2;
+        const imMin = descriptor.imMin ?? -2;
+        const imMax = descriptor.imMax ?? 2;
+        const gridRe1 = reSegments + 1;
+        const vertexCount = gridRe1 * (imSegments + 1);
+        const values = new Float32Array(vertexCount * 2);
+        const moduli = new Float64Array(vertexCount);
+        const base = Geometry._heightGrid(
+            reMin, reMax, imMin, imMax, reSegments, imSegments, descriptor.plane ?? "xz", descriptor.skipInvalid ?? true,
+            (re, im, i) => {
+                const w = f(re, im);
+                const wr = w[0];
+                const wi = w[1];
+                values[i * 2 + 0] = Number.isFinite(wr) ? wr : NaN;
+                values[i * 2 + 1] = Number.isFinite(wi) ? wi : NaN;
+                moduli[i] = (Number.isFinite(wr) && Number.isFinite(wi)) ? Math.hypot(wr, wi) : NaN;
+                let h: number;
+                switch (height) {
+                    case "none":
+                        return 0;
+                    case "modulus":
+                        h = Math.hypot(wr, wi);
+                        break;
+                    case "logModulus":
+                        h = Math.log(Math.hypot(wr, wi));
+                        break;
+                    case "real":
+                        h = wr;
+                        break;
+                    case "imaginary":
+                        h = wi;
+                        break;
+                }
+                if (!Number.isFinite(h)) return NaN;
+                if (heightRange) h = Math.min(heightRange[1], Math.max(heightRange[0], h));
+                return h * heightScale;
+            }
+        );
+        if (!base) return new Geometry({ positions: new Float32Array(0) });
+        const modulusRange = coloring === "modulus" ? (range ?? finiteRange(moduli)) : undefined;
+        const colors = new Float32Array(vertexCount * 4);
+        for (let i = 0; i < vertexCount; i++) colors.set(domainColor(values[i * 2 + 0], values[i * 2 + 1], { mode: coloring, colormap, range: modulusRange }), i * 4);
+        base.values = values;
+        base.valueComponents = 2;
+        base.colors = colors;
+        return new Geometry((descriptor.doubleSided ?? false) ? Geometry._makeDoubleSided(base) : base);
+    }
+
+    private static _heightGrid(xMin: number, xMax: number, zMin: number, zMax: number, gridX: number, gridZ: number, plane: "xy" | "xz" | "yz", skipInvalid: boolean, sample: (x: number, z: number, i: number) => number): GeometryDescriptor | null {
         const gridX1 = gridX + 1;
         const gridZ1 = gridZ + 1;
         const positions = new Float32Array(gridX1 * gridZ1 * 3);
@@ -2033,7 +2334,7 @@ export class Geometry {
                 const ux = gridX > 0 ? (ix / gridX) : 0;
                 const x = xMin + xRange * ux;
                 const i = ix + gridX1 * iz;
-                const y = f(x, z);
+                const y = sample(x, z, i);
                 const ok = Number.isFinite(y);
                 valid[i] = ok ? 1 : 0;
                 const p = i * 3;
@@ -2067,6 +2368,8 @@ export class Geometry {
             }
         }
         Geometry._computeGridNormals(positions, valid, gridX, gridZ, normals);
+        const mirrored = plane !== "xz";
+        if (mirrored) for (let i = 0; i < normals.length; i++) normals[i] = -normals[i];
         const indices: number[] = [];
         for (let iz = 0; iz < gridZ; iz++) {
             for (let ix = 0; ix < gridX; ix++) {
@@ -2075,236 +2378,68 @@ export class Geometry {
                 const c = (ix + 1) + gridX1 * (iz + 1);
                 const d = (ix + 1) + gridX1 * iz;
                 if (skipInvalid && (!valid[a] || !valid[b] || !valid[c] || !valid[d])) continue;
-                indices.push(a, b, d, b, c, d);
+                if (mirrored) indices.push(a, d, b, b, d, c);
+                else indices.push(a, b, d, b, c, d);
             }
         }
-        if (indices.length === 0) return new Geometry({ positions: new Float32Array(0) });
-        const base: GeometryDescriptor = {
+        if (indices.length === 0) return null;
+        return {
             positions,
             normals,
             uvs,
             indices: new Uint32Array(indices)
         };
-        return new Geometry(doubleSided ? Geometry._makeDoubleSided(base) : base);
     }
 
-    static parametricCurve(descriptor: ParametricCurveDescriptor): Geometry {
-        const f = descriptor.f;
-        const tMin = descriptor.tMin ?? 0;
-        const tMax = descriptor.tMax ?? 1;
-        const segments = Math.max(2, Math.floor(descriptor.segments ?? 256));
+    private static _curveGeometry(label: string, descriptor: CartesianCurveDescriptor | ParametricCurveDescriptor, points: ReadonlyArray<[number, number, number] | null>, sampleValues: Float64Array | null, up: [number, number, number], color: ResolvedGeometryColor | null): Geometry {
+        const sides = resolveCurveSides(label, descriptor.profile, descriptor.profileSides);
         const radius = descriptor.radius ?? 0.01;
         const radialSegments = Math.max(3, Math.floor(descriptor.radialSegments ?? 8));
+        const rotation = descriptor.profileRotation ?? 0;
+        assert(typeof rotation === "number" && Number.isFinite(rotation), `${label}: profileRotation must be a finite number.`);
         const closed = descriptor.closed ?? false;
         const breakOnInvalid = descriptor.breakOnInvalid ?? true;
-        const plane: "xy" | "xz" | "yz" = descriptor.plane ?? "xy";
-        const positions: number[] = [];
-        const normals: number[] = [];
-        const uvs: number[] = [];
-        const indices: number[] = [];
+        const endcaps = (descriptor.endcaps ?? true) && sides !== 2;
+        const doubleSided = (descriptor.doubleSided ?? true) && sides === 2;
+        const out: CurveOutput = { positions: [], normals: [], uvs: [], indices: [], values: sampleValues ? [] : null };
         let vertexOffset = 0;
-        const sampleCount = closed ? segments : segments + 1;
-        let segmentPoints: number[] = [];
+        let piecePoints: number[] = [];
+        let pieceValues: number[] = [];
         let anyInvalid = false;
-        let upLocal: [number, number, number] | null = descriptor.up ?? null;
-        let upWorld: [number, number, number] | null = null;
-        if (upLocal) {
-            switch (plane) {
-                case "xy":
-                    upWorld = upLocal;
-                    break;
-                case "xz":
-                    upWorld = [upLocal[0], upLocal[2], upLocal[1]];
-                    break;
-                case "yz":
-                    upWorld = [upLocal[2], upLocal[0], upLocal[1]];
-                    break;
-            }
-        }
-        const flushSegment = (close: boolean) => {
-            const pointCount = segmentPoints.length / 3;
-            if (pointCount >= 2) {
-                const upVec: [number, number, number] = upWorld ?? [0, 1, 0];
-                vertexOffset = Geometry._appendTubeSegment(new Float32Array(segmentPoints), radius, radialSegments, close, upVec, positions, normals, uvs, indices, vertexOffset);
-            }
-            segmentPoints = [];
+        const flushPiece = (close: boolean) => {
+            if (piecePoints.length / 3 >= 2) vertexOffset = Geometry._appendCurvePiece(new Float32Array(piecePoints), sampleValues ? pieceValues : null, radius, radialSegments, sides, rotation, close, endcaps && !close, up, out, vertexOffset);
+            piecePoints = [];
+            pieceValues = [];
         };
-        const range = tMax - tMin;
-        for (let i = 0; i < sampleCount; i++) {
-            const s = segments > 0 ? (i / segments) : 0;
-            const t = tMin + range * s;
-            const p = f(t);
-            let x: number;
-            let y: number;
-            let z: number;
-            if (p.length === 2) {
-                x = p[0];
-                y = p[1];
-                z = 0;
-                if (!upLocal) {
-                    upLocal = [0, 0, 1];
-                    switch (plane) {
-                        case "xy":
-                            upWorld = upLocal;
-                            break;
-                        case "xz":
-                            upWorld = [upLocal[0], upLocal[2], upLocal[1]];
-                            break;
-                        case "yz":
-                            upWorld = [upLocal[2], upLocal[0], upLocal[1]];
-                            break;
-                    }
-                }
-            } else {
-                x = p[0];
-                y = p[1];
-                z = p[2];
-                if (!upLocal) {
-                    upLocal = [0, 1, 0];
-                    switch (plane) {
-                        case "xy":
-                            upWorld = upLocal;
-                            break;
-                        case "xz":
-                            upWorld = [upLocal[0], upLocal[2], upLocal[1]];
-                            break;
-                        case "yz":
-                            upWorld = [upLocal[2], upLocal[0], upLocal[1]];
-                            break;
-                    }
-                }
-            }
-            if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)) {
+        for (let i = 0; i < points.length; i++) {
+            const p = points[i];
+            if (!p) {
                 anyInvalid = true;
-                if (breakOnInvalid) flushSegment(false);
+                if (breakOnInvalid) flushPiece(false);
                 continue;
             }
-            let wx: number;
-            let wy: number;
-            let wz: number;
-            switch (plane) {
-                case "xy":
-                    wx = x;
-                    wy = y;
-                    wz = z;
-                    break;
-                case "xz":
-                    wx = x;
-                    wy = z;
-                    wz = y;
-                    break;
-                case "yz":
-                    wx = z;
-                    wy = x;
-                    wz = y;
-                    break;
-            }
-            segmentPoints.push(wx, wy, wz);
+            piecePoints.push(p[0], p[1], p[2]);
+            if (sampleValues) pieceValues.push(sampleValues[i]);
         }
-        flushSegment(closed && !anyInvalid);
-        if (positions.length === 0) return new Geometry({ positions: new Float32Array(0) });
-        return new Geometry({
-            positions: new Float32Array(positions),
-            normals: new Float32Array(normals),
-            uvs: new Float32Array(uvs),
-            indices: new Uint32Array(indices)
-        });
-    }
-
-    static parametricSurface(descriptor: ParametricSurfaceDescriptor): Geometry {
-        const f = descriptor.f;
-        const uMin = descriptor.uMin ?? 0;
-        const uMax = descriptor.uMax ?? 1;
-        const vMin = descriptor.vMin ?? 0;
-        const vMax = descriptor.vMax ?? 1;
-        const uSegments = Math.max(1, Math.floor(descriptor.uSegments ?? 128));
-        const vSegments = Math.max(1, Math.floor(descriptor.vSegments ?? 128));
-        const skipInvalid = descriptor.skipInvalid ?? true;
-        const doubleSided = descriptor.doubleSided ?? false;
-        const plane: "xy" | "xz" | "yz" = descriptor.plane ?? "xy";
-        const gridU = uSegments;
-        const gridV = vSegments;
-        const gridU1 = gridU + 1;
-        const gridV1 = gridV + 1;
-        const positions = new Float32Array(gridU1 * gridV1 * 3);
-        const normals = new Float32Array(gridU1 * gridV1 * 3);
-        const uvs = new Float32Array(gridU1 * gridV1 * 2);
-        const valid = new Uint8Array(gridU1 * gridV1);
-        const uRange = uMax - uMin;
-        const vRange = vMax - vMin;
-        for (let iv = 0; iv < gridV1; iv++) {
-            const vv = gridV > 0 ? (iv / gridV) : 0;
-            const v = vMin + vRange * vv;
-            for (let iu = 0; iu < gridU1; iu++) {
-                const uu = gridU > 0 ? (iu / gridU) : 0;
-                const u = uMin + uRange * uu;
-                const i = iu + gridU1 * iv;
-                const p = f(u, v);
-                const x = p[0];
-                const y = p[1];
-                const z = p[2];
-                const ok = Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z);
-                valid[i] = ok ? 1 : 0;
-                const o = i * 3;
-                if (ok) {
-                    let wx: number;
-                    let wy: number;
-                    let wz: number;
-                    switch (plane) {
-                        case "xy":
-                            wx = x;
-                            wy = y;
-                            wz = z;
-                            break;
-                        case "xz":
-                            wx = x;
-                            wy = z;
-                            wz = y;
-                            break;
-                        case "yz":
-                            wx = z;
-                            wy = x;
-                            wz = y;
-                            break;
-                    }
-                    positions[o + 0] = wx;
-                    positions[o + 1] = wy;
-                    positions[o + 2] = wz;
-                } else {
-                    positions[o + 0] = 0;
-                    positions[o + 1] = 0;
-                    positions[o + 2] = 0;
-                }
-                const t = i * 2;
-                uvs[t + 0] = uu;
-                uvs[t + 1] = 1 - vv;
-            }
-        }
-        Geometry._computeGridNormals(positions, valid, gridU, gridV, normals);
-        const indices: number[] = [];
-        for (let iv = 0; iv < gridV; iv++) {
-            for (let iu = 0; iu < gridU; iu++) {
-                const a = iu + gridU1 * iv;
-                const b = iu + gridU1 * (iv + 1);
-                const c = (iu + 1) + gridU1 * (iv + 1);
-                const d = (iu + 1) + gridU1 * iv;
-                if (skipInvalid && (!valid[a] || !valid[b] || !valid[c] || !valid[d])) continue;
-                indices.push(a, b, d, b, c, d);
-            }
-        }
-        if (indices.length === 0) return new Geometry({ positions: new Float32Array(0) });
+        flushPiece(closed && !anyInvalid);
+        if (out.positions.length === 0) return new Geometry({ positions: new Float32Array(0) });
         const base: GeometryDescriptor = {
-            positions,
-            normals,
-            uvs,
-            indices: new Uint32Array(indices)
+            positions: new Float32Array(out.positions),
+            normals: new Float32Array(out.normals),
+            uvs: new Float32Array(out.uvs),
+            indices: new Uint32Array(out.indices)
         };
+        if (color && out.values) {
+            const values = new Float32Array(out.values);
+            base.values = values;
+            base.valueComponents = 1;
+            base.colors = bakeGeometryColors(values, color.colormap, color.range);
+        }
         return new Geometry(doubleSided ? Geometry._makeDoubleSided(base) : base);
     }
 
-    private static _appendTubeSegment(points: Float32Array, radius: number, radialSegments: number, closed: boolean, up: [number, number, number], outPositions: number[], outNormals: number[], outUvs: number[], outIndices: number[], vertexOffset: number): number {
+    private static _computeCurveFrames(points: Float32Array, closed: boolean, up: [number, number, number]): { tangents: Float32Array; normals: Float32Array; binormals: Float32Array } {
         const pointCount = points.length / 3;
-        if (pointCount < 2) return vertexOffset;
         const tangents = new Float32Array(pointCount * 3);
         for (let i = 0; i < pointCount; i++) {
             const prev = closed ? (i - 1 + pointCount) % pointCount : Math.max(i - 1, 0);
@@ -2430,8 +2565,39 @@ export class Geometry {
             binormals[i * 3 + 1] = by;
             binormals[i * 3 + 2] = bz;
         }
-        const ring = radialSegments + 1;
+        return { tangents, normals, binormals };
+    }
+
+    private static _appendCurvePiece(points: Float32Array, values: ReadonlyArray<number> | null, radius: number, radialSegments: number, sides: number, rotation: number, closed: boolean, endcaps: boolean, up: [number, number, number], out: CurveOutput, vertexOffset: number): number {
+        const pointCount = points.length / 3;
+        if (pointCount < 2) return vertexOffset;
+        const { tangents, normals, binormals } = Geometry._computeCurveFrames(points, closed, up);
         const denomU = closed ? pointCount : (pointCount - 1);
+        const segmentCount = closed ? pointCount : (pointCount - 1);
+        const pushVertex = (i: number, px: number, py: number, pz: number, nx: number, ny: number, nz: number, u: number, v: number): void => {
+            out.positions.push(px, py, pz);
+            out.normals.push(nx, ny, nz);
+            out.uvs.push(u, v);
+            if (out.values && values) out.values.push(values[i]);
+        };
+        const directions: number[] = [];
+        let ring: number;
+        if (sides === 1) {
+            for (let j = 0; j <= radialSegments; j++) {
+                const theta = (radialSegments > 0 ? (j / radialSegments) : 0) * Math.PI * 2;
+                directions.push(Math.cos(theta), Math.sin(theta));
+            }
+            ring = radialSegments + 1;
+        } else if (sides === 2) {
+            directions.push(-Math.cos(rotation), -Math.sin(rotation), Math.cos(rotation), Math.sin(rotation));
+            ring = 2;
+        } else {
+            for (let k = 0; k <= sides; k++) {
+                const theta = rotation + (Math.PI / 2) - (Math.PI / sides) + ((2 * Math.PI * k) / sides);
+                directions.push(Math.cos(theta), Math.sin(theta));
+            }
+            ring = sides * 2;
+        }
         for (let i = 0; i < pointCount; i++) {
             const u = denomU > 0 ? (i / denomU) : 0;
             const px = points[i * 3 + 0];
@@ -2443,31 +2609,103 @@ export class Geometry {
             const bx0 = binormals[i * 3 + 0];
             const by0 = binormals[i * 3 + 1];
             const bz0 = binormals[i * 3 + 2];
-            for (let j = 0; j <= radialSegments; j++) {
-                const v = radialSegments > 0 ? (j / radialSegments) : 0;
-                const theta = v * Math.PI * 2;
-                const cosT = Math.cos(theta);
-                const sinT = Math.sin(theta);
+            if (sides === 1) {
+                for (let j = 0; j <= radialSegments; j++) {
+                    const cosT = directions[j * 2 + 0];
+                    const sinT = directions[j * 2 + 1];
+                    const rx = cosT * nx0 + sinT * bx0;
+                    const ry = cosT * ny0 + sinT * by0;
+                    const rz = cosT * nz0 + sinT * bz0;
+                    pushVertex(i, px + radius * rx, py + radius * ry, pz + radius * rz, rx, ry, rz, u, radialSegments > 0 ? (j / radialSegments) : 0);
+                }
+            } else if (sides === 2) {
+                const fx = -Math.sin(rotation) * nx0 - Math.cos(rotation) * bx0;
+                const fy = -Math.sin(rotation) * ny0 - Math.cos(rotation) * by0;
+                const fz = -Math.sin(rotation) * nz0 - Math.cos(rotation) * bz0;
+                for (let j = 0; j < 2; j++) {
+                    const cosT = directions[j * 2 + 0];
+                    const sinT = directions[j * 2 + 1];
+                    const rx = cosT * nx0 - sinT * bx0;
+                    const ry = cosT * ny0 - sinT * by0;
+                    const rz = cosT * nz0 - sinT * bz0;
+                    pushVertex(i, px + radius * rx, py + radius * ry, pz + radius * rz, fx, fy, fz, u, j);
+                }
+            } else {
+                for (let k = 0; k < sides; k++) {
+                    const phi = rotation + (Math.PI / 2) + ((2 * Math.PI * k) / sides);
+                    const fx = Math.cos(phi) * nx0 - Math.sin(phi) * bx0;
+                    const fy = Math.cos(phi) * ny0 - Math.sin(phi) * by0;
+                    const fz = Math.cos(phi) * nz0 - Math.sin(phi) * bz0;
+                    for (let e = 0; e < 2; e++) {
+                        const cosT = directions[(k + e) * 2 + 0];
+                        const sinT = directions[(k + e) * 2 + 1];
+                        const rx = cosT * nx0 - sinT * bx0;
+                        const ry = cosT * ny0 - sinT * by0;
+                        const rz = cosT * nz0 - sinT * bz0;
+                        pushVertex(i, px + radius * rx, py + radius * ry, pz + radius * rz, fx, fy, fz, u, (k + e) / sides);
+                    }
+                }
+            }
+        }
+        for (let i = 0; i < segmentCount; i++) {
+            const next = closed ? ((i + 1) % pointCount) : (i + 1);
+            if (sides === 1) {
+                for (let j = 0; j < radialSegments; j++) {
+                    const a = vertexOffset + ring * i + j;
+                    const b = vertexOffset + ring * next + j;
+                    const c = vertexOffset + ring * next + j + 1;
+                    const d = vertexOffset + ring * i + j + 1;
+                    out.indices.push(a, d, b, b, d, c);
+                }
+            } else if (sides === 2) {
+                const a = vertexOffset + ring * i;
+                const b = vertexOffset + ring * next;
+                out.indices.push(a, a + 1, b, b, a + 1, b + 1);
+            } else {
+                for (let k = 0; k < sides; k++) {
+                    const a = vertexOffset + ring * i + k * 2;
+                    const b = vertexOffset + ring * next + k * 2;
+                    out.indices.push(a, b, a + 1, b, b + 1, a + 1);
+                }
+            }
+        }
+        vertexOffset += ring * pointCount;
+        if (!endcaps) return vertexOffset;
+        const corners = sides === 1 ? radialSegments : sides;
+        const flip = sides === 1 ? 1 : -1;
+        for (const end of [0, 1]) {
+            const i = end === 0 ? 0 : pointCount - 1;
+            const sign = end === 0 ? -1 : 1;
+            const px = points[i * 3 + 0];
+            const py = points[i * 3 + 1];
+            const pz = points[i * 3 + 2];
+            const cx = sign * tangents[i * 3 + 0];
+            const cy = sign * tangents[i * 3 + 1];
+            const cz = sign * tangents[i * 3 + 2];
+            const nx0 = normals[i * 3 + 0];
+            const ny0 = normals[i * 3 + 1];
+            const nz0 = normals[i * 3 + 2];
+            const bx0 = flip * binormals[i * 3 + 0];
+            const by0 = flip * binormals[i * 3 + 1];
+            const bz0 = flip * binormals[i * 3 + 2];
+            pushVertex(i, px, py, pz, cx, cy, cz, 0.5, 0.5);
+            for (let k = 0; k < corners; k++) {
+                const cosT = directions[k * 2 + 0];
+                const sinT = directions[k * 2 + 1];
                 const rx = cosT * nx0 + sinT * bx0;
                 const ry = cosT * ny0 + sinT * by0;
                 const rz = cosT * nz0 + sinT * bz0;
-                outPositions.push(px + radius * rx, py + radius * ry, pz + radius * rz);
-                outNormals.push(rx, ry, rz);
-                outUvs.push(u, v);
+                pushVertex(i, px + radius * rx, py + radius * ry, pz + radius * rz, cx, cy, cz, 0.5 + 0.5 * cosT, 0.5 + 0.5 * sinT);
             }
-        }
-        const segmentCount = closed ? pointCount : (pointCount - 1);
-        for (let i = 0; i < segmentCount; i++) {
-            const next = closed ? ((i + 1) % pointCount) : (i + 1);
-            for (let j = 0; j < radialSegments; j++) {
-                const a = vertexOffset + ring * i + j;
-                const b = vertexOffset + ring * next + j;
-                const c = vertexOffset + ring * next + j + 1;
-                const d = vertexOffset + ring * i + j + 1;
-                outIndices.push(a, d, b, b, d, c);
+            const forward = (end === 1) === (flip === 1);
+            for (let k = 0; k < corners; k++) {
+                const k1 = (k + 1) % corners;
+                if (forward) out.indices.push(vertexOffset, vertexOffset + 1 + k, vertexOffset + 1 + k1);
+                else out.indices.push(vertexOffset, vertexOffset + 1 + k1, vertexOffset + 1 + k);
             }
+            vertexOffset += 1 + corners;
         }
-        return vertexOffset + ring * pointCount;
+        return vertexOffset;
     }
 
     private static _computeGridNormals(positions: Float32Array, valid: Uint8Array, gridX: number, gridY: number, outNormals: Float32Array): void {
@@ -2535,6 +2773,18 @@ export class Geometry {
         const indices = descriptor.indices;
         if (!indices) return descriptor;
         const baseVertexCount = positions.length / 3;
+        let outColors: Float32Array | undefined;
+        if (descriptor.colors) {
+            outColors = new Float32Array(descriptor.colors.length * 2);
+            outColors.set(descriptor.colors, 0);
+            outColors.set(descriptor.colors, descriptor.colors.length);
+        }
+        let outValues: Float32Array | undefined;
+        if (descriptor.values) {
+            outValues = new Float32Array(descriptor.values.length * 2);
+            outValues.set(descriptor.values, 0);
+            outValues.set(descriptor.values, descriptor.values.length);
+        }
         const outPositions = new Float32Array(positions.length * 2);
         outPositions.set(positions, 0);
         outPositions.set(positions, positions.length);
@@ -2580,9 +2830,11 @@ export class Geometry {
             positions: outPositions,
             normals: outNormals,
             tangents: outTangents,
+            colors: outColors,
             uvs: outUvs,
             uvs1: outUvs1,
-            indices: outIndices
+            indices: outIndices,
+            values: outValues
         };
     }
 }

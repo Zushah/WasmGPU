@@ -12,7 +12,6 @@ struct GlyphFieldUniforms {
     scale_flags: vec4<f32>,
     visual: vec4<f32>,
     solid_color: vec4<f32>,
-    colors: array<vec4<f32>, 8>,
 }
 
 struct CameraUniforms {

@@ -1013,7 +1013,7 @@ export const getLatticeSpaceBindGroupLayout = (ctx: RendererContext): GPUBindGro
         { binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
         { binding: 1, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
         { binding: 2, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
-        { binding: 3, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE, buffer: { type: "uniform", minBindingSize: 368 } },
+        { binding: 3, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT | GPUShaderStage.COMPUTE, buffer: { type: "uniform", minBindingSize: 240 } },
         { binding: 4, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
         { binding: 5, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "1d" } }
     ] });
@@ -1080,7 +1080,7 @@ export const ensureLatticeSpaceBindGroup = (ctx: RendererContext, space: Lattice
 const getLatticeSortKeygenLayout = (ctx: RendererContext): GPUBindGroupLayout => {
     return ctx.latticeSortKeygenBindGroupLayout ??= ctx.device.createBindGroupLayout({
         entries: [
-            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", minBindingSize: 368 } },
+            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", minBindingSize: 240 } },
             { binding: 1, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", minBindingSize: 64 } },
             { binding: 2, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } },
             { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
@@ -1134,7 +1134,7 @@ const getLatticeSortScatterLayout = (ctx: RendererContext): GPUBindGroupLayout =
 const getLatticeIdentityLayout = (ctx: RendererContext): GPUBindGroupLayout => {
     return ctx.latticeSortIdentityBindGroupLayout ??= ctx.device.createBindGroupLayout({
         entries: [
-            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", minBindingSize: 368 } },
+            { binding: 0, visibility: GPUShaderStage.COMPUTE, buffer: { type: "uniform", minBindingSize: 240 } },
             { binding: 3, visibility: GPUShaderStage.COMPUTE, buffer: { type: "storage" } }
         ]
     });
@@ -1278,7 +1278,7 @@ export const getPointCloudBindGroupLayout = (ctx: RendererContext): GPUBindGroup
             {
                 binding: 1,
                 visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-                buffer: { type: "uniform", minBindingSize: 240 }
+                buffer: { type: "uniform", minBindingSize: 112 }
             },
             {
                 binding: 2,
@@ -1431,7 +1431,7 @@ export const getGlyphFieldBindGroupLayout = (ctx: RendererContext): GPUBindGroup
             {
                 binding: 4,
                 visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT,
-                buffer: { type: "uniform", minBindingSize: 240 }
+                buffer: { type: "uniform", minBindingSize: 112 }
             },
             {
                 binding: 5,
@@ -1565,7 +1565,7 @@ export const getNodeLinkBindGroupLayout = (ctx: RendererContext): GPUBindGroupLa
             { binding: 4, visibility: GPUShaderStage.VERTEX, buffer: { type: "read-only-storage" } },
             { binding: 5, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
             { binding: 6, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "read-only-storage" } },
-            { binding: 7, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform", minBindingSize: 512 } },
+            { binding: 7, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: { type: "uniform", minBindingSize: 256 } },
             { binding: 8, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },
             { binding: 9, visibility: GPUShaderStage.FRAGMENT, texture: { sampleType: "float", viewDimension: "1d" } },
             { binding: 10, visibility: GPUShaderStage.FRAGMENT, sampler: { type: "filtering" } },

@@ -6,7 +6,7 @@
 
 import assert from "./utils/assert.js";
 import { createApproxHelpers, destroyTestDevice, safelySilence, setupTest } from "./utils/helpers.js";
-import { initWebAssembly, Geometry, wasm, webassemblyInterop, WasmMemoryView } from "../release/WasmGPU.js";
+import { initWebAssembly, Colormap, Geometry, wasm, webassemblyInterop, WasmMemoryView } from "../release/WasmGPU.js";
 
 const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
 
@@ -278,6 +278,19 @@ const { device } = await setupTest({ initWebAssembly, webgpu: true });
         { message: "Invalid derived wasmPositions vertexCount should throw", error: /wasmPositions length must be a multiple of 3/i, create: () => new Geometry({ wasmPositions: invalidPositions.view }) },
         { message: "Short wasmNormals should throw", error: /wasmNormals length must be at least vertexCount\*3/i, create: () => new Geometry({ wasmPositions: positions.view, wasmNormals: shortNormals.view, vertexCount: 3 }) }
     ]) assert.throws(create, error, message);
+
+    const valuedPositions = makeView(9, "f32", "geometry:wasm:values", 18);
+    setPositions(valuedPositions.data, 3, 0);
+    const valued = new Geometry({ wasmPositions: valuedPositions.view, values: new Float32Array([1, 2, 3]) });
+    assert.strictEqual(valued.valueComponents, 1, "CPU values should align with the WebAssembly vertex count");
+    valued.refreshWasmVertices({ vertexCount: 3 });
+    assert.deepStrictEqual(Array.from(valued.values), [1, 2, 3], "Refreshing without a count change must keep values");
+    valuedPositions.lengthGlobal.value = 12;
+    setPositions(valuedPositions.data, 4, 0);
+    valued.refreshWasmVertices({ vertexCount: 4 });
+    assert.strictEqual(valued.values, null, "A WebAssembly vertex-count change must drop misaligned values");
+    assert.strictEqual(valued.valueComponents, 0);
+    valued.destroy();
 }
 
 // 5) Geometry bounds generation releases every scoped WebAssembly scratch allocation.
@@ -303,7 +316,121 @@ const { device } = await setupTest({ initWebAssembly, webgpu: true });
     assert.equal(freedU32.length, 0, "Geometry construction must not allocate persistent u32 scratch");
 }
 
-// 6) Cleanup waits for shared GPU work before destroying the browser device.
+// 6) Plotting factories build curve profiles, flat end caps, flat height fields, per-vertex values and colors, and complex surfaces.
+{
+    const dot = (a, b) => (a[0] * b[0]) + (a[1] * b[1]) + (a[2] * b[2]);
+    const vec = (array, i, n = 3) => Array.from(array.slice(i * n, i * n + n));
+    const line = { f: (x) => 0.5 * x, xMin: -1, xMax: 1, segments: 4, radius: 0.1, radialSegments: 6 };
+    const P = 5;
+    const R = 6;
+    const counts = (geometry) => [geometry.vertexCount, geometry.indexCount];
+    assert.deepStrictEqual(counts(Geometry.cartesianCurve(line)), [P * (R + 1) + 2 * (1 + R), 6 * R * (P - 1) + 2 * 3 * R], "round tube with flat end caps");
+    assert.deepStrictEqual(counts(Geometry.cartesianCurve({ ...line, endcaps: false })), [P * (R + 1), 6 * R * (P - 1)], "endcaps: false keeps the old tube topology");
+    assert.deepStrictEqual(counts(Geometry.cartesianCurve({ ...line, profile: "2d", doubleSided: false })), [2 * P, 6 * (P - 1)], "single-sided ribbon");
+    assert.deepStrictEqual(counts(Geometry.cartesianCurve({ ...line, profile: "2d" })), [4 * P, 12 * (P - 1)], "double-sided ribbon");
+    assert.deepStrictEqual(counts(Geometry.cartesianCurve({ ...line, profileSides: 3 })), [2 * 3 * P + 2 * (1 + 3), 6 * 3 * (P - 1) + 2 * 3 * 3], "capped triangular prism");
+    assert.deepStrictEqual(counts(Geometry.cartesianCurve({ ...line, profileSides: 4, endcaps: false })), [2 * 4 * P, 6 * 4 * (P - 1)], "uncapped square prism");
+
+    const closed = Geometry.parametricCurve({ f: (t) => [Math.cos(t), Math.sin(t)], tMin: 0, tMax: 2 * Math.PI, segments: 16, closed: true, radius: 0.05, radialSegments: R });
+    assert.deepStrictEqual(counts(closed), [16 * (R + 1), 6 * R * 16], "closed curves get no caps");
+    const broken = Geometry.cartesianCurve({ ...line, f: (x) => (Math.abs(x) < 0.3 ? NaN : x), segments: 10 });
+    assert.deepStrictEqual(counts(broken), [2 * (4 * (R + 1) + 2 * (1 + R)), 2 * (6 * R * 3 + 2 * 3 * R)], "breakOnInvalid caps every piece");
+
+    const tangent = [2 / Math.sqrt(5), 1 / Math.sqrt(5), 0];
+    for (const sides of [3, 4, 6]) {
+        const prism = Geometry.cartesianCurve({ ...line, profileSides: sides, endcaps: false });
+        for (let i = 0; i < prism.vertexCount; i++) {
+            const n = vec(prism.normals, i);
+            numberApproxEqual(Math.hypot(...n), 1, 1e-6, `prism(${sides}) normal ${i} must be unit length`);
+            numberApproxEqual(dot(n, tangent), 0, 1e-6, `prism(${sides}) normal ${i} must be perpendicular to the tangent`);
+        }
+    }
+    const planeNormals = { xy: [0, 0, 1], xz: [0, 1, 0], yz: [1, 0, 0] };
+    for (const [plane, normal] of Object.entries(planeNormals)) {
+        const ribbon = Geometry.cartesianCurve({ ...line, plane, profile: "2d" });
+        for (let i = 0; i < ribbon.vertexCount; i++) arraysApproxEqual(vec(ribbon.normals, i), i < 2 * P ? normal : normal.map((v) => -v), 1e-6, `${plane} ribbon normal ${i}`);
+        const square = Geometry.cartesianCurve({ ...line, plane, profileSides: 4 });
+        arraysApproxEqual(vec(square.normals, 0), normal, 1e-6, `${plane} prism face 0 must face the plane normal`);
+    }
+    const rotated = Geometry.cartesianCurve({ ...line, profile: "2d", doubleSided: false, profileRotation: Math.PI / 2 });
+    numberApproxEqual(Math.abs(rotated.normals[2]), 0, 1e-6, "profileRotation turns the ribbon about the tangent");
+
+    assert.throws(() => Geometry.cartesianCurve({ ...line, profile: "2d", profileSides: 3 }), /Geometry\.cartesianCurve: profile '2d'/);
+    assert.throws(() => Geometry.parametricCurve({ f: (t) => [t, t], profile: "3d", profileSides: 2 }), /Geometry\.parametricCurve: profileSides 2/);
+    assert.throws(() => Geometry.cartesianCurve({ ...line, profileSides: 0 }), /profileSides must be an integer >= 1/);
+    assert.throws(() => Geometry.cartesianCurve({ ...line, profileSides: 2.5 }), /profileSides must be an integer >= 1/);
+    assert.throws(() => Geometry.cartesianCurve({ ...line, profile: "4d" }), /profile must be '2d' or '3d'/);
+
+    const flat = Geometry.cartesianSurface({ f: (x, z) => Math.sin(3 * x) + z, xSegments: 3, zSegments: 2, heightScale: 0, color: {} });
+    for (let i = 0; i < flat.vertexCount; i++) {
+        assert.strictEqual(Math.abs(flat.positions[i * 3 + 1]), 0, "heightScale: 0 must flatten the field");
+        arraysApproxEqual(vec(flat.normals, i), [0, 1, 0], 1e-6, "flat xz fields must face +y");
+    }
+    numberApproxEqual(flat.values[0], Math.sin(-3) - 1, 1e-6, "color values must use the unscaled height");
+    const flatXY = Geometry.cartesianSurface({ f: () => 0, xSegments: 1, zSegments: 1, plane: "xy" });
+    arraysApproxEqual(vec(flatXY.normals, 0), [0, 0, 1], 1e-6, "flat xy fields must face +z");
+    assert.throws(() => Geometry.cartesianSurface({ f: () => 0, heightScale: Infinity }), /heightScale must be a finite number/);
+
+    const colored = Geometry.cartesianCurve({ ...line, color: { by: "y" } });
+    assert.strictEqual(colored.valueComponents, 1);
+    assert.strictEqual(colored.values.length, colored.vertexCount, "values align with vertices");
+    assert.strictEqual(colored.colors.length, 4 * colored.vertexCount, "colors align with vertices");
+    numberApproxEqual(colored.values[0], -0.5, 1e-6, "vertex 0 belongs to sample x = -1");
+    numberApproxEqual(colored.values[colored.vertexCount - 1], 0.5, 1e-6, "the end cap belongs to the last sample");
+    arraysApproxEqual(vec(colored.colors, 0, 4), Colormap.builtin("viridis").sampleCPU(0), 1e-6, "the default colormap and range map the minimum to t = 0");
+    const byX = Geometry.cartesianCurve({ ...line, color: { by: "x", colormap: "magma", range: [-2, 2] } });
+    numberApproxEqual(byX.values[0], -1, 1e-6);
+    arraysApproxEqual(vec(byX.colors, 0, 4), Colormap.builtin("magma").sampleCPU(0.25), 1e-6, "color.range normalizes values");
+    const partial = Geometry.cartesianCurve({ ...line, color: { by: (x, y) => (x > 0 ? NaN : x * y) } });
+    assert.ok(Number.isNaN(partial.values[partial.vertexCount - 1]), "non-finite values stay NaN");
+    arraysApproxEqual(vec(partial.colors, partial.vertexCount - 1, 4), [0, 0, 0, 0], 0, "non-finite values get transparent black");
+    assert.strictEqual(Geometry.cartesianCurve(line).values, null, "factories without color write no values");
+    assert.throws(() => Geometry.cartesianCurve({ ...line, color: { by: "z" } }), /color\.by must be a function or one of 'x', 'y'/);
+
+    const sided = Geometry.cartesianSurface({ f: (x, z) => x + z, xSegments: 2, zSegments: 2, doubleSided: true, color: { by: "x" } });
+    assert.strictEqual(sided.vertexCount, 18);
+    assert.strictEqual(sided.values.length, 18, "double-sided duplication keeps values aligned");
+    assert.strictEqual(sided.colors.length, 72, "double-sided duplication keeps colors aligned");
+    for (let i = 0; i < 9; i++) {
+        assert.strictEqual(sided.values[9 + i], sided.values[i]);
+        arraysApproxEqual(vec(sided.colors, 9 + i, 4), vec(sided.colors, i, 4), 0);
+    }
+    const ribbonValues = Geometry.cartesianCurve({ ...line, profile: "2d", color: {} });
+    assert.strictEqual(ribbonValues.values.length, ribbonValues.vertexCount, "double-sided ribbons keep values aligned");
+
+    const planar = Geometry.parametricSurface({ f: (u, v) => [u, v], uSegments: 2, vSegments: 2, color: {} });
+    assert.strictEqual(planar.vertexCount, 9);
+    for (let i = 0; i < 9; i++) assert.strictEqual(planar.positions[i * 3 + 2], 0, "2-component parametric surfaces lie in the plot plane");
+    assert.ok(planar.values.every((v) => v === 0), "2-component output colors by z = 0");
+
+    const { result: dropped, messages } = safelySilence("warn", () => [
+        new Geometry({ positions: new Float32Array(9), values: new Float32Array(2) }),
+        new Geometry({ positions: new Float32Array(9), values: new Float32Array(15), valueComponents: 5 })
+    ]);
+    assert.ok(dropped.every((g) => g.values === null && g.valueComponents === 0), "invalid values are dropped");
+    assert.strictEqual(messages.length, 2, "dropping values warns");
+    const kept = new Geometry({ positions: new Float32Array(9), values: new Float32Array(6), valueComponents: 2 });
+    assert.strictEqual(kept.valueComponents, 2);
+
+    const reciprocal = (re, im) => { const d = (re * re) + (im * im); return [re / d, -im / d]; };
+    const grid = { reSegments: 4, imSegments: 4 };
+    const pole = Geometry.complexSurface({ f: reciprocal, ...grid });
+    assert.strictEqual(pole.indexCount, 4 * 4 * 6, "height: 'none' keeps every vertex valid around a pole");
+    assert.strictEqual(pole.valueComponents, 2);
+    assert.strictEqual(pole.values.length, 2 * pole.vertexCount);
+    const origin = 2 + 5 * 2;
+    assert.ok(Number.isNaN(pole.values[origin * 2]) && Number.isNaN(pole.values[origin * 2 + 1]), "non-finite values stay NaN");
+    arraysApproxEqual(vec(pole.colors, origin, 4), [1, 1, 1, 1], 0, "poles are white");
+    assert.strictEqual(Geometry.complexSurface({ f: reciprocal, ...grid, height: "modulus" }).indexCount, (4 * 4 - 4) * 6, "invalid heights drop their quads");
+    const identity = Geometry.complexSurface({ f: (re, im) => [re, im], ...grid, height: "modulus" });
+    numberApproxEqual(identity.positions[(3 + 5 * 4) * 3 + 1], Math.sqrt(5), 1e-6, "height is |z| at re = 1, im = 2");
+    arraysApproxEqual(vec(identity.colors, origin, 4), [0, 0, 0, 1], 0, "the origin of f = z is black");
+    const clamped = Geometry.complexSurface({ f: (re, im) => [re, im], ...grid, height: "modulus", heightRange: [0, 1], heightScale: 2 });
+    numberApproxEqual(Math.max(...vec(clamped.positions, 0, clamped.positions.length).filter((_, i) => i % 3 === 1)), 2, 1e-6, "heightRange clamps before heightScale");
+    assert.throws(() => Geometry.complexSurface({ f: (re, im) => [re, im], color: {} }), /Geometry\.complexSurface: color is not supported/);
+}
+
+// 7) Cleanup waits for shared GPU work before destroying the browser device.
 {
     await destroyTestDevice(device);
 }

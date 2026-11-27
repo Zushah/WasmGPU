@@ -6,7 +6,8 @@
 
 import { assert, clamp01, createBuffer, isGPUBuffer, resolveGPUBuffer } from "../utils";
 import { Texture2D } from "./texture";
-import { Colormap, type BuiltinColormapName } from "./colormap";
+import { Colormap } from "./color";
+import type { BuiltinColormapName } from "./color";
 import unlitWGSL from "../../wgsl/graphics/unlit.wgsl";
 import unlitInstancedWGSL from "../../wgsl/graphics/unlit-instanced.wgsl";
 import unlitSkinnedWGSL from "../../wgsl/graphics/unlit-skinned.wgsl";

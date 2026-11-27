@@ -12,7 +12,7 @@ const { arraysApproxEqual, numberApproxEqual } = createApproxHelpers();
 
 const { device } = await setupTest({ initWebAssembly: WasmGPU.initWebAssembly, webgpu: true });
 
-const { NodeLink, Compute, Scene, WasmGPU: Engine, WasmMemoryView } = WasmGPU;
+const { NodeLink, Colormap, Compute, Scene, WasmGPU: Engine, WasmMemoryView } = WasmGPU;
 assert.ok(NodeLink, "Missing export: NodeLink");
 assert.ok(Compute, "Missing export: Compute");
 assert.ok(Scene, "Missing export: Scene");
@@ -348,10 +348,10 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     link.edgeGeometryMode = "cylinders";
     link.nodeColorMode = "scalar";
     link.edgeColorMode = "scalar";
-    link.nodeColormap = "custom";
-    link.nodeColormapStops = [[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]];
-    link.edgeColormap = "custom";
-    link.edgeColormapStops = [[0.2, 0.2, 0.9, 1], [0.9, 0.2, 0.2, 1]];
+    const nodeColormap = Colormap.fromStops([[1, 0, 0, 1], [0, 1, 0, 1], [0, 0, 1, 1]], { colorSpace: "linear", interpolation: "linear" });
+    const edgeColormap = Colormap.fromStops([[0.2, 0.2, 0.9, 1], [0.9, 0.2, 0.2, 1]], { colorSpace: "linear", interpolation: "linear" });
+    link.nodeColormap = nodeColormap;
+    link.edgeColormap = edgeColormap;
     link.nodeSolidColor = [0.1, 0.2, 0.3, 0.4];
     link.edgeSolidColor = [0.8, 0.7, 0.6, 0.5];
     link.nodeSize = 1.5;
@@ -365,9 +365,9 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     link.setEdgeScaleTransform({ componentCount: 1, componentIndex: 0, stride: 1, offset: 0, mode: "log", clampMode: "range", domainMin: 0.1, domainMax: 10, clampMin: 0.2, clampMax: 8, logBase: 10, gamma: 1.5 });
     link.upload(device, device.queue);
 
-    assert.strictEqual(link.getUniformBufferSize(), 512, "NodeLink uniform size must be 512 bytes");
+    assert.strictEqual(link.getUniformBufferSize(), 256, "NodeLink uniform size must be 256 bytes");
     const u = link.getUniformData();
-    assert.strictEqual(u.byteLength, 512, "NodeLink uniform byteLength mismatch");
+    assert.strictEqual(u.byteLength, 256, "NodeLink uniform byteLength mismatch");
 
     numberApproxEqual(u[0], 1.5, 1e-6, "global.nodeSize mismatch");
     numberApproxEqual(u[1], 0.15, 1e-6, "global.edgeSize mismatch");
@@ -381,7 +381,7 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     numberApproxEqual(u[12], -2.0, 1e-6, "nodeScale.clampMin mismatch");
     numberApproxEqual(u[13], 2.0, 1e-6, "nodeScale.clampMax mismatch");
     numberApproxEqual(u[24], 1.0, 1e-6, "nodeVisual.colorMode(scalar) mismatch");
-    numberApproxEqual(u[25], 3.0, 1e-6, "nodeVisual.customStopCount mismatch");
+    numberApproxEqual(u[25], 0.0, 1e-6, "nodeVisual reserved slot must stay zero");
     numberApproxEqual(u[26], 2.0, 1e-6, "nodeVisual.geometryMode(ellipsoids) mismatch");
     numberApproxEqual(u[27], 1.0, 1e-6, "nodeVisual.radiiEnabled mismatch");
 
@@ -389,7 +389,7 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     numberApproxEqual(u[32], 0.1, 1e-6, "edgeScale.domainMin mismatch");
     numberApproxEqual(u[33], 10.0, 1e-6, "edgeScale.domainMax mismatch");
     numberApproxEqual(u[48], 1.0, 1e-6, "edgeVisual.colorMode(scalar) mismatch");
-    numberApproxEqual(u[49], 2.0, 1e-6, "edgeVisual.customStopCount mismatch");
+    numberApproxEqual(u[49], 0.0, 1e-6, "edgeVisual reserved slot must stay zero");
     numberApproxEqual(u[50], 1.0, 1e-6, "edgeVisual.geometryMode(cylinders) mismatch");
 
     numberApproxEqual(u[52], 0.1, 1e-6, "nodeSolid.r mismatch");
@@ -404,14 +404,11 @@ const destroyExternalNodeLinkBuffers = (buffers) => { buffers.nodePositions.dest
     numberApproxEqual(u[61], 9.5, 1e-6, "pointParams.maxPointSize mismatch");
     numberApproxEqual(u[62], 6.0, 1e-6, "pointParams.attenuation mismatch");
 
-    numberApproxEqual(u[64], 1.0, 1e-6, "node stop[0].r mismatch");
-    numberApproxEqual(u[65], 0.0, 1e-6, "node stop[0].g mismatch");
-    numberApproxEqual(u[66], 0.0, 1e-6, "node stop[0].b mismatch");
-    numberApproxEqual(u[68], 0.0, 1e-6, "node stop[1].r mismatch");
-    numberApproxEqual(u[69], 1.0, 1e-6, "node stop[1].g mismatch");
-    numberApproxEqual(u[96], 0.2, 1e-6, "edge stop[0].r mismatch");
-    numberApproxEqual(u[97], 0.2, 1e-6, "edge stop[0].g mismatch");
-    numberApproxEqual(u[98], 0.9, 1e-6, "edge stop[0].b mismatch");
+    assert.strictEqual(link.getNodeColormapForBinding(), nodeColormap, "Node colormap objects must bind directly");
+    assert.strictEqual(link.getEdgeColormapForBinding(), edgeColormap, "Edge colormap objects must bind directly");
+    assert.strictEqual(link.getNodeColormapKey(), `cm:${nodeColormap.id}`);
+    assert.strictEqual(link.getEdgeColormapKey(), `cm:${edgeColormap.id}`);
+    numberApproxEqual(nodeColormap.sampleCPU(0.5)[1], 1.0, 1 / 255, "Node colormap midpoint must keep the linear green stop");
 
     link.destroy();
 }

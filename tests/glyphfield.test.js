@@ -271,7 +271,7 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
     assert.strictEqual(typeof gf.getUniformData, "function", "GlyphField.getUniformData missing");
 
     const byteSize = gf.getUniformBufferSize();
-    assert.strictEqual(byteSize, 240, "GlyphField uniform buffer size should be 240 bytes (15 vec4<f32>)");
+    assert.strictEqual(byteSize, 112, "GlyphField uniform buffer size should be 112 bytes (7 vec4<f32>)");
 
     assert.ok(("opacity" in gf), "GlyphField.opacity missing");
     assert.ok(("colormap" in gf), "GlyphField.colormap missing");
@@ -292,7 +292,7 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
 
     const u = gf.getUniformData();
     assert.ok(u instanceof Float32Array, "getUniformData() should return Float32Array");
-    assert.strictEqual(u.byteLength, 240, "getUniformData() byteLength mismatch");
+    assert.strictEqual(u.byteLength, 112, "getUniformData() byteLength mismatch");
 
     numberApproxEqual(u[0], 4.0, 1e-6, "scaleSource.componentCount mismatch");
     numberApproxEqual(u[1], 0.0, 1e-6, "scaleSource.componentIndex mismatch");
@@ -310,6 +310,7 @@ const setExternalGlyphBuffers = (field, buffers, opts) => { field.setBuffers(buf
     numberApproxEqual(u[16], 1.0, 1e-6, "scaleFlags.invert mismatch");
 
     numberApproxEqual(u[20], 0.25, 1e-6, "visual.opacity mismatch");
+    numberApproxEqual(u[21], 0.0, 1e-6, "visual reserved slot must stay zero");
     numberApproxEqual(u[22], 1.0, 1e-6, "visual.colorModeId(scalar) mismatch");
     numberApproxEqual(u[23], 0.0, 1e-6, "visual.lit flag mismatch");
 

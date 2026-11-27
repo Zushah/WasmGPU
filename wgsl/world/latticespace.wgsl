@@ -44,7 +44,6 @@ struct LatticeSpaceUniforms {
     scale_clamp: vec4<f32>,
     scale_params: vec4<f32>,
     scale_flags: vec4<f32>,
-    colors: array<vec4<f32>, 8>,
 }
 
 struct VertexOutput {
@@ -275,14 +274,7 @@ fn scale_value(value: f32) -> f32 {
 }
 
 fn map_color(t: f32) -> vec4<f32> {
-    let count = u32(lattice.filters.y + 0.5);
-    if (count < 2u) {
-        return textureSample(colormap_texture, colormap_sampler, clamp(t, 0.0, 1.0));
-    }
-    let x = clamp(t, 0.0, 1.0) * f32(count - 1u);
-    let index = min(u32(floor(x)), count - 1u);
-    let next = min(index + 1u, count - 1u);
-    return mix(lattice.colors[index], lattice.colors[next], x - f32(index));
+    return textureSample(colormap_texture, colormap_sampler, clamp(t, 0.0, 1.0));
 }
 
 fn linear_from_srgb(value: vec3<f32>) -> vec3<f32> {

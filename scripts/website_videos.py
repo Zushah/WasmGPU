@@ -2354,7 +2354,7 @@ wasm.freeF32(m, 16);
 # ============================== Video: objects ==============================
 # Sources: ./typescript/world/mesh.ts, ./typescript/core/engine.ts (geometry, material, texture, colormap factories),
 # ./typescript/graphics/geometry.ts, ./typescript/graphics/material.ts, ./typescript/graphics/texture.ts,
-# ./typescript/graphics/colormap.ts (built-in tables), ./typescript/world/{pointcloud,glyphfield,nodelink,splatfield,latticespace}.ts,
+# ./typescript/graphics/color.ts (built-in tables), ./typescript/world/{pointcloud,glyphfield,nodelink,splatfield,latticespace}.ts,
 # ./typescript/gltf/ (loader.ts, accessors.ts, import.ts), ./rust/src/accessors.rs, ./typescript/graphics/animation.ts,
 # ./rust/src/anim.rs, ./wgsl/graphics/ (skinned, skinned8), ./website/docs/objects/*.md, and ./ARCHITECTURE.md §1.5-§1.8, §1.16-§1.17.
 

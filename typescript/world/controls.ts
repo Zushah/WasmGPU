@@ -1443,8 +1443,9 @@ export class NavigationControls {
             if (z < minZ) minZ = z;
             if (z > maxZ) maxZ = z;
         }
-        if (aspect >= 1) halfWidth = Math.max(halfWidth, halfHeight * aspect);
-        else halfHeight = Math.max(halfHeight, halfWidth / Math.max(aspect, EPSILON));
+        const safeAspect = Math.max(aspect, EPSILON);
+        if (halfWidth < halfHeight * safeAspect) halfWidth = halfHeight * safeAspect;
+        else halfHeight = halfWidth / safeAspect;
         const halfDepth = Math.max(Math.abs(minZ), Math.abs(maxZ), sourceBounds.sphereRadius);
         const distance = Math.max(halfDepth * 2 + Math.max(halfWidth, halfHeight), sourceBounds.sphereRadius * 2, 0.1);
         const nearFloor = minNear ?? 0.01;

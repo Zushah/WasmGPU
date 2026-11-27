@@ -11,8 +11,8 @@ import type { PointCloud } from "../world/pointcloud";
 import type { GlyphField } from "../world/glyphfield";
 import type { NodeLink } from "../world/nodelink";
 import type { LatticeSpace } from "../world/latticespace";
-import type { Colormap, BuiltinColormapName } from "../graphics/colormap";
-import type { Color4, DataMaterial } from "../graphics/material";
+import type { Colormap, BuiltinColormapName } from "../graphics/color";
+import type { DataMaterial } from "../graphics/material";
 import type { ScaleTransform, ScaleTransformDescriptor } from "../scaling";
 
 export type OverlayInvalidationReason = "manual" | "camera" | "viewport" | "layout" | "scale" | "colormap" | "interaction";
@@ -175,7 +175,6 @@ export type GridLayerDescriptor = {
 export type OverlayLegendExplicitSource = {
     scaleTransform: ScaleTransformDescriptor | ScaleTransform;
     colormap: Colormap | BuiltinColormapName;
-    colormapStops?: ReadonlyArray<Color4>;
 };
 
 export type OverlayLegendNodeLinkSource = {

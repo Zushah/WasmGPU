@@ -17,7 +17,6 @@ struct PointCloudUniforms {
     scale_params: vec4<f32>,
     scale_flags: vec4<f32>,
     visual: vec4<f32>,
-    colors: array<vec4<f32>, 8>,
 }
 
 struct VertexOutput {
@@ -160,23 +159,8 @@ fn srgb_from_linear(linear: vec3<f32>) -> vec3<f32> {
     return select(lo, hi, use_hi);
 }
 
-fn sample_custom_stops(t: f32, stop_count: u32) -> vec4<f32> {
-    let n = min(stop_count, 8u);
-    let x = scale_clamp01(t) * f32(n - 1u);
-    let i = u32(floor(x));
-    let f = x - f32(i);
-    if (i >= n - 1u) {
-        return pc.colors[n - 1u];
-    }
-    return pc.colors[i] + f * (pc.colors[i + 1u] - pc.colors[i]);
-}
-
 fn colormap(t_in: f32) -> vec4<f32> {
     let t = scale_clamp01(t_in);
-    let stop_count = u32(pc.visual.z + 0.5);
-    if (stop_count >= 2u) {
-        return sample_custom_stops(t, stop_count);
-    }
     return textureSampleLevel(colormap_tex, colormap_sampler, t, 0.0);
 }
 

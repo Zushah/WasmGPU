@@ -83,8 +83,7 @@
                     componentCount: 4, componentIndex: 3, stride: 4, offset: 0,
                     mode: "linear", clampMode: "none", domainMin: 0.0, domainMax: 1.0, gamma: 0.7
                 },
-                colormap: "custom",
-                colormapStops: [[1.0, 1.0, 1.0, 1.0], [1.0, 0.9, 0.6, 1.0], [0.4, 0.7, 1.0, 1.0], [0.1, 0.3, 0.9, 0.6], [0.0, 0.0, 0.2, 0.0]]
+                colormap: wgpu.color.map.fromStops([[1.0, 1.0, 1.0, 1.0], [1.0, 0.9, 0.6, 1.0], [0.4, 0.7, 1.0, 1.0], [0.1, 0.3, 0.9, 0.6], [0.0, 0.0, 0.2, 0.0]])
             }));
             scene.add(wgpu.createPointCloud({
                 pointsBuffer: outBuffer, pointCount: points,
@@ -94,8 +93,7 @@
                     componentCount: 4, componentIndex: 3, stride: 4, offset: 0,
                     mode: "linear", clampMode: "none", domainMin: 0.0, domainMax: 1.0, gamma: 0.9
                 },
-                colormap: "custom",
-                colormapStops: [[1.0, 0.5, 0.3, 1.0], [0.6, 0.2, 0.6, 0.8], [0.1, 0.2, 0.5, 0.6], [0.0, 0.0, 0.0, 0.0]]
+                colormap: wgpu.color.map.fromStops([[1.0, 0.5, 0.3, 1.0], [0.6, 0.2, 0.6, 0.8], [0.1, 0.2, 0.5, 0.6], [0.0, 0.0, 0.0, 0.0]])
             }));
             const computePipeline = wgpu.compute.createPipeline({ code: wgsl, entryPoint: "main" });
             const uniform = wgpu.compute.createUniformBuffer({ byteLength: 16, copyDst: true });

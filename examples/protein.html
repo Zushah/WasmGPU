@@ -195,10 +195,10 @@
                     const stops = values.map((value, index) => colors ? (colors(value) ?? ELEMENT_PALETTE.OTHER) : BASE_CATEGORICAL[index % BASE_CATEGORICAL.length]);
                     if (stops.length === 1) stops.push(stops[0]);
                     for (let i = 0; i < values.length; i++) lookup.set(values[i], values.length === 1 ? 0.5 : i / (values.length - 1));
-                    return { lookup, colormap: "custom", colormapStops: stops, values };
+                    return { lookup, colormap: wgpu.color.map.fromStops(stops), values };
                 }
                 for (let i = 0; i < values.length; i++) lookup.set(values[i], values.length === 1 ? 0.5 : i / (values.length - 1));
-                return { lookup, colormap: fallback, colormapStops: null, values };
+                return { lookup, colormap: fallback, values };
             };
             const getAtomicRadius = (element) => ATOMIC_RADII[element] ?? ATOMIC_RADII.OTHER;
             const getRenderedRadius = (element) => VISUAL_RADIUS_ANCHOR + (VISUAL_RADIUS_GAIN * (getAtomicRadius(element) - VISUAL_RADIUS_ANCHOR));
@@ -449,7 +449,6 @@
                 nodeGeometryMode: "spheres",
                 nodeColorMode: "scalar",
                 nodeColormap: elementSetup.colormap,
-                nodeColormapStops: elementSetup.colormapStops ?? undefined,
                 nodeScaleTransform: nodeScale,
                 nodeSize: 2.0,
                 minPointSize: 4,
@@ -459,7 +458,7 @@
                 edgeScalars,
                 edgeGeometryMode: "cylinders",
                 edgeColorMode: "solid",
-                edgeSolidColor: [0.72, 0.80, 0.92, 0.9],
+                edgeSolidColor: wgpu.color.srgbToLinear([0.72, 0.80, 0.92, 0.9]),
                 edgeScaleTransform: edgeScale,
                 edgeSize: 0.065,
                 opacity: 1.0,
@@ -491,7 +490,6 @@
                 activeColorMode = mode;
                 proteinGraph.setNodeScalars(nodeScalarsByMode[mode], { keepCPUData: true });
                 proteinGraph.nodeColormap = config.setup.colormap;
-                if (config.setup.colormapStops) proteinGraph.nodeColormapStops = config.setup.colormapStops;
                 proteinGraph.setNodeScaleTransform(nodeScale);
                 proteinGraph.upload(device, queue);
                 lastMessage = `color mode: ${config.label}`;

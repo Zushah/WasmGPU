@@ -539,7 +539,7 @@
                         4: splat.source.bindingResource(),
                         5: splat.counter.bindingResource(),
                         6: splatParams,
-                        7: wgpu.colormap.builtin(s.colormap).getGPUResources(device, queue).view
+                        7: wgpu.color.map.builtin(s.colormap).getGPUResources(device, queue).view
                     }, "tomography-example:splat-bg0");
                 }
                 const [domainMin, domainMax] = domainFor(s.normalize);

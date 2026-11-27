@@ -13,7 +13,6 @@ struct PointCloudUniforms {
     size_params: vec4<f32>,
     scalar_params: vec4<f32>,
     options: vec4<f32>,
-    colors: array<vec4<f32>, 8>,
 }
 
 struct CameraUniforms {

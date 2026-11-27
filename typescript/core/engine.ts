@@ -16,10 +16,9 @@ import { loadGltf, importGltf, parseGLB, readAccessor, readAccessorAsFloat32, re
 import type { GltfDocument, LoadGltfOptions, ImportGltfOptions, GltfImportResult, ParsedGLB, AccessorView } from "../gltf";
 import { AnimationClip, AnimationPlayer, Skin } from "../graphics/animation";
 import type { AnimationClipDescriptor } from "../graphics/animation";
-import { Colormap } from "../graphics/colormap";
-import type { BuiltinColormapName, ColormapDescriptor, ColormapStop } from "../graphics/colormap";
+import { color } from "../graphics/color";
 import { Geometry } from "../graphics/geometry";
-import type { GeometryDescriptor, CartesianCurveDescriptor, CartesianSurfaceDescriptor, ParametricCurveDescriptor, ParametricSurfaceDescriptor } from "../graphics/geometry";
+import type { GeometryDescriptor, CartesianCurveDescriptor, CartesianSurfaceDescriptor, ParametricCurveDescriptor, ParametricSurfaceDescriptor, ComplexSurfaceDescriptor } from "../graphics/geometry";
 import { Material, UnlitMaterial, StandardMaterial, DataMaterial, CustomMaterial, Color } from "../graphics/material";
 import type { UnlitMaterialDescriptor, StandardMaterialDescriptor, DataMaterialDescriptor, CustomMaterialDescriptor } from "../graphics/material";
 import { Texture2D } from "../graphics/texture";
@@ -159,6 +158,14 @@ export class WasmGPU {
 
     get math() {
         return { mat4, mat4f, mat4d, quat, quatf, quatd, vec3, vec3f, vec3d };
+    }
+
+    static get color() {
+        return color;
+    }
+
+    get color() {
+        return color;
     }
 
     static createHeapArena(capBytes: number, align: number = 16): WasmHeapArena {
@@ -456,6 +463,9 @@ export class WasmGPU {
         },
         parametricSurface: (descriptor: ParametricSurfaceDescriptor): Geometry => {
             return Geometry.parametricSurface(descriptor);
+        },
+        complexSurface: (descriptor: ComplexSurfaceDescriptor): Geometry => {
+            return Geometry.complexSurface(descriptor);
         }
     };
 
@@ -507,36 +517,6 @@ export class WasmGPU {
     createLatticeSpace(descriptor: LatticeSpaceDescriptor): LatticeSpace {
         return new LatticeSpace(descriptor);
     }
-
-    readonly colormap = {
-        builtin: (name: BuiltinColormapName): Colormap => {
-            return Colormap.builtin(name);
-        },
-        grayscale: (): Colormap => {
-            return Colormap.builtin("grayscale");
-        },
-        turbo: (): Colormap => {
-            return Colormap.builtin("turbo");
-        },
-        viridis: (): Colormap => {
-            return Colormap.builtin("viridis");
-        },
-        magma: (): Colormap => {
-            return Colormap.builtin("magma");
-        },
-        plasma: (): Colormap => {
-            return Colormap.builtin("plasma");
-        },
-        inferno: (): Colormap => {
-            return Colormap.builtin("inferno");
-        },
-        fromStops: (stops: ReadonlyArray<ColormapStop>, desc: ColormapDescriptor = {}): Colormap => {
-            return Colormap.fromStops(stops, desc);
-        },
-        fromPalette: (colors: ReadonlyArray<[number, number, number, number]>, desc: ColormapDescriptor = {}): Colormap => {
-            return Colormap.fromPalette(colors, desc);
-        }
-    };
 
     readonly createLight = {
         ambient: (options?: { color?: Color; intensity?: number; }): AmbientLight => {

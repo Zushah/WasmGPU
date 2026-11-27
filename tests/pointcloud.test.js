@@ -209,7 +209,7 @@ const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-was
     assert.strictEqual(typeof pc.getUniformData, "function", "PointCloud.getUniformData missing");
 
     const byteSize = pc.getUniformBufferSize();
-    assert.strictEqual(byteSize, 240, "PointCloud uniform buffer size should be 240 bytes (15 vec4<f32>)");
+    assert.strictEqual(byteSize, 112, "PointCloud uniform buffer size should be 112 bytes (7 vec4<f32>)");
 
     assert.ok(("basePointSize" in pc), "PointCloud.basePointSize missing");
     assert.ok(("minPointSize" in pc), "PointCloud.minPointSize missing");
@@ -230,7 +230,7 @@ const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-was
 
     const u = pc.getUniformData();
     assert.ok(u instanceof Float32Array, "getUniformData() should return Float32Array");
-    assert.strictEqual(u.byteLength, 240, "getUniformData() byteLength mismatch");
+    assert.strictEqual(u.byteLength, 112, "getUniformData() byteLength mismatch");
 
     numberApproxEqual(u[0], 6.0, 1e-6, "sizeParams.x mismatch");
     numberApproxEqual(u[1], 2.0, 1e-6, "sizeParams.y mismatch");
@@ -254,6 +254,7 @@ const makeWasmF32ViewWithLengthGlobal = (length, ptr = 0, name = "pointcloud-was
 
     numberApproxEqual(u[24], 0.25, 1e-6, "visual.opacity mismatch");
     numberApproxEqual(u[25], 0.6, 1e-6, "visual.softness mismatch");
+    numberApproxEqual(u[26], 0.0, 1e-6, "visual reserved slot must stay zero");
 
     assert.ok(("dirtyUniforms" in pc), "PointCloud.dirtyUniforms missing");
     assert.strictEqual(typeof pc.markUniformsClean, "function", "PointCloud.markUniformsClean missing");

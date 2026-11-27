@@ -4,8 +4,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { clamp01, sampleColorStops } from "../utils";
-import { Colormap } from "../graphics/colormap";
+import { clamp01 } from "../utils";
+import { Colormap } from "../graphics/color";
 import { DataMaterial, type Color4 } from "../graphics/material";
 import { invertScaleTransformCPU, normalizeScaleTransform, type ScaleTransform } from "../scaling";
 import { PointCloud } from "../world/pointcloud";
@@ -35,8 +35,6 @@ const applyStyle = (node: HTMLElement | null, style: OverlayCSSStyle | undefined
 const clearStyle = (node: HTMLElement | null, style: OverlayCSSStyle | undefined): void => { if (node && style) for (const property of Object.keys(style)) (node.style as any)[property] = ""; };
 
 const styleEquals = (a: LegendStyle, b: LegendStyle): boolean => JSON.stringify(a) === JSON.stringify(b);
-
-const sampleCustomStops = (tIn: number, stopsIn: ReadonlyArray<Color4>): Color4 => sampleColorStops(tIn, stopsIn);
 
 const serializeTransform = (transform: ScaleTransform): string => {
     return [
@@ -76,60 +74,41 @@ const subscribeSource = (source: OverlayLegendSource, callback: () => void): (()
 const resolveSource = (source: OverlayLegendSource, strictParity: boolean): LegendResolvedSource => {
     if (source instanceof PointCloud) {
         const transform = normalizeScaleTransform(source.scaleTransform);
-        if (source.colormap === "custom") {
-            const stops = source.colormapStops.slice();
-            return { transform, signature: `pointcloud|custom|${serializeTransform(transform)}|${JSON.stringify(stops)}`, sample: (t: number) => sampleCustomStops(t, stops) };
-        }
         const colormap = source.getColormapForBinding();
         if (strictParity && !colormap.canSampleCPU) throw new Error("LegendLayer: bound point cloud colormap is GPU-only and cannot be sampled on CPU in strict parity mode.");
-        return { transform, signature: `pointcloud|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`, sample: (t: number) => colormap.sampleCPU(t) };
+        return { transform, signature: `pointcloud|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`, sample: (t: number) => colormap.sampleCPU(t, "srgb") };
     }
     if (source instanceof GlyphField) {
         const transform = normalizeScaleTransform(source.scaleTransform);
-        if (source.colorMode === "scalar" && source.colormap === "custom") {
-            const stops = source.colormapStops.slice();
-            return { transform, signature: `glyphfield|custom|${serializeTransform(transform)}|${JSON.stringify(stops)}`, sample: (t: number) => sampleCustomStops(t, stops) };
-        }
         const colormap = source.getColormapForBinding();
         if (strictParity && !colormap.canSampleCPU) throw new Error("LegendLayer: bound glyph colormap is GPU-only and cannot be sampled on CPU in strict parity mode.");
-        return { transform, signature: `glyphfield|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`, sample: (t: number) => colormap.sampleCPU(t) };
+        return { transform, signature: `glyphfield|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`, sample: (t: number) => colormap.sampleCPU(t, "srgb") };
     }
     if (source instanceof LatticeSpace) {
         const transform = normalizeScaleTransform(source.scaleTransform);
-        if (source.colorMode === "scalar" && source.colormap === "custom") {
-            const stops = source.colormapStops.slice();
-            return { transform, signature: `latticespace|custom|${serializeTransform(transform)}|${JSON.stringify(stops)}`, sample: (t: number) => sampleCustomStops(t, stops) };
-        }
         const colormap = source.getColormapForBinding();
         if (strictParity && !colormap.canSampleCPU) throw new Error("LegendLayer: bound latticespace colormap is GPU-only and cannot be sampled on CPU in strict parity mode.");
-        return { transform, signature: `latticespace|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`, sample: (t: number) => colormap.sampleCPU(t) };
+        return { transform, signature: `latticespace|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`, sample: (t: number) => colormap.sampleCPU(t, "srgb") };
     }
     if (source instanceof NodeLink || (source as { nodelink?: NodeLink }).nodelink instanceof NodeLink) {
         const obj = source instanceof NodeLink ? source : (source as { nodelink: NodeLink }).nodelink;
         const component = source instanceof NodeLink ? "node" : ((source as { component?: "node" | "edge" }).component ?? "node");
         const transform = normalizeScaleTransform(component === "edge" ? obj.edgeScaleTransform : obj.nodeScaleTransform);
-        const colormap = component === "edge" ? obj.edgeColormap : obj.nodeColormap;
-        const stops = component === "edge" ? obj.edgeColormapStops : obj.nodeColormapStops;
-        if (typeof colormap === "string" && colormap === "custom") return { transform, signature: `nodelink|${component}|custom|${serializeTransform(transform)}|${JSON.stringify(stops)}`, sample: (t: number) => sampleCustomStops(t, stops) };
         const resolved = component === "edge" ? obj.getEdgeColormapForBinding() : obj.getNodeColormapForBinding();
         if (strictParity && !resolved.canSampleCPU) throw new Error("LegendLayer: bound nodelink colormap is GPU-only and cannot be sampled on CPU in strict parity mode.");
-        return { transform, signature: `nodelink|${component}|cm:${resolved.id}|f:${resolved.filter}|w:${resolved.width}|${serializeTransform(transform)}`, sample: (t: number) => resolved.sampleCPU(t) };
+        return { transform, signature: `nodelink|${component}|cm:${resolved.id}|f:${resolved.filter}|w:${resolved.width}|${serializeTransform(transform)}`, sample: (t: number) => resolved.sampleCPU(t, "srgb") };
     }
     if (source instanceof DataMaterial) {
         const transform = normalizeScaleTransform(source.scaleTransform);
         const colormap = source.getColormapForBinding();
         if (strictParity && !colormap.canSampleCPU) throw new Error("LegendLayer: bound data-material colormap is GPU-only and cannot be sampled on CPU in strict parity mode.");
-        return { transform, signature: `datamaterial|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`, sample: (t: number) => colormap.sampleCPU(t) };
+        return { transform, signature: `datamaterial|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`, sample: (t: number) => colormap.sampleCPU(t, "srgb") };
     }
     const explicit = source as OverlayLegendExplicitSource;
     const transform = normalizeScaleTransform(explicit.scaleTransform);
-    if (explicit.colormapStops && explicit.colormapStops.length >= 2) {
-        const stops = explicit.colormapStops.slice();
-        return { transform, signature: `explicit|stops|${serializeTransform(transform)}|${JSON.stringify(stops)}`, sample: (t: number) => sampleCustomStops(t, stops) };
-    }
     const colormap = typeof explicit.colormap === "string" ? Colormap.builtin(explicit.colormap) : explicit.colormap;
     if (strictParity && !colormap.canSampleCPU) throw new Error("LegendLayer: explicit colormap is GPU-only and cannot be sampled on CPU in strict parity mode.");
-    return { transform, signature: `explicit|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`, sample: (t: number) => colormap.sampleCPU(t) };
+    return { transform, signature: `explicit|cm:${colormap.id}|f:${colormap.filter}|w:${colormap.width}|${serializeTransform(transform)}`, sample: (t: number) => colormap.sampleCPU(t, "srgb") };
 };
 
 export class LegendLayer implements OverlayLayer {

@@ -4,16 +4,16 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-import { assert, clamp01, createBuffer, linearIndexToNdIndex, normalizeColorStops, normalizePositiveIntShape, resolveGPUBuffer } from "../utils";
+import { assert, clamp01, createBuffer, linearIndexToNdIndex, normalizePositiveIntShape, resolveGPUBuffer } from "../utils";
 import { Transform } from "../core/transform";
-import { BlendMode, type Color4 } from "../graphics/material";
-import { Colormap, type BuiltinColormapName } from "../graphics/colormap";
+import { BlendMode } from "../graphics/material";
+import { Colormap, type BuiltinColormapName } from "../graphics/color";
 import { cloneScaleTransform, normalizeScaleTransform, packScaleTransform, SCALE_UNIFORM_FLOAT_COUNT } from "../scaling";
 import type { ScaleSourceDescriptor, ScaleStatsResult, ScaleTransform, ScaleTransformDescriptor } from "../scaling";
 import { WasmMemoryView, assertWasmF32View, assertWasmRecordCount, assertWasmCapacity, resolveWasmRecordCount, validateWasmRecordRange, growWasmCapacity } from "../wasm";
 import { Bounds3, boundsFromBox, boundsFromBoxAndSphere, boundsFromSphere, emptyBounds, transformBounds } from "./bounds";
 
-export type PointCloudColormap = BuiltinColormapName | "custom";
+export type PointCloudColormap = BuiltinColormapName;
 
 export type PointCloudColorMode = "rgba" | "scalar";
 
@@ -57,7 +57,6 @@ export type PointCloudDescriptor = {
     sizeAttenuation?: number;
     opacity?: number;
     colormap?: PointCloudColormap | Colormap;
-    colormapStops?: Color4[];
     colorMode?: PointCloudColorMode;
     softness?: number;
     scaleTransform: ScaleTransformDescriptor;
@@ -68,7 +67,7 @@ export type PointCloudDescriptor = {
     ndShape?: number[];
 };
 
-const UNIFORM_FLOAT_COUNT = 4 + SCALE_UNIFORM_FLOAT_COUNT + 4 + (8 * 4);
+const UNIFORM_FLOAT_COUNT = 4 + SCALE_UNIFORM_FLOAT_COUNT + 4;
 const UNIFORM_BYTE_SIZE = UNIFORM_FLOAT_COUNT * 4;
 const POINT_RECORD_FLOATS = 4;
 const POINT_RECORD_BYTES = POINT_RECORD_FLOATS * 4;
@@ -109,7 +108,6 @@ export class PointCloud {
     private _opacity: number = 1.0;
     private _colorMode: PointCloudColorMode = "scalar";
     private _colormap: PointCloudColormap | Colormap = "viridis";
-    private _colormapStops: Color4[] = [[0.26700, 0.00487, 0.32942, 1.0], [0.99325, 0.90616, 0.14394, 1.0]];
     private _softness: number = 0.15;
     private _scaleTransform: ScaleTransform;
     private _CPUData: Float32Array | null = null;
@@ -157,7 +155,6 @@ export class PointCloud {
         if (desc.sizeAttenuation !== undefined) this._sizeAttenuation = desc.sizeAttenuation;
         if (desc.opacity !== undefined) this._opacity = desc.opacity;
         if (desc.colormap !== undefined) this._colormap = desc.colormap;
-        if (desc.colormapStops !== undefined) this._colormapStops = normalizeColorStops(desc.colormapStops);
         if (desc.colorMode !== undefined) this._colorMode = desc.colorMode;
         else if (desc.colors || desc.colorsBuffer || desc.wasmColors) this._colorMode = "rgba";
         if (desc.softness !== undefined) this._softness = desc.softness;
@@ -466,16 +463,6 @@ export class PointCloud {
         this.emitVisualChange("colormap");
     }
 
-    get colormapStops(): ReadonlyArray<Color4> {
-        return this._colormapStops;
-    }
-
-    set colormapStops(stops: ReadonlyArray<Color4>) {
-        this._colormapStops = normalizeColorStops(stops);
-        this._uniformDirty = true;
-        this.emitVisualChange("colormap");
-    }
-
     getColormapKey(): string {
         const c = this._colormap;
         return (c instanceof Colormap) ? `cm:${c.id}` : `cm:${c}`;
@@ -484,7 +471,6 @@ export class PointCloud {
     getColormapForBinding(): Colormap {
         const c = this._colormap;
         if (c instanceof Colormap) return c;
-        if (c === "custom") return Colormap.builtin("grayscale");
         return Colormap.builtin(c);
     }
 
@@ -773,18 +759,8 @@ export class PointCloud {
         packScaleTransform(this._scaleTransform, out, 4);
         out[24] = clamp01(this._opacity);
         out[25] = clamp01(this._softness);
-        out[26] = (typeof this._colormap === "string" && this._colormap === "custom") ? Math.min(8, Math.max(2, this._colormapStops.length)) : 0;
+        out[26] = 0;
         out[27] = colorModeId(this._colorMode);
-        const stops = this._colormapStops;
-        const nStops = Math.min(8, Math.max(2, stops.length));
-        for (let i = 0; i < 8; i++) {
-            const src = stops[Math.min(i, nStops - 1)];
-            const o = 28 + i * 4;
-            out[o + 0] = src[0];
-            out[o + 1] = src[1];
-            out[o + 2] = src[2];
-            out[o + 3] = src[3];
-        }
         return out;
     }
 
