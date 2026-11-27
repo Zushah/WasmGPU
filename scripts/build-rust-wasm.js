@@ -13,7 +13,7 @@
         - ./wasm/wasm.d.ts (TypeScript declarations)
     It downloads:
         - ./tools/wabt/1.0.42/ (WABT for generating wasm.wat with wasm2wat.exe)
-        - ./tools/binaryen/version_132/ (Binaryen for optimizing wasm.wasm with wasm-opt.exe)
+        - ./tools/binaryen/version_133/ (Binaryen for optimizing wasm.wasm with wasm-opt.exe)
 
     This file is intentionally self-contained so that building WasmGPU with `npm run build` is as straightforward as possible.
 */
@@ -38,7 +38,7 @@ const WASM_TARGET = "wasm32-unknown-unknown";
 const PROFILE_DIR = "release";
 
 const WABT_VERSION = "1.0.42";
-const BINARYEN_VERSION = "version_132";
+const BINARYEN_VERSION = "version_133";
 
 const envFlag = (name, defaultValue) => {
     const raw = process.env[name];

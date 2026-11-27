@@ -16,10 +16,10 @@
   ],
   "devDependencies": {
     "typescript": "7.0.2",
-    "@types/node": "26.6.1",
-    "@webgpu/types": "0.1.72",
+    "@types/node": "26.6.11",
+    "@webgpu/types": "0.1.74",
     "esbuild": "0.28.2",
-    "@playwright/test": "1.63.0"
+    "@playwright/test": "1.65.1"
   },
   "allowScripts": {
     "esbuild@0.28.2": true
